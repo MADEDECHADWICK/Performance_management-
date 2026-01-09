@@ -1,0 +1,4 @@
+project_id = "ozxuihizpvxtwhytjrjw"
+
+[functions.create-cycle-evaluations]
+verify_jwt = false

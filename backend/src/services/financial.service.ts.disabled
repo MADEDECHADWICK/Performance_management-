@@ -1,0 +1,564 @@
+import { PrismaClient, Job, TimeEntry, Profile } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+export interface EmployeeJobMetrics {
+  employeeId: number;
+  employeeName: string;
+  jobId: number;
+  estimatedHours: number;
+  actualHours: number;
+  billableHours: number;
+  estimatedCost: number;
+  billableCost: number;
+  utilization: number; // %
+  costPerBillableHour: number;
+}
+
+export interface JobMetrics {
+  jobId: number;
+  jobCode: string | null;
+  estimatedHours: number;
+  actualHours: number;
+  billableHours: number;
+  estimatedCost: number;
+  actualCost: number;
+  revenueCollected: number;
+  fees: number;
+  profit: number;
+  efficiency: number; // %
+  marginPercentage: number; // %
+  utilizationRate: number; // %
+  teamSize: number;
+  completionPercentage: number;
+}
+
+export interface PartnerPortfolioMetrics {
+  partnerId: number;
+  totalJobs: number;
+  completedJobs: number;
+  activeJobs: number;
+  totalEstimatedHours: number;
+  totalActualHours: number;
+  totalBillableCost: number;
+  totalRevenueCollected: number;
+  totalProfit: number;
+  averageEfficiency: number; // %
+  averageMargin: number; // %
+  totalTeamSize: number;
+  utilizationRate: number; // %
+  profitMargin: number; // %
+}
+
+export interface TeamUtilization {
+  employeeId: number;
+  employeeName: string;
+  totalHours: number;
+  billableHours: number;
+  cost: number;
+  billableCost: number;
+  utilizationPercentage: number;
+}
+
+export class FinancialService {
+  /**
+   * Calculate metrics for an employee on a specific job
+   * Formula: Based on time entries and profile hourly rates
+   */
+  static async calculateEmployeeJobMetrics(
+    employeeId: number,
+    jobId: number
+  ): Promise<EmployeeJobMetrics> {
+    // Get all approved time entries for employee on job
+    const timeEntries = await prisma.timeEntry.findMany({
+      where: {
+        employee_id: employeeId,
+        job_id: jobId,
+        status: 'approved',
+      },
+    });
+
+    // Get employee profile with hourly rate
+    const employee = await prisma.profile.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        first_name: true,
+        last_name: true,
+        hourly_rate: true,
+      },
+    });
+
+    if (!employee) {
+      throw new Error(`Employee ${employeeId} not found`);
+    }
+
+    // Get job details
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { billable_hours: true },
+    });
+
+    if (!job) {
+      throw new Error(`Job ${jobId} not found`);
+    }
+
+    // Calculate metrics
+    const actualHours = timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
+    const billableHours = timeEntries
+      .filter((te) => te.billable)
+      .reduce((sum, te) => sum + Number(te.hours), 0);
+
+    const estimatedHours = Number(job.billable_hours) || 0;
+    const hourlyRate = Number(employee.hourly_rate) || 0;
+    const estimatedCost = estimatedHours * hourlyRate;
+    const billableCost = billableHours * hourlyRate;
+
+    return {
+      employeeId,
+      employeeName: `${employee.first_name} ${employee.last_name}`,
+      jobId,
+      estimatedHours,
+      actualHours,
+      billableHours,
+      estimatedCost,
+      billableCost,
+      utilization: estimatedHours > 0 ? (actualHours / estimatedHours) * 100 : 0,
+      costPerBillableHour: billableHours > 0 ? billableCost / billableHours : 0,
+    };
+  }
+
+  /**
+   * Calculate aggregated metrics for a job
+   * Formulas:
+   * - Efficiency: (billable_actual_hours / estimated_billable_hours) * 100
+   * - Margin: ((revenue - fees - actual_cost) / revenue) * 100
+   * - Profit: revenue - fees - actual_cost
+   */
+  static async calculateJobMetrics(jobId: number): Promise<JobMetrics> {
+    // Get job details
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job) {
+      throw new Error(`Job ${jobId} not found`);
+    }
+
+    // Get all approved time entries with employee details
+    const timeEntries = await prisma.timeEntry.findMany({
+      where: {
+        job_id: jobId,
+        status: 'approved',
+      },
+      include: {
+        employee: {
+          select: {
+            hourly_rate: true,
+          },
+        },
+      },
+    });
+
+    // Calculate totals
+    const actualHours = timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
+    const billableHours = timeEntries
+      .filter((te) => te.billable)
+      .reduce((sum, te) => sum + Number(te.hours), 0);
+
+    // Calculate actual cost from time entries
+    const actualCost = timeEntries.reduce((sum, te) => {
+      const hourlyRate = Number(te.employee.hourly_rate) || 0;
+      return sum + Number(te.hours) * hourlyRate;
+    }, 0);
+
+    // Get unique team members
+    const uniqueEmployees = new Set(timeEntries.map((te) => te.employee_id));
+
+    // Calculate metrics
+    const estimatedHours = Number(job.billable_hours) || 0;
+    const estimatedCost = estimatedHours * (Number(job.hourly_rate) || 0);
+    const revenueCollected = Number(job.amount_collected) || 0;
+    const fees = Number(job.fees) || 0;
+    const profit = revenueCollected - fees - actualCost;
+
+    return {
+      jobId,
+      jobCode: job.job_code,
+      estimatedHours,
+      actualHours,
+      billableHours,
+      estimatedCost,
+      actualCost,
+      revenueCollected,
+      fees,
+      profit,
+      efficiency: estimatedHours > 0 ? (billableHours / estimatedHours) * 100 : 0,
+      marginPercentage:
+        revenueCollected > 0
+          ? ((revenueCollected - fees - actualCost) / revenueCollected) * 100
+          : 0,
+      utilizationRate: estimatedHours > 0 ? (actualHours / estimatedHours) * 100 : 0,
+      teamSize: uniqueEmployees.size,
+      completionPercentage: job.completion_percentage || 0,
+    };
+  }
+
+  /**
+   * Calculate partner portfolio metrics
+   * Aggregates all jobs owned by partner
+   */
+  static async calculatePartnerPortfolioMetrics(
+    partnerId: number
+  ): Promise<PartnerPortfolioMetrics> {
+    // Get all jobs for partner
+    const jobs = await prisma.job.findMany({
+      where: { partner_id: partnerId },
+      include: {
+        timeEntries: {
+          where: { status: 'approved' },
+          include: {
+            employee: {
+              select: { hourly_rate: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (jobs.length === 0) {
+      return {
+        partnerId,
+        totalJobs: 0,
+        completedJobs: 0,
+        activeJobs: 0,
+        totalEstimatedHours: 0,
+        totalActualHours: 0,
+        totalBillableCost: 0,
+        totalRevenueCollected: 0,
+        totalProfit: 0,
+        averageEfficiency: 0,
+        averageMargin: 0,
+        totalTeamSize: 0,
+        utilizationRate: 0,
+        profitMargin: 0,
+      };
+    }
+
+    // Calculate aggregated metrics
+    let totalEstimatedHours = 0;
+    let totalActualHours = 0;
+    let totalBillableCost = 0;
+    let totalRevenueCollected = 0;
+    let totalProfit = 0;
+    let totalEfficiency = 0;
+    let totalMargin = 0;
+    const uniqueTeamMembers = new Set<number>();
+
+    for (const job of jobs) {
+      const estimatedHours = Number(job.billable_hours) || 0;
+      const actualHours = job.timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
+      const billableHours = job.timeEntries
+        .filter((te) => te.billable)
+        .reduce((sum, te) => sum + Number(te.hours), 0);
+
+      const actualCost = job.timeEntries.reduce((sum, te) => {
+        const hourlyRate = Number(te.employee.hourly_rate) || 0;
+        return sum + Number(te.hours) * hourlyRate;
+      }, 0);
+
+      const revenueCollected = Number(job.amount_collected) || 0;
+      const fees = Number(job.fees) || 0;
+      const profit = revenueCollected - fees - actualCost;
+
+      totalEstimatedHours += estimatedHours;
+      totalActualHours += actualHours;
+      totalBillableCost += actualCost;
+      totalRevenueCollected += revenueCollected;
+      totalProfit += profit;
+
+      // Track efficiencies and margins for averaging
+      if (estimatedHours > 0) {
+        totalEfficiency += (billableHours / estimatedHours) * 100;
+      }
+
+      if (revenueCollected > 0) {
+        totalMargin += ((revenueCollected - fees - actualCost) / revenueCollected) * 100;
+      }
+
+      // Track unique team members
+      job.timeEntries.forEach((te) => {
+        uniqueTeamMembers.add(te.employee_id);
+      });
+    }
+
+    const completedJobs = jobs.filter((j) => j.status === 'completed').length;
+    const activeJobs = jobs.filter((j) => j.status !== 'completed').length;
+
+    return {
+      partnerId,
+      totalJobs: jobs.length,
+      completedJobs,
+      activeJobs,
+      totalEstimatedHours,
+      totalActualHours,
+      totalBillableCost,
+      totalRevenueCollected,
+      totalProfit,
+      averageEfficiency: jobs.length > 0 ? totalEfficiency / jobs.length : 0,
+      averageMargin: jobs.length > 0 ? totalMargin / jobs.length : 0,
+      totalTeamSize: uniqueTeamMembers.size,
+      utilizationRate:
+        totalEstimatedHours > 0 ? (totalActualHours / totalEstimatedHours) * 100 : 0,
+      profitMargin: totalRevenueCollected > 0 ? (totalProfit / totalRevenueCollected) * 100 : 0,
+    };
+  }
+
+  /**
+   * Get all jobs for partner with financial metrics
+   */
+  static async getPartnerJobsWithMetrics(partnerId: number) {
+    const jobs = await prisma.job.findMany({
+      where: { partner_id: partnerId },
+      include: {
+        timeEntries: {
+          where: { status: 'approved' },
+          include: {
+            employee: {
+              select: { hourly_rate: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Fetch client info separately for each job
+    const jobsWithClients = await Promise.all(
+      jobs.map(async (job) => {
+        let clientName = '';
+        if (job.client_id) {
+          try {
+            const client = await prisma.client.findUnique({
+              where: { id: job.client_id },
+              select: { client_name: true },
+            });
+            clientName = client?.client_name || '';
+          } catch (error) {
+            // Client relation might not exist, continue without it
+          }
+        }
+        return { ...job, clientName };
+      })
+    );
+
+    return jobsWithClients.map((job) => {
+      const estimatedHours = Number(job.billable_hours) || 0;
+      const actualHours = job.timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
+      const billableHours = job.timeEntries
+        .filter((te) => te.billable)
+        .reduce((sum, te) => sum + Number(te.hours), 0);
+
+      const actualCost = job.timeEntries.reduce((sum, te) => {
+        const hourlyRate = Number(te.employee.hourly_rate) || 0;
+        return sum + Number(te.hours) * hourlyRate;
+      }, 0);
+
+      const revenueCollected = Number(job.amount_collected) || 0;
+      const fees = Number(job.fees) || 0;
+      const profit = revenueCollected - fees - actualCost;
+
+      return {
+        id: job.id,
+        job_id: job.id,
+        job_code: job.job_code,
+        job_name: job.job_name,
+        title: job.job_name,
+        clientName: job.clientName || '',
+        status: job.status,
+        estimated_hours: estimatedHours,
+        actual_hours: actualHours,
+        billable_hours: billableHours,
+        estimated_cost: estimatedHours * (Number(job.hourly_rate) || 0),
+        actual_cost: actualCost,
+        billable_cost: actualCost,
+        amount_collected: revenueCollected,
+        fees: fees,
+        profit: profit,
+        efficiency_ratio: estimatedHours > 0 ? (billableHours / estimatedHours) * 100 : 0,
+        efficiency: estimatedHours > 0 ? (billableHours / estimatedHours) * 100 : 0,
+        margin_percentage:
+          revenueCollected > 0 ? ((revenueCollected - fees - actualCost) / revenueCollected) * 100 : 0,
+        created_at: job.createdAt,
+        updated_at: job.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * Get team utilization for a job
+   */
+  static async getJobTeamUtilization(jobId: number): Promise<TeamUtilization[]> {
+    const timeEntries = await prisma.timeEntry.findMany({
+      where: {
+        job_id: jobId,
+        status: 'approved',
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            hourly_rate: true,
+          },
+        },
+      },
+    });
+
+    const teamMetrics = new Map<
+      number,
+      {
+        employeeId: number;
+        employeeName: string;
+        totalHours: number;
+        billableHours: number;
+        cost: number;
+        billableCost: number;
+      }
+    >();
+
+    timeEntries.forEach((entry) => {
+      const key = entry.employee_id;
+
+      if (!teamMetrics.has(key)) {
+        teamMetrics.set(key, {
+          employeeId: key,
+          employeeName: `${entry.employee.first_name} ${entry.employee.last_name}`,
+          totalHours: 0,
+          billableHours: 0,
+          cost: 0,
+          billableCost: 0,
+        });
+      }
+
+      const metric = teamMetrics.get(key)!;
+      const hours = Number(entry.hours) || 0;
+      const hourlyRate = Number(entry.employee.hourly_rate) || 0;
+
+      metric.totalHours += hours;
+      if (entry.billable) {
+        metric.billableHours += hours;
+        metric.billableCost += hours * hourlyRate;
+      }
+      metric.cost += hours * hourlyRate;
+    });
+
+    // Get job estimated hours for utilization calculation
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { billable_hours: true },
+    });
+
+    const estimatedHours = Number(job?.billable_hours) || 0;
+
+    return Array.from(teamMetrics.values()).map((metric) => ({
+      employeeId: metric.employeeId,
+      employeeName: metric.employeeName,
+      totalHours: metric.totalHours,
+      billableHours: metric.billableHours,
+      cost: metric.cost,
+      billableCost: metric.billableCost,
+      utilizationPercentage:
+        estimatedHours > 0 ? (metric.totalHours / estimatedHours) * 100 : 0,
+    }));
+  }
+
+  /**
+   * Approve multiple time entries
+   */
+  static async approveTimeEntries(
+    timeEntryIds: number[],
+    approverId: number
+  ): Promise<void> {
+    await prisma.timeEntry.updateMany({
+      where: {
+        id: { in: timeEntryIds },
+      },
+      data: {
+        status: 'approved',
+        approved_by: approverId,
+        approved_at: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Reject multiple time entries
+   */
+  static async rejectTimeEntries(
+    timeEntryIds: number[],
+    approverId: number
+  ): Promise<void> {
+    await prisma.timeEntry.updateMany({
+      where: {
+        id: { in: timeEntryIds },
+      },
+      data: {
+        status: 'rejected',
+        approved_by: approverId,
+        approved_at: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Get pending time entries for job
+   */
+  static async getPendingTimeEntries(jobId: number): Promise<TimeEntry[]> {
+    return prisma.timeEntry.findMany({
+      where: {
+        job_id: jobId,
+        status: 'submitted',
+      },
+      orderBy: { date_worked: 'desc' },
+    });
+  }
+
+  /**
+   * Update job financial summary
+   */
+  static async updateJobFinancials(jobId: number): Promise<void> {
+    const metrics = await this.calculateJobMetrics(jobId);
+
+    // First, find existing profitability record
+    const existing = await prisma.jobProfitability.findFirst({
+      where: { job_id: jobId },
+    });
+
+    if (existing) {
+      // Update existing record
+      await prisma.jobProfitability.update({
+        where: { id: existing.id },
+        data: {
+          total_revenue: metrics.revenueCollected,
+          total_cost: metrics.actualCost,
+          profit: metrics.profit,
+          profit_margin: metrics.marginPercentage,
+          calculated_at: new Date(),
+        },
+      });
+    } else {
+      // Create new record
+      await prisma.jobProfitability.create({
+        data: {
+          job_id: jobId,
+          total_revenue: metrics.revenueCollected,
+          total_cost: metrics.actualCost,
+          profit: metrics.profit,
+          profit_margin: metrics.marginPercentage,
+        },
+      });
+    }
+  }
+}

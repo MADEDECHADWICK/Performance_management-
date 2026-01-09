@@ -1,0 +1,52 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:rbac": "jest -- 1-rbac-access-control.test.ts",
+    "test:hr": "jest -- 2-hr-admin-workflow.test.ts",
+    "test:employee": "jest -- 3-employee-workflow.test.ts",
+    "test:partner": "jest -- 4-partner-workflow.test.ts",
+    "test:financial": "jest -- 5-financial-logic.test.ts",
+    "test:kpi": "jest -- 6-kpi-logic.test.ts",
+    "test:e2e": "jest -- 7-end-to-end-scenarios.test.ts",
+    "test:all": "jest --coverage --verbose"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@prisma/client": "^6.19.1",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.16.3",
+    "prisma": "^6.19.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.12",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.8",
+    "@types/jsonwebtoken": "^9.0.2",
+    "@types/node": "^20.4.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.1",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.2.2"
+  }
+}
