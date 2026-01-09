@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_DATABASE_URL")
 }
 
@@ -44,17 +44,17 @@ model AuditLog {
 }
 
 model Department {
-  id                  Int      @id @default(autoincrement())
-  name                String
-  description         String?
-  department_code     String?  @unique
-  department_head_id  Int?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                 Int      @id @default(autoincrement())
+  name               String
+  description        String?
+  department_code    String?  @unique
+  department_head_id Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  profiles Profile[]
-  kpis     Kpi[]
-  evaluationTeams EvaluationTeam[]
+  profiles         Profile[]
+  kpis             Kpi[]
+  evaluationTeams  EvaluationTeam[]
   adHocEvaluations AdHocEvaluation[]
 
   @@map("departments")
@@ -65,96 +65,105 @@ model Department {
 // Each role has a billing_rate for job assignments and permissions for access control
 // This replaces PositionRate and becomes the central role system
 model Role {
-  id            Int       @id @default(autoincrement())
-  name          String    @unique  // "Partner", "Manager", "Associate", "Intern", "Employee"
-  billing_rate  Decimal   @default(0)  // 15000, 6000, 4000, 2000, etc.
-  permissions   Json      @default("[]")  // JSON array of permission strings
-  description   String?   // Optional description
-  is_active     Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           Int      @id @default(autoincrement())
+  name         String   @unique // "Partner", "Manager", "Associate", "Intern", "Employee"
+  billing_rate Decimal  @default(0) // 15000, 6000, 4000, 2000, etc.
+  permissions  Json     @default("[]") // JSON array of permission strings
+  description  String? // Optional description
+  is_active    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  profiles              Profile[]  // Employees with this role
-  jobStaffAssignments   JobStaffAssignment[]  // Job assignments using this role
+  profiles            Profile[] // Employees with this role
+  jobStaffAssignments JobStaffAssignment[] // Job assignments using this role
 
   @@index([name])
   @@map("roles")
 }
 
 model Profile {
-  id             Int      @id @default(autoincrement())
-  userId         Int?     @unique
-  first_name     String
-  last_name      String
-  email          String?  @unique
-  phone_number   String?
+  id              Int       @id @default(autoincrement())
+  userId          Int?      @unique
+  first_name      String
+  last_name       String
+  email           String?   @unique
+  phone_number    String?
   profile_picture String?
-  status         String   @default("active")
-  position       String?
-  departmentId   Int?
-  role_id        Int?     // Foreign key to Role model (for job assignments and billing)
-  hire_date      DateTime?
-  manager_id     Int?
-  cost_rate      Decimal? @default(0)  // Optional: internal cost rate for profit calculations
-  is_partner     Boolean  @default(false)  // Deprecated: use role instead
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status          String    @default("active")
+  position        String?
+  departmentId    Int?
+  role_id         Int? // Foreign key to Role model (for job assignments and billing)
+  hire_date       DateTime?
+  manager_id      Int?
+  cost_rate       Decimal?  @default(0) // Optional: internal cost rate for profit calculations
+  is_partner      Boolean   @default(false) // Deprecated: use role instead
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  department     Department? @relation(fields: [departmentId], references: [id])
-  user           User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role           Role?       @relation(fields: [role_id], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  user       User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role?       @relation(fields: [role_id], references: [id])
 
-  workLogs               WorkLog[]
-  performanceReviews     PerformanceReview[]
-  clientEvaluations      ClientEvaluation[]
-  employeeEvaluations    EmployeeEvaluation[]
-  employeeGoals          EmployeeGoal[]
-  employeeKpiAssignments EmployeeKpiAssignment[]
+  workLogs                   WorkLog[]
+  performanceReviews         PerformanceReview[]
+  clientEvaluations          ClientEvaluation[]
+  employeeEvaluations        EmployeeEvaluation[]
+  employeeGoals              EmployeeGoal[]
+  employeeKpiAssignments     EmployeeKpiAssignment[]
   employeeProjectAllocations EmployeeProjectAllocation[]
-  continuousFeedback     ContinuousFeedback[]
+  continuousFeedback         ContinuousFeedback[]
   developmentRecommendations DevelopmentRecommendation[]
-  evaluationActionItems  EvaluationActionItem[]
-  jobStaffAssignments    JobStaffAssignment[]
-  todos                  Todo[]
-  notifications          Notification[]
-  partnerProfile         Partner? @relation("ProfilePartner")
-  partnerJobs            Job[] @relation("partner")
-  managerJobs            Job[] @relation("manager")
-  tasksAssigned          Task[] @relation("assigned_to")
-  timeEntries            TimeEntry[] @relation("employee")
-  approvedTimeEntries    TimeEntry[] @relation("approver")
+  evaluationActionItems      EvaluationActionItem[]
+  jobStaffAssignments        JobStaffAssignment[]
+  todos                      Todo[]
+  notifications              Notification[]
+  partnerProfile             Partner?                    @relation("ProfilePartner")
+  partnerJobs                Job[]                       @relation("partner")
+  managerJobs                Job[]                       @relation("manager")
+  tasksAssigned              Task[]                      @relation("assigned_to")
+  timeEntries                TimeEntry[]                 @relation("employee")
+  approvedTimeEntries        TimeEntry[]                 @relation("approver")
+
+  // Non-financial performance tracking relations
+  trainingRecords           TrainingRecord[]   @relation("EmployeeTrainingRecords")
+  knowledgeSessions         KnowledgeSession[] @relation("PresenterKnowledgeSessions")
+  qualityReviews            QualityReview[]    @relation("EmployeeQualityReviews")
+  reviewsGiven              QualityReview[]    @relation("ReviewerQualityReviews")
+  improvementIdeasSubmitted ImprovementIdea[]  @relation("ImprovementIdeaSubmitter")
+  improvementIdeasReviewed  ImprovementIdea[]  @relation("ImprovementIdeaReviewer")
+  employeeKpiScores         EmployeeKpiScore[] @relation("EmployeeKpiScores")
 
   @@index([is_partner])
   @@map("profiles")
 }
 
 model PartnerCompany {
-  id                      Int       @id @default(autoincrement())
-  company_name            String    @unique
-  registration_number     String?
-  tax_id                  String?
-  bank_account_details    String?   @db.Text
-  contract_terms          String?   @db.Text
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  id                   Int      @id @default(autoincrement())
+  company_name         String   @unique
+  registration_number  String?
+  tax_id               String?
+  bank_account_details String?  @db.Text
+  contract_terms       String?  @db.Text
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  partners                Partner[]
+  partners Partner[]
 
   @@map("partner_companies")
 }
 
 model Partner {
-  id                      Int       @id @default(autoincrement())
-  profile_id              Int       @unique
-  company_id              Int?
-  commission_rate         Decimal?  @default(0)
-  performance_threshold   Decimal?  @default(80)
-  group_name              String?
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  id                    Int      @id @default(autoincrement())
+  profile_id            Int      @unique
+  company_id            Int?
+  commission_rate       Decimal? @default(0)
+  performance_threshold Decimal? @default(80)
+  group_name            String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  profile                 Profile   @relation("ProfilePartner", fields: [profile_id], references: [id], onDelete: Cascade)
-  company                 PartnerCompany? @relation(fields: [company_id], references: [id], onDelete: SetNull)
+  profile Profile         @relation("ProfilePartner", fields: [profile_id], references: [id], onDelete: Cascade)
+  company PartnerCompany? @relation(fields: [company_id], references: [id], onDelete: SetNull)
 
   @@index([profile_id])
   @@index([company_id])
@@ -177,106 +186,245 @@ model Session {
 }
 
 model Client {
-  id            Int       @id @default(autoincrement())
-  client_name   String
-  client_code   String?   @unique
-  industry      String?
+  id             Int      @id @default(autoincrement())
+  client_name    String
+  client_code    String?  @unique
+  industry       String?
   contact_person String?
-  contact_email String?
-  contact_phone String?
-  address       String?
-  status        String    @default("active")
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  contact_email  String?
+  contact_phone  String?
+  address        String?
+  status         String   @default("active")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  projects           Project[]
-  clientEvaluations  ClientEvaluation[]
-  jobs               Job[]
+  projects          Project[]
+  clientEvaluations ClientEvaluation[]
+  jobs              Job[]
 
   @@map("clients")
 }
 
 model Project {
-  id                Int       @id @default(autoincrement())
-  project_name      String
-  project_code      String?   @unique
-  client_id         Int?
-  description       String?
-  start_date        DateTime?
-  end_date          DateTime?
-  status            String    @default("active")
-  budget            Decimal?
+  id                 Int       @id @default(autoincrement())
+  project_name       String
+  project_code       String?   @unique
+  client_id          Int?
+  description        String?
+  start_date         DateTime?
+  end_date           DateTime?
+  status             String    @default("active")
+  budget             Decimal?
   project_manager_id Int?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  client                      Client? @relation(fields: [client_id], references: [id])
-  workLogs                    WorkLog[]
-  employeeProjectAllocations  EmployeeProjectAllocation[]
-  projectFinancials           ProjectFinancial[]
-  clientEvaluations           ClientEvaluation[]
+  client                     Client?                     @relation(fields: [client_id], references: [id])
+  workLogs                   WorkLog[]
+  employeeProjectAllocations EmployeeProjectAllocation[]
+  projectFinancials          ProjectFinancial[]
+  clientEvaluations          ClientEvaluation[]
 
   @@map("projects")
 }
 
 model WorkLog {
-  id            Int       @id @default(autoincrement())
-  employee_id   Int
-  project_id    Int?
-  work_date     DateTime
-  hours_worked  Decimal   
-  billable_hours Decimal? 
-  description   String?
-  task_type     String?
-  is_overtime   Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id             Int      @id @default(autoincrement())
+  employee_id    Int
+  project_id     Int?
+  work_date      DateTime
+  hours_worked   Decimal
+  billable_hours Decimal?
+  description    String?
+  task_type      String?
+  activity_type  String? // 'mentoring', 'training', 'client_work', 'admin', etc.
+  is_overtime    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  employee Profile @relation(fields: [employee_id], references: [id])
+  employee Profile  @relation(fields: [employee_id], references: [id])
   project  Project? @relation(fields: [project_id], references: [id])
 
   @@map("work_logs")
 }
 
+// Training Records: Track formal training completed by employees
+// Used for Learning & Growth BSC calculation
+model TrainingRecord {
+  id              Int      @id @default(autoincrement())
+  employee_id     Int
+  course_name     String
+  provider        String? // Training provider/organization
+  hours           Decimal // Training hours completed
+  completed_at    DateTime
+  certificate_url String? // Link to certificate if available
+  training_type   String   @default("external") // 'external', 'internal', 'self_study'
+  cost            Decimal? @default(0)
+  notes           String?
+  status          String   @default("completed") // 'completed', 'in_progress', 'cancelled'
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  employee Profile @relation("EmployeeTrainingRecords", fields: [employee_id], references: [id], onDelete: Cascade)
+
+  @@index([employee_id])
+  @@index([completed_at])
+  @@map("training_records")
+}
+
+// Knowledge Sessions: Track knowledge sharing presentations
+// Used for Learning & Growth BSC calculation
+model KnowledgeSession {
+  id             Int      @id @default(autoincrement())
+  presenter_id   Int
+  title          String
+  topic_area     String? // e.g., 'Audit Standards', 'Tax Updates', 'Technology'
+  session_date   DateTime
+  duration_hours Decimal  @default(1)
+  attendee_count Int      @default(0)
+  description    String?
+  session_type   String   @default("presentation") // 'presentation', 'workshop', 'lunch_learn'
+  materials_url  String? // Link to presentation materials
+  feedback_score Decimal? // Average feedback score from attendees
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  presenter Profile @relation("PresenterKnowledgeSessions", fields: [presenter_id], references: [id], onDelete: Cascade)
+
+  @@index([presenter_id])
+  @@index([session_date])
+  @@map("knowledge_sessions")
+}
+
+// Quality Reviews: Manager/partner quality assessments of completed work
+// Used for Internal Processes BSC calculation
+model QualityReview {
+  id                    Int      @id @default(autoincrement())
+  job_id                Int
+  employee_id           Int
+  reviewer_id           Int
+  accuracy_score        Decimal // 1-5 scale: How accurate was the work?
+  completeness_score    Decimal // 1-5 scale: How complete was the deliverable?
+  timeliness_score      Decimal // 1-5 scale: Was it delivered on time?
+  innovation_score      Decimal? // 1-5 scale: Did they show innovative thinking?
+  overall_score         Decimal // Overall quality score (1-5)
+  feedback              String?  @db.Text
+  areas_for_improvement String?  @db.Text
+  strengths             String?  @db.Text
+  review_date           DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  job      Job     @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  employee Profile @relation("EmployeeQualityReviews", fields: [employee_id], references: [id], onDelete: Cascade)
+  reviewer Profile @relation("ReviewerQualityReviews", fields: [reviewer_id], references: [id], onDelete: Cascade)
+
+  @@unique([job_id, employee_id]) // One review per employee per job
+  @@index([employee_id])
+  @@index([reviewer_id])
+  @@index([review_date])
+  @@map("quality_reviews")
+}
+
+// Improvement Ideas: Process improvement suggestions from staff
+// Used for Internal Processes BSC calculation
+model ImprovementIdea {
+  id                  Int       @id @default(autoincrement())
+  submitted_by        Int
+  title               String
+  description         String    @db.Text
+  category            String // 'process', 'technology', 'training', 'client_service'
+  priority            String    @default("medium") // 'low', 'medium', 'high'
+  status              String    @default("pending") // 'pending', 'approved', 'implemented', 'rejected'
+  impact_area         String? // Which department/area this affects
+  estimated_savings   Decimal? // Estimated time/cost savings
+  implementation_date DateTime?
+  feedback            String? // Admin feedback on the idea
+  submitted_at        DateTime  @default(now())
+  reviewed_at         DateTime?
+  reviewed_by         Int?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  submitter Profile  @relation("ImprovementIdeaSubmitter", fields: [submitted_by], references: [id], onDelete: Cascade)
+  reviewer  Profile? @relation("ImprovementIdeaReviewer", fields: [reviewed_by], references: [id])
+
+  @@index([submitted_by])
+  @@index([status])
+  @@index([submitted_at])
+  @@map("improvement_ideas")
+}
+
+// Employee KPI Scores: Aggregated KPI scores per employee per period
+// Central table for BSC score calculation
+model EmployeeKpiScore {
+  id                       Int      @id @default(autoincrement())
+  employee_id              Int
+  evaluation_cycle_id      Int?
+  kpi_name                 String // e.g., 'training_hours', 'client_feedback', 'quality_score'
+  kpi_category             String // 'learning_growth', 'customer_satisfaction', 'internal_processes'
+  calculated_value         Decimal // Actual achieved value
+  target_value             Decimal // Target/expected value
+  achievement_percentage   Decimal // (calculated_value / target_value) * 100
+  weight_percentage        Decimal // Weight of this KPI within its category
+  weighted_score           Decimal // achievement_percentage * weight_percentage
+  calculation_period_start DateTime
+  calculation_period_end   DateTime
+  calculated_at            DateTime @default(now())
+  notes                    String? // Additional context about the calculation
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  employee        Profile          @relation("EmployeeKpiScores", fields: [employee_id], references: [id], onDelete: Cascade)
+  evaluationCycle EvaluationCycle? @relation(fields: [evaluation_cycle_id], references: [id])
+
+  @@unique([employee_id, evaluation_cycle_id, kpi_name]) // One score per KPI per employee per cycle
+  @@index([employee_id])
+  @@index([evaluation_cycle_id])
+  @@index([kpi_category])
+  @@index([calculation_period_start])
+  @@map("employee_kpi_scores")
+}
+
 model Kpi {
-  id               Int       @id @default(autoincrement())
+  id               Int      @id @default(autoincrement())
   name             String
   description      String?
   category         String?
   measurement_unit String?
-  target_value     Decimal?  
-  weight           Decimal?  
+  target_value     Decimal?
+  weight           Decimal?
   bsc_category     String?
   department_id    Int?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  department                 Department? @relation(fields: [department_id], references: [id])
-  employeeKpiAssignments     EmployeeKpiAssignment[]
-  evaluationResultAreas      EvaluationResultArea[]
-  employeeGoals              EmployeeGoal[]
+  department             Department?             @relation(fields: [department_id], references: [id])
+  employeeKpiAssignments EmployeeKpiAssignment[]
+  evaluationResultAreas  EvaluationResultArea[]
+  employeeGoals          EmployeeGoal[]
 
   @@map("kpis")
 }
 
 model PerformanceReview {
-  id                  Int       @id @default(autoincrement())
-  employee_id         Int
-  reviewer_id         Int?
-  review_period_start DateTime?
-  review_period_end   DateTime?
-  overall_rating      Decimal?  
-  financial_score     Decimal?  
-  non_financial_score Decimal?  
-  strengths           String?
+  id                    Int       @id @default(autoincrement())
+  employee_id           Int
+  reviewer_id           Int?
+  review_period_start   DateTime?
+  review_period_end     DateTime?
+  overall_rating        Decimal?
+  financial_score       Decimal?
+  non_financial_score   Decimal?
+  strengths             String?
   areas_for_improvement String?
-  goals_next_period   String?
-  reviewer_comments   String?
-  employee_comments   String?
-  status              String    @default("draft")
-  submitted_at        DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  goals_next_period     String?
+  reviewer_comments     String?
+  employee_comments     String?
+  status                String    @default("draft")
+  submitted_at          DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   employee Profile @relation(fields: [employee_id], references: [id])
 
@@ -284,33 +432,34 @@ model PerformanceReview {
 }
 
 model Feedback {
-  id            Int       @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   recipient_id  Int
   giver_id      Int?
   feedback_type String?
   category      String?
   message       String
-  is_anonymous  Boolean   @default(false)
-  is_public     Boolean   @default(false)
-  createdAt     DateTime  @default(now())
+  is_anonymous  Boolean  @default(false)
+  is_public     Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
   @@map("feedback")
 }
 
 model EvaluationCycle {
-  id          Int       @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   cycle_name  String
   description String?
   start_date  DateTime
   end_date    DateTime
-  status      String    @default("draft")
+  status      String   @default("draft")
   created_by  Int?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   employeeEvaluations EmployeeEvaluation[]
   peerEvaluations     PeerEvaluation[]
   upwardEvaluations   UpwardEvaluation[]
+  employeeKpiScores   EmployeeKpiScore[]
 
   @@map("evaluation_cycles")
 }
@@ -326,7 +475,7 @@ model ClientEvaluation {
   timeliness      Int?
   professionalism Int?
   expertise       Int?
-  overall_rating  Decimal?  
+  overall_rating  Decimal?
   comments        String?
   would_recommend Boolean?
   access_token    String?   @unique
@@ -334,9 +483,9 @@ model ClientEvaluation {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  employee Profile @relation(fields: [employee_id], references: [id])
+  employee Profile  @relation(fields: [employee_id], references: [id])
   project  Project? @relation(fields: [project_id], references: [id])
-  client   Client? @relation(fields: [client_id], references: [id])
+  client   Client?  @relation(fields: [client_id], references: [id])
 
   @@map("client_evaluations")
 }
@@ -344,9 +493,9 @@ model ClientEvaluation {
 model ProjectFinancial {
   id            Int       @id @default(autoincrement())
   project_id    Int?
-  total_revenue Decimal?  
-  total_cost    Decimal?  
-  profit_margin Decimal?  
+  total_revenue Decimal?
+  total_cost    Decimal?
+  profit_margin Decimal?
   period_start  DateTime?
   period_end    DateTime?
   createdAt     DateTime  @default(now())
@@ -361,49 +510,53 @@ model EmployeeProjectAllocation {
   id                    Int       @id @default(autoincrement())
   employee_id           Int
   project_id            Int?
-  allocation_percentage Decimal?  
-  allocation_amount     Decimal?  
-  billable_hours        Decimal?  
+  allocation_percentage Decimal?
+  allocation_amount     Decimal?
+  billable_hours        Decimal?
   start_date            DateTime?
   end_date              DateTime?
   role_in_project       String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  employee Profile @relation(fields: [employee_id], references: [id])
+  employee Profile  @relation(fields: [employee_id], references: [id])
   project  Project? @relation(fields: [project_id], references: [id])
 
   @@map("employee_project_allocations")
 }
 
 model EmployeeEvaluation {
-  id                  Int       @id @default(autoincrement())
-  evaluation_cycle_id Int?
-  employee_id         Int
-  evaluator_id        Int?
-  evaluation_type     String?
-  self_rating         Decimal?  
-  manager_rating      Decimal?  
-  peer_rating         Decimal?  
-  upward_rating       Decimal?  
-  overall_rating      Decimal?  
-  manager_technical_expertise Decimal? 
-  manager_communication Decimal? 
-  manager_collaboration Decimal? 
-  manager_problem_solving Decimal? 
-  manager_time_management Decimal? 
-  manager_innovation  Decimal?  
-  competencies        String?   @db.Text
-  goals_achieved      String?   @db.Text
-  development_areas   String?   @db.Text
-  comments            String?
-  status              String    @default("pending")
-  submitted_at        DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id                              Int       @id @default(autoincrement())
+  evaluation_cycle_id             Int?
+  employee_id                     Int
+  evaluator_id                    Int?
+  evaluation_type                 String?
+  self_rating                     Decimal?
+  manager_rating                  Decimal?
+  peer_rating                     Decimal?
+  upward_rating                   Decimal?
+  overall_rating                  Decimal?
+  manager_technical_expertise     Decimal?
+  manager_communication           Decimal?
+  manager_collaboration           Decimal?
+  manager_problem_solving         Decimal?
+  manager_time_management         Decimal?
+  manager_innovation              Decimal?
+  // Balanced Scorecard (BSC) Non-Financial Performance Scores
+  bsc_learning_growth_score       Decimal? // Learning & Growth perspective (35%)
+  bsc_customer_satisfaction_score Decimal? // Customer Satisfaction perspective (35%)
+  bsc_internal_processes_score    Decimal? // Internal Processes perspective (30%)
+  competencies                    String?   @db.Text
+  goals_achieved                  String?   @db.Text
+  development_areas               String?   @db.Text
+  comments                        String?
+  status                          String    @default("pending")
+  submitted_at                    DateTime?
+  createdAt                       DateTime  @default(now())
+  updatedAt                       DateTime  @updatedAt
 
-  employee          Profile @relation(fields: [employee_id], references: [id])
-  evaluationCycle   EvaluationCycle? @relation(fields: [evaluation_cycle_id], references: [id])
+  employee        Profile          @relation(fields: [employee_id], references: [id])
+  evaluationCycle EvaluationCycle? @relation(fields: [evaluation_cycle_id], references: [id])
 
   @@map("employee_evaluations")
 }
@@ -417,7 +570,7 @@ model PeerEvaluation {
   communication_rating     Int?
   reliability_rating       Int?
   knowledge_sharing_rating Int?
-  overall_rating           Decimal?  
+  overall_rating           Decimal?
   strengths                String?
   areas_for_improvement    String?
   is_anonymous             Boolean   @default(true)
@@ -441,7 +594,7 @@ model UpwardEvaluation {
   support_rating          Int?
   decision_making_rating  Int?
   feedback_quality_rating Int?
-  overall_rating          Decimal?  
+  overall_rating          Decimal?
   strengths               String?
   areas_for_improvement   String?
   suggestions             String?
@@ -471,39 +624,39 @@ model EmployeeGoal {
   updatedAt           DateTime  @updatedAt
 
   employee Profile @relation(fields: [employee_id], references: [id])
-  kpi      Kpi? @relation(fields: [kpi_id], references: [id])
+  kpi      Kpi?    @relation(fields: [kpi_id], references: [id])
 
   @@map("employee_goals")
 }
 
 model EmployeeKpiAssignment {
-  id              Int       @id @default(autoincrement())
-  employee_id     Int
-  kpi_id          Int?
-  target_value    Decimal?  
-  achieved_value  Decimal?  
-  weight          Decimal?  
-  period_start    DateTime?
-  period_end      DateTime?
-  status          String    @default("active")
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id             Int       @id @default(autoincrement())
+  employee_id    Int
+  kpi_id         Int?
+  target_value   Decimal?
+  achieved_value Decimal?
+  weight         Decimal?
+  period_start   DateTime?
+  period_end     DateTime?
+  status         String    @default("active")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   employee Profile @relation(fields: [employee_id], references: [id])
-  kpi      Kpi? @relation(fields: [kpi_id], references: [id])
+  kpi      Kpi?    @relation(fields: [kpi_id], references: [id])
 
   @@map("employee_kpi_assignments")
 }
 
 model Notification {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   user_id   Int
   title     String
   message   String
   type      String?
-  is_read   Boolean   @default(false)
+  is_read   Boolean  @default(false)
   link      String?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   user Profile @relation(fields: [user_id], references: [id])
 
@@ -511,62 +664,62 @@ model Notification {
 }
 
 model SystemConfig {
-  id          Int       @id @default(autoincrement())
-  config_key  String    @unique
+  id           Int      @id @default(autoincrement())
+  config_key   String   @unique
   config_value String?
-  description String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  description  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@map("system_config")
 }
 
 model AdHocEvaluation {
-  id                                   Int       @id @default(autoincrement())
-  name                                 String
-  evaluation_target                    String?
-  department_id                        Int?
-  created_by                           Int?
-  enable_self_evaluation               Boolean   @default(false)
-  enable_peer_evaluation               Boolean   @default(false)
-  enable_upward_evaluation             Boolean   @default(false)
-  enable_downward_evaluation           Boolean   @default(false)
-  due_date                             DateTime?
-  cancel_if_not_processed              Boolean   @default(false)
-  process_anonymously                  Boolean   @default(false)
-  hide_from_dashboard                  Boolean   @default(false)
-  require_all_kpis                     Boolean   @default(false)
-  exclude_from_score                   Boolean   @default(false)
-  require_evaluator_signature          Boolean   @default(false)
-  require_evaluatee_signature          Boolean   @default(false)
-  send_signature_to_evaluatee          Boolean   @default(false)
-  send_signature_to_managers           Boolean   @default(false)
-  send_signature_to_downward_evaluators Boolean  @default(false)
-  status                               String    @default("draft")
-  published_at                         DateTime?
-  createdAt                            DateTime  @default(now())
-  updatedAt                            DateTime  @updatedAt
+  id                                    Int       @id @default(autoincrement())
+  name                                  String
+  evaluation_target                     String?
+  department_id                         Int?
+  created_by                            Int?
+  enable_self_evaluation                Boolean   @default(false)
+  enable_peer_evaluation                Boolean   @default(false)
+  enable_upward_evaluation              Boolean   @default(false)
+  enable_downward_evaluation            Boolean   @default(false)
+  due_date                              DateTime?
+  cancel_if_not_processed               Boolean   @default(false)
+  process_anonymously                   Boolean   @default(false)
+  hide_from_dashboard                   Boolean   @default(false)
+  require_all_kpis                      Boolean   @default(false)
+  exclude_from_score                    Boolean   @default(false)
+  require_evaluator_signature           Boolean   @default(false)
+  require_evaluatee_signature           Boolean   @default(false)
+  send_signature_to_evaluatee           Boolean   @default(false)
+  send_signature_to_managers            Boolean   @default(false)
+  send_signature_to_downward_evaluators Boolean   @default(false)
+  status                                String    @default("draft")
+  published_at                          DateTime?
+  createdAt                             DateTime  @default(now())
+  updatedAt                             DateTime  @updatedAt
 
-  department                Department? @relation(fields: [department_id], references: [id])
-  evaluationAssignments     EvaluationAssignment[]
-  evaluationResultAreas     EvaluationResultArea[]
+  department            Department?            @relation(fields: [department_id], references: [id])
+  evaluationAssignments EvaluationAssignment[]
+  evaluationResultAreas EvaluationResultArea[]
 
   @@map("ad_hoc_evaluations")
 }
 
 model EvaluationAssignment {
-  id                    Int       @id @default(autoincrement())
-  ad_hoc_evaluation_id  Int?
-  evaluator_id          Int
-  evaluatee_id          Int
-  evaluation_type       String?
-  status                String    @default("pending")
-  responses             String?   @db.Text
-  evidence_urls         String[]
-  evaluator_comments    String?
-  submitted_at          DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  id                   Int       @id @default(autoincrement())
+  ad_hoc_evaluation_id Int?
+  evaluator_id         Int
+  evaluatee_id         Int
+  evaluation_type      String?
+  status               String    @default("pending")
+  responses            String?   @db.Text
+  evidence_urls        String[]
+  evaluator_comments   String?
+  submitted_at         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   adHocEvaluation AdHocEvaluation? @relation(fields: [ad_hoc_evaluation_id], references: [id], onDelete: Cascade)
 
@@ -574,41 +727,41 @@ model EvaluationAssignment {
 }
 
 model EvaluationResultArea {
-  id                   Int       @id @default(autoincrement())
+  id                   Int      @id @default(autoincrement())
   ad_hoc_evaluation_id Int?
   kpi_id               Int?
   evaluator_type       String?
-  weight               Decimal?  
+  weight               Decimal?
   description          String?
-  createdAt            DateTime  @default(now())
+  createdAt            DateTime @default(now())
 
   adHocEvaluation AdHocEvaluation? @relation(fields: [ad_hoc_evaluation_id], references: [id], onDelete: Cascade)
-  kpi             Kpi? @relation(fields: [kpi_id], references: [id])
+  kpi             Kpi?             @relation(fields: [kpi_id], references: [id])
 
   @@map("evaluation_result_areas")
 }
 
 model EvaluationTeam {
-  id          Int       @id @default(autoincrement())
-  name        String
-  description String?
+  id            Int      @id @default(autoincrement())
+  name          String
+  description   String?
   department_id Int?
-  created_by  Int?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  created_by    Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  department Department? @relation(fields: [department_id], references: [id])
+  department Department?            @relation(fields: [department_id], references: [id])
   members    EvaluationTeamMember[]
 
   @@map("evaluation_teams")
 }
 
 model EvaluationTeamMember {
-  id          Int       @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   team_id     Int
   employee_id Int
   role        String?
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime @default(now())
 
   team EvaluationTeam @relation(fields: [team_id], references: [id], onDelete: Cascade)
 
@@ -616,39 +769,39 @@ model EvaluationTeamMember {
 }
 
 model EvaluationTemplate {
-  id            Int       @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   template_name String
   description   String?
   template_type String?
-  questions     String?   @db.Text
+  questions     String?  @db.Text
   created_by    Int?
-  is_active     Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  is_active     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@map("evaluation_templates")
 }
 
 model GoalKpiLink {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   goal_id   Int
   kpi_id    Int
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@map("goal_kpi_links")
 }
 
 model ContinuousFeedback {
-  id            Int       @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   recipient_id  Int
   giver_id      Int?
   feedback_type String?
   category      String?
   message       String
-  is_anonymous  Boolean   @default(false)
-  is_public     Boolean   @default(false)
+  is_anonymous  Boolean  @default(false)
+  is_public     Boolean  @default(false)
   tags          String[]
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime @default(now())
 
   recipient Profile @relation(fields: [recipient_id], references: [id])
 
@@ -656,19 +809,19 @@ model ContinuousFeedback {
 }
 
 model DevelopmentRecommendation {
-  id                       Int       @id @default(autoincrement())
-  employee_id              Int
-  recommended_by           Int?
-  recommendation_type      String?
-  title                    String
-  description              String?
-  priority                 String?
-  target_completion_date   DateTime?
-  status                   String    @default("pending")
-  progress_notes           String?
-  completed_at             DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  id                     Int       @id @default(autoincrement())
+  employee_id            Int
+  recommended_by         Int?
+  recommendation_type    String?
+  title                  String
+  description            String?
+  priority               String?
+  target_completion_date DateTime?
+  status                 String    @default("pending")
+  progress_notes         String?
+  completed_at           DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   employee Profile @relation(fields: [employee_id], references: [id])
 
@@ -676,17 +829,17 @@ model DevelopmentRecommendation {
 }
 
 model EvaluationActionItem {
-  id             Int       @id @default(autoincrement())
-  evaluation_id  Int?
-  employee_id    Int
-  action_item    String
-  description    String?
-  due_date       DateTime?
-  status         String    @default("pending")
-  assigned_by    Int?
-  completed_at   DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id            Int       @id @default(autoincrement())
+  evaluation_id Int?
+  employee_id   Int
+  action_item   String
+  description   String?
+  due_date      DateTime?
+  status        String    @default("pending")
+  assigned_by   Int?
+  completed_at  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   employee Profile @relation(fields: [employee_id], references: [id])
 
@@ -694,44 +847,45 @@ model EvaluationActionItem {
 }
 
 model Job {
-  id               Int       @id @default(autoincrement())
-  job_name         String
-  job_code         String?   @unique
-  client_id        Int?
-  partner_id       Int?
-  manager_id       Int?
-  description      String?
-  start_date       DateTime?
-  due_date         DateTime?
-  completion_date  DateTime?
-  status           String    @default("active")
-  assigned_to      Int?
-  department_id    Int?
-  estimated_hours  Decimal?  
-  actual_hours     Decimal?  
-  billable_hours   Decimal?
+  id                    Int       @id @default(autoincrement())
+  job_name              String
+  job_code              String?   @unique
+  client_id             Int?
+  partner_id            Int?
+  manager_id            Int?
+  description           String?
+  start_date            DateTime?
+  due_date              DateTime?
+  completion_date       DateTime?
+  status                String    @default("active")
+  assigned_to           Int?
+  department_id         Int?
+  estimated_hours       Decimal?
+  actual_hours          Decimal?
+  billable_hours        Decimal?
   // Billing type: hourly (charged by hours), fixed_fee (flat fee), retainer (recurring charge)
-  billing_type     String    @default("hourly")
-  budgeted_hours   Decimal?
+  billing_type          String    @default("hourly")
+  budgeted_hours        Decimal?
   // For fixed_fee billing type: the fixed amount to be charged
-  fixed_fee_amount Decimal?  @default(0)
-  amount_collected Decimal?  @default(0)
-  fees             Decimal?  @default(0)
-  partner_notes    String?
-  completion_percentage Int @default(0)
+  fixed_fee_amount      Decimal?  @default(0)
+  amount_collected      Decimal?  @default(0)
+  fees                  Decimal?  @default(0)
+  partner_notes         String?
+  completion_percentage Int       @default(0)
   // NOTE: hourly_rate is REMOVED - rates are now derived from employee position/role
   // When time is logged, the billable amount is calculated from the employee's position rate
-  budget           Decimal?  
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  budget                Decimal?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  partner              Profile?  @relation("partner", fields: [partner_id], references: [id])
-  manager              Profile?  @relation("manager", fields: [manager_id], references: [id])
-  client               Client?   @relation(fields: [client_id], references: [id])
-  jobStaffAssignments  JobStaffAssignment[]
-  jobProfitability     JobProfitability[]
-  tasks                Task[]
-  timeEntries          TimeEntry[]
+  partner             Profile?             @relation("partner", fields: [partner_id], references: [id])
+  manager             Profile?             @relation("manager", fields: [manager_id], references: [id])
+  client              Client?              @relation(fields: [client_id], references: [id])
+  jobStaffAssignments JobStaffAssignment[]
+  jobProfitability    JobProfitability[]
+  tasks               Task[]
+  timeEntries         TimeEntry[]
+  qualityReviews      QualityReview[]
 
   @@index([partner_id])
   @@index([manager_id])
@@ -741,16 +895,16 @@ model Job {
 }
 
 model Todo {
-  id          Int       @id @default(autoincrement())
-  user_id     Int
-  title       String
-  description String?
-  status      String    @default("pending")
-  priority    String?
-  due_date    DateTime?
+  id           Int       @id @default(autoincrement())
+  user_id      Int
+  title        String
+  description  String?
+  status       String    @default("pending")
+  priority     String?
+  due_date     DateTime?
   completed_at DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   user Profile @relation(fields: [user_id], references: [id])
 
@@ -758,22 +912,22 @@ model Todo {
 }
 
 model Task {
-  id               Int       @id @default(autoincrement())
-  job_id           Int
-  assigned_to      Int?
-  title            String
-  description      String?
-  estimated_hours  Decimal?
-  billable         Boolean   @default(true)
-  status           String    @default("pending")
-  priority         String    @default("medium")
-  due_date         DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id              Int       @id @default(autoincrement())
+  job_id          Int
+  assigned_to     Int?
+  title           String
+  description     String?
+  estimated_hours Decimal?
+  billable        Boolean   @default(true)
+  status          String    @default("pending")
+  priority        String    @default("medium")
+  due_date        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  job              Job       @relation(fields: [job_id], references: [id], onDelete: Cascade)
-  assignee         Profile?  @relation("assigned_to", fields: [assigned_to], references: [id])
-  timeEntries      TimeEntry[]
+  job         Job         @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  assignee    Profile?    @relation("assigned_to", fields: [assigned_to], references: [id])
+  timeEntries TimeEntry[]
 
   @@index([job_id])
   @@index([assigned_to])
@@ -782,32 +936,32 @@ model Task {
 }
 
 model TimeEntry {
-  id               Int       @id @default(autoincrement())
-  job_id           Int
-  task_id          Int?
-  employee_id      Int
-  date_worked      DateTime
-  start_time       String?
-  end_time         String?
-  hours            Decimal   @default(0)
-  billable         Boolean   @default(true)
-  description      String?
-  status           String    @default("submitted")
-  approved_by      Int?
-  approved_at      DateTime?
+  id              Int       @id @default(autoincrement())
+  job_id          Int
+  task_id         Int?
+  employee_id     Int
+  date_worked     DateTime
+  start_time      String?
+  end_time        String?
+  hours           Decimal   @default(0)
+  billable        Boolean   @default(true)
+  description     String?
+  status          String    @default("submitted")
+  approved_by     Int?
+  approved_at     DateTime?
   // Calculated automatically based on employee's position rate
   // billable_amount = hours × role.billing_rate
-  billable_amount  Decimal?  @default(0)
+  billable_amount Decimal?  @default(0)
   // Calculated automatically based on employee's position cost_rate
   // cost = hours × role.cost_rate
-  cost             Decimal?  @default(0)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  cost            Decimal?  @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  job              Job       @relation(fields: [job_id], references: [id], onDelete: Cascade)
-  task             Task?     @relation(fields: [task_id], references: [id], onDelete: SetNull)
-  employee         Profile   @relation("employee", fields: [employee_id], references: [id], onDelete: Cascade)
-  approver         Profile?  @relation("approver", fields: [approved_by], references: [id])
+  job      Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  task     Task?    @relation(fields: [task_id], references: [id], onDelete: SetNull)
+  employee Profile  @relation("employee", fields: [employee_id], references: [id], onDelete: Cascade)
+  approver Profile? @relation("approver", fields: [approved_by], references: [id])
 
   @@index([job_id])
   @@index([employee_id])
@@ -819,7 +973,7 @@ model TimeEntry {
 model FinancialRecord {
   id               Int       @id @default(autoincrement())
   record_type      String?
-  amount           Decimal   
+  amount           Decimal
   description      String?
   transaction_date DateTime?
   project_id       Int?
@@ -831,32 +985,32 @@ model FinancialRecord {
 }
 
 model JobStaffAssignment {
-  id                     Int       @id @default(autoincrement())
-  job_id                 Int
-  employee_id            Int
-  assigned_role_id       Int       // Snapshot of role at assignment time
-  assigned_hourly_rate   Decimal   // Snapshot of billing_rate at assignment time
-  role_snapshot          Json?     // Optional: Full role details at time of assignment (for audit)
-  assigned_at            DateTime  @default(now())
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
+  id                   Int      @id @default(autoincrement())
+  job_id               Int
+  employee_id          Int
+  assigned_role_id     Int // Snapshot of role at assignment time
+  assigned_hourly_rate Decimal // Snapshot of billing_rate at assignment time
+  role_snapshot        Json? // Optional: Full role details at time of assignment (for audit)
+  assigned_at          DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  job                Job         @relation(fields: [job_id], references: [id], onDelete: Cascade)
-  employee           Profile     @relation(fields: [employee_id], references: [id])
-  assigned_role      Role        @relation(fields: [assigned_role_id], references: [id])
+  job           Job     @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  employee      Profile @relation(fields: [employee_id], references: [id])
+  assigned_role Role    @relation(fields: [assigned_role_id], references: [id])
 
   @@unique([job_id, employee_id])
   @@map("job_staff_assignments")
 }
 
 model JobProfitability {
-  id             Int       @id @default(autoincrement())
-  job_id         Int
-  total_revenue  Decimal?  
-  total_cost     Decimal?  
-  profit         Decimal?  
-  profit_margin  Decimal?  
-  calculated_at  DateTime  @default(now())
+  id            Int      @id @default(autoincrement())
+  job_id        Int
+  total_revenue Decimal?
+  total_cost    Decimal?
+  profit        Decimal?
+  profit_margin Decimal?
+  calculated_at DateTime @default(now())
 
   job Job @relation(fields: [job_id], references: [id], onDelete: Cascade)
 

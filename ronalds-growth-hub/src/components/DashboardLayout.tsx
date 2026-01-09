@@ -75,6 +75,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         if (profile?.role) {
           const roleName = typeof profile.role === 'object' ? profile.role.name : profile.role;
           console.log('User role:', roleName);
+          console.log('User position:', profile.position);
+          console.log('User is_partner:', profile.is_partner);
           setUserRoles([roleName]);
         } else {
           console.log('No role found in profile');
@@ -103,24 +105,36 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   };
 
   const getRoleDisplay = () => {
+    // Check if user is partner based on is_partner flag
+    if (userProfile?.is_partner) return "Partner";
+    
+    // Check position for admin
+    if (userProfile?.position?.toLowerCase().includes('administrator')) return "System Administrator";
+    
+    // Check role from database
     if (userRoles.length > 0) {
       const role = userRoles[0];
+      if (role === 'Partner') return "Partner";
+      if (role === 'Manager') return "Manager";
+      if (role === 'Senior Associate') return "Senior Associate";
+      if (role === 'Associate') return "Associate";
       if (role === 'super_admin') return "Super Administrator";
       if (role === 'hr_manager') return "HR Manager";
-      if (role === 'manager' || role === 'Manager') return "Manager";
-      if (role === 'partner' || role === 'Partner') return "Partner";
-      if (role === 'client') return "Client";
     }
-    if (user?.is_partner) return "Partner";
+    
+    // Check position for manager roles
+    if (userProfile?.position?.toLowerCase().includes('manager')) return "Manager";
+    
     return "Employee";
   };
 
-  const isHROrAdmin = userRoles.some(r => r === 'super_admin' || r === 'hr_manager');
-  const isManager = userRoles.some(r => r === 'manager' || r === 'Manager') || 
+  const isHROrAdmin = userRoles.some(r => r === 'super_admin' || r === 'hr_manager') || 
+                      userProfile?.position?.toLowerCase().includes('administrator');
+  const isManager = userRoles.some(r => r === 'Manager') || 
                     userProfile?.position?.toLowerCase().includes('manager');
-  const isPartner = userRoles.some(r => r === 'partner' || r === 'Partner') || 
-                    userProfile?.position?.toLowerCase() === 'partner' || 
-                    userProfile?.is_partner === true;
+  const isPartner = userProfile?.is_partner || userRoles.some(r => r === 'Partner');
+  const isSeniorAssociate = userRoles.some(r => r === 'Senior Associate');
+  const isAssociate = userRoles.some(r => r === 'Associate');
   const isGMP = userProfile?.position?.toLowerCase().includes('group_managing_partner') || 
                 userProfile?.position?.toLowerCase().includes('group managing partner') ||
                 userProfile?.position === 'group_managing_partner' ||
@@ -130,7 +144,15 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-gradient-to-br from-primary/5 via-background to-secondary/5">
-        <AppSidebar isHROrAdmin={isHROrAdmin} isManager={isManager} isPartner={isPartner} isGMP={isGMP} isActive={isActive} />
+        <AppSidebar 
+          isHROrAdmin={isHROrAdmin} 
+          isManager={isManager} 
+          isPartner={isPartner} 
+          isGMP={isGMP} 
+          isSeniorAssociate={isSeniorAssociate}
+          isAssociate={isAssociate}
+          isActive={isActive} 
+        />
 
         <div className="flex-1 flex flex-col">
           {/* Header */}
@@ -180,10 +202,12 @@ interface AppSidebarProps {
   isManager: boolean;
   isPartner: boolean;
   isGMP: boolean;
+  isSeniorAssociate: boolean;
+  isAssociate: boolean;
   isActive: (path: string) => boolean;
 }
 
-function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isActive }: AppSidebarProps) {
+function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isSeniorAssociate, isAssociate, isActive }: AppSidebarProps) {
   const location = useLocation();
   const { state } = useSidebar();
 
@@ -310,6 +334,54 @@ function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isActive }: AppS
                     <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" />
                     <NavItem path="/kpi-management" icon={Settings} label="KPIs" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" />
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
+
+        {/* Partner-specific features */}
+        {isPartner && (
+          <Collapsible className="group/collapsible">
+            <SidebarGroup>
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="flex w-full items-center justify-between">
+                  Partner Tools
+                  <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" />
+                    <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" />
+                    <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" />
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
+
+        {/* Manager-specific features */}
+        {isManager && !isPartner && (
+          <Collapsible className="group/collapsible">
+            <SidebarGroup>
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="flex w-full items-center justify-between">
+                  Team Management
+                  <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <NavItem path="/team-performance" icon={Users} label="Team Performance" />
+                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" />
+                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" />
+                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>

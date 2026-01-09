@@ -40,6 +40,7 @@ import employeeRolesRoutes from './routes/employeeRoles';
 import jobStaffAssignmentsRoutes from './routes/jobStaffAssignments';
 import managerDashboardRoutes from './routes/managerDashboard';
 import gmpDashboardRoutes from './routes/gmpDashboard';
+import nonFinancialPerformanceRoutes from './routes/nonFinancialPerformance';
 
 dotenv.config();
 
@@ -91,5 +92,6 @@ app.use('/jobs', jobStaffAssignmentsRoutes);
 app.use('/partner', partnerRoutes);
 app.use('/manager-dashboard', managerDashboardRoutes);
 app.use('/gmp-dashboard', gmpDashboardRoutes);
+app.use('/non-financial-performance', nonFinancialPerformanceRoutes);
 
 export default app;

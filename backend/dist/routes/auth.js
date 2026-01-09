@@ -140,7 +140,7 @@ router.get('/me', auth_1.authMiddleware, async (req, res) => {
             name: user.name,
             profile_id: user.profile?.id,
             roles,
-            is_partner: roles.includes('PARTNER'),
+            is_partner: roles.includes('partner'),
             partner: partner ? {
                 id: partner.id,
                 profile_id: partner.profile_id,
