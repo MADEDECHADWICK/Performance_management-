@@ -74,9 +74,13 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         // Get the user's role - handle both object and string formats
         if (profile?.role) {
           const roleName = typeof profile.role === 'object' ? profile.role.name : profile.role;
-          console.log('User role:', roleName);
+          console.log('=== ROLE DETECTION DEBUG ===');
+          console.log('User email:', me.email);
+          console.log('User role object:', profile.role);
+          console.log('User role name:', roleName);
           console.log('User position:', profile.position);
           console.log('User is_partner:', profile.is_partner);
+          console.log('Profile data:', profile);
           setUserRoles([roleName]);
         } else {
           console.log('No role found in profile');
@@ -99,12 +103,68 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     }
   };
 
+  // Role detection flags - moved before useEffect
+  const isHROrAdmin = userRoles.some(r => r === 'super_admin' || r === 'hr_manager') || 
+                      userProfile?.position?.toLowerCase().includes('administrator');
+  const isManager = userRoles.some(r => r === 'Manager') || 
+                    userProfile?.position?.toLowerCase().includes('manager');
+  const isPartner = userProfile?.is_partner || userRoles.some(r => r === 'Partner');
+  const isSeniorAssociate = userRoles.some(r => r === 'Senior Associate');
+  const isAssociate = userRoles.some(r => r === 'Associate');
+  const isGMP = userProfile?.position?.toLowerCase().includes('group_managing_partner') || 
+                userProfile?.position?.toLowerCase().includes('group managing partner') ||
+                userProfile?.position === 'group_managing_partner' ||
+                userRoles.some(r => r === 'group_managing_partner') ||
+                userRoles.some(r => r === 'Group Managing Partner');
+  
+  console.log('=== ROLE FLAGS DEBUG ===');
+  console.log('isHROrAdmin:', isHROrAdmin);
+  console.log('isManager:', isManager); 
+  console.log('isPartner:', isPartner);
+  console.log('isGMP:', isGMP);
+  console.log('userRoles:', userRoles);
+  console.log('userProfile position:', userProfile?.position);
+  
+  const isActive = (path: string) => location.pathname === path;
+
+  // Auto-redirect to appropriate dashboard based on role
+  useEffect(() => {
+    if (user && userProfile && location.pathname === '/dashboard') {
+      console.log('=== DASHBOARD REDIRECT LOGIC ===');
+      console.log('Current path:', location.pathname);
+      console.log('isGMP:', isGMP);
+      console.log('isHROrAdmin:', isHROrAdmin);
+      console.log('isPartner:', isPartner);
+      console.log('isManager:', isManager);
+      
+      if (isGMP) {
+        console.log('Redirecting to GMP dashboard');
+        navigate('/gmp-dashboard', { replace: true });
+      } else if (isHROrAdmin) {
+        console.log('Redirecting to HR dashboard');
+        navigate('/hr-dashboard', { replace: true });
+      } else if (isPartner) {
+        console.log('Redirecting to Partner dashboard');
+        navigate('/partner-dashboard', { replace: true });
+      } else if (isManager) {
+        console.log('Redirecting to Manager dashboard');
+        navigate('/manager-dashboard', { replace: true });
+      }
+    }
+  }, [user, userProfile, isGMP, isHROrAdmin, isPartner, isManager, location.pathname, navigate]);
+
   const handleSignOut = async () => {
     setToken(null);
     navigate("/auth");
   };
 
   const getRoleDisplay = () => {
+    // Check if user is GMP first (highest level)
+    if (userRoles.some(r => r === 'Group Managing Partner') || 
+        userProfile?.position?.toLowerCase().includes('group managing partner')) {
+      return "Group Managing Partner";
+    }
+    
     // Check if user is partner based on is_partner flag
     if (userProfile?.is_partner) return "Partner";
     
@@ -127,19 +187,6 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     
     return "Employee";
   };
-
-  const isHROrAdmin = userRoles.some(r => r === 'super_admin' || r === 'hr_manager') || 
-                      userProfile?.position?.toLowerCase().includes('administrator');
-  const isManager = userRoles.some(r => r === 'Manager') || 
-                    userProfile?.position?.toLowerCase().includes('manager');
-  const isPartner = userProfile?.is_partner || userRoles.some(r => r === 'Partner');
-  const isSeniorAssociate = userRoles.some(r => r === 'Senior Associate');
-  const isAssociate = userRoles.some(r => r === 'Associate');
-  const isGMP = userProfile?.position?.toLowerCase().includes('group_managing_partner') || 
-                userProfile?.position?.toLowerCase().includes('group managing partner') ||
-                userProfile?.position === 'group_managing_partner' ||
-                userRoles.some(r => r === 'group_managing_partner');
-  const isActive = (path: string) => location.pathname === path;
 
   return (
     <SidebarProvider>
@@ -330,7 +377,9 @@ function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isSeniorAssociat
                 <SidebarGroupContent>
                   <SidebarMenu>
                     <NavItem path="/employee-management" icon={Users} label="Employee Management" />
-                    <NavItem path="/job-tracking" icon={Briefcase} label="Job Tracking" />
+
+                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" />
+                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" />
                     <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" />
                     <NavItem path="/kpi-management" icon={Settings} label="KPIs" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" />

@@ -19,25 +19,47 @@ const router = Router();
  * - HR/Super Admin: see all time entries
  */
 
-// Helper function to get employee role billing and cost rates
-async function getEmployeeRates(employeeId: number) {
+// Helper function to get employee position-based rates
+async function getEmployeePositionRates(employeeId: number) {
   const profile = await prisma.profile.findUnique({
     where: { id: employeeId },
-    include: { role: true },
+    select: { position_level: true, cost_rate: true }
   });
 
   if (!profile) {
     throw new Error(`Employee profile not found for ID: ${employeeId}`);
   }
 
-  if (!profile.role) {
-    throw new Error(`Employee role not assigned for ID: ${employeeId}`);
+  if (!profile.position_level) {
+    throw new Error(`Employee position level not set for ID: ${employeeId}`);
   }
 
-  // Return object with billing_rate and cost_rate
+  // Get position rates
+  const positionRate = await prisma.positionRate.findFirst({
+    where: { 
+      position_level: profile.position_level,
+      is_active: true 
+    }
+  });
+
+  if (!positionRate) {
+    // Fallback to role-based rates if position rates not found
+    const profileWithRole = await prisma.profile.findUnique({
+      where: { id: employeeId },
+      include: { role: true }
+    });
+
+    return {
+      billing_rate: profileWithRole?.role?.billing_rate || 0,
+      cost_rate: profile.cost_rate || 0,
+      source: 'role'
+    };
+  }
+
   return {
-    billing_rate: profile.role.billing_rate,
-    cost_rate: profile.cost_rate || 0,
+    billing_rate: positionRate.billing_rate,
+    cost_rate: positionRate.cost_rate,
+    source: 'position'
   };
 }
 
@@ -226,18 +248,31 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Cannot log time for other employees' });
     }
 
-    // Get employee role rates for cost calculation
-    const rates = await getEmployeeRates(employeeId);
-    const hoursDecimal = parseFloat(hours);
+    // Validate task if provided
+    if (task_id) {
+      const task = await prisma.task.findFirst({
+        where: { 
+          id: parseInt(task_id),
+          job_id: parseInt(job_id)
+        }
+      });
+      
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found or does not belong to this job' });
+      }
+    }
 
-    // Calculate billable amount and cost based on role rates
-    // Xero Model: billable_amount = hours × role.billing_rate
-    const billable_amount = billable !== false 
-      ? new Decimal(hoursDecimal).mul(rates.billing_rate)
-      : new Decimal(0);
+    // Get employee rates for automatic cost calculation
+    const rates = await getEmployeePositionRates(employeeId);
     
-    // cost = hours × role.cost_rate (used for profit calculation)
-    const cost = new Decimal(hoursDecimal).mul(rates.cost_rate);
+    // Calculate billable amount and cost
+    const hoursWorked = parseFloat(hours);
+    const isBillable = billable !== false; // Default to true if not specified
+    
+    const calculatedBillableAmount = isBillable 
+      ? hoursWorked * Number(rates.billing_rate) 
+      : 0;
+    const calculatedCost = hoursWorked * Number(rates.cost_rate);
 
     const timeEntry = await prisma.timeEntry.create({
       data: {
@@ -247,20 +282,39 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         date_worked: new Date(date_worked),
         start_time,
         end_time,
-        hours: hoursDecimal,
-        billable: billable !== false,
+        hours: hoursWorked,
+        billable: isBillable,
         description,
-        billable_amount,
-        cost,
-        status: 'submitted',
+        billable_amount: calculatedBillableAmount,
+        cost: calculatedCost,
+        status: 'submitted'
       },
       include: {
-        job: true,
-        task: true,
-        employee: true,
-      },
+        job: {
+          select: {
+            id: true,
+            job_name: true,
+            job_code: true
+          }
+        },
+        task: {
+          select: {
+            id: true,
+            title: true
+          }
+        },
+        employee: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            position_level: true
+          }
+        }
+      }
     });
 
+    // Create audit log
     await createAudit({
       action: `time_entry:${timeEntry.id}:created`,
       entity_type: 'time_entry',
@@ -268,7 +322,18 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       ip_address: req.ip,
     });
 
-    res.status(201).json(timeEntry);
+    res.status(201).json({
+      message: 'Time entry created successfully',
+      time_entry: timeEntry,
+      calculation: {
+        hours: hoursWorked,
+        billing_rate: Number(rates.billing_rate),
+        cost_rate: Number(rates.cost_rate),
+        billable_amount: calculatedBillableAmount,
+        cost: calculatedCost,
+        rate_source: rates.source
+      }
+    });
   } catch (error: any) {
     console.error('Error creating time entry:', error);
     res.status(500).json({ error: error.message || 'Failed to create time entry' });
@@ -316,7 +381,7 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       const newHours = hours !== undefined ? parseFloat(hours) : Number(existingEntry.hours);
       const newBillable = billable !== undefined ? billable : existingEntry.billable;
 
-      const rates = await getEmployeeRates(existingEntry.employee_id);
+      const rates = await getEmployeePositionRates(existingEntry.employee_id);
       
       billable_amount = newBillable ? new Decimal(newHours).mul(rates.billing_rate) : new Decimal(0);
       cost = new Decimal(newHours).mul(rates.cost_rate);

@@ -10,6 +10,7 @@ router.get('/', async (req, res) => {
     const status = req.query.status as string | undefined;
     const excludeId = req.query.exclude_id as string | undefined;
     const userId = req.query.user_id as string | undefined;
+    const departmentId = req.query.department_id as string | undefined;
     const includeDepartment = req.query.include_department === 'true';
     const limit = Math.min(1000, Number(req.query.limit as string) || 100);
 
@@ -27,6 +28,11 @@ router.get('/', async (req, res) => {
       return res.json({ ...profile, user_id: profile.userId });
     }
 
+    // Build where clause
+    const whereClause: any = {};
+    if (status) whereClause.status = status;
+    if (departmentId) whereClause.departmentId = parseInt(departmentId);
+
     // For other queries, use Prisma instead of raw SQL to avoid type issues
     let profiles;
     
@@ -34,7 +40,7 @@ router.get('/', async (req, res) => {
       const excludeUserId = Number(excludeId);
       profiles = await prisma.profile.findMany({
         where: {
-          ...(status && { status }),
+          ...whereClause,
           userId: { not: excludeUserId },
         },
         include: {
@@ -46,7 +52,7 @@ router.get('/', async (req, res) => {
       });
     } else {
       profiles = await prisma.profile.findMany({
-        where: status ? { status } : {},
+        where: whereClause,
         include: {
           role: { select: { id: true, name: true, billing_rate: true } },
           ...(includeDepartment && { department: { select: { id: true, name: true } } }),

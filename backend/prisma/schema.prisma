@@ -91,6 +91,7 @@ model Profile {
   profile_picture String?
   status          String    @default("active")
   position        String?
+  position_level  String? // 'group_managing_partner', 'partner', 'manager', 'senior', 'semi_senior', 'associate', 'intern'
   departmentId    Int?
   role_id         Int? // Foreign key to Role model (for job assignments and billing)
   hire_date       DateTime?
@@ -863,17 +864,18 @@ model Job {
   estimated_hours       Decimal?
   actual_hours          Decimal?
   billable_hours        Decimal?
-  // Billing type: hourly (charged by hours), fixed_fee (flat fee), retainer (recurring charge)
-  billing_type          String    @default("hourly")
+  // Enhanced fields for comprehensive job tracking
+  billing_type          String    @default("hourly") // 'hourly', 'fixed_fee', 'retainer'
+  budget_hours          Decimal?  @default(0) // Estimated hours for monitoring
+  fixed_fee_amount      Decimal?  @default(0) // For fixed_fee billing type
+  job_owner_id          Int? // Partner who owns the job (duplicate of partner_id for clarity)
+  priority              String    @default("medium") // 'low', 'medium', 'high', 'urgent'
+  // Legacy fields maintained for backward compatibility
   budgeted_hours        Decimal?
-  // For fixed_fee billing type: the fixed amount to be charged
-  fixed_fee_amount      Decimal?  @default(0)
   amount_collected      Decimal?  @default(0)
   fees                  Decimal?  @default(0)
   partner_notes         String?
   completion_percentage Int       @default(0)
-  // NOTE: hourly_rate is REMOVED - rates are now derived from employee position/role
-  // When time is logged, the billable amount is calculated from the employee's position rate
   budget                Decimal?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
@@ -991,7 +993,10 @@ model JobStaffAssignment {
   assigned_role_id     Int // Snapshot of role at assignment time
   assigned_hourly_rate Decimal // Snapshot of billing_rate at assignment time
   role_snapshot        Json? // Optional: Full role details at time of assignment (for audit)
+  // Enhanced fields for comprehensive job tracking
+  role_on_job          String? // Role on this specific job (e.g., 'Lead Auditor', 'Assistant', 'Reviewer')
   assigned_at          DateTime @default(now())
+  assigned_by          Int? // Profile ID of who assigned this employee
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -1015,4 +1020,19 @@ model JobProfitability {
   job Job @relation(fields: [job_id], references: [id], onDelete: Cascade)
 
   @@map("job_profitability")
+}
+
+// Position Rates: New table for Xero-style position-based costing
+// This complements the Role system but focuses specifically on position levels and rates
+model PositionRate {
+  id             String   @id @default(uuid())
+  position_level String   @unique // 'group_managing_partner', 'partner', 'manager', 'senior', 'semi_senior', 'associate', 'intern'
+  billing_rate   Decimal  @default(0) // What we charge clients per hour (KES)
+  cost_rate      Decimal  @default(0) // Internal cost (salary-based) per hour (KES)
+  effective_from DateTime @default(now()) // When this rate becomes effective
+  is_active      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("position_rates")
 }

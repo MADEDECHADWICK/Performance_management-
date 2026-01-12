@@ -75,7 +75,7 @@ router.post('/:jobId/staff', authMiddleware, async (req: AuthRequest, res) => {
     
     // Authorization check - only admins or job partner can assign staff
     const userRoles = req.user?.authRoles || req.user?.roles || [];
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr');
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr') || userRoles.includes('admin');
     const isPartner = userRoles.includes('partner');
     
     if (!isAdmin && (!isPartner || job.partner_id !== req.user?.sub)) {
@@ -183,7 +183,7 @@ router.post('/job/:jobId/assign-staff', authMiddleware, async (req: AuthRequest,
     
     // Authorization check - only admins or job partner can assign staff
     const userRoles = req.user?.roles || [];
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr');
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr') || userRoles.includes('admin');
     const isPartner = userRoles.includes('partner');
     
     if (!isAdmin && (!isPartner || job.partner_id !== req.user?.sub)) {
@@ -280,7 +280,7 @@ router.delete('/job/:jobId/staff/:employeeId', authMiddleware, async (req: AuthR
     
     // Authorization check
     const userRoles = req.user?.roles || [];
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr');
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr_manager') || userRoles.includes('hr') || userRoles.includes('admin');
     const isPartner = userRoles.includes('partner');
     
     if (!isAdmin && (!isPartner || job.partner_id !== req.user?.sub)) {

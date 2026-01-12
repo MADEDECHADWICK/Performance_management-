@@ -32,10 +32,20 @@ import NotFound from "./pages/NotFound";
 import ManagerEvaluationPage from "./pages/ManagerEvaluation";
 import EmployeeManagement from "./pages/EmployeeManagement";
 import Todos from "./pages/Todos";
-import JobTracking from "./pages/JobTracking";
+
 import UpwardReviews from "./pages/UpwardReviews";
-import JobsList from "./pages/JobsList";
-import JobDetail from "./pages/JobDetail";
+
+
+import TeamPerformance from "./pages/TeamPerformance";
+import StaffDevelopment from "./pages/StaffDevelopment";
+import WorkloadManagement from "./pages/WorkloadManagement";
+import ClientPortfolio from "./pages/ClientPortfolio";
+import BusinessDevelopment from "./pages/BusinessDevelopment";
+import PartnerMetrics from "./pages/PartnerMetrics";
+import TeamOverview from "./pages/TeamOverview";
+import GMPLogin from "./pages/GMPLogin";
+import AdminJobCreation from "./pages/AdminJobCreation";
+import JobWorkflowDashboard from "./pages/JobWorkflowDashboard";
 
 const queryClient = new QueryClient();
 
@@ -48,6 +58,7 @@ const App = () => (
         <Routes>
         <Route path="/" element={<Index />} />
         <Route path="/auth" element={<Auth />} />
+        <Route path="/gmp-login" element={<GMPLogin />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/partner-dashboard" element={<PartnerDashboard />} />
@@ -74,10 +85,19 @@ const App = () => (
           <Route path="/manager-evaluation" element={<ManagerEvaluationPage />} />
           <Route path="/employee-management" element={<EmployeeManagement />} />
           <Route path="/todos" element={<Todos />} />
-          <Route path="/job-tracking" element={<JobTracking />} />
+
           <Route path="/upward-reviews" element={<UpwardReviews />} />
-          <Route path="/jobs" element={<JobsList />} />
-          <Route path="/jobs/:id" element={<JobDetail />} />
+
+
+          <Route path="/team-performance" element={<TeamPerformance />} />
+          <Route path="/staff-development" element={<StaffDevelopment />} />
+          <Route path="/workload-management" element={<WorkloadManagement />} />
+          <Route path="/client-portfolio" element={<ClientPortfolio />} />
+          <Route path="/business-development" element={<BusinessDevelopment />} />
+          <Route path="/partner-metrics" element={<PartnerMetrics />} />
+          <Route path="/team-overview" element={<TeamOverview />} />
+          <Route path="/admin-job-creation" element={<AdminJobCreation />} />
+          <Route path="/job-workflow-dashboard" element={<JobWorkflowDashboard />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

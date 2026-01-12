@@ -6,7 +6,7 @@ import userRolesRoutes from './routes/userRoles';
 import auditLogsRoutes from './routes/auditLogs';
 import analyticsRoutes from './routes/analytics';
 import todosRoutes from './routes/todos';
-import jobsRoutes from './routes/jobs';
+
 import profilesRoutes from './routes/profiles';
 import upwardEvaluationsRoutes from './routes/upwardEvaluations';
 import peerEvaluationsRoutes from './routes/peerEvaluations';
@@ -41,6 +41,13 @@ import jobStaffAssignmentsRoutes from './routes/jobStaffAssignments';
 import managerDashboardRoutes from './routes/managerDashboard';
 import gmpDashboardRoutes from './routes/gmpDashboard';
 import nonFinancialPerformanceRoutes from './routes/nonFinancialPerformance';
+import gmpAuthRoutes from './routes/gmp-auth';
+import jobWorkflowRoutes from './routes/jobWorkflow';
+import employeesRoutes from './routes/employees';
+// Enhanced job tracking routes
+import positionRatesRoutes from './routes/positionRates';
+import financialSummaryRoutes from './routes/financialSummary';
+import teamManagementRoutes from './routes/teamManagement';
 
 dotenv.config();
 
@@ -57,7 +64,7 @@ app.use('/user_roles', userRolesRoutes);
 app.use('/audit_logs', auditLogsRoutes);
 app.use('/analytics', analyticsRoutes);
 app.use('/todos', todosRoutes);
-app.use('/jobs', jobsRoutes);
+
 app.use('/profiles', profilesRoutes);
 app.use('/upward_evaluations', upwardEvaluationsRoutes);
 app.use('/peer_evaluations', peerEvaluationsRoutes);
@@ -92,6 +99,14 @@ app.use('/jobs', jobStaffAssignmentsRoutes);
 app.use('/partner', partnerRoutes);
 app.use('/manager-dashboard', managerDashboardRoutes);
 app.use('/gmp-dashboard', gmpDashboardRoutes);
+app.use('/gmp-auth', gmpAuthRoutes);
+app.use('/job-workflow', jobWorkflowRoutes);
+app.use('/employees', employeesRoutes);
 app.use('/non-financial-performance', nonFinancialPerformanceRoutes);
+
+// Enhanced job tracking routes
+app.use('/position-rates', positionRatesRoutes);
+app.use('/financial-summary', financialSummaryRoutes);
+app.use('/api/manager', teamManagementRoutes);
 
 export default app;

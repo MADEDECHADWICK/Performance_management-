@@ -297,7 +297,7 @@ Returns array of Job objects WITH NESTED data:
 
 ## Frontend Data Transformation
 
-### In JobTracking Component (loadData):
+### In Job Workflow Component (loadData):
 ```typescript
 const transformedJobs = (jobsData || []).map((job: any) => ({
   ...job,
@@ -305,7 +305,7 @@ const transformedJobs = (jobsData || []).map((job: any) => ({
 }));
 ```
 
-### In JobsTable Component (display):
+### In Job Workflow Dashboard (display):
 ```typescript
 // Calculate job value
 const value = job.fees + (job.jobProfitability?.total_revenue || 0);

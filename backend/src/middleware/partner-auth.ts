@@ -6,6 +6,7 @@ const prisma = new PrismaClient();
 export enum UserRole {
   SUPER_ADMIN = 'super_admin',
   HR_MANAGER = 'hr_manager',
+  ADMIN = 'admin',
   PARTNER = 'partner',
   MANAGER = 'manager',
   EMPLOYEE = 'employee',
@@ -96,8 +97,8 @@ export async function canAccessJob(jobId: number, context: AuthContext): Promise
 
   if (!job) return false;
 
-  // Super admin/HR can access all existing jobs
-  if (hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER])) {
+  // Super admin/HR/Admin can access all existing jobs
+  if (hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER, UserRole.ADMIN])) {
     return true;
   }
 
@@ -130,8 +131,8 @@ export async function canAccessJob(jobId: number, context: AuthContext): Promise
  * Verify user can approve time entries for job
  */
 export async function canApproveTimeEntries(jobId: number, context: AuthContext): Promise<boolean> {
-  // Only partners and HR can approve
-  if (!hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER])) {
+  // Only partners, HR, and Admin can approve
+  if (!hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER, UserRole.ADMIN])) {
     if (!context.isPartner) {
       return false;
     }
@@ -159,8 +160,8 @@ export async function canViewPartnerPortfolio(
   portfolioOwnerId: number,
   context: AuthContext
 ): Promise<boolean> {
-  // Super admin/HR can view all
-  if (hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER])) {
+  // Super admin/HR/Admin can view all
+  if (hasAnyRole(context, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER, UserRole.ADMIN])) {
     return true;
   }
 
@@ -232,7 +233,7 @@ export const requirePartner = (req: Request, res: Response, next: NextFunction):
 export const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
   if (
     !req.authContext ||
-    !hasAnyRole(req.authContext, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER])
+    !hasAnyRole(req.authContext, [UserRole.SUPER_ADMIN, UserRole.HR_MANAGER, UserRole.ADMIN])
   ) {
     res.status(403).json({ error: 'Forbidden - Admin access required' });
     return;

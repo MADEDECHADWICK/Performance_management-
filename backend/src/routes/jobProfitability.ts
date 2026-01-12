@@ -83,8 +83,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     // DEBUG: Log what we received
     console.log('[jobProfitability GET /] User roles:', userRoles, 'req.user:', req.user);
 
-    // Check if user is admin (super_admin, hr, or hr_manager)
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager');
+    // Check if user is admin (super_admin, hr, hr_manager, or admin)
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager') || userRoles.includes('admin');
     const isPartner = userRoles.includes('partner');
 
     let jobs;
@@ -148,8 +148,8 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    // Check visibility - Super Admin, HR, and HR Manager can see all jobs
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager');
+    // Check visibility - Super Admin, HR, HR Manager, and Admin can see all jobs
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager') || userRoles.includes('admin');
     const isPartner = userRoles.includes('partner');
 
     if (!isAdmin) {
@@ -183,8 +183,8 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
     const { jobId } = req.params;
     const userRoles = req.user?.roles || [];
 
-    if (!userRoles.includes('super_admin') && !userRoles.includes('hr') && !userRoles.includes('hr_manager')) {
-      return res.status(403).json({ error: 'Only HR, HR Manager, and Super Admin can recalculate profitability' });
+    if (!userRoles.includes('super_admin') && !userRoles.includes('hr') && !userRoles.includes('hr_manager') && !userRoles.includes('admin')) {
+      return res.status(403).json({ error: 'Only HR, HR Manager, Super Admin, and Admin can recalculate profitability' });
     }
 
     const profitability = await calculateJobProfitability(parseInt(jobId));
