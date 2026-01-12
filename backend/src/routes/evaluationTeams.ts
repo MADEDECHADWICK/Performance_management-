@@ -23,8 +23,17 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const payload = req.body || {};
     if (!payload.team_name || !payload.department_id) return res.status(400).json({ error: 'team_name and department_id required' });
-    const inserted = await prisma.$queryRaw<any>(Prisma.sql`INSERT INTO evaluation_teams(team_name, description, department_id, created_by) VALUES (${payload.team_name}, ${payload.description}, ${payload.department_id}, ${payload.created_by}) RETURNING *` as any);
-    return res.status(201).json((inserted as any[])[0] ?? null);
+    
+    const inserted = await prisma.evaluationTeam.create({
+      data: {
+        name: payload.team_name,
+        description: payload.description,
+        department_id: payload.department_id,
+        created_by: payload.created_by
+      }
+    });
+    
+    return res.status(201).json(inserted);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -33,11 +42,19 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 // PUT /evaluation_teams/:id
 router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const id = req.params.id;
+    const id = parseInt(req.params.id);
     const payload = req.body || {};
     if (!payload.team_name) return res.status(400).json({ error: 'team_name required' });
-    const updated = await prisma.$queryRaw<any>(Prisma.sql`UPDATE evaluation_teams SET team_name=${payload.team_name}, description=${payload.description} WHERE id=${id} RETURNING *` as any);
-    return res.json((updated as any[])[0] ?? null);
+    
+    const updated = await prisma.evaluationTeam.update({
+      where: { id: id },
+      data: {
+        name: payload.team_name,
+        description: payload.description
+      }
+    });
+    
+    return res.json(updated);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -46,8 +63,10 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res) => {
 // DELETE /evaluation_teams/:id
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const id = req.params.id;
-    await prisma.$queryRaw`DELETE FROM evaluation_teams WHERE id = ${id}`;
+    const id = parseInt(req.params.id);
+    await prisma.evaluationTeam.delete({
+      where: { id: id }
+    });
     return res.json({ ok: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

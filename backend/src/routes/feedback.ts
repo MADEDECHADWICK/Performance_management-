@@ -31,14 +31,24 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { subject_id, feedback_type, rating, comments, is_anonymous, reviewer_id } = req.body;
     if (!subject_id || !feedback_type) return res.status(400).json({ error: 'Missing required fields' });
+    
     const reviewer = reviewer_id || (req.user?.sub ? Number(req.user.sub) : null);
-    const created = await prisma.$queryRaw<any>`
-      INSERT INTO feedback (subject_id, feedback_type, rating, comments, is_anonymous, reviewer_id, created_at)
-      VALUES (${subject_id}, ${feedback_type}, ${rating || null}, ${comments || null}, ${is_anonymous || false}, ${reviewer}, now())
-      RETURNING *`;
+    
+    const created = await prisma.feedback.create({
+      data: {
+        subject_id: Number(subject_id),
+        feedback_type,
+        rating: rating || null,
+        comments: comments || null,
+        is_anonymous: is_anonymous || false,
+        reviewer_id: reviewer,
+      }
+    });
+    
     await createAudit({ action: `submit_feedback:${feedback_type}`, entity_type: 'feedback', user_id: reviewer || null, ip_address: req.ip });
-    return res.status(201).json((created as any[])[0] ?? null);
+    return res.status(201).json(created);
   } catch (err: any) {
+    console.error('Error creating feedback:', err);
     return res.status(500).json({ error: err.message });
   }
 });

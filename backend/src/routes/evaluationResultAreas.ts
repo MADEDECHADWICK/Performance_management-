@@ -40,11 +40,15 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         return res.status(400).json({ error: 'ad_hoc_evaluation_id and kpi_id required' });
       }
 
-      const result = await prisma.$queryRaw<any>`
-        INSERT INTO evaluation_result_areas (ad_hoc_evaluation_id, kpi_id, evaluator_type, weight, created_at)
-        VALUES (${kpi.ad_hoc_evaluation_id}::uuid, ${kpi.kpi_id}::uuid, ${kpi.evaluator_type || null}, ${kpi.weight || 0}, now())
-        RETURNING *`;
-      created.push((result as any[])[0]);
+      const result = await prisma.evaluationResultArea.create({
+        data: {
+          ad_hoc_evaluation_id: kpi.ad_hoc_evaluation_id,
+          kpi_id: kpi.kpi_id,
+          evaluator_type: kpi.evaluator_type || null,
+          weight: kpi.weight || 0,
+        }
+      });
+      created.push(result);
     }
 
     const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;

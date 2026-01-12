@@ -42,12 +42,19 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { employee_id, recommendation, target_completion, status } = req.body;
-    const row = await prisma.$queryRaw`
-      INSERT INTO development_recommendations (employee_id, recommendation, target_completion, status, created_at, updated_at)
-      VALUES (${employee_id}::uuid, ${recommendation}, ${target_completion}, ${status || 'pending'}, NOW(), NOW())
-      RETURNING *`;
-    return res.json(Array.isArray(row) ? row[0] : row);
+    
+    const created = await prisma.developmentRecommendation.create({
+      data: {
+        employee_id,
+        recommendation,
+        target_completion,
+        status: status || 'pending',
+      }
+    });
+    
+    return res.json(created);
   } catch (err: any) {
+    console.error('Error creating development recommendation:', err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -58,29 +65,27 @@ router.patch('/:id', async (req, res) => {
     const id = req.params.id;
     const { recommendation, target_completion, status } = req.body;
     
-    const updates: string[] = [];
-    const values: any[] = [];
+    const updateData: any = {};
     
     if (recommendation !== undefined) {
-      updates.push(`recommendation = $${values.length + 1}`);
-      values.push(recommendation);
+      updateData.recommendation = recommendation;
     }
     if (target_completion !== undefined) {
-      updates.push(`target_completion = $${values.length + 1}`);
-      values.push(target_completion);
+      updateData.target_completion = target_completion;
     }
     if (status !== undefined) {
-      updates.push(`status = $${values.length + 1}`);
-      values.push(status);
+      updateData.status = status;
     }
     
-    updates.push(`updated_at = NOW()`);
-    values.push(id);
+    // Prisma automatically updates updatedAt
+    const updated = await prisma.developmentRecommendation.update({
+      where: { id },
+      data: updateData,
+    });
     
-    const sql = `UPDATE development_recommendations SET ${updates.join(', ')} WHERE id = $${values.length}::uuid RETURNING *`;
-    const row = await prisma.$queryRawUnsafe(sql, ...values);
-    return res.json(Array.isArray(row) ? row[0] : row);
+    return res.json(updated);
   } catch (err: any) {
+    console.error('Error updating development recommendation:', err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -89,7 +94,9 @@ router.patch('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    await prisma.$queryRaw`DELETE FROM development_recommendations WHERE id = ${id}::uuid`;
+    await prisma.developmentRecommendation.delete({
+      where: { id: id }
+    });
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

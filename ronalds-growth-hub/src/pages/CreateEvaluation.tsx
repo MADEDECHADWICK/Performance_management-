@@ -57,6 +57,7 @@ export default function CreateEvaluation() {
   const [hideFromDashboard, setHideFromDashboard] = useState(false);
   const [requireAllKPIs, setRequireAllKPIs] = useState(false);
   const [excludeFromScore, setExcludeFromScore] = useState(false);
+  const [cancelIfNotProcessed, setCancelIfNotProcessed] = useState(false);
   
   // Signature options
   const [requireEvaluatorSignature, setRequireEvaluatorSignature] = useState(false);
@@ -79,17 +80,22 @@ export default function CreateEvaluation() {
   }, []);
 
   const loadTemplates = async () => {
-    const data = await apiFetch('/evaluation_templates?is_active=true');
-    setTemplates(data || []);
+    try {
+      const data = await apiFetch('GET', '/evaluation_templates?is_active=true');
+      setTemplates(data || []);
+    } catch (error) {
+      console.log('Templates not available:', error);
+      setTemplates([]);
+    }
   };
 
   const loadEmployees = async () => {
-    const data = await apiFetch('/profiles?status=active');
+    const data = await apiFetch('GET', '/profiles?status=active');
     setEmployees(data || []);
   };
 
   const loadKPIs = async () => {
-    const data = await apiFetch('/kpis?is_active=true');
+    const data = await apiFetch('GET', '/kpis?is_active=true');
     setKPIs(data || []);
   };
 
@@ -126,28 +132,28 @@ export default function CreateEvaluation() {
       const user = await authAPI.me();
       
       // Create evaluation
-      const evaluation = await apiFetch('/ad_hoc_evaluations', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: evaluationName,
-          created_by: user?.id,
-          enable_self_evaluation: enableSelf,
-          enable_peer_evaluation: enablePeer,
-          enable_upward_evaluation: enableUpward,
-          enable_downward_evaluation: enableDownward,
-          due_date: dueDate,
-          process_anonymously: processAnonymously,
-          hide_from_dashboard: hideFromDashboard,
-          require_all_kpis: requireAllKPIs,
-          exclude_from_score: excludeFromScore,
-          require_evaluator_signature: requireEvaluatorSignature,
-          require_evaluatee_signature: requireEvaluateeSignature,
-          send_signature_to_evaluatee: sendToEvaluatee,
-          send_signature_to_managers: sendToManagers,
-          send_signature_to_downward_evaluators: sendToDownward,
-          status: "published",
-          published_at: new Date().toISOString()
-        })
+      const evaluation = await apiFetch('POST', '/ad_hoc_evaluations', {
+        name: evaluationName,
+        evaluation_target: "individual", // Default to individual for this interface
+        department_id: null, // This interface focuses on individual evaluations
+        created_by: user?.id,
+        enable_self_evaluation: enableSelf,
+        enable_peer_evaluation: enablePeer,
+        enable_upward_evaluation: enableUpward,
+        enable_downward_evaluation: enableDownward,
+        due_date: dueDate,
+        cancel_if_not_processed: cancelIfNotProcessed,
+        process_anonymously: processAnonymously,
+        hide_from_dashboard: hideFromDashboard,
+        require_all_kpis: requireAllKPIs,
+        exclude_from_score: excludeFromScore,
+        require_evaluator_signature: requireEvaluatorSignature,
+        require_evaluatee_signature: requireEvaluateeSignature,
+        send_signature_to_evaluatee: sendToEvaluatee,
+        send_signature_to_managers: sendToManagers,
+        send_signature_to_downward_evaluators: sendToDownward,
+        status: "published",
+        published_at: new Date().toISOString()
       });
 
       // Create assignments
@@ -156,17 +162,17 @@ export default function CreateEvaluation() {
         for (const evaluateeId of selectedEvaluatees) {
           if (enableDownward) {
             assignments.push({
-              ad_hoc_evaluation_id: evaluation.id,
-              evaluator_id: evaluatorId,
-              evaluatee_id: evaluateeId,
+              ad_hoc_evaluation_id: parseInt(evaluation.id),
+              evaluator_id: parseInt(evaluatorId),
+              evaluatee_id: parseInt(evaluateeId),
               evaluation_type: "downward"
             });
           }
           if (enablePeer && evaluatorId !== evaluateeId) {
             assignments.push({
-              ad_hoc_evaluation_id: evaluation.id,
-              evaluator_id: evaluatorId,
-              evaluatee_id: evaluateeId,
+              ad_hoc_evaluation_id: parseInt(evaluation.id),
+              evaluator_id: parseInt(evaluatorId),
+              evaluatee_id: parseInt(evaluateeId),
               evaluation_type: "peer"
             });
           }
@@ -176,27 +182,27 @@ export default function CreateEvaluation() {
       if (enableSelf) {
         for (const evaluateeId of selectedEvaluatees) {
           assignments.push({
-            ad_hoc_evaluation_id: evaluation.id,
-            evaluator_id: evaluateeId,
-            evaluatee_id: evaluateeId,
+            ad_hoc_evaluation_id: parseInt(evaluation.id),
+            evaluator_id: parseInt(evaluateeId),
+            evaluatee_id: parseInt(evaluateeId),
             evaluation_type: "self"
           });
         }
       }
 
       if (assignments.length > 0) {
-        await apiFetch('/evaluation_assignments', { method: 'POST', body: JSON.stringify(assignments) });
+        await apiFetch('POST', '/evaluation_assignments', assignments);
       }
 
       // Add KPIs
       if (selectedKpis.length > 0) {
         const resultAreas = selectedKpis.map(kpi => ({
-          ad_hoc_evaluation_id: evaluation.id,
-          kpi_id: kpi.kpi_id,
+          ad_hoc_evaluation_id: parseInt(evaluation.id),
+          kpi_id: parseInt(kpi.kpi_id),
           weight: kpi.weight
         }));
 
-        await apiFetch('/evaluation_result_areas', { method: 'POST', body: JSON.stringify(resultAreas) });
+        await apiFetch('POST', '/evaluation_result_areas', { kpis: resultAreas });
       }
 
       toast({ title: "Evaluation published successfully!" });
@@ -218,7 +224,8 @@ export default function CreateEvaluation() {
 
         <Card>
           <CardHeader>
-          const user = await authAPI.me();
+            <CardTitle>Basic Information</CardTitle>
+            <CardDescription>Enter the evaluation details</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
@@ -400,6 +407,10 @@ export default function CreateEvaluation() {
             <div className="flex items-center justify-between">
               <Label>Hide from Dashboard</Label>
               <Switch checked={hideFromDashboard} onCheckedChange={setHideFromDashboard} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>Cancel if Not Processed</Label>
+              <Switch checked={cancelIfNotProcessed} onCheckedChange={setCancelIfNotProcessed} />
             </div>
             <div className="flex items-center justify-between">
               <Label>Require All KPIs</Label>

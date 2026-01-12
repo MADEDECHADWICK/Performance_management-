@@ -43,7 +43,8 @@ const EvaluationManagement = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCycle, setEditingCycle] = useState<any>(null);
   const [cycleFormData, setCycleFormData] = useState({
-    name: "",
+    cycle_name: "",
+    description: "",
     cycle_type: "quarterly",
     start_date: "",
     end_date: "",
@@ -200,7 +201,8 @@ const EvaluationManagement = () => {
       setDialogOpen(false);
       setEditingCycle(null);
       setCycleFormData({
-        name: "",
+        cycle_name: "",
+        description: "",
         cycle_type: "quarterly",
         start_date: "",
         end_date: "",
@@ -225,7 +227,8 @@ const EvaluationManagement = () => {
   const handleEdit = (cycle: any) => {
     setEditingCycle(cycle);
     setCycleFormData({
-      name: cycle.name,
+      cycle_name: cycle.cycle_name,
+      description: cycle.description || "",
       cycle_type: cycle.cycle_type,
       start_date: cycle.start_date,
       end_date: cycle.end_date,
@@ -469,13 +472,23 @@ const EvaluationManagement = () => {
                   <ScrollArea className="max-h-[calc(90vh-120px)] pr-4">
                     <form onSubmit={handleCycleSubmit} className="space-y-4">
                       <div className="space-y-2">
-                        <Label htmlFor="name">Cycle Name</Label>
+                        <Label htmlFor="cycle_name">Cycle Name</Label>
                         <Input
-                          id="name"
-                          value={cycleFormData.name}
-                          onChange={(e) => setCycleFormData({ ...cycleFormData, name: e.target.value })}
+                          id="cycle_name"
+                          value={cycleFormData.cycle_name}
+                          onChange={(e) => setCycleFormData({ ...cycleFormData, cycle_name: e.target.value })}
                           placeholder="e.g., Q1 2025"
                           required
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="description">Description</Label>
+                        <Input
+                          id="description"
+                          value={cycleFormData.description}
+                          onChange={(e) => setCycleFormData({ ...cycleFormData, description: e.target.value })}
+                          placeholder="Optional description"
                         />
                       </div>
                       

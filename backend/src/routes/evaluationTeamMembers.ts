@@ -24,14 +24,41 @@ router.post('/', authMiddleware, async (req, res) => {
     const body = req.body;
     if (Array.isArray(body)) {
       if (body.length === 0) return res.status(400).json({ error: 'empty array' });
-      const values = Prisma.join(body.map((b: any) => Prisma.sql`(${b.team_id}, ${b.employee_id})`));
-      const rows = await prisma.$queryRaw<any>(Prisma.sql`INSERT INTO evaluation_team_members(team_id, employee_id) VALUES ${values} RETURNING *` as any);
-      return res.status(201).json(rows || []);
+      
+      const data = body.map((b: any) => ({
+        team_id: b.team_id,
+        employee_id: b.employee_id,
+        role: b.role
+      }));
+      
+      const rows = await prisma.evaluationTeamMember.createMany({
+        data: data
+      });
+      
+      // Fetch the created records to return them
+      const created = await prisma.evaluationTeamMember.findMany({
+        where: {
+          team_id: { in: body.map((b: any) => b.team_id) },
+          employee_id: { in: body.map((b: any) => b.employee_id) }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: body.length
+      });
+      
+      return res.status(201).json(created);
     } else {
-      const { team_id, employee_id } = body;
+      const { team_id, employee_id, role } = body;
       if (!team_id || !employee_id) return res.status(400).json({ error: 'team_id and employee_id required' });
-      const row = await prisma.$queryRaw<any>(Prisma.sql`INSERT INTO evaluation_team_members(team_id, employee_id) VALUES (${team_id}, ${employee_id}) RETURNING *` as any);
-      return res.status(201).json((row as any[])[0] ?? null);
+      
+      const row = await prisma.evaluationTeamMember.create({
+        data: {
+          team_id: team_id,
+          employee_id: employee_id,
+          role: role
+        }
+      });
+      
+      return res.status(201).json(row);
     }
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

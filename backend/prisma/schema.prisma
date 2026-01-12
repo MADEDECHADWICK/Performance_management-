@@ -134,6 +134,10 @@ model Profile {
   improvementIdeasReviewed  ImprovementIdea[]  @relation("ImprovementIdeaReviewer")
   employeeKpiScores         EmployeeKpiScore[] @relation("EmployeeKpiScores")
 
+  // Evaluation assignment relations
+  evaluatorAssignments      EvaluationAssignment[] @relation("EvaluationAssignmentEvaluator")
+  evaluateeAssignments      EvaluationAssignment[] @relation("EvaluationAssignmentEvaluatee")
+
   @@index([is_partner])
   @@map("profiles")
 }
@@ -723,6 +727,8 @@ model EvaluationAssignment {
   updatedAt            DateTime  @updatedAt
 
   adHocEvaluation AdHocEvaluation? @relation(fields: [ad_hoc_evaluation_id], references: [id], onDelete: Cascade)
+  evaluator       Profile          @relation("EvaluationAssignmentEvaluator", fields: [evaluator_id], references: [id])
+  evaluatee       Profile          @relation("EvaluationAssignmentEvaluatee", fields: [evaluatee_id], references: [id])
 
   @@map("evaluation_assignments")
 }
