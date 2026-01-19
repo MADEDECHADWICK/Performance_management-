@@ -1,241 +1,134 @@
-import { Request, Response, NextFunction } from 'express'
-import jwt from 'jsonwebtoken'
-import { prisma } from '../../lib/prisma'
-// Extend Express Request to include user data
-declare global {
-  namespace Express {
-    interface Request {
-      user?: {
-        id: number
-        email: string
-        userId: number
-        roles: string[]
-      }
-      token?: string
-    }
-  }
+/**
+ * Base authentication middleware
+ * - Validates JWT token
+ * - Verifies user is active
+ * - Attaches minimal user context to request
+ *
+ * IMPORTANT:
+ * - Does NOT load Profile (handled by loadProfile middleware)
+ */
+
+import { Request, Response, NextFunction } from "express";
+import jwt, { JwtPayload } from "jsonwebtoken";
+import prisma from "../prisma";
+
+/**
+ * Minimal profile shape injected later by loadProfile
+ * Keep this lightweight to avoid over-fetching
+ */
+export type RequestProfile = {
+  id: number;
+  firstName: string;
+  lastName: string;
+  status: string;
+  isPartner: boolean;
+  department: { id: number; name: string } | null;
+  role: { id: number; name: string } | null;
+  manager: { id: number; firstName: string; lastName: string } | null;
+};
+
+/**
+ * Extended Express request used across the app
+ * This is the SINGLE SOURCE OF TRUTH for request type safety
+ */
+export interface AuthRequest extends Request {
+  user?: {
+    userId: number;      // User.id (set by authMiddleware)
+    email: string;       // User.email (set by authMiddleware)
+    profileId?: number;  // Profile.id (ALWAYS set by loadProfile before using resource access)
+  };
+  profile?: RequestProfile; // populated by loadProfile (user profile data)
+  token?: string;       // JWT token (set by authMiddleware)
+  
+  // Typed properties for downstream middleware/controllers
+  // Use these directly instead of casting to 'any'
+  userRoles?: string[]; // Set by requireRole - array of role names
+  userPermissions?: string[]; // Set by requirePermission - array of permission strings
+  job?: any; // Set by requireJobAccess - Job entity with access checks done
+  timeEntry?: any; // Set by requireTimeEntryAccess - TimeEntry entity with access checks done
+  evaluation?: any; // Set by requireEvaluationAccess - EvaluationAssignment with access checks done
+  evaluationAssignment?: any; // Set by requireEvaluationAccess (alternative prop name)
+  document?: any; // Set by requireDocumentAccess - Document with access checks done
+  partner?: any; // Set by requirePartnerAccess - Partner entity with access checks done
+  budgetCheck?: { // Set by validateTimeEntryBudget - Budget validation result
+    jobId: number;
+    employeeProfileId: number;
+    hoursUsed: number;
+    hoursRemaining: number;
+    hoursAssigned: number;
+    requiresApproval?: boolean;
+    budget?: any;
+  };
 }
 
-interface TokenPayload {
-  id: number
-  email: string
-  userId: number
-  iat: number
-  exp: number
-}
+/**
+ * Expected JWT payload
+ */
+type AccessTokenPayload = JwtPayload & {
+  userId: number;
+  email: string;
+};
 
 export const authMiddleware = async (
-  req: Request,
+  req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    const token = extractToken(req)
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      res.status(401).json({
+        error: "Missing or invalid Authorization header",
+      });
+      return;
+    }
+
+    const token = authHeader.replace("Bearer ", "").trim();
 
     if (!token) {
-      res.status(401).json({ error: 'No token provided' })
-      return
+      res.status(401).json({ error: "No token provided" });
+      return;
     }
 
-    const decoded = verifyToken(token)
-    const session = await prisma.session.findUnique({
-      where: { token },
-      include: {
-        user: {
-          include: {
-            roles: true,
-            profile: true,
-          },
-        },
-      },
-    })
-
-    if (!session || session.revokedAt) {
-      res.status(401).json({ error: 'Invalid or revoked session' })
-      return
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      res.status(500).json({
+        error: "Server misconfigured (JWT_SECRET missing)",
+      });
+      return;
     }
 
-    if (new Date() > session.expiresAt) {
-      res.status(401).json({ error: 'Session expired' })
-      return
-    }
+    const decoded = jwt.verify(token, secret) as AccessTokenPayload;
 
-    req.user = {
-      id: session.user.id,
-      email: session.user.email!,
-      userId: session.user.id,
-      roles: session.user.roles.map((ur) => ur.role),
-    }
-    req.token = token
-
-    next()
-  } catch (error) {
-    res.status(401).json({ error: 'Authentication failed' })
-  }
-}
-
-export const optionalAuth = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  try {
-    const token = extractToken(req)
-
-    if (!token) {
-      next()
-      return
-    }
-
-    const session = await prisma.session.findUnique({
-      where: { token },
-      include: {
-        user: {
-          include: {
-            roles: true,
-            profile: true,
-          },
-        },
-      },
-    })
-
-    if (session && !session.revokedAt && new Date() <= session.expiresAt) {
-      req.user = {
-        id: session.user.id,
-        email: session.user.email!,
-        userId: session.user.id,
-        roles: session.user.roles.map((ur) => ur.role),
-      }
-      req.token = token
-    }
-
-    next()
-  } catch (error) {
-    next()
-  }
-}
-
-export const requireRole = (...roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Authentication required' })
-      return
-    }
-
-    const hasRole = req.user.roles.some((role) => roles.includes(role))
-
-    if (!hasRole) {
-      res
-        .status(403)
-        .json({
-          error: `Required role(s): ${roles.join(', ')}`,
-        })
-      return
-    }
-
-    next()
-  }
-}
-
-export const requirePermission = (permission: string) => {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user) {
-      res.status(401).json({ error: 'Authentication required' })
-      return
-    }
-
-    try {
-      const role = await prisma.role.findFirst({
-        where: {
-          name: {
-            in: req.user.roles,
-          },
-        },
-      })
-
-      if (!role) {
-        res.status(403).json({ error: 'No role found' })
-        return
-      }
-
-      const permissions = (role.permissions as string[]) || []
-
-      if (!permissions.includes(permission)) {
-        res.status(403).json({ error: `Permission required: ${permission}` })
-        return
-      }
-
-      next()
-    } catch (error) {
-      res.status(500).json({ error: 'Permission check failed' })
-    }
-  }
-}
-
-export const requireActive = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> => {
-  if (!req.user) {
-    res.status(401).json({ error: 'Authentication required' })
-    return
-  }
-
-  try {
+    // Verify user still exists & is active
     const user = await prisma.user.findUnique({
-      where: { id: req.user.userId },
-    })
+      where: { id: decoded.userId },
+      select: {
+        id: true,
+        email: true,
+        isActive: true,
+      },
+    });
 
     if (!user || !user.isActive) {
-      res.status(403).json({ error: 'User account is inactive' })
-      return
+      res.status(401).json({
+        error: "User inactive or not found",
+      });
+      return;
     }
 
-    next()
+    // Attach minimal auth context
+    req.user = {
+      userId: user.id,
+      email: user.email,
+    };
+
+    req.token = token;
+
+    next();
   } catch (error) {
-    res.status(500).json({ error: 'Account status check failed' })
+    console.error("authMiddleware error:", error);
+    res.status(401).json({ error: "Invalid or expired token" });
   }
-}
-
-// Helper functions
-function extractToken(req: Request): string | null {
-  const authHeader = req.headers.authorization
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null
-  }
-
-  return authHeader.substring(7)
-}
-
-function verifyToken(token: string): TokenPayload {
-  const secret = process.env.JWT_SECRET || 'your-secret-key'
-  return jwt.verify(token, secret) as TokenPayload
-}
-
-export const createSession = async (
-  userId: number,
-  expiresIn: number = 24 * 60 * 60 * 1000 // 24 hours
-) => {
-  const token = jwt.sign(
-    { id: userId, userId },
-    process.env.JWT_SECRET || 'your-secret-key',
-    { expiresIn: expiresIn / 1000 }
-  )
-
-  return prisma.session.create({
-    data: {
-      userId,
-      token,
-      expiresAt: new Date(Date.now() + expiresIn),
-    },
-  })
-}
-
-export const revokeSession = async (token: string) => {
-  return prisma.session.update({
-    where: { token },
-    data: { revokedAt: new Date() },
-  })
-}
+};
