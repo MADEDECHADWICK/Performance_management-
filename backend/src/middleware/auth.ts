@@ -9,8 +9,8 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import jwt, { JwtPayload } from "jsonwebtoken";
-import prisma from "../prisma";
+import jwt from "jsonwebtoken";
+import { prisma } from "../lib/prisma";
 
 /**
  * Minimal profile shape injected later by loadProfile
@@ -64,71 +64,68 @@ export interface AuthRequest extends Request {
 /**
  * Expected JWT payload
  */
-type AccessTokenPayload = JwtPayload & {
+type AccessTokenPayload = {
   userId: number;
   email: string;
+  iat: number;
+  exp: number;
 };
 
-export const authMiddleware = async (
+export async function authMiddleware(
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): Promise<void> => {
+) {
   try {
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({
-        error: "Missing or invalid Authorization header",
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Missing or invalid token",
       });
-      return;
     }
 
-    const token = authHeader.replace("Bearer ", "").trim();
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret") as AccessTokenPayload;
 
-    if (!token) {
-      res.status(401).json({ error: "No token provided" });
-      return;
-    }
-
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      res.status(500).json({
-        error: "Server misconfigured (JWT_SECRET missing)",
-      });
-      return;
-    }
-
-    const decoded = jwt.verify(token, secret) as AccessTokenPayload;
-
-    // Verify user still exists & is active
-    const user = await prisma.user.findUnique({
+    // Verify user still exists
+    const user = await prisma.profile.findUnique({
       where: { id: decoded.userId },
-      select: {
-        id: true,
-        email: true,
-        isActive: true,
-      },
     });
 
-    if (!user || !user.isActive) {
-      res.status(401).json({
-        error: "User inactive or not found",
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "User not found",
       });
-      return;
     }
 
-    // Attach minimal auth context
+    // Verify user is active
+    if (user.status === "inactive") {
+      return res.status(403).json({
+        success: false,
+        message: "User account is inactive",
+      });
+    }
+
     req.user = {
-      userId: user.id,
-      email: user.email,
+      userId: decoded.userId,
+      email: decoded.email,
     };
 
-    req.token = token;
-
     next();
-  } catch (error) {
-    console.error("authMiddleware error:", error);
-    res.status(401).json({ error: "Invalid or expired token" });
+  } catch (error: any) {
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "Token expired",
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized",
+    });
   }
-};
+}

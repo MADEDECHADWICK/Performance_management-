@@ -4,18 +4,22 @@
  */
 
 import { RequestHandler } from "express";
+
 import { authMiddleware } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
+
 import { requireRole } from "../middleware/reqiureRole";
 import { requirePermission } from "../middleware/requirePermission";
+
 import { requireJobAccess } from "../middleware/requireJobAccess";
 import { requireTimeEntryAccess } from "../middleware/requireTimeEntryAccess";
 import { requireEvaluationAccess } from "../middleware/requireEvaluationAccess";
 import { requireDocumentAccess } from "../middleware/requireDocumentAccess";
-import { requirePartnerAccess, requirePartnerJobOwnership } from "../middleware/requirePartnerAccess";
 
-import { requireDepartmentAccess, requireDepartmentEmployeeAccess } from "../middleware/requireDepartmentAccess";
-import { validateTimeEntryBudget, requireBudgetApprovalIfNeeded } from "../middleware/validateTimeEntryBudget";
+import { requirePartnerAccess } from "../middleware/requirePartnerAccess";
+import { requireDepartmentAccess } from "../middleware/requireDepartmentAccess";
+
+import { validateTimeEntryBudget } from "../middleware/validateTimeEntryBudget";
 
 /**
  * Authenticated user (auth + profile loaded)
@@ -59,10 +63,14 @@ export const withTimeEntryAccess = (): RequestHandler[] => [
 
 /**
  * Evaluation access (auth + profile + evaluation access check)
+ *
+ * NOTE:
+ * Your requireEvaluationAccess supports a mode ("view" | "submit") but
+ * this helper defaults to "view". If you need submit mode, make a new helper.
  */
 export const withEvaluationAccess = (): RequestHandler[] => [
   ...authenticated(),
-  requireEvaluationAccess,
+  requireEvaluationAccess(),
 ];
 
 /**
@@ -74,80 +82,68 @@ export const withDocumentAccess = (): RequestHandler[] => [
 ];
 
 /**
- * Partner access (auth + profile + partner check)
+ * Partner access (auth + profile + partner/admin check)
+ *
+ * NOTE:
+ * requirePartnerAccess already enforces partner/admin access.
+ * If you want strict role-gating before DB checks, wrap it with withRoles("partner","admin","super_admin").
  */
 export const withPartnerAccess = (): RequestHandler[] => [
   ...authenticated(),
-  requireRole("partner", "admin"),
   requirePartnerAccess,
 ];
 
 /**
- * Partner job ownership (auth + profile + partner + job ownership)
- */
-export const withPartnerJobOwnership = (): RequestHandler[] => [
-  ...withPartnerAccess(),
-  requirePartnerJobOwnership,
-];
-
-/**
- * Department access (auth + profile + department head check)
+ * Department access (auth + profile + department scope check)
+ *
+ * NOTE:
+ * requireDepartmentAccess already handles Admin/SuperAdmin/HR internally.
+ * If you want extra strictness (e.g., only manager/admin), add requireRole(...) here.
  */
 export const withDepartmentAccess = (): RequestHandler[] => [
   ...authenticated(),
-  requireRole("manager", "admin"),
   requireDepartmentAccess,
 ];
 
 /**
- * Department employee access (auth + profile + dept employee check)
- */
-export const withDepartmentEmployeeAccess = (): RequestHandler[] => [
-  ...authenticated(),
-  requireRole("manager", "admin"),
-  requireDepartmentEmployeeAccess,
-];
-
-/**
- * Time entry with budget validation (auth + profile + budget check + approval if needed)
+ * Time entry with budget validation
+ * Use this when creating/updating entries where hours changes.
  */
 export const withTimeEntryBudgetValidation = (): RequestHandler[] => [
   ...authenticated(),
   validateTimeEntryBudget,
-  requireBudgetApprovalIfNeeded,
 ];
 
 /**
- * Manager or admin only
+ * Convenience bundles
  */
 export const managerOrAdmin = (): RequestHandler[] => [
   ...withRoles("manager", "admin", "super_admin"),
 ];
 
-/**
- * Partner, manager, or admin
- */
 export const partnerManagerOrAdmin = (): RequestHandler[] => [
   ...withRoles("partner", "manager", "admin", "super_admin"),
 ];
 
-/**
- * Admin only
- */
 export const adminOnly = (): RequestHandler[] => [
   ...withRoles("admin", "super_admin"),
 ];
 
-/**
- * HR or admin
- */
 export const hrOrAdmin = (): RequestHandler[] => [
   ...withRoles("hr", "hr_manager", "admin", "super_admin"),
 ];
 
-/**
- * Employee (any authenticated user with profile)
- */
 export const employeeOnly = (): RequestHandler[] => [
   ...authenticated(),
 ];
+
+/**
+ * Pagination helper
+ */
+export function getPaginationParams(req: any) {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 10));
+  const skip = (page - 1) * pageSize;
+
+  return { page, pageSize, skip };
+}

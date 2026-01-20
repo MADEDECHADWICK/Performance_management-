@@ -14,7 +14,7 @@
  * - kpis
  */
 
-import prisma from "../prisma";
+import { prisma } from '../lib/prisma';
 
 export interface DepartmentCreateInput {
   name: string;
@@ -84,7 +84,7 @@ const parseDate = (value?: string): Date | undefined => {
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
-class DepartmentService {
+export class DepartmentService {
   private requireAdminOrHr(auth: AuthContext) {
     const roles = auth.roles ?? [];
     const isAdmin = roles.includes("admin") || roles.includes("super_admin");
@@ -657,5 +657,3 @@ class DepartmentService {
     };
   }
 }
-
-export default new DepartmentService();

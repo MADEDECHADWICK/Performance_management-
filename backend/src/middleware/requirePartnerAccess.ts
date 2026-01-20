@@ -12,6 +12,7 @@
  * - req.params.partnerProfileId / req.params.partnerId (depending on your routes)
  */
 
+
 import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";

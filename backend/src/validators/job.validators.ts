@@ -59,12 +59,12 @@ export const createJobValidators = [
 
   body("fixedFeeAmount")
     .if(() => body("billingType").equals("fixed_fee"))
-    .isDecimal({ min: 0.01 })
+    .isFloat({ min: 0.01 })
     .withMessage("Fixed fee amount required and must be > 0"),
 
   body("budgetHours")
     .optional()
-    .isDecimal({ min: 0 })
+    .isFloat({ min: 0.01 })
     .withMessage("Budget hours must be >= 0 if provided"),
 
   body("engagementLetterId")
@@ -194,7 +194,7 @@ export const assignJobTeamValidators = [
     .withMessage("Valid assignedRoleId required"),
 
   body("assignedHourlyRate")
-    .isDecimal({ min: 0 })
+    .isFloat({ min: 0.01 })
     .withMessage("Valid assignedHourlyRate required"),
 
   body("roleOnJob")

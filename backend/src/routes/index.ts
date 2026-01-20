@@ -7,143 +7,255 @@
  * app.use('/api', routes);
  */
 
-import { Router } from "express";
+import { Router } from 'express';
+import { authMiddleware } from '../middleware/auth';
 
-// Auth routes
-import authRoutes from "./auth";
+// Import all route modules
+import authRoutes from './auth';
+import departmentRoutes from './departments.routes';
+import documentsRoutes from './documents.routes';
+import employeeOnboardingRoutes from './employeeOnboardingCase.routes';
+import evaluationRoutes from './evaluations.routes';
+import inductionChecklistRoutes from './inductionChecklist.routes';
+import partnerRoutes from './partners.routes';
+import jobsRoutes from './jobs.routes';
+import timeEntriesRoutes from './time-entries.routes';
 
-// Core domain routes (v2.1)
-import jobsRoutes from "./jobs.routes";
-import timeEntriesRoutes from "./time-entries.routes";
-import evaluationsRoutes from "./evaluations.routes";
-import documentsRoutes from "./documents.routes";
-import partnersRoutes from "./partners.routes";
-import departmentsRoutes from "./departments.routes";
-import clientsRoutes from "./clients";
-import kpisRoutes from "./kpis";
+// Legacy/Additional routes
+import analyticRoutes from './analytics';
+import auditLogsRoutes from './auditLogs';
+import clientsRoutes from './clients';
+import clientEvaluationsRoutes from './clientEvaluations';
+import continuousFeedbackRoutes from './continuousFeedback';
+import createCycleEvaluationsRoutes from './createCycleEvaluations';
+import developmentRecommendationsRoutes from './developmentRecommendations';
+import employeeEvaluationsRoutes from './employeeEvaluations';
+import employeeGoalsRoutes from './employeeGoals';
+import employeeKpiAssignmentsRoutes from './employeeKpiAssignments';
+import employeeProjectAllocationsRoutes from './employeeProjectAllocations';
+import employeeRolesRoutes from './employeeRoles';
+import employeesRoutes from './employees';
+import evaluationAssignmentsRoutes from './evaluationAssignments';
+import evaluationCyclesRoutes from './evaluationCycles';
+import evaluationResultAreasRoutes from './evaluationResultAreas';
+import evaluationTemplatesRoutes from './evaluationTemplates';
+import feedbackRoutes from './feedback';
+import financialSummaryRoutes from './financialSummary';
+import gmpAuthRoutes from './gmp-auth';
+import gmpDashboardRoutes from './gmpDashboard';
+import jobProfitabilityRoutes from './jobProfitability';
+import jobStaffAssignmentsRoutes from './jobStaffAssignments';
+import jobWorkflowRoutes from './jobWorkflow';
+import kpisRoutes from './kpis';
+import managerDashboardRoutes from './managerDashboard';
+import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
+import notificationsRoutes from './notifications';
+import peerEvaluationsRoutes from './peerEvaluations';
+import performanceReviewsRoutes from './performanceReviews';
+import positionRatesRoutes from './positionRates';
+import profilesRoutes from './profiles';
+import projectsRoutes from './projects';
+import rolesRoutes from './roles';
+import subordinatesRoutes from './subordinates';
+import teamManagementRoutes from './teamManagement';
+import todosRoutes from './todos';
+import upwardEvaluationsRoutes from './upwardEvaluations';
+import userRolesRoutes from './userRoles';
+import workLogsRoutes from './workLogs';
+import adminJobDashboardRoutes from './admin-job-dashboard';
+import adminJobWorkflowRoutes from './admin-job-workflow';
+import adHocEvaluationsRoutes from './adHocEvaluations';
 
-// Legacy routes (to be deprecated/refactored)
-import userRolesRoutes from "./userRoles";
-import auditLogsRoutes from "./auditLogs";
-import analyticsRoutes from "./analytics";
-import todosRoutes from "./todos";
-import profilesRoutes from "./profiles";
-import upwardEvaluationsRoutes from "./upwardEvaluations";
-import peerEvaluationsRoutes from "./peerEvaluations";
-import projectsRoutes from "./projects";
-import workLogsRoutes from "./workLogs";
-import employeeGoalsRoutes from "./employeeGoals";
-import feedbackRoutes from "./feedback";
-import continuousFeedbackRoutes from "./continuousFeedback";
-import adHocEvaluationsRoutes from "./adHocEvaluations";
-import performanceReviewsRoutes from "./performanceReviews";
-import clientEvaluationsRoutes from "./clientEvaluations";
-import employeeProjectAllocationsRoutes from "./employeeProjectAllocations";
-import employeeEvaluationsRoutes from "./employeeEvaluations";
-import evaluationTeamsRoutes from "./evaluationTeams";
-import evaluationTeamMembersRoutes from "./evaluationTeamMembers";
-import jobProfitabilityRoutes from "./jobProfitability";
-import evaluationCyclesRoutes from "./evaluationCycles";
-import evaluationTemplatesRoutes from "./evaluationTemplates";
-import createCycleEvaluationsRoutes from "./createCycleEvaluations";
-import developmentRecommendationsRoutes from "./developmentRecommendations";
-import notificationsRoutes from "./notifications";
-import subordinatesRoutes from "./subordinates";
-import evaluationResultAreasRoutes from "./evaluationResultAreas";
-import employeeKpiAssignmentsRoutes from "./employeeKpiAssignments";
-import rolesRoutes from "./roles";
-import employeeRolesRoutes from "./employeeRoles";
-import jobStaffAssignmentsRoutes from "./jobStaffAssignments";
-import managerDashboardRoutes from "./managerDashboard";
-import gmpDashboardRoutes from "./gmpDashboard";
-import nonFinancialPerformanceRoutes from "./nonFinancialPerformance";
-import gmpAuthRoutes from "./gmp-auth";
-import jobWorkflowRoutes from "./jobWorkflow";
-import employeesRoutes from "./employees";
-import positionRatesRoutes from "./positionRates";
-import financialSummaryRoutes from "./financialSummary";
-import teamManagementRoutes from "./teamManagement";
+export function setupRoutes(app: any) {
+  const router = Router();
 
-const router = Router();
+  // ============================================
+  // 🔐 PHASE 1 & 2: CORE DOMAINS (NEW & SECURE)
+  // ============================================
+  
+  /**
+   * Auth Routes (no auth required)
+   * Handles: login, signup, refresh token, logout
+   */
+  router.use('/api/auth', authRoutes);
+
+  /**
+   * Core CRUD Domains (all require authentication)
+   */
+  router.use('/api/departments', authMiddleware, departmentRoutes);
+  router.use('/api/documents', authMiddleware, documentsRoutes);
+  router.use('/api/onboarding', authMiddleware, employeeOnboardingRoutes);
+  router.use('/api/evaluations', authMiddleware, evaluationRoutes);
+  router.use('/api/induction-checklist', authMiddleware, inductionChecklistRoutes);
+  router.use('/api/partners', authMiddleware, partnerRoutes);
+  router.use('/api/jobs', authMiddleware, jobsRoutes);
+  
+  /**
+   * ⏱️  TIME ENTRIES - PHASE 2 COMPLETE
+   * Priority: HIGH - Core business logic for time tracking
+   * Endpoints: 13 fully implemented with:
+   *   - Authorization checks (employees see own, managers see team)
+   *   - Budget validation (prevent exceeding job budgets)
+   *   - Timer functionality (start/stop with duration calculation)
+   *   - Batch operations (submit/approve multiple entries)
+   *   - Job summaries (total hours, budget usage, per-employee breakdown)
+   *   - Status workflow (draft → submitted → approved/rejected)
+   */
+  router.use('/api/time-entries', authMiddleware, timeEntriesRoutes);
+
+  // ============================================
+  // 📊 SECONDARY DOMAINS (Dashboard & Workflows)
+  // ============================================
+  
+  /**
+   * Analytics & Reporting
+   */
+  router.use('/api/analytics', authMiddleware, analyticRoutes);
+  router.use('/api/audit-logs', authMiddleware, auditLogsRoutes);
+  router.use('/api/financial-summary', authMiddleware, financialSummaryRoutes);
+  router.use('/api/job-profitability', authMiddleware, jobProfitabilityRoutes);
+
+  /**
+   * Job Management
+   */
+  router.use('/api/job-staff-assignments', authMiddleware, jobStaffAssignmentsRoutes);
+  router.use('/api/job-workflow', authMiddleware, jobWorkflowRoutes);
+  router.use('/api/admin/job-dashboard', authMiddleware, adminJobDashboardRoutes);
+  router.use('/api/admin/job-workflow', authMiddleware, adminJobWorkflowRoutes);
+
+  /**
+   * Evaluation Workflows
+   */
+  router.use('/api/evaluation-assignments', authMiddleware, evaluationAssignmentsRoutes);
+  router.use('/api/evaluation-cycles', authMiddleware, evaluationCyclesRoutes);
+  router.use('/api/evaluation-result-areas', authMiddleware, evaluationResultAreasRoutes);
+  router.use('/api/evaluation-templates', authMiddleware, evaluationTemplatesRoutes);
+  router.use('/api/employee-evaluations', authMiddleware, employeeEvaluationsRoutes);
+  router.use('/api/client-evaluations', authMiddleware, clientEvaluationsRoutes);
+  router.use('/api/peer-evaluations', authMiddleware, peerEvaluationsRoutes);
+  router.use('/api/upward-evaluations', authMiddleware, upwardEvaluationsRoutes);
+  router.use('/api/ad-hoc-evaluations', authMiddleware, adHocEvaluationsRoutes);
+  router.use('/api/continuous-feedback', authMiddleware, continuousFeedbackRoutes);
+  router.use('/api/create-cycle-evaluations', authMiddleware, createCycleEvaluationsRoutes);
+
+  /**
+   * Performance Management
+   */
+  router.use('/api/performance-reviews', authMiddleware, performanceReviewsRoutes);
+  router.use('/api/non-financial-performance', authMiddleware, nonFinancialPerformanceRoutes);
+  router.use('/api/development-recommendations', authMiddleware, developmentRecommendationsRoutes);
+
+  /**
+   * KPI & Goal Management
+   */
+  router.use('/api/kpis', authMiddleware, kpisRoutes);
+  router.use('/api/employee-goals', authMiddleware, employeeGoalsRoutes);
+  router.use('/api/employee-kpi-assignments', authMiddleware, employeeKpiAssignmentsRoutes);
+
+  /**
+   * Employee Management
+   */
+  router.use('/api/employees', authMiddleware, employeesRoutes);
+  router.use('/api/profiles', authMiddleware, profilesRoutes);
+  router.use('/api/employee-roles', authMiddleware, employeeRolesRoutes);
+  router.use('/api/employee-project-allocations', authMiddleware, employeeProjectAllocationsRoutes);
+  router.use('/api/subordinates', authMiddleware, subordinatesRoutes);
+  router.use('/api/team-management', authMiddleware, teamManagementRoutes);
+
+  /**
+   * Client Management
+   */
+  router.use('/api/clients', authMiddleware, clientsRoutes);
+
+  /**
+   * Feedback & Communication
+   */
+  router.use('/api/feedback', authMiddleware, feedbackRoutes);
+  router.use('/api/notifications', authMiddleware, notificationsRoutes);
+
+  /**
+   * Dashboard & User Views
+   */
+  router.use('/api/manager-dashboard', authMiddleware, managerDashboardRoutes);
+  router.use('/api/gmp-dashboard', authMiddleware, gmpDashboardRoutes);
+  router.use('/api/gmp-auth', gmpAuthRoutes); // Public endpoint for GMP
+
+  /**
+   * System Configuration
+   */
+  router.use('/api/roles', authMiddleware, rolesRoutes);
+  router.use('/api/user-roles', authMiddleware, userRolesRoutes);
+  router.use('/api/position-rates', authMiddleware, positionRatesRoutes);
+
+  /**
+   * Utilities & Other
+   */
+  router.use('/api/projects', authMiddleware, projectsRoutes);
+  router.use('/api/todos', authMiddleware, todosRoutes);
+  router.use('/api/work-logs', authMiddleware, workLogsRoutes);
+
+  // ============================================
+  // 🏥 HEALTH CHECK ENDPOINT
+  // ============================================
+  router.get('/api/health', (req, res) => {
+    res.json({
+      success: true,
+      message: 'API is running',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+    });
+  });
+
+  // ============================================
+  // 404 Handler
+  // ============================================
+  router.use('/api/*', (req, res) => {
+    res.status(404).json({
+      success: false,
+      message: 'Endpoint not found',
+      path: req.path,
+    });
+  });
+
+  app.use(router);
+}
 
 /**
- * ==========================================
- * CORE DOMAIN ROUTES (v2.1 - Primary API)
- * ==========================================
+ * ROUTE ORGANIZATION SUMMARY
+ * 
+ * Total Endpoints: 50+ routes
+ * 
+ * PHASE 1 (Security):
+ * ✅ Notifications, Profiles, Feedback secured
+ * 
+ * PHASE 2 (TimeEntry - COMPLETE):
+ * ✅ 13 TimeEntry endpoints fully implemented
+ *    - List, Create, Read, Update, Delete
+ *    - Submit, Approve, Reject
+ *    - Timer (start/stop)
+ *    - Batch operations
+ *    - Job summary
+ * ✅ Authorization checks (role-based access control)
+ * ✅ Budget validation (prevent overage)
+ * ✅ Request validation (express-validator)
+ * ✅ Error handling (consistent error responses)
+ * 
+ * PHASE 3 (Next - Complete remaining controllers):
+ * ⏳ Job domain
+ * ⏳ Evaluation domain (expand)
+ * ⏳ Partner domain
+ * ⏳ Department domain (polish)
+ * 
+ * PHASE 4 (Modernize legacy routes):
+ * ⏳ profiles.ts (mix of old/new patterns)
+ * ⏳ notifications.ts (needs pagination)
+ * ⏳ feedback.ts (raw SQL queries)
+ * ⏳ kpis.ts (basic implementation)
+ * ⏳ roles.ts (minimal implementation)
+ * 
+ * PHASE 5 (Business logic services):
+ * ⏳ Budget validation service
+ * ⏳ Revenue allocation service
+ * ⏳ KPI calculation service
+ * ⏳ Workflow automation service
  */
-
-// Authentication (no middleware needed - handled internally)
-router.use("/auth", authRoutes);
-
-// Jobs - core business domain
-router.use("/jobs", jobsRoutes);
-
-// Time entries - core business domain
-router.use("/time-entries", timeEntriesRoutes);
-
-// Evaluations - performance domain
-router.use("/evaluations", evaluationsRoutes);
-router.use("/evaluation-cycles", evaluationCyclesRoutes);
-
-// Documents & Onboarding - HR domain
-router.use("/documents", documentsRoutes);
-
-// Partners - business domain
-router.use("/partners", partnersRoutes);
-
-// Departments - org structure
-router.use("/departments", departmentsRoutes);
-
-// Clients - business domain
-router.use("/clients", clientsRoutes);
-
-// KPIs - performance domain
-router.use("/kpis", kpisRoutes);
-
-/**
- * ==========================================
- * LEGACY ROUTES (to be refactored/removed)
- * ==========================================
- */
-
-router.use("/user_roles", userRolesRoutes);
-router.use("/audit_logs", auditLogsRoutes);
-router.use("/analytics", analyticsRoutes);
-router.use("/todos", todosRoutes);
-router.use("/profiles", profilesRoutes);
-router.use("/upward_evaluations", upwardEvaluationsRoutes);
-router.use("/peer_evaluations", peerEvaluationsRoutes);
-router.use("/projects", projectsRoutes);
-router.use("/work_logs", workLogsRoutes);
-router.use("/employee_goals", employeeGoalsRoutes);
-router.use("/feedback", feedbackRoutes);
-router.use("/continuous_feedback", continuousFeedbackRoutes);
-router.use("/ad_hoc_evaluations", adHocEvaluationsRoutes);
-router.use("/performance_reviews", performanceReviewsRoutes);
-router.use("/client_evaluations", clientEvaluationsRoutes);
-router.use("/employee_project_allocations", employeeProjectAllocationsRoutes);
-router.use("/employee_evaluations", employeeEvaluationsRoutes);
-router.use("/evaluation_teams", evaluationTeamsRoutes);
-router.use("/evaluation_team_members", evaluationTeamMembersRoutes);
-router.use("/job_profitability", jobProfitabilityRoutes);
-router.use("/evaluation_result_areas", evaluationResultAreasRoutes);
-router.use("/employee_kpi_assignments", employeeKpiAssignmentsRoutes);
-router.use("/evaluation_templates", evaluationTemplatesRoutes);
-router.use("/create-cycle-evaluations", createCycleEvaluationsRoutes);
-router.use("/development_recommendations", developmentRecommendationsRoutes);
-router.use("/notifications", notificationsRoutes);
-router.use("/subordinates", subordinatesRoutes);
-router.use("/roles", rolesRoutes);
-router.use("/employee_roles", employeeRolesRoutes);
-router.use("/jobs-staff", jobStaffAssignmentsRoutes);
-router.use("/manager-dashboard", managerDashboardRoutes);
-router.use("/gmp-dashboard", gmpDashboardRoutes);
-router.use("/gmp-auth", gmpAuthRoutes);
-router.use("/job-workflow", jobWorkflowRoutes);
-router.use("/employees", employeesRoutes);
-router.use("/non-financial-performance", nonFinancialPerformanceRoutes);
-router.use("/position-rates", positionRatesRoutes);
-router.use("/financial-summary", financialSummaryRoutes);
-router.use("/manager", teamManagementRoutes);
-
-export default router;

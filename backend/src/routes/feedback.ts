@@ -1,56 +1,122 @@
+/**
+ * Feedback Routes (Modernized - Phase 4)
+ */
+
 import { Router } from 'express';
-import prisma from '../prisma';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { createAudit } from '../utils/audit';
+import { FeedbackController } from '../controllers/feedback.controller';
+import { authMiddleware } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
+import { handleValidationErrors } from '../middleware/validate';
+import { body, param, query } from 'express-validator';
 
 const router = Router();
 
-// GET /feedback?subject_id=... or ?reviewer_id=...
-router.get('/', async (req, res) => {
-  try {
-    const subjectId = req.query.subject_id as string | undefined;
-    const reviewerId = req.query.reviewer_id as string | undefined;
-    const limit = Math.min(1000, Number(req.query.limit as string) || 200);
-    if (subjectId) {
-      const rows = await prisma.$queryRaw<any>`SELECT * FROM feedback WHERE subject_id = ${subjectId} ORDER BY "createdAt" DESC LIMIT ${limit}`;
-      return res.json(rows || []);
-    }
-    if (reviewerId) {
-      const rows = await prisma.$queryRaw<any>`SELECT * FROM feedback WHERE reviewer_id = ${reviewerId} ORDER BY "createdAt" DESC LIMIT ${limit}`;
-      return res.json(rows || []);
-    }
-    const rows = await prisma.$queryRaw<any>`SELECT * FROM feedback ORDER BY "createdAt" DESC LIMIT ${limit}`;
-    return res.json(rows || []);
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+// ✅ VALIDATORS
+const createFeedbackValidators = [
+  body('recipient_profile_id')
+    .isInt()
+    .withMessage('recipient_profile_id must be an integer'),
+  body('title')
+    .isString()
+    .trim()
+    .isLength({ min: 5, max: 100 })
+    .withMessage('title must be 5-100 characters'),
+  body('content')
+    .isString()
+    .trim()
+    .isLength({ min: 10, max: 2000 })
+    .withMessage('content must be 10-2000 characters'),
+  body('type')
+    .optional()
+    .isString()
+    .isIn(['general', 'praise', 'improvement', 'suggestion'])
+    .withMessage('Invalid feedback type'),
+  body('is_anonymous')
+    .optional()
+    .isBoolean()
+    .withMessage('is_anonymous must be boolean'),
+];
+
+const updateStatusValidators = [
+  param('feedbackId').isInt().toInt(),
+  body('status')
+    .isString()
+    .isIn(['pending', 'reviewed', 'resolved', 'archived'])
+    .withMessage('Invalid status'),
+];
+
+const listFeedbackValidators = [
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('pageSize').optional().isInt({ min: 1, max: 100 }).toInt(),
+  query('type').optional().isString(),
+  query('status')
+    .optional()
+    .isIn(['pending', 'reviewed', 'resolved', 'archived']),
+  query('recipientId').optional().isInt().toInt(),
+];
+
+// ✅ ROUTES
+
+// GET /feedback
+router.get(
+  '/',
+  authMiddleware,
+  loadProfile,
+  ...listFeedbackValidators,
+  handleValidationErrors,
+  FeedbackController.listFeedback
+);
 
 // POST /feedback
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { subject_id, feedback_type, rating, comments, is_anonymous, reviewer_id } = req.body;
-    if (!subject_id || !feedback_type) return res.status(400).json({ error: 'Missing required fields' });
-    
-    const reviewer = reviewer_id || (req.user?.sub ? Number(req.user.sub) : null);
-    
-    const created = await prisma.feedback.create({
-      data: {
-        subject_id: Number(subject_id),
-        feedback_type,
-        rating: rating || null,
-        comments: comments || null,
-        is_anonymous: is_anonymous || false,
-        reviewer_id: reviewer,
-      }
-    });
-    
-    await createAudit({ action: `submit_feedback:${feedback_type}`, entity_type: 'feedback', user_id: reviewer || null, ip_address: req.ip });
-    return res.status(201).json(created);
-  } catch (err: any) {
-    console.error('Error creating feedback:', err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  ...createFeedbackValidators,
+  handleValidationErrors,
+  FeedbackController.createFeedback
+);
+
+// GET /feedback/:feedbackId
+router.get(
+  '/:feedbackId',
+  authMiddleware,
+  loadProfile,
+  param('feedbackId').isInt().toInt(),
+  handleValidationErrors,
+  FeedbackController.getFeedback
+);
+
+// PATCH /feedback/:feedbackId/status
+router.patch(
+  '/:feedbackId/status',
+  authMiddleware,
+  loadProfile,
+  requireRole(['admin']),
+  ...updateStatusValidators,
+  handleValidationErrors,
+  FeedbackController.updateFeedbackStatus
+);
+
+// GET /feedback/:profileId/analytics
+router.get(
+  '/:profileId/analytics',
+  authMiddleware,
+  loadProfile,
+  param('profileId').isInt().toInt(),
+  handleValidationErrors,
+  FeedbackController.getFeedbackAnalytics
+);
+
+// DELETE /feedback/:feedbackId
+router.delete(
+  '/:feedbackId',
+  authMiddleware,
+  loadProfile,
+  param('feedbackId').isInt().toInt(),
+  handleValidationErrors,
+  FeedbackController.deleteFeedback
+);
 
 export default router;

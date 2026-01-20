@@ -207,12 +207,12 @@ export const createDepartmentKpiValidators = [
 
   body("targetValue")
     .optional()
-    .isDecimal({ min: 0 })
+    .isFloat({ min: 0 })
     .withMessage("Target value must be >= 0 if provided"),
 
   body("weight")
     .optional()
-    .isDecimal({ min: 0, max: 100 })
+    .isFloat({ min: 0, max: 100 })
     .withMessage("Weight must be between 0 and 100 if provided"),
 
   body("targetFrequency")

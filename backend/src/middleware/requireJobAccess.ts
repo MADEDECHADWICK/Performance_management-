@@ -1,81 +1,64 @@
+import { Response, NextFunction } from 'express';
+import { AuthRequest } from './auth';
+import { prisma } from '../lib/prisma';
+
 /**
- * Job-level access control
- * Verify user can access specific job
- *
- * IMPORTANT:
- * This expects loadProfile middleware to have run already,
- * so req.user.profileId is available.
+ * Verify user has access to job
  */
-
-import { Response, NextFunction } from "express";
-import prisma from "../prisma";
-import { AuthRequest } from "./auth";
-
-export const requireJobAccess = async (
+export async function requireJobAccess(
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): Promise<void> => {
+) {
   try {
-    if (!req.user?.userId) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
+    const jobId = Number(req.params.jobId);
+    const requesterProfileId = req.profile?.id;
+    const requesterRole = req.profile?.role?.name;
 
-    // Must have a profileId because Job relations use Profile IDs
-    const profileId = req.user.profileId;
-    if (!profileId) {
-      res.status(401).json({ error: "Profile not loaded. Run loadProfile middleware first." });
-      return;
-    }
-
-    const rawJobId = (req.params.jobId ?? req.query.jobId) as string | undefined;
-    const jobId = Number(rawJobId);
-
-    if (!rawJobId || Number.isNaN(jobId)) {
-      res.status(400).json({ error: "Invalid job ID" });
-      return;
+    if (!requesterProfileId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized',
+      });
     }
 
     const job = await prisma.job.findUnique({
       where: { id: jobId },
-      select: {
-        id: true,
-        partnerProfileId: true,
-        managerProfileId: true,
+      include: {
         staffing: {
-          where: { employeeProfileId: profileId },
-          select: { id: true }
-        }
-      }
+          where: { employee_profile_id: requesterProfileId },
+        },
+      },
     });
 
     if (!job) {
-      res.status(404).json({ error: "Job not found" });
-      return;
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found',
+      });
     }
 
-    const userRoles: string[] = req.userRoles || [];
-    const isAdmin =
-      userRoles.includes("admin") || userRoles.includes("super_admin");
+    // ✅ ACCESS CONTROL LOGIC
+    const isAdmin = requesterRole === 'admin';
+    const isManager = requesterRole === 'manager';
+    const isPartner = requesterRole === 'partner' && job.partner_id === requesterProfileId;
+    const isStaffAssigned = job.staffing.length > 0;
 
-    const hasAccess =
-      isAdmin ||
-      job.partnerProfileId === profileId ||
-      job.managerProfileId === profileId ||
-      job.staffing.length > 0;
+    const hasAccess = isAdmin || isManager || isPartner || isStaffAssigned;
 
     if (!hasAccess) {
-      res.status(403).json({ error: "No access to this job" });
-      return;
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to access this job',
+      });
     }
 
-    // Cache job data for downstream handlers
     req.job = job;
-
     next();
-  } catch (error) {
-    console.error("requireJobAccess error:", error);
-    res.status(500).json({ error: "Job access check failed" });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
-};
+}

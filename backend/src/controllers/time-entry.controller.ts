@@ -1,260 +1,370 @@
-/**
- * Time Entry Controller
- * Handles all time entry operations including tracking, approval, and budget enforcement
- */
-
-import { Response } from "express";
-import { AuthRequest } from "../middleware/auth";
-import { TimeEntryService } from "../services/time-entry.service";
-import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
+import { Response } from 'express';
+import { AuthRequest } from '../middleware/auth';
+import { TimeEntryService } from '../services/time-entry.service';
+import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
 export class TimeEntryController {
+  /**
+   * GET /time-entries
+   * List time entries accessible to user
+   */
   static async listTimeEntries(req: AuthRequest, res: Response): Promise<void> {
     try {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
-      const status = req.query.status as string | undefined;
+      const status = (req.query.status as string) || undefined;
       const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
-      const employeeProfileId = req.query.employeeProfileId ? Number(req.query.employeeProfileId) : undefined;
+      const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
+      const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
 
       const result = await TimeEntryService.listTimeEntries(
-        { page, pageSize, status, jobId, employeeProfileId },
-        req.user!.profileId
+        {
+          page,
+          pageSize,
+          status,
+          jobId,
+          dateFrom,
+          dateTo,
+        },
+        auth
       );
 
-      res.json(paginatedResponse(result.timeEntries, result.total, page, pageSize, "Time entries retrieved successfully"));
-    } catch (error) {
-      console.error("TimeEntryController.listTimeEntries error:", error);
-      res.status(500).json(errorResponse("Failed to retrieve time entries", 500));
+      res.json(
+        paginatedResponse(result.timeEntries, result.total, page, pageSize)
+      );
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
     }
   }
 
+  /**
+   * POST /time-entries
+   * Create a new time entry
+   */
   static async createTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { jobId, hours, description, entryDate } = req.body;
-      const budgetValidation = (req as any).budgetValidation;
-      const budgetWarning = (req as any).budgetWarning;
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
 
-      const result = await TimeEntryService.createTimeEntry(
-        { jobId, employeeProfileId: req.user!.profileId, hours, description, entryDate },
-        req.user!.profileId,
-        budgetValidation
+      const timeEntry = await TimeEntryService.createTimeEntry(req.body, auth);
+
+      res.status(201).json(
+        successResponse(timeEntry, 'Time entry created successfully', 201)
       );
-
-      const response = successResponse(result, "Time entry created successfully", 201);
-      if (budgetWarning) {
-        (response as any).warning = budgetWarning;
-      }
-
-      res.status(201).json(response);
     } catch (error: any) {
-      console.error("TimeEntryController.createTimeEntry error:", error);
-      if (error.message.includes("not assigned")) {
-        res.status(403).json(errorResponse("You are not assigned to this job", 403));
-        return;
-      }
-      if (error.message.includes("exceeds daily limit")) {
-        res.status(400).json(errorResponse(error.message, 400));
-        return;
-      }
-      if (error.message.includes("Budget exceeded")) {
-        res.status(400).json(errorResponse(error.message, 400));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to create time entry", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * GET /time-entries/:timeEntryId
+   * Get a specific time entry
+   */
   static async getTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const result = await TimeEntryService.getTimeEntryById(timeEntryId, req.user!.profileId);
-      if (!result) {
-        res.status(404).json(errorResponse("Time entry not found", 404));
-        return;
-      }
-      res.json(successResponse(result, "Time entry retrieved successfully"));
-    } catch (error) {
-      console.error("TimeEntryController.getTimeEntry error:", error);
-      res.status(500).json(errorResponse("Failed to retrieve time entry", 500));
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.getTimeEntry(timeEntryId, auth);
+
+      res.json(successResponse(timeEntry, 'Time entry retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
     }
   }
 
+  /**
+   * PATCH /time-entries/:timeEntryId
+   * Update time entry (only before submission)
+   */
   static async updateTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const { hours, description } = req.body;
-      const budgetValidation = (req as any).budgetValidation;
 
-      const result = await TimeEntryService.updateTimeEntry(
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.updateTimeEntry(
         timeEntryId,
-        { hours, description },
-        req.user!.profileId,
-        budgetValidation
+        req.body,
+        auth
       );
 
-      res.json(successResponse(result, "Time entry updated successfully"));
+      res.json(
+        successResponse(timeEntry, 'Time entry updated successfully')
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.updateTimeEntry error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("forbidden")) {
-        res.status(403).json(errorResponse(error.message, 403));
-        return;
-      }
-      if (error.message.includes("Budget exceeded")) {
-        res.status(400).json(errorResponse(error.message, 400));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to update time entry", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * DELETE /time-entries/:timeEntryId
+   * Delete time entry (only before approval)
+   */
   static async deleteTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      await TimeEntryService.deleteTimeEntry(timeEntryId, req.user!.profileId);
-      res.json(successResponse(null, "Time entry deleted successfully"));
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      await TimeEntryService.deleteTimeEntry(timeEntryId, auth);
+
+      res.json(successResponse(null, 'Time entry deleted successfully'));
     } catch (error: any) {
-      console.error("TimeEntryController.deleteTimeEntry error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("forbidden")) {
-        res.status(403).json(errorResponse(error.message, 403));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to delete time entry", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * PATCH /time-entries/:timeEntryId/submit
+   * Submit time entry for approval
+   */
   static async submitTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const result = await TimeEntryService.submitTimeEntry(timeEntryId, req.user!.profileId);
-      res.json(successResponse(result, "Time entry submitted successfully"));
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.submitTimeEntry(
+        timeEntryId,
+        auth
+      );
+
+      res.json(
+        successResponse(timeEntry, 'Time entry submitted for approval')
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.submitTimeEntry error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("already submitted")) {
-        res.status(409).json(errorResponse(error.message, 409));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to submit time entry", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * PATCH /time-entries/:timeEntryId/approve
+   * Approve time entry (managers/partners only)
+   */
   static async approveTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const { approvalNotes } = req.body;
-      const result = await TimeEntryService.approveTimeEntry(timeEntryId, req.user!.profileId, approvalNotes);
-      res.json(successResponse(result, "Time entry approved successfully"));
+      const { approval_notes } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.approveTimeEntry(
+        timeEntryId,
+        approval_notes || '',
+        auth
+      );
+
+      res.json(
+        successResponse(timeEntry, 'Time entry approved successfully')
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.approveTimeEntry error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("not pending")) {
-        res.status(409).json(errorResponse(error.message, 409));
-        return;
-      }
-      if (error.message.includes("forbidden")) {
-        res.status(403).json(errorResponse(error.message, 403));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to approve time entry", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * PATCH /time-entries/:timeEntryId/reject
+   * Reject time entry with reason
+   */
+  static async rejectTimeEntry(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const timeEntryId = Number(req.params.timeEntryId);
+      const { rejection_reason } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.rejectTimeEntry(
+        timeEntryId,
+        rejection_reason,
+        auth
+      );
+
+      res.json(successResponse(timeEntry, 'Time entry rejected'));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * POST /time-entries/:timeEntryId/timer/start
+   * Start real-time timer
+   */
   static async startTimer(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const result = await TimeEntryService.startTimer(timeEntryId, req.user!.profileId);
-      res.json(successResponse(result, "Timer started"));
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.startTimer(timeEntryId, auth);
+
+      res.json(successResponse(timeEntry, 'Timer started', 200));
     } catch (error: any) {
-      console.error("TimeEntryController.startTimer error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("already running")) {
-        res.status(409).json(errorResponse(error.message, 409));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to start timer", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * POST /time-entries/:timeEntryId/timer/stop
+   * Stop real-time timer and calculate hours
+   */
   static async stopTimer(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const result = await TimeEntryService.stopTimer(timeEntryId, req.user!.profileId);
-      res.json(successResponse(result, "Timer stopped"));
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const timeEntry = await TimeEntryService.stopTimer(timeEntryId, auth);
+
+      res.json(
+        successResponse(timeEntry, 'Timer stopped, time calculated')
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.stopTimer error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      if (error.message.includes("not running")) {
-        res.status(409).json(errorResponse(error.message, 409));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to stop timer", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * POST /time-entries/batch/submit
+   * Batch submit multiple time entries
+   */
   static async batchSubmitTimeEntries(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { timeEntryIds } = req.body;
-      const result = await TimeEntryService.batchSubmitTimeEntries(timeEntryIds, req.user!.profileId);
-      res.json(successResponse(result, "Time entries submitted in batch"));
+      const { time_entry_ids } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const result = await TimeEntryService.batchSubmitTimeEntries(
+        time_entry_ids,
+        auth
+      );
+
+      res.json(
+        successResponse(result, `${result.submitted} time entries submitted`)
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.batchSubmitTimeEntries error:", error);
-      res.status(400).json(errorResponse(error.message || "Failed to submit time entries", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
+  /**
+   * POST /time-entries/batch/approve
+   * Batch approve multiple time entries
+   */
   static async batchApproveTimeEntries(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { timeEntryIds } = req.body;
-      const result = await TimeEntryService.batchApproveTimeEntries(timeEntryIds, req.user!.profileId);
-      res.json(successResponse(result, "Time entries approved in batch"));
+      const { time_entry_ids } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const result = await TimeEntryService.batchApproveTimeEntries(
+        time_entry_ids,
+        auth
+      );
+
+      res.json(
+        successResponse(result, `${result.approved} time entries approved`)
+      );
     } catch (error: any) {
-      console.error("TimeEntryController.batchApproveTimeEntries error:", error);
-      if (error.message.includes("forbidden")) {
-        res.status(403).json(errorResponse(error.message, 403));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to approve time entries", 400));
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
     }
   }
 
-  static async requestMoreTime(req: AuthRequest, res: Response): Promise<void> {
+  /**
+   * GET /time-entries/job/:jobId/summary
+   * Get time entry summary for a job
+   */
+  static async getJobTimeSummary(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const timeEntryId = Number(req.params.timeEntryId);
-      const { reason, requestedHours } = req.body;
-      const result = await TimeEntryService.requestMoreTime(
-        timeEntryId,
-        { reason, requestedHours },
-        req.user!.profileId
-      );
-      res.status(201).json(successResponse(result, "Overage request created", 201));
+      const jobId = Number(req.params.jobId);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const summary = await TimeEntryService.getJobTimeSummary(jobId, auth);
+
+      res.json(successResponse(summary, 'Job time summary retrieved'));
     } catch (error: any) {
-      console.error("TimeEntryController.requestMoreTime error:", error);
-      if (error.message.includes("not found")) {
-        res.status(404).json(errorResponse(error.message, 404));
-        return;
-      }
-      res.status(400).json(errorResponse(error.message || "Failed to request more time", 400));
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
     }
   }
 }

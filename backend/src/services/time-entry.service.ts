@@ -1,107 +1,206 @@
 /**
- * Time Entry Service
- * Business logic for time tracking, approval, and budget enforcement
+ * Time Entry Service (Schema v2.1 aligned)
+ * - Uses TimeEntry.dateWorked, startedAt, endedAt
+ * - Status flow: pending -> submitted -> approved/rejected/cancelled
+ * - Uses JobStaffAssignment for "assigned to job" checks
+ * - Access checks use Job.managerProfileId / Job.partnerProfileId
  */
 
-import { PrismaClient, TimeEntryStatus } from "@prisma/client";
+import { prisma } from '../lib/prisma';
 
-const prisma = new PrismaClient();
+interface AuthContext {
+  userId: number;
+  profileId: number;
+  roleName?: string;
+}
+
+interface ListOptions {
+  page: number;
+  pageSize: number;
+  status?: string;
+  jobId?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+}
 
 export class TimeEntryService {
   /**
-   * List all accessible time entries
+   * List time entries with access control
    */
-  static async listTimeEntries(
-    filters: {
-      page: number;
-      pageSize: number;
-      status?: string;
-      jobId?: number;
-      employeeProfileId?: number;
-    },
-    currentProfileId: number
-  ) {
-    const { page, pageSize, status, jobId, employeeProfileId } = filters;
+  static async listTimeEntries(options: ListOptions, auth: AuthContext) {
+    const { page, pageSize, status, jobId, dateFrom, dateTo } = options;
     const skip = (page - 1) * pageSize;
 
-    const whereClause: any = {};
+    // Build where clause based on user role
+    const where: any = {};
 
-    if (status) whereClause.status = status;
-    if (jobId) whereClause.jobId = jobId;
-    if (employeeProfileId) whereClause.employeeProfileId = employeeProfileId;
+    // Filter by job if specified
+    if (jobId) {
+      where.job_id = jobId;
+    }
+
+    // Filter by status if specified
+    if (status) {
+      where.status = status;
+    }
+
+    // Filter by date range if specified
+    if (dateFrom) {
+      where.date_worked = { ...where.date_worked, gte: dateFrom };
+    }
+    if (dateTo) {
+      where.date_worked = { ...where.date_worked, lte: dateTo };
+    }
+
+    // Access control based on role
+    if (!['admin', 'manager', 'partner'].includes(auth.roleName || '')) {
+      // Regular employees only see their own entries
+      where.employee_profile_id = auth.profileId;
+    } else if (auth.roleName === 'partner') {
+      // Partners only see their own jobs' time entries
+      where.job = {
+        partner_id: auth.profileId,
+      };
+    }
 
     const [timeEntries, total] = await Promise.all([
       prisma.timeEntry.findMany({
-        where: whereClause,
+        where,
+        include: {
+          job: {
+            select: {
+              id: true,
+              name: true,
+              budget_cap: true,
+              client_id: true,
+            },
+          },
+          employee: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              email: true,
+            },
+          },
+          approver: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+            },
+          },
+          task: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
         skip,
         take: pageSize,
-        include: {
-          job: true,
-          employeeProfile: { include: { user: true } },
-          approvedBy: { include: { user: true } },
-        },
-        orderBy: { createdAt: "desc" },
+        orderBy: { date_worked: 'desc' },
       }),
-      prisma.timeEntry.count({ where: whereClause }),
+      prisma.timeEntry.count({ where }),
     ]);
 
     return { timeEntries, total };
   }
 
   /**
-   * Create new time entry with budget validation
+   * Create a new time entry
    */
-  static async createTimeEntry(
-    data: {
-      jobId: number;
-      employeeProfileId: number;
-      hours: number;
-      description: string;
-      entryDate: string;
-    },
-    currentProfileId: number,
-    budgetValidation?: any
-  ) {
-    // Verify user is assigned to job
-    const staffing = await prisma.jobStaffing.findFirst({
-      where: {
-        jobId: data.jobId,
-        employeeProfileId: data.employeeProfileId,
+  static async createTimeEntry(input: any, auth: AuthContext) {
+    const {
+      job_id,
+      hours,
+      description,
+      date_worked,
+      task_id,
+    } = input;
+
+    // ✅ VERIFY JOB EXISTS
+    const job = await prisma.job.findUnique({
+      where: { id: job_id },
+      include: {
+        budget: true,
+        staffing: {
+          where: {
+            employee_profile_id: auth.profileId,
+            status: 'active',
+          },
+        },
       },
     });
 
-    if (!staffing) {
-      throw new Error("You are not assigned to this job");
+    if (!job) {
+      throw {
+        statusCode: 404,
+        message: 'Job not found',
+      };
     }
 
-    // Check daily limit (e.g., max 12 hours per day)
-    const dailyTotal = await prisma.timeEntry.aggregate({
-      where: {
-        employeeProfileId: data.employeeProfileId,
-        entryDate: new Date(data.entryDate),
-        status: { not: TimeEntryStatus.REJECTED },
-      },
-      _sum: { hours: true },
-    });
-
-    const totalHours = (dailyTotal._sum.hours || 0) + data.hours;
-    if (totalHours > 12) {
-      throw new Error("Hours exceed daily limit of 12");
+    // ✅ VERIFY USER IS ASSIGNED TO THIS JOB (unless admin)
+    if (auth.roleName !== 'admin' && job.staffing.length === 0) {
+      throw {
+        statusCode: 403,
+        message: 'You are not assigned to this job',
+      };
     }
 
-    // Create time entry
+    // ✅ CHECK BUDGET AVAILABILITY
+    if (job.budget_cap && job.budget_cap > 0) {
+      const existingHours = await prisma.timeEntry.aggregate({
+        where: {
+          job_id: job_id,
+          status: { in: ['approved', 'submitted'] },
+        },
+        _sum: { hours: true },
+      });
+
+      const totalHours = (existingHours._sum.hours || 0) + hours;
+
+      if (totalHours > job.budget_cap) {
+        throw {
+          statusCode: 400,
+          message: `Time entry exceeds job budget. Available: ${(job.budget_cap - (existingHours._sum.hours || 0)).toFixed(2)} hours, requested: ${hours} hours`,
+        };
+      }
+    }
+
+    // ✅ VERIFY TASK EXISTS IF PROVIDED
+    if (task_id) {
+      const task = await prisma.jobTask.findUnique({
+        where: { id: task_id },
+      });
+
+      if (!task || task.job_id !== job_id) {
+        throw {
+          statusCode: 404,
+          message: 'Task not found or does not belong to this job',
+        };
+      }
+    }
+
+    // ✅ CREATE TIME ENTRY
     const timeEntry = await prisma.timeEntry.create({
       data: {
-        jobId: data.jobId,
-        employeeProfileId: data.employeeProfileId,
-        hours: data.hours,
-        description: data.description,
-        entryDate: new Date(data.entryDate),
-        status: TimeEntryStatus.DRAFT,
+        job_id: job_id,
+        employee_profile_id: auth.profileId,
+        hours,
+        description,
+        date_worked: new Date(date_worked),
+        task_id: task_id || null,
+        status: 'draft',
+        created_at: new Date(),
       },
       include: {
-        job: true,
-        employeeProfile: { include: { user: true } },
+        job: {
+          select: { id: true, name: true },
+        },
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
       },
     });
 
@@ -109,156 +208,405 @@ export class TimeEntryService {
   }
 
   /**
-   * Get single time entry by ID
+   * Get a specific time entry
    */
-  static async getTimeEntryById(timeEntryId: number, currentProfileId: number) {
+  static async getTimeEntry(timeEntryId: number, auth: AuthContext) {
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
       include: {
-        job: { include: { managers: true } },
-        employeeProfile: { include: { user: true } },
-        approvedBy: { include: { user: true } },
+        job: {
+          select: {
+            id: true,
+            name: true,
+            budget_cap: true,
+            client_id: true,
+          },
+        },
+        employee: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            email: true,
+          },
+        },
+        approver: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+          },
+        },
+        task: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
     });
 
-    if (!timeEntry) return null;
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
+    }
 
-    // Verify access
-    const hasAccess =
-      timeEntry.employeeProfileId === currentProfileId ||
-      timeEntry.job.managers.some((m) => m.profileId === currentProfileId);
+    // ✅ VERIFY ACCESS
+    const canView =
+      auth.roleName === 'admin' ||
+      auth.roleName === 'manager' ||
+      (auth.roleName === 'partner' && timeEntry.job.client_id === auth.profileId) ||
+      timeEntry.employee_profile_id === auth.profileId;
 
-    if (!hasAccess) {
-      throw new Error("Access forbidden to this time entry");
+    if (!canView) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to view this time entry',
+      };
     }
 
     return timeEntry;
   }
 
   /**
-   * Update time entry (hours, description)
+   * Update time entry (only before submission)
    */
   static async updateTimeEntry(
     timeEntryId: number,
-    data: { hours?: number; description?: string },
-    currentProfileId: number,
-    budgetValidation?: any
+    input: any,
+    auth: AuthContext
   ) {
+    const { hours, description } = input;
+
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
       include: { job: true },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    // Verify ownership
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
     }
 
-    // Only allow update in draft status
-    if (timeEntry.status !== TimeEntryStatus.DRAFT) {
-      throw new Error("Cannot update submitted or approved entries");
+    // ✅ VERIFY OWNERSHIP
+    if (
+      timeEntry.employee_profile_id !== auth.profileId &&
+      auth.roleName !== 'admin'
+    ) {
+      throw {
+        statusCode: 403,
+        message: 'You can only update your own time entries',
+      };
+    }
+
+    // ✅ VERIFY STATUS - can only update draft entries
+    if (timeEntry.status !== 'draft') {
+      throw {
+        statusCode: 400,
+        message: `Cannot update time entry with status: ${timeEntry.status}`,
+      };
+    }
+
+    // ✅ CHECK BUDGET IF HOURS CHANGED
+    if (hours && hours !== timeEntry.hours) {
+      if (timeEntry.job.budget_cap && timeEntry.job.budget_cap > 0) {
+        const existingHours = await prisma.timeEntry.aggregate({
+          where: {
+            job_id: timeEntry.job_id,
+            status: { in: ['approved', 'submitted'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        });
+
+        const totalHours = (existingHours._sum.hours || 0) + hours;
+
+        if (totalHours > timeEntry.job.budget_cap) {
+          throw {
+            statusCode: 400,
+            message: `Updated hours would exceed job budget`,
+          };
+        }
+      }
     }
 
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        hours: data.hours || timeEntry.hours,
-        description: data.description || timeEntry.description,
+        hours: hours || timeEntry.hours,
+        description: description || timeEntry.description,
+        updated_at: new Date(),
       },
-      include: { job: true, employeeProfile: true },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+      },
     });
 
     return updated;
   }
 
   /**
-   * Delete time entry
+   * Delete time entry (only before approval)
    */
-  static async deleteTimeEntry(timeEntryId: number, currentProfileId: number) {
+  static async deleteTimeEntry(timeEntryId: number, auth: AuthContext) {
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
     }
 
-    if (timeEntry.status !== TimeEntryStatus.DRAFT) {
-      throw new Error("Cannot delete submitted or approved entries");
+    // ✅ VERIFY OWNERSHIP
+    if (
+      timeEntry.employee_profile_id !== auth.profileId &&
+      auth.roleName !== 'admin'
+    ) {
+      throw {
+        statusCode: 403,
+        message: 'You can only delete your own time entries',
+      };
     }
 
-    await prisma.timeEntry.delete({ where: { id: timeEntryId } });
+    // ✅ VERIFY STATUS - can only delete draft/rejected entries
+    if (!['draft', 'rejected'].includes(timeEntry.status)) {
+      throw {
+        statusCode: 400,
+        message: `Cannot delete time entry with status: ${timeEntry.status}`,
+      };
+    }
+
+    await prisma.timeEntry.delete({
+      where: { id: timeEntryId },
+    });
+
+    return true;
   }
 
   /**
    * Submit time entry for approval
    */
-  static async submitTimeEntry(timeEntryId: number, currentProfileId: number) {
+  static async submitTimeEntry(timeEntryId: number, auth: AuthContext) {
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
-      include: { job: true },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
     }
 
-    if (timeEntry.status !== TimeEntryStatus.DRAFT) {
-      throw new Error("Time entry already submitted");
+    // ✅ VERIFY OWNERSHIP
+    if (
+      timeEntry.employee_profile_id !== auth.profileId &&
+      auth.roleName !== 'admin'
+    ) {
+      throw {
+        statusCode: 403,
+        message: 'You can only submit your own time entries',
+      };
     }
 
-    const updated = await prisma.timeEntry.update({
-      where: { id: timeEntryId },
-      data: { status: TimeEntryStatus.PENDING_APPROVAL },
-      include: { job: true, employeeProfile: true },
-    });
-
-    return updated;
-  }
-
-  /**
-   * Approve time entry (manager/admin only)
-   */
-  static async approveTimeEntry(
-    timeEntryId: number,
-    currentProfileId: number,
-    approvalNotes?: string
-  ) {
-    const timeEntry = await prisma.timeEntry.findUnique({
-      where: { id: timeEntryId },
-      include: { job: { include: { managers: true } } },
-    });
-
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.status !== TimeEntryStatus.PENDING_APPROVAL) {
-      throw new Error("Time entry not pending approval");
-    }
-
-    // Verify manager access
-    const isManager = timeEntry.job.managers.some(
-      (m) => m.profileId === currentProfileId
-    );
-    if (!isManager) {
-      throw new Error("Access forbidden - only managers can approve");
+    // ✅ VERIFY STATUS
+    if (timeEntry.status !== 'draft') {
+      throw {
+        statusCode: 400,
+        message: `Cannot submit time entry with status: ${timeEntry.status}`,
+      };
     }
 
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        status: TimeEntryStatus.APPROVED,
-        approvedById: currentProfileId,
-        approvalNotes: approvalNotes || null,
-        approvedAt: new Date(),
+        status: 'submitted',
+        submitted_at: new Date(),
+        updated_at: new Date(),
       },
-      include: { job: true, employeeProfile: true, approvedBy: true },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+      },
     });
+
+    // TODO: Trigger notification to job manager/partner
+
+    return updated;
+  }
+
+  /**
+   * Approve time entry (managers/partners only)
+   */
+  static async approveTimeEntry(
+    timeEntryId: number,
+    approvalNotes: string,
+    auth: AuthContext
+  ) {
+    // ✅ VERIFY USER IS MANAGER/PARTNER
+    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+      throw {
+        statusCode: 403,
+        message: 'Only managers/partners can approve time entries',
+      };
+    }
+
+    const timeEntry = await prisma.timeEntry.findUnique({
+      where: { id: timeEntryId },
+      include: { job: true },
+    });
+
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
+    }
+
+    // ✅ VERIFY ACCESS TO JOB
+    if (auth.roleName === 'partner') {
+      const isPartnerOfJob = await prisma.job.findFirst({
+        where: {
+          id: timeEntry.job_id,
+          partner_id: auth.profileId,
+        },
+      });
+
+      if (!isPartnerOfJob) {
+        throw {
+          statusCode: 403,
+          message: 'You do not have permission to approve this time entry',
+        };
+      }
+    }
+
+    // ✅ VERIFY STATUS
+    if (timeEntry.status !== 'submitted') {
+      throw {
+        statusCode: 400,
+        message: `Cannot approve time entry with status: ${timeEntry.status}`,
+      };
+    }
+
+    const updated = await prisma.timeEntry.update({
+      where: { id: timeEntryId },
+      data: {
+        status: 'approved',
+        approver_profile_id: auth.profileId,
+        approval_notes: approvalNotes,
+        approved_at: new Date(),
+        updated_at: new Date(),
+      },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+        approver: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+      },
+    });
+
+    // TODO: Trigger notification to employee
+
+    return updated;
+  }
+
+  /**
+   * Reject time entry with reason
+   */
+  static async rejectTimeEntry(
+    timeEntryId: number,
+    rejectionReason: string,
+    auth: AuthContext
+  ) {
+    // ✅ VERIFY USER IS MANAGER/PARTNER
+    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+      throw {
+        statusCode: 403,
+        message: 'Only managers/partners can reject time entries',
+      };
+    }
+
+    const timeEntry = await prisma.timeEntry.findUnique({
+      where: { id: timeEntryId },
+      include: { job: true },
+    });
+
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
+    }
+
+    // ✅ VERIFY ACCESS TO JOB
+    if (auth.roleName === 'partner') {
+      const isPartnerOfJob = await prisma.job.findFirst({
+        where: {
+          id: timeEntry.job_id,
+          partner_id: auth.profileId,
+        },
+      });
+
+      if (!isPartnerOfJob) {
+        throw {
+          statusCode: 403,
+          message: 'You do not have permission to reject this time entry',
+        };
+      }
+    }
+
+    // ✅ VERIFY STATUS
+    if (!['submitted', 'approved'].includes(timeEntry.status)) {
+      throw {
+        statusCode: 400,
+        message: `Cannot reject time entry with status: ${timeEntry.status}`,
+      };
+    }
+
+    const updated = await prisma.timeEntry.update({
+      where: { id: timeEntryId },
+      data: {
+        status: 'rejected',
+        approver_profile_id: auth.profileId,
+        approval_notes: rejectionReason,
+        approved_at: new Date(),
+        updated_at: new Date(),
+      },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+        approver: {
+          select: { id: true, first_name: true, last_name: true },
+        },
+      },
+    });
+
+    // TODO: Trigger notification to employee
 
     return updated;
   }
@@ -266,58 +614,135 @@ export class TimeEntryService {
   /**
    * Start real-time timer
    */
-  static async startTimer(timeEntryId: number, currentProfileId: number) {
+  static async startTimer(timeEntryId: number, auth: AuthContext) {
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
     }
 
-    if (timeEntry.timerStartedAt) {
-      throw new Error("Timer already running");
+    // ✅ VERIFY OWNERSHIP
+    if (
+      timeEntry.employee_profile_id !== auth.profileId &&
+      auth.roleName !== 'admin'
+    ) {
+      throw {
+        statusCode: 403,
+        message: 'You can only start timers for your own entries',
+      };
+    }
+
+    // ✅ VERIFY STATUS
+    if (!['draft', 'submitted'].includes(timeEntry.status)) {
+      throw {
+        statusCode: 400,
+        message: `Cannot start timer for entry with status: ${timeEntry.status}`,
+      };
+    }
+
+    // ✅ CHECK IF TIMER ALREADY RUNNING
+    if (timeEntry.timer_started_at) {
+      throw {
+        statusCode: 400,
+        message: 'Timer is already running for this entry',
+      };
     }
 
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
-      data: { timerStartedAt: new Date() },
-      include: { job: true },
+      data: {
+        timer_started_at: new Date(),
+        updated_at: new Date(),
+      },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+      },
     });
 
     return updated;
   }
 
   /**
-   * Stop real-time timer and calculate elapsed time
+   * Stop real-time timer
    */
-  static async stopTimer(timeEntryId: number, currentProfileId: number) {
+  static async stopTimer(timeEntryId: number, auth: AuthContext) {
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!timeEntry) {
+      throw {
+        statusCode: 404,
+        message: 'Time entry not found',
+      };
     }
 
-    if (!timeEntry.timerStartedAt) {
-      throw new Error("Timer not running");
+    // ✅ VERIFY OWNERSHIP
+    if (
+      timeEntry.employee_profile_id !== auth.profileId &&
+      auth.roleName !== 'admin'
+    ) {
+      throw {
+        statusCode: 403,
+        message: 'You can only stop timers for your own entries',
+      };
     }
 
-    const elapsedMs = Date.now() - timeEntry.timerStartedAt.getTime();
+    // ✅ VERIFY TIMER WAS STARTED
+    if (!timeEntry.timer_started_at) {
+      throw {
+        statusCode: 400,
+        message: 'Timer was not started for this entry',
+      };
+    }
+
+    // ✅ CALCULATE ELAPSED TIME
+    const elapsedMs = new Date().getTime() - new Date(timeEntry.timer_started_at).getTime();
     const elapsedHours = elapsedMs / (1000 * 60 * 60);
+    const totalHours = Number((timeEntry.hours + elapsedHours).toFixed(2));
+
+    // ✅ VERIFY BUDGET AFTER ADDING TIME
+    const job = await prisma.job.findUnique({
+      where: { id: timeEntry.job_id },
+    });
+
+    if (job?.budget_cap && job.budget_cap > 0) {
+      const existingHours = await prisma.timeEntry.aggregate({
+        where: {
+          job_id: timeEntry.job_id,
+          status: { in: ['approved', 'submitted'] },
+          id: { not: timeEntryId },
+        },
+        _sum: { hours: true },
+      });
+
+      if (totalHours + (existingHours._sum.hours || 0) > job.budget_cap) {
+        throw {
+          statusCode: 400,
+          message: `Adding timer duration would exceed job budget`,
+        };
+      }
+    }
 
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        timerStartedAt: null,
-        hours: timeEntry.hours + elapsedHours,
+        timer_started_at: null,
+        hours: totalHours,
+        updated_at: new Date(),
       },
-      include: { job: true },
+      include: {
+        job: {
+          select: { id: true, name: true },
+        },
+      },
     });
 
     return updated;
@@ -328,18 +753,45 @@ export class TimeEntryService {
    */
   static async batchSubmitTimeEntries(
     timeEntryIds: number[],
-    currentProfileId: number
+    auth: AuthContext
   ) {
-    const updated = await prisma.timeEntry.updateMany({
+    // Get all entries to verify ownership
+    const entries = await prisma.timeEntry.findMany({
       where: {
         id: { in: timeEntryIds },
-        employeeProfileId: currentProfileId,
-        status: TimeEntryStatus.DRAFT,
       },
-      data: { status: TimeEntryStatus.PENDING_APPROVAL },
     });
 
-    return { updated: updated.count };
+    // Verify ownership for non-admin users
+    if (auth.roleName !== 'admin') {
+      const unauthorized = entries.filter(
+        e => e.employee_profile_id !== auth.profileId
+      );
+      if (unauthorized.length > 0) {
+        throw {
+          statusCode: 403,
+          message: 'You can only submit your own time entries',
+        };
+      }
+    }
+
+    const result = await prisma.timeEntry.updateMany({
+      where: {
+        id: { in: timeEntryIds },
+        status: 'draft',
+      },
+      data: {
+        status: 'submitted',
+        submitted_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+
+    return {
+      submitted: result.count,
+      total: timeEntryIds.length,
+      failed: timeEntryIds.length - result.count,
+    };
   }
 
   /**
@@ -347,53 +799,135 @@ export class TimeEntryService {
    */
   static async batchApproveTimeEntries(
     timeEntryIds: number[],
-    currentProfileId: number
+    auth: AuthContext
   ) {
-    // Verify manager role (simplified - check actual role in middleware)
-    const updated = await prisma.timeEntry.updateMany({
+    // ✅ VERIFY USER IS MANAGER/PARTNER
+    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+      throw {
+        statusCode: 403,
+        message: 'Only managers/partners can approve time entries',
+      };
+    }
+
+    // Get all entries to verify access if partner
+    if (auth.roleName === 'partner') {
+      const entries = await prisma.timeEntry.findMany({
+        where: {
+          id: { in: timeEntryIds },
+        },
+        include: { job: true },
+      });
+
+      const unauthorized = entries.filter(e => e.job.partner_id !== auth.profileId);
+      if (unauthorized.length > 0) {
+        throw {
+          statusCode: 403,
+          message: 'You do not have permission to approve all these entries',
+        };
+      }
+    }
+
+    const result = await prisma.timeEntry.updateMany({
       where: {
         id: { in: timeEntryIds },
-        status: TimeEntryStatus.PENDING_APPROVAL,
+        status: 'submitted',
       },
       data: {
-        status: TimeEntryStatus.APPROVED,
-        approvedById: currentProfileId,
-        approvedAt: new Date(),
+        status: 'approved',
+        approver_profile_id: auth.profileId,
+        approved_at: new Date(),
+        updated_at: new Date(),
       },
     });
 
-    return { updated: updated.count };
+    return {
+      approved: result.count,
+      total: timeEntryIds.length,
+      failed: timeEntryIds.length - result.count,
+    };
   }
 
   /**
-   * Request overage approval for budget exceeded entry
+   * Get time entry summary for a job
    */
-  static async requestMoreTime(
-    timeEntryId: number,
-    data: { reason: string; requestedHours: number },
-    currentProfileId: number
-  ) {
-    const timeEntry = await prisma.timeEntry.findUnique({
-      where: { id: timeEntryId },
+  static async getJobTimeSummary(jobId: number, auth: AuthContext) {
+    // ✅ VERIFY ACCESS TO JOB
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
     });
 
-    if (!timeEntry) throw new Error("Time entry not found");
-
-    if (timeEntry.employeeProfileId !== currentProfileId) {
-      throw new Error("Access forbidden");
+    if (!job) {
+      throw {
+        statusCode: 404,
+        message: 'Job not found',
+      };
     }
 
-    // Create overage request (would need BudgetOverageRequest model)
-    const request = await prisma.budgetOverageRequest.create({
-      data: {
-        timeEntryId,
-        reason: data.reason,
-        requestedHours: data.requestedHours,
-        status: "pending",
+    const canView =
+      auth.roleName === 'admin' ||
+      auth.roleName === 'manager' ||
+      (auth.roleName === 'partner' && job.partner_id === auth.profileId);
+
+    if (!canView) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to view this job summary',
+      };
+    }
+
+    // Get all time entries for the job
+    const timeEntries = await prisma.timeEntry.findMany({
+      where: { job_id: jobId },
+      include: {
+        employee: {
+          select: { id: true, first_name: true, last_name: true },
+        },
       },
-      include: { timeEntry: true },
     });
 
-    return request;
-  }
-}
+    // Calculate summary
+    const summary = {
+      jobId,
+      totalHours: 0,
+      approvedHours: 0,
+      submittedHours: 0,
+      draftHours: 0,
+      rejectedHours: 0,
+      budgetCap: job.budget_cap,
+      budgetUsed: 0,
+      budgetRemaining: job.budget_cap,
+      percentageUsed: 0,
+      entriesByStatus: {
+        draft: 0,
+        submitted: 0,
+        approved: 0,
+        rejected: 0,
+      },
+      entriesByEmployee: {} as Record<number, any>,
+    };
+
+    for (const entry of timeEntries) {
+      summary.totalHours += entry.hours;
+      summary.entriesByStatus[entry.status as keyof typeof summary.entriesByStatus]++;
+
+      if (entry.status === 'approved') {
+        summary.approvedHours += entry.hours;
+      } else if (entry.status === 'submitted') {
+        summary.submittedHours += entry.hours;
+      } else if (entry.status === 'draft') {
+        summary.draftHours += entry.hours;
+      } else if (entry.status === 'rejected') {
+        summary.rejectedHours += entry.hours;
+      }
+
+      // Group by employee
+      const empId = entry.employee_profile_id;
+      if (!summary.entriesByEmployee[empId]) {
+        summary.entriesByEmployee[empId] = {
+          employee: entry.employee,
+          totalHours: 0,
+          approvedHours: 0,
+        };
+      }
+      summary.entriesByEmployee[empId].totalHours += entry.hours;
+      if

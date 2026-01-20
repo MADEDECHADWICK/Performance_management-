@@ -89,4 +89,78 @@ export const paginatedResponse = <T = any>(
     message,
     timestamp: new Date().toISOString(),
   };
-};
+}
+
+/**
+ * Sanitize sensitive fields from response
+ */
+export function sanitizeSensitiveFields(data: any): any {
+  if (!data) return null;
+
+  const sanitized = { ...data };
+
+  // ✅ NEVER EXPOSE
+  delete sanitized.password_hash;
+  delete sanitized.refresh_token;
+  delete sanitized.password;
+  delete sanitized.internal_notes;
+  delete sanitized.social_security_number;
+
+  return sanitized;
+}
+
+/**
+ * Sanitize array of objects
+ */
+export function sanitizeArray(items: any[], roleFilter?: string): any[] {
+  return items.map((item) => sanitizeSensitiveFields(item));
+}
+
+/**
+ * Build paginated response with metadata
+ */
+export function paginatedResponse<T>(
+  data: T[],
+  total: number,
+  page: number,
+  pageSize: number
+) {
+  return {
+    success: true,
+    data,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.ceil(total / pageSize),
+      hasMore: page * pageSize < total,
+    },
+  };
+}
+
+/**
+ * Generic success response
+ */
+export function successResponse<T>(
+  data: T,
+  message: string = "Success",
+  statusCode: number = 200
+) {
+  return {
+    success: true,
+    message,
+    data,
+    statusCode,
+  };
+}
+
+/**
+ * Generic error response
+ */
+export function errorResponse(message: string, statusCode: number = 400) {
+  return {
+    success: false,
+    message,
+    statusCode,
+  };
+}

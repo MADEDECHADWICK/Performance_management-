@@ -1,179 +1,201 @@
-/**
- * Time Entry Routes
- * Endpoints for time tracking, approval workflows, and budget enforcement
- */
-
 import { Router } from "express";
 import { TimeEntryController } from "../controllers/time-entry.controller";
-import { authenticated, withRoles, withTimeEntryAccess } from "../utils/middleware";
+import { authMiddleware } from "../middleware/auth";
+import { loadProfile } from "../middleware/loadProfile";
+import { requireTimeEntryAccess } from "../middleware/requireTimeEntryAccess";
+import { requireJobAccess } from "../middleware/requireJobAccess";
+import { requireRole } from "../middleware/reqiureRole";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 import {
   createTimeEntryValidators,
   updateTimeEntryValidators,
   submitTimeEntryValidators,
   approveTimeEntryValidators,
+  rejectTimeEntryValidators,
   timerStartValidators,
   timerStopValidators,
   batchSubmitValidators,
   batchApproveValidators,
-  requestMoreTimeValidators,
+  listTimeEntriesValidators,
+  getJobSummaryValidators,
 } from "../validators/time-entry.validators";
-import { validateTimeEntryBudget } from "../middleware/validateTimeEntryBudget";
 
 const router = Router();
 
 /**
  * GET /time-entries
- * List all accessible time entries
- * Query: page, pageSize, status, jobId, employeeProfileId
+ * List accessible time entries
  */
 router.get(
   "/",
-  authenticated(),
+  authMiddleware,
+  loadProfile,
+  ...listTimeEntriesValidators,
+  handleValidationErrors,
   TimeEntryController.listTimeEntries
 );
 
 /**
  * POST /time-entries
- * Create new time entry with budget validation
- * Body: jobId, hours, description, entryDate
- * Requires: employee, manager, or admin
+ * Create new time entry
  */
 router.post(
   "/",
-  authenticated(),
-  validateRequest(createTimeEntryValidators),
+  authMiddleware,
+  loadProfile,
+  ...createTimeEntryValidators,
   handleValidationErrors,
-  validateTimeEntryBudget,
   TimeEntryController.createTimeEntry
 );
 
 /**
  * GET /time-entries/:timeEntryId
- * Get single time entry details
- * Access: entry employee, job manager/partner, or admin
+ * Get specific time entry
  */
 router.get(
   "/:timeEntryId",
-  withTimeEntryAccess(),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
   TimeEntryController.getTimeEntry
 );
 
 /**
  * PATCH /time-entries/:timeEntryId
- * Update time entry (hours, description)
- * Only allowed before submission
- * Body: hours, description
+ * Update time entry (draft only)
  */
 router.patch(
   "/:timeEntryId",
-  withTimeEntryAccess(),
-  validateRequest(updateTimeEntryValidators),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
+  ...updateTimeEntryValidators,
   handleValidationErrors,
-  validateTimeEntryBudget,
   TimeEntryController.updateTimeEntry
 );
 
 /**
  * DELETE /time-entries/:timeEntryId
  * Delete time entry
- * Only allowed before approval
  */
 router.delete(
   "/:timeEntryId",
-  withTimeEntryAccess(),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
   TimeEntryController.deleteTimeEntry
 );
 
 /**
  * PATCH /time-entries/:timeEntryId/submit
- * Submit time entry for approval
- * Triggers workflow if budget exceeded
+ * Submit for approval
  */
 router.patch(
   "/:timeEntryId/submit",
-  withTimeEntryAccess(),
-  validateRequest(submitTimeEntryValidators),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
+  ...submitTimeEntryValidators,
   handleValidationErrors,
   TimeEntryController.submitTimeEntry
 );
 
 /**
  * PATCH /time-entries/:timeEntryId/approve
- * Approve submitted time entry
- * Access: job manager/partner or admin only
- * Body: approvalNotes (optional)
+ * Approve time entry (manager/partner only)
  */
 router.patch(
   "/:timeEntryId/approve",
-  authenticated(),
-  validateRequest(approveTimeEntryValidators),
+  authMiddleware,
+  loadProfile,
+  requireRole(["manager", "partner", "admin"]),
+  requireTimeEntryAccess,
+  ...approveTimeEntryValidators,
   handleValidationErrors,
   TimeEntryController.approveTimeEntry
 );
 
 /**
+ * PATCH /time-entries/:timeEntryId/reject
+ * Reject time entry
+ */
+router.patch(
+  "/:timeEntryId/reject",
+  authMiddleware,
+  loadProfile,
+  requireRole(["manager", "partner", "admin"]),
+  requireTimeEntryAccess,
+  ...rejectTimeEntryValidators,
+  handleValidationErrors,
+  TimeEntryController.rejectTimeEntry
+);
+
+/**
  * POST /time-entries/:timeEntryId/timer/start
- * Start real-time timer for time entry
+ * Start timer
  */
 router.post(
   "/:timeEntryId/timer/start",
-  withTimeEntryAccess(),
-  validateRequest(timerStartValidators),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
+  ...timerStartValidators,
   handleValidationErrors,
   TimeEntryController.startTimer
 );
 
 /**
  * POST /time-entries/:timeEntryId/timer/stop
- * Stop real-time timer and calculate elapsed time
+ * Stop timer
  */
 router.post(
   "/:timeEntryId/timer/stop",
-  withTimeEntryAccess(),
-  validateRequest(timerStopValidators),
+  authMiddleware,
+  loadProfile,
+  requireTimeEntryAccess,
+  ...timerStopValidators,
   handleValidationErrors,
   TimeEntryController.stopTimer
 );
 
 /**
  * POST /time-entries/batch/submit
- * Bulk submit multiple time entries
- * Body: timeEntryIds (array)
+ * Batch submit
  */
 router.post(
   "/batch/submit",
-  authenticated(),
-  validateRequest(batchSubmitValidators),
+  authMiddleware,
+  loadProfile,
+  ...batchSubmitValidators,
   handleValidationErrors,
   TimeEntryController.batchSubmitTimeEntries
 );
 
 /**
  * POST /time-entries/batch/approve
- * Bulk approve multiple time entries
- * Access: manager/partner or admin only
- * Body: timeEntryIds (array)
+ * Batch approve (manager/partner only)
  */
 router.post(
   "/batch/approve",
-  withRoles("manager", "partner", "admin"),
-  validateRequest(batchApproveValidators),
+  authMiddleware,
+  loadProfile,
+  requireRole(["manager", "partner", "admin"]),
+  ...batchApproveValidators,
   handleValidationErrors,
   TimeEntryController.batchApproveTimeEntries
 );
 
 /**
- * POST /time-entries/:timeEntryId/request-more-time
- * Request overage approval for budget exceeded entry
- * Body: reason, requestedHours
+ * GET /time-entries/job/:jobId/summary
+ * Get job time summary
  */
-router.post(
-  "/:timeEntryId/request-more-time",
-  withTimeEntryAccess(),
-  validateRequest(requestMoreTimeValidators),
+router.get(
+  "/job/:jobId/summary",
+  authMiddleware,
+  loadProfile,
+  ...getJobSummaryValidators,
   handleValidationErrors,
-  TimeEntryController.requestMoreTime
+  TimeEntryController.getJobTimeSummary
 );
 
 export default router;

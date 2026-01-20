@@ -1,39 +1,25 @@
-/**
- * Time entry-level access control
- * Only employee who owns the entry, job manager/partner, or admin
- *
- * IMPORTANT:
- * Expects loadProfile middleware to run before this, so req.user.profileId exists.
- */
-
 import { Response, NextFunction } from "express";
-import prisma from "../prisma";
 import { AuthRequest } from "./auth";
+import { prisma } from "../lib/prisma";
 
+/**
+ * Verify user has access to time entry
+ * Employees can only access their own
+ * Managers/Partners can access team/partner time entries
+ * Admins can access all
+ */
 export const requireTimeEntryAccess = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
-    if (!req.user?.userId) {
+    const timeEntryId = Number(req.params.timeEntryId);
+    const requesterProfileId = req.profile?.id;
+    const requesterRole = req.profile?.role?.name;
+
+    if (!requesterProfileId) {
       res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    const profileId = req.user.profileId;
-    if (!profileId) {
-      res
-        .status(401)
-        .json({ error: "Profile not loaded. Run loadProfile middleware first." });
-      return;
-    }
-
-    const rawId = (req.params.timeEntryId ?? req.params.id) as string | undefined;
-    const timeEntryId = Number(rawId);
-
-    if (!rawId || Number.isNaN(timeEntryId)) {
-      res.status(400).json({ error: "Invalid time entry ID" });
       return;
     }
 
@@ -41,10 +27,10 @@ export const requireTimeEntryAccess = async (
       where: { id: timeEntryId },
       include: {
         job: {
-          select: {
-            id: true,
-            partnerProfileId: true,
-            managerProfileId: true,
+          include: {
+            staffing: {
+              where: { status: "active" },
+            },
           },
         },
       },
@@ -55,25 +41,42 @@ export const requireTimeEntryAccess = async (
       return;
     }
 
-    const userRoles: string[] = req.userRoles || [];
-    const isAdmin =
-      userRoles.includes("admin") || userRoles.includes("super_admin");
+    // ✅ ACCESS CONTROL LOGIC
+    const isAdmin = requesterRole === "admin";
+    const isOwner = timeEntry.employee_profile_id === requesterProfileId;
 
-    const hasAccess =
-      isAdmin ||
-      timeEntry.employeeProfileId === profileId ||
-      timeEntry.job.partnerProfileId === profileId ||
-      timeEntry.job.managerProfileId === profileId;
+    // Check if user is manager of the employee
+    const isManager = requesterRole === "manager";
+
+    // Check if user is partner of the job
+    const isPartner =
+      requesterRole === "partner" &&
+      timeEntry.job.partner_id === requesterProfileId;
+
+    const hasAccess = isAdmin || isOwner || isManager || isPartner;
 
     if (!hasAccess) {
-      res.status(403).json({ error: "No access to this time entry" });
+      res.status(403).json({
+        error: "You do not have permission to access this time entry",
+      });
       return;
     }
 
+    // ✅ ATTACH TIME ENTRY TO REQUEST FOR DOWNSTREAM USE
     req.timeEntry = timeEntry;
+
     next();
   } catch (error) {
     console.error("requireTimeEntryAccess error:", error);
     res.status(500).json({ error: "Time entry access check failed" });
   }
 };
+
+// Extend AuthRequest to include timeEntry
+declare global {
+  namespace Express {
+    interface Request {
+      timeEntry?: any;
+    }
+  }
+}

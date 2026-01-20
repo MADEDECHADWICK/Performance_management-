@@ -1,108 +1,161 @@
+/**
+ * Notifications Routes (Modernized - Phase 4)
+ */
+
 import { Router } from 'express';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
-import prisma from '../prisma';
+import { NotificationController } from '../controllers/notifications.controller';
+import { authMiddleware } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
+import { handleValidationErrors } from '../middleware/validate';
+import { body, param, query } from 'express-validator';
 
 const router = Router();
 
-// GET /notifications?user_id=&is_read=false
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const userId = req.query.user_id as string | undefined;
-    const isRead = req.query.is_read as string | undefined;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'user_id query parameter required' });
-    }
+// ✅ VALIDATORS
+const createNotificationValidators = [
+  body('recipient_profile_id')
+    .isInt()
+    .withMessage('recipient_profile_id must be an integer'),
+  body('type')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage('type is required'),
+  body('title')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 100 })
+    .withMessage('title must be 1-100 characters'),
+  body('message')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 500 })
+    .withMessage('message must be 1-500 characters'),
+  body('related_entity_type')
+    .optional()
+    .isString()
+    .isLength({ max: 50 }),
+  body('related_entity_id')
+    .optional()
+    .isInt(),
+];
 
-    const where: any = { user_id: parseInt(userId) };
-    if (isRead !== undefined) {
-      where.is_read = isRead === 'true';
-    }
+const batchNotificationValidators = [
+  body('recipient_profile_ids')
+    .isArray({ min: 1 })
+    .withMessage('recipient_profile_ids must be a non-empty array'),
+  body('type')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage('type is required'),
+  body('title')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 100 })
+    .withMessage('title must be 1-100 characters'),
+  body('message')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 500 })
+    .withMessage('message must be 1-500 characters'),
+];
 
-    const notifications = await prisma.notification.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
+const listNotificationValidators = [
+  query('page')
+    .optional()
+    .isInt({ min: 1 })
+    .toInt(),
+  query('pageSize')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .toInt(),
+  query('type')
+    .optional()
+    .isString(),
+  query('status')
+    .optional()
+    .isIn(['read', 'unread'])
+    .withMessage('status must be read or unread'),
+];
 
-    return res.json(notifications || []);
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+// ✅ ROUTES
 
-// GET /notifications/:id
-router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const notification = await prisma.notification.findUnique({
-      where: { id: parseInt(req.params.id) },
-    });
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-    return res.json(notification);
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PATCH /notifications/:id { is_read }
-router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { id } = req.params;
-    const { is_read } = req.body;
-
-    const notification = await prisma.notification.update({
-      where: { id: parseInt(id) },
-      data: { is_read },
-    });
-
-    return res.json(notification);
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PATCH /notifications/user/:userId/mark-all-read
-router.patch('/user/:userId/mark-all-read', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { userId } = req.params;
-
-    await prisma.notification.updateMany({
-      where: { user_id: parseInt(userId) },
-      data: { is_read: true },
-    });
-
-    return res.json({ ok: true });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+// GET /notifications
+router.get(
+  '/',
+  authMiddleware,
+  loadProfile,
+  ...listNotificationValidators,
+  handleValidationErrors,
+  NotificationController.listNotifications
+);
 
 // POST /notifications
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { user_id, title, message, type, link } = req.body;
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole(['admin', 'manager']),
+  ...createNotificationValidators,
+  handleValidationErrors,
+  NotificationController.createNotification
+);
 
-    if (!user_id || !title || !message) {
-      return res.status(400).json({ error: 'user_id, title, and message required' });
-    }
+// GET /notifications/unread-count
+router.get(
+  '/unread-count',
+  authMiddleware,
+  loadProfile,
+  NotificationController.getUnreadCount
+);
 
-    const notification = await prisma.notification.create({
-      data: {
-        user_id: parseInt(user_id),
-        title,
-        message,
-        type,
-        link,
-        is_read: false,
-      },
-    });
+// PATCH /notifications/:notificationId/read
+router.patch(
+  '/:notificationId/read',
+  authMiddleware,
+  loadProfile,
+  param('notificationId').isInt().toInt(),
+  handleValidationErrors,
+  NotificationController.markAsRead
+);
 
-    return res.status(201).json(notification);
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+// PATCH /notifications/read-all
+router.patch(
+  '/read-all',
+  authMiddleware,
+  loadProfile,
+  NotificationController.markAllAsRead
+);
+
+// DELETE /notifications/:notificationId
+router.delete(
+  '/:notificationId',
+  authMiddleware,
+  loadProfile,
+  param('notificationId').isInt().toInt(),
+  handleValidationErrors,
+  NotificationController.deleteNotification
+);
+
+// DELETE /notifications/all
+router.delete(
+  '/all',
+  authMiddleware,
+  loadProfile,
+  NotificationController.deleteAllNotifications
+);
+
+// POST /notifications/batch
+router.post(
+  '/batch',
+  authMiddleware,
+  loadProfile,
+  requireRole(['admin', 'manager']),
+  ...batchNotificationValidators,
+  handleValidationErrors,
+  NotificationController.sendBatchNotifications
+);
 
 export default router;
