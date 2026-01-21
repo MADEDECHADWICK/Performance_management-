@@ -1,4 +1,4 @@
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 interface AuthContext {
   userId: number;
@@ -14,17 +14,14 @@ interface ListOptions {
 
 export class PartnerService {
   /**
-   * List partners
+   * List partners (profiles with isPartner flag)
    */
   static async listPartners(options: ListOptions, auth: AuthContext) {
     const { page, pageSize, status } = options;
     const skip = (page - 1) * pageSize;
 
     const where: any = {
-      OR: [
-        { role: { name: 'partner' } },
-        { role: { name: 'client' } },
-      ],
+      isPartner: true,
     };
 
     if (status) where.status = status;
@@ -34,10 +31,11 @@ export class PartnerService {
         where,
         include: {
           role: { select: { id: true, name: true } },
+          user: { select: { id: true, email: true } },
         },
         skip,
         take: pageSize,
-        orderBy: { created_at: 'desc' },
+        orderBy: { createdAt: 'desc' },
       }),
       prisma.profile.count({ where }),
     ]);
@@ -57,42 +55,28 @@ export class PartnerService {
       };
     }
 
-    const { first_name, last_name, email, phone_number, company_name, role_id } = input;
+    const { firstName, lastName, phoneNumber, roleId } = input;
 
     // ✅ VERIFY ROLE EXISTS
-    const role = await prisma.role.findUnique({
-      where: { id: role_id },
+    const role = await prisma.positionRole.findUnique({
+      where: { id: roleId },
     });
 
-    if (!role || !['partner', 'client'].includes(role.name)) {
+    if (!role) {
       throw {
         statusCode: 400,
         message: 'Invalid role for partner',
       };
     }
 
-    // ✅ CHECK EMAIL NOT USED
-    const existing = await prisma.profile.findUnique({
-      where: { email },
-    });
-
-    if (existing) {
-      throw {
-        statusCode: 400,
-        message: 'Email already in use',
-      };
-    }
-
     const partner = await prisma.profile.create({
       data: {
-        first_name,
-        last_name,
-        email,
-        phone_number: phone_number || null,
-        company_name: company_name || null,
-        role_id,
+        firstName,
+        lastName,
+        phoneNumber: phoneNumber || null,
+        roleId,
         status: 'active',
-        created_at: new Date(),
+        isPartner: true,
       },
       include: {
         role: { select: { id: true, name: true } },
@@ -110,6 +94,7 @@ export class PartnerService {
       where: { id: partnerId },
       include: {
         role: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
       },
     });
 
@@ -162,12 +147,12 @@ export class PartnerService {
       };
     }
 
-    // ✅ WHITELIST FIELDS
+    // ✅ WHITELIST FIELDS (using camelCase)
     const allowedFields = [
-      'first_name',
-      'last_name',
-      'phone_number',
-      'company_name',
+      'firstName',
+      'lastName',
+      'phoneNumber',
+      'positionTitle',
     ];
 
     const updateData: Record<string, any> = {};
@@ -180,12 +165,10 @@ export class PartnerService {
 
     const updated = await prisma.profile.update({
       where: { id: partnerId },
-      data: {
-        ...updateData,
-        updated_at: new Date(),
-      },
+      data: updateData,
       include: {
         role: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
       },
     });
 
@@ -221,12 +204,12 @@ export class PartnerService {
     }
 
     const jobs = await prisma.job.findMany({
-      where: { partner_id: partnerId },
+      where: { partnerProfileId: partnerId },
       include: {
-        client: { select: { id: true, name: true } },
-        staffing: { select: { id: true, employee_profile_id: true } },
+        client: { select: { id: true, clientName: true } },
+        staffing: { select: { id: true, employeeProfileId: true } },
       },
-      orderBy: { created_at: 'desc' },
+      orderBy: { createdAt: 'desc' },
     });
 
     return jobs;
@@ -262,7 +245,7 @@ export class PartnerService {
 
     // Get all jobs for partner
     const jobs = await prisma.job.findMany({
-      where: { partner_id: partnerId },
+      where: { partnerProfileId: partnerId },
       include: {
         timeEntries: {
           where: { status: 'approved' },
@@ -276,8 +259,8 @@ export class PartnerService {
 
     for (const job of jobs) {
       if (job.status === 'completed') jobsCompleted++;
-      totalBudget += job.budget_cap || 0;
-      totalApprovedHours += job.timeEntries.reduce((sum, te) => sum + te.hours, 0);
+      totalBudget += Number(job.budgetHours) || 0;
+      totalApprovedHours += job.timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
     }
 
     return {

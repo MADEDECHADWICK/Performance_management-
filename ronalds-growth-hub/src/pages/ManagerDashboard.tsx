@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import apiFetch, { authAPI } from '@/integrations/apiClient';
+import { apiFetch, authAPI } from '@/lib/api';
 import { 
   Users, 
   DollarSign, 

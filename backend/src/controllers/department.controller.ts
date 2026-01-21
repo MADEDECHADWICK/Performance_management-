@@ -4,7 +4,7 @@
 
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import { DepartmentService } from "../services/department.service";
+import { DepartmentService } from "../services/departments.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class DepartmentController {

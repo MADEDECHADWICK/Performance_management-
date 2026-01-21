@@ -42,7 +42,7 @@ export default function Goals() {
       }
 
       // Load active cycles
-      const cyclesData = await apiFetch('GET', '/evaluation_cycles?status=active');
+      const cyclesData = await apiFetch('GET', '/evaluation-cycles?status=active');
       setCycles(cyclesData || []);
 
       // Load KPIs
@@ -328,3 +328,4 @@ export default function Goals() {
     </DashboardLayout>
   );
 }
+

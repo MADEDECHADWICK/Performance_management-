@@ -8,18 +8,48 @@ const router = Router();
 // GET /todos?userId=
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.query.userId as string | undefined;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'userId query parameter required' });
+    const userIdRaw = req.query.userId as string | undefined;
+    let profileId = req.user?.profileId;
+
+    if (userIdRaw) {
+      const userId = Number(userIdRaw);
+      if (Number.isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid userId query parameter' });
+      }
+
+      const profile = await prisma.profile.findUnique({
+        where: { userId },
+        select: { id: true },
+      });
+      profileId = profile?.id;
     }
 
-    const todos = await prisma.todo.findMany({
-      where: { user_id: parseInt(userId) },
-      orderBy: { createdAt: 'desc' },
+    if (!profileId) {
+      return res.status(400).json({ error: 'profileId not available for user' });
+    }
+
+    const tasks = await prisma.task.findMany({
+      where: { assignedToProfileId: profileId },
+      include: {
+        job: {
+          select: {
+            id: true,
+            jobName: true,
+            description: true,
+            startDate: true,
+            dueDate: true,
+            status: true,
+            budgetHours: true,
+            fixedFeeAmount: true,
+            department: { select: { name: true } },
+            client: { select: { clientName: true } },
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
     });
-    
-    return res.json(todos || []);
+
+    return res.json(tasks || []);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -28,7 +58,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 // GET /todos/:id
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const todo = await prisma.todo.findUnique({
+    const todo = await prisma.task.findUnique({
       where: { id: parseInt(req.params.id) },
     });
     if (!todo) return res.status(404).json({ error: 'Todo not found' });
@@ -41,24 +71,25 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 // POST /todos
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { user_id, title, description, priority, due_date } = req.body;
-    
-    if (!user_id || !title) {
-      return res.status(400).json({ error: 'user_id and title required' });
+    const { jobId, title, description, priority, dueDate, assignedToProfileId } = req.body;
+
+    if (!jobId || !title) {
+      return res.status(400).json({ error: 'jobId and title required' });
     }
 
-    const todo = await prisma.todo.create({
+    const todo = await prisma.task.create({
       data: {
-        user_id: parseInt(user_id),
+        jobId: Number(jobId),
         title,
         description,
         priority,
-        due_date: due_date ? new Date(due_date) : undefined,
+        dueDate: dueDate ? new Date(dueDate) : undefined,
+        assignedToProfileId: assignedToProfileId ? Number(assignedToProfileId) : req.user?.profileId,
         status: 'pending',
       },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'todo:create',
       entity_type: 'todo',
@@ -82,15 +113,14 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'status required' });
     }
 
-    const todo = await prisma.todo.update({
+    const todo = await prisma.task.update({
       where: { id: parseInt(id) },
       data: {
         status,
-        completed_at: status === 'completed' ? new Date() : null,
       },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: `todo:update:status->${status}`,
       entity_type: 'todo',
@@ -110,12 +140,12 @@ router.patch('/:id/notes', authMiddleware, async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { description } = req.body;
 
-    const todo = await prisma.todo.update({
+    const todo = await prisma.task.update({
       where: { id: parseInt(id) },
       data: { description },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'todo:update:notes',
       entity_type: 'todo',
@@ -134,11 +164,11 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
 
-    await prisma.todo.delete({
+    await prisma.task.delete({
       where: { id: parseInt(id) },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'todo:delete',
       entity_type: 'todo',

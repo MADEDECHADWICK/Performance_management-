@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useNavigate } from 'react-router-dom';
-import { authAPI, apiFetch } from '@/integrations/apiClient';
+import { authAPI, apiFetch } from '@/lib/api';
 import {
   Card,
   CardContent,
@@ -77,7 +77,8 @@ const PartnerDashboard = () => {
         return;
       }
 
-      if (!user.is_partner) {
+      const isPartner = user.is_partner ?? user.isPartner;
+      if (!isPartner) {
         navigate('/dashboard');
         return;
       }

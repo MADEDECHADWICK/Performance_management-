@@ -144,8 +144,12 @@ export const listJobsValidators = [
 
   query("status")
     .optional()
-    .isIn(["planned", "in_progress", "on_hold", "completed", "cancelled"])
-    .withMessage("Status must be one of: planned, in_progress, on_hold, completed, cancelled"),
+    .custom((value) => {
+      const allowed = ["planned", "in_progress", "on_hold", "completed", "cancelled"];
+      const statuses = String(value).split(",").map((status) => status.trim()).filter(Boolean);
+      return statuses.length > 0 && statuses.every((status) => allowed.includes(status));
+    })
+    .withMessage("Status must be one or more of: planned, in_progress, on_hold, completed, cancelled"),
 
   query("clientId")
     .optional()

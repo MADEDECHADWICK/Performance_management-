@@ -5,16 +5,14 @@ import { createAudit } from '../utils/audit';
 
 const router = Router();
 
-// Valid roles in the system
-const VALID_ROLES = ['admin', 'partner', 'manager', 'associate', 'intern'];
-
 // Role hierarchy for preventing certain escalations
 const ROLE_HIERARCHY: Record<string, number> = {
   'intern': 1,
   'associate': 2,
   'manager': 3,
   'partner': 4,
-  'admin': 5
+  'admin': 5,
+  'super_admin': 6
 };
 
 /**
@@ -22,10 +20,11 @@ const ROLE_HIERARCHY: Record<string, number> = {
  * Only admins can assign or modify roles
  */
 const isAdmin = async (userId: number): Promise<boolean> => {
-  const roles = await prisma.userRole.findMany({
+  const roles = await prisma.userAuthRole.findMany({
     where: { userId },
+    include: { role: true },
   });
-  return roles.some(r => r.role === 'admin' || r.role === 'super_admin');
+  return roles.some(r => r.role.name === 'admin' || r.role.name === 'super_admin');
 };
 
 // GET /user_roles?userId=123
@@ -36,9 +35,12 @@ router.get('/', async (req, res) => {
   const userId = Number(userIdRaw);
   if (Number.isNaN(userId)) return res.status(400).json({ error: 'Invalid userId' });
   try {
-    const roles = await prisma.userRole.findMany({ where: { userId } });
+    const roles = await prisma.userAuthRole.findMany({
+      where: { userId },
+      include: { role: true },
+    });
     // return shape compatible with previous frontend usage: [{ role: '...' }, ...]
-    return res.json(roles.map(r => ({ role: r.role })));
+    return res.json(roles.map(r => ({ role: r.role.name })));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -49,7 +51,7 @@ router.get('/', async (req, res) => {
 router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
   try {
     // Check authorization - only admins can view all users
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     
     const isUserAdmin = await isAdmin(userId);
@@ -60,7 +62,7 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
     // Get all users with their roles and profile info
     const users = await prisma.user.findMany({
       include: {
-        roles: true,
+        roles: { include: { role: true } },
         profile: {
           include: {
             department: true,
@@ -75,12 +77,12 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
       id: user.id,
       email: user.email,
       name: user.name,
-      roles: user.roles.map(r => r.role),
+      roles: user.roles.map(r => r.role.name),
       status: user.profile?.status || 'inactive',
       department: user.profile?.department?.name || 'Unassigned',
       departmentId: user.profile?.departmentId,
-      position: user.profile?.position,
-      hireDate: user.profile?.hire_date,
+      position: user.profile?.positionTitle,
+      hireDate: user.profile?.hireDate,
       createdAt: user.createdAt,
     }));
 
@@ -96,15 +98,10 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   const { userId, role } = req.body;
   if (!userId || !role) return res.status(400).json({ error: 'userId and role required' });
-  
-  // Validate role
-  if (!VALID_ROLES.includes(role)) {
-    return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` });
-  }
 
   try {
     // Check authorization - only admins can assign roles
-    const currentUserId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
     const isUserAdmin = await isAdmin(currentUserId);
@@ -118,10 +115,18 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Check if user already has this role
-    const existingRole = await prisma.userRole.findFirst({
+    const roleRecord = await prisma.authRole.findUnique({
+      where: { name: role },
+    });
+
+    if (!roleRecord) {
+      return res.status(400).json({ error: `Invalid role: ${role}` });
+    }
+
+    const existingRole = await prisma.userAuthRole.findFirst({
       where: {
         userId: Number(userId),
-        role: role,
+        roleId: roleRecord.id,
       },
     });
 
@@ -129,10 +134,10 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'User already has this role' });
     }
 
-    const created = await prisma.userRole.create({
+    const created = await prisma.userAuthRole.create({
       data: {
         userId: Number(userId),
-        role,
+        roleId: roleRecord.id,
       },
     });
 
@@ -167,14 +172,9 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'userId, oldRole, and newRole required' });
   }
 
-  // Validate roles
-  if (!VALID_ROLES.includes(newRole)) {
-    return res.status(400).json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` });
-  }
-
   try {
     // Check authorization - only admins can change roles
-    const currentUserId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
     const isUserAdmin = await isAdmin(currentUserId);
@@ -188,10 +188,21 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Check if user has the old role
-    const existingRole = await prisma.userRole.findFirst({
+    const oldRoleRecord = await prisma.authRole.findUnique({
+      where: { name: oldRole },
+    });
+    const newRoleRecord = await prisma.authRole.findUnique({
+      where: { name: newRole },
+    });
+
+    if (!oldRoleRecord || !newRoleRecord) {
+      return res.status(400).json({ error: 'Invalid role provided' });
+    }
+
+    const existingRole = await prisma.userAuthRole.findFirst({
       where: {
         userId: Number(userId),
-        role: oldRole,
+        roleId: oldRoleRecord.id,
       },
     });
 
@@ -205,18 +216,18 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     const isEscalation = newHierarchy > oldHierarchy;
 
     // Remove old role
-    await prisma.userRole.deleteMany({
+    await prisma.userAuthRole.deleteMany({
       where: {
         userId: Number(userId),
-        role: oldRole,
+        roleId: oldRoleRecord.id,
       },
     });
 
     // Add new role
-    const newUserRole = await prisma.userRole.create({
+    const newUserRole = await prisma.userAuthRole.create({
       data: {
         userId: Number(userId),
-        role: newRole,
+        roleId: newRoleRecord.id,
       },
     });
 
@@ -256,7 +267,7 @@ router.delete('/', authMiddleware, async (req: AuthRequest, res) => {
   
   try {
     // Check authorization - only admins can remove roles
-    const currentUserId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
     const isUserAdmin = await isAdmin(currentUserId);
@@ -269,10 +280,18 @@ router.delete('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'You cannot remove your own roles' });
     }
 
-    const deleted = await prisma.userRole.deleteMany({
+    const roleRecord = await prisma.authRole.findUnique({
+      where: { name: role },
+    });
+
+    if (!roleRecord) {
+      return res.status(400).json({ error: `Invalid role: ${role}` });
+    }
+
+    const deleted = await prisma.userAuthRole.deleteMany({
       where: {
         userId: Number(userId),
-        role,
+        roleId: roleRecord.id,
       },
     });
 

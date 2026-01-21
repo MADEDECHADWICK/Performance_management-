@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { authAPI, setToken } from "@/integrations/apiClient";
+import { authAPI, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,15 +25,13 @@ const Auth = () => {
     try {
       if (isLogin) {
         const data = await authAPI.login(email, password);
-        if (data?.token) setToken(data.token);
-
         toast({
           title: "Welcome back!",
           description: "You have successfully signed in.",
         });
         navigate("/dashboard");
       } else {
-        await authAPI.register(email, password, firstName, lastName);
+        await authAPI.register({ email, password, firstName, lastName });
 
         toast({
           title: "Account created!",

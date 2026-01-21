@@ -3,7 +3,7 @@
  * Complex evaluation calculations and scoring
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 interface AuthContext {
   userId: number;
@@ -162,8 +162,8 @@ export class EvaluationService {
     // ✅ CALCULATE BY EVALUATOR TYPE
     const byEvaluatorType: Record<string, any> = {};
 
-    evaluations.forEach(eval => {
-      const type = eval.evaluation_type;
+    evaluations.forEach(evaluation => {
+      const type = evaluation.evaluation_type;
       if (!byEvaluatorType[type]) {
         byEvaluatorType[type] = {
           count: 0,
@@ -172,7 +172,7 @@ export class EvaluationService {
         };
       }
       byEvaluatorType[type].count++;
-      byEvaluatorType[type].scores.push(eval.average_score);
+      byEvaluatorType[type].scores.push(evaluation.average_score);
     });
 
     // ✅ CALCULATE AVERAGES FOR EACH TYPE
@@ -258,18 +258,18 @@ export class EvaluationService {
     // ✅ GROUP BY EVALUATEE
     const byEmployee: Record<number, any> = {};
 
-    evaluations.forEach(eval => {
-      const employeeId = eval.evaluatee_profile_id;
+    evaluations.forEach(evaluation => {
+      const employeeId = evaluation.evaluatee_profile_id;
       if (!byEmployee[employeeId]) {
         byEmployee[employeeId] = {
-          name: `${eval.evaluatee.first_name} ${eval.evaluatee.last_name}`,
+          name: `${evaluation.evaluatee.first_name} ${evaluation.evaluatee.last_name}`,
           evaluations: [],
         };
       }
       byEmployee[employeeId].evaluations.push({
-        score: eval.average_score,
-        rating: eval.rating,
-        type: eval.evaluation_type,
+        score: evaluation.average_score,
+        rating: evaluation.rating,
+        type: evaluation.evaluation_type,
       });
     });
 
@@ -435,8 +435,8 @@ export class EvaluationService {
     // ✅ IDENTIFY WEAK AREAS
     const scoreFrequency: Record<string, number[]> = {};
 
-    evaluations.forEach(eval => {
-      Object.entries(eval.scores).forEach(([category, score]) => {
+    evaluations.forEach(evaluation => {
+      Object.entries(evaluation.scores).forEach(([category, score]) => {
         if (!scoreFrequency[category]) {
           scoreFrequency[category] = [];
         }

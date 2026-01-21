@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { authAPI } from '@/integrations/apiClient';
+import { authAPI } from '@/lib/api';
 import DashboardLayout from '@/components/DashboardLayout';
 import {
   Card,
@@ -94,7 +94,8 @@ const PartnerJobDetail = () => {
       setError(null);
 
       const user = await authAPI.me();
-      if (!user || !user.profile_id) {
+      const profileId = user?.profile_id ?? user?.profileId;
+      if (!user || !profileId) {
         throw new Error('Missing user information');
       }
 

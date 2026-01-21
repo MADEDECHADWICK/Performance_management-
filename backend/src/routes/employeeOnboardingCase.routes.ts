@@ -7,7 +7,7 @@ import {
   createOnboardingCaseValidators,
   updateOnboardingCaseValidators,
   getOnboardingCaseValidators,
-} from "../validators/employeeOnboardingCase.validators.js";
+} from "../validators/employeeOnboardingCase.validators";
 
 const router = Router();
 

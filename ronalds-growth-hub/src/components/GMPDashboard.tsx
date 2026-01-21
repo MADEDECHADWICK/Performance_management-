@@ -63,7 +63,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { apiFetch, authAPI } from '@/integrations/apiClient';
+import { apiFetch, authAPI } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 
 // TypeScript interfaces for the original dashboard structure

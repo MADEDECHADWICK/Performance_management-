@@ -99,7 +99,7 @@ const EvaluationManagement = () => {
 
   const loadCycles = async () => {
     try {
-      const data = await apiFetch('GET', "/evaluation_cycles");
+      const data = await apiFetch('GET', "/evaluation-cycles");
       setCycles(data || []);
     } catch (error: any) {
       console.error("Error loading cycles:", error);
@@ -158,7 +158,7 @@ const EvaluationManagement = () => {
       let cycleId: string;
 
       if (editingCycle) {
-        await apiFetch('PATCH', `/evaluation_cycles/${editingCycle.id}`, cycleFormData);
+        await apiFetch('PATCH', `/evaluation-cycles/${editingCycle.id}`, cycleFormData);
         cycleId = editingCycle.id;
         
         toast({
@@ -166,7 +166,7 @@ const EvaluationManagement = () => {
           description: "Evaluation cycle has been updated successfully.",
         });
       } else {
-        const data = await apiFetch('POST', "/evaluation_cycles", cycleFormData);
+        const data = await apiFetch('POST', "/evaluation-cycles", cycleFormData);
         cycleId = data.id;
         
         toast({
@@ -244,9 +244,9 @@ const EvaluationManagement = () => {
 
   const handleStatusChange = async (cycleId: string, newStatus: string) => {
     try {
-      const cycle = await apiFetch('GET', `/evaluation_cycles/${cycleId}`);
+      const cycle = await apiFetch('GET', `/evaluation-cycles/${cycleId}`);
 
-      await apiFetch('PATCH', `/evaluation_cycles/${cycleId}`, { status: newStatus });
+      await apiFetch('PATCH', `/evaluation-cycles/${cycleId}`, { status: newStatus });
 
       toast({
         title: "Status Updated",
@@ -986,3 +986,4 @@ const EvaluationManagement = () => {
 };
 
 export default EvaluationManagement;
+

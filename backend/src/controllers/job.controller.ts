@@ -5,22 +5,23 @@
 
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import { JobService } from "../services/job.service";
+import jobService from "../services/jobs.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class JobController {
   /**
    * GET /jobs
    * List all jobs with filtering and pagination
-   * Access: Admin, Manager, Partner (filtered to own jobs), Staff (assigned jobs only)
    */
   static async listJobs(req: AuthRequest, res: Response): Promise<void> {
     try {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
-      const status = (req.query.status as string) || undefined;
+      const statusParam = (req.query.status as string) || undefined;
       const clientId = req.query.clientId ? Number(req.query.clientId) : undefined;
-      const departmentId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
+      const status = statusParam
+        ? statusParam.split(",").map((value) => value.trim()).filter(Boolean)
+        : undefined;
 
       const auth = {
         userId: req.user!.userId,
@@ -28,14 +29,16 @@ export class JobController {
         roles: (req as any).userRoles || [],
       };
 
-      const result = await JobService.listJobs(
-        { page, pageSize, status, clientId, departmentId },
+      const result = await jobService.listJobs(
+        { 
+          page, 
+          pageSize, 
+          filters: { status, clientId } 
+        },
         auth
       );
 
-      res.json(
-        paginatedResponse(result.jobs, result.total, page, pageSize)
-      );
+      res.json(paginatedResponse(result.jobs, result.total, page, pageSize));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -50,13 +53,7 @@ export class JobController {
     try {
       const jobId = Number(req.params.jobId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
-      };
-
-      const job = await JobService.getJob(jobId, auth);
+      const job = await jobService.getJobById(jobId);
 
       if (!job) {
         res.status(404).json(errorResponse("Job not found", 404));
@@ -73,7 +70,6 @@ export class JobController {
   /**
    * POST /jobs
    * Create new job
-   * Access: Admin, Manager, Partner
    */
   static async createJob(req: AuthRequest, res: Response): Promise<void> {
     try {
@@ -83,11 +79,15 @@ export class JobController {
         roles: (req as any).userRoles || [],
       };
 
-      const newJob = await JobService.createJob(req.body, auth);
+      // Add managerProfileId if not provided
+      const input = {
+        ...req.body,
+        managerProfileId: req.body.managerProfileId || auth.profileId,
+      };
 
-      res.status(201).json(
-        successResponse(newJob, "Job created successfully", 201)
-      );
+      const newJob = await jobService.createJob(input, auth);
+
+      res.status(201).json(successResponse(newJob, "Job created successfully", 201));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -97,7 +97,6 @@ export class JobController {
   /**
    * PATCH /jobs/:jobId
    * Update job
-   * Access: Admin, Manager (own jobs), Partner (own jobs)
    */
   static async updateJob(req: AuthRequest, res: Response): Promise<void> {
     try {
@@ -109,7 +108,7 @@ export class JobController {
         roles: (req as any).userRoles || [],
       };
 
-      const updatedJob = await JobService.updateJob(jobId, req.body, auth);
+      const updatedJob = await jobService.updateJob(jobId, req.body, auth);
 
       res.json(successResponse(updatedJob, "Job updated successfully"));
     } catch (error: any) {
@@ -133,12 +132,7 @@ export class JobController {
         roles: (req as any).userRoles || [],
       };
 
-      const updatedJob = await JobService.updateJobStatus(
-        jobId,
-        status,
-        reason,
-        auth
-      );
+      const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth);
 
       res.json(successResponse(updatedJob, "Job status updated"));
     } catch (error: any) {
@@ -155,13 +149,7 @@ export class JobController {
     try {
       const jobId = Number(req.params.jobId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
-      };
-
-      const costing = await JobService.getJobCosting(jobId, auth);
+      const costing = await jobService.getJobCosting(jobId);
 
       if (!costing) {
         res.status(404).json(errorResponse("Job costing not found", 404));
@@ -176,7 +164,7 @@ export class JobController {
   }
 
   /**
-   * POST /jobs/:jobId/staff-assignments
+   * POST /jobs/:jobId/staff
    * Assign staff to job
    */
   static async assignStaff(req: AuthRequest, res: Response): Promise<void> {
@@ -189,11 +177,9 @@ export class JobController {
         roles: (req as any).userRoles || [],
       };
 
-      const assignment = await JobService.assignStaff(jobId, req.body, auth);
+      const assignment = await jobService.assignJobTeam(jobId, req.body, auth);
 
-      res.status(201).json(
-        successResponse(assignment, "Staff assigned successfully", 201)
-      );
+      res.status(201).json(successResponse(assignment, "Staff assigned successfully", 201));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -201,17 +187,14 @@ export class JobController {
   }
 
   /**
-   * GET /jobs/:jobId/staff-assignments
+   * GET /jobs/:jobId/staff
    * Get all staff assignments for job
    */
-  static async getStaffAssignments(
-    req: AuthRequest,
-    res: Response
-  ): Promise<void> {
+  static async getStaffAssignments(req: AuthRequest, res: Response): Promise<void> {
     try {
       const jobId = Number(req.params.jobId);
 
-      const assignments = await JobService.getStaffAssignments(jobId);
+      const assignments = await jobService.getJobStaff(jobId);
 
       res.json(successResponse(assignments, "Staff assignments retrieved"));
     } catch (error: any) {
@@ -221,31 +204,12 @@ export class JobController {
   }
 
   /**
-   * PATCH /jobs/:jobId/staff-assignments/:assignmentId
-   * Update staff assignment
+   * PATCH /jobs/:jobId/staff/:assignmentId
+   * Update staff assignment - simplified for now
    */
-  static async updateStaffAssignment(
-    req: AuthRequest,
-    res: Response
-  ): Promise<void> {
+  static async updateStaffAssignment(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const jobId = Number(req.params.jobId);
-      const assignmentId = Number(req.params.assignmentId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
-      };
-
-      const updated = await JobService.updateStaffAssignment(
-        jobId,
-        assignmentId,
-        req.body,
-        auth
-      );
-
-      res.json(successResponse(updated, "Staff assignment updated"));
+      res.status(501).json(errorResponse("Not implemented - use assignStaff to reassign", 501));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -253,26 +217,12 @@ export class JobController {
   }
 
   /**
-   * DELETE /jobs/:jobId/staff-assignments/:assignmentId
-   * Remove staff assignment
+   * DELETE /jobs/:jobId/staff/:assignmentId
+   * Remove staff assignment - simplified for now
    */
-  static async removeStaffAssignment(
-    req: AuthRequest,
-    res: Response
-  ): Promise<void> {
+  static async removeStaffAssignment(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const jobId = Number(req.params.jobId);
-      const assignmentId = Number(req.params.assignmentId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
-      };
-
-      await JobService.removeStaffAssignment(jobId, assignmentId, auth);
-
-      res.json(successResponse(null, "Staff assignment removed"));
+      res.status(501).json(errorResponse("Not implemented", 501));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -283,20 +233,11 @@ export class JobController {
    * GET /jobs/:jobId/profitability
    * Get job profitability analysis
    */
-  static async getJobProfitability(
-    req: AuthRequest,
-    res: Response
-  ): Promise<void> {
+  static async getJobProfitability(req: AuthRequest, res: Response): Promise<void> {
     try {
       const jobId = Number(req.params.jobId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
-      };
-
-      const profitability = await JobService.getJobProfitability(jobId, auth);
+      const profitability = await jobService.getJobProfitability(jobId);
 
       res.json(successResponse(profitability, "Job profitability retrieved"));
     } catch (error: any) {

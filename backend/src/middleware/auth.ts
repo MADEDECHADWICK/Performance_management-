@@ -10,7 +10,7 @@
 
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { prisma } from "../lib/prisma";
+import { prisma } from "../prisma";
 
 /**
  * Minimal profile shape injected later by loadProfile
@@ -65,7 +65,8 @@ export interface AuthRequest extends Request {
  * Expected JWT payload
  */
 type AccessTokenPayload = {
-  userId: number;
+  userId?: number;
+  sub?: number;
   email: string;
   iat: number;
   exp: number;
@@ -88,10 +89,19 @@ export async function authMiddleware(
 
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret") as AccessTokenPayload;
+    const resolvedUserId = decoded.userId ?? decoded.sub;
+
+    if (!resolvedUserId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Invalid token payload",
+      });
+    }
 
     // Verify user still exists
-    const user = await prisma.profile.findUnique({
-      where: { id: decoded.userId },
+    const user = await prisma.user.findUnique({
+      where: { id: resolvedUserId },
+      include: { profile: true },
     });
 
     if (!user) {
@@ -102,7 +112,7 @@ export async function authMiddleware(
     }
 
     // Verify user is active
-    if (user.status === "inactive") {
+    if (!user.isActive || user.profile?.status === "inactive") {
       return res.status(403).json({
         success: false,
         message: "User account is inactive",
@@ -110,8 +120,9 @@ export async function authMiddleware(
     }
 
     req.user = {
-      userId: decoded.userId,
+      userId: resolvedUserId,
       email: decoded.email,
+      profileId: user.profile?.id,
     };
 
     next();

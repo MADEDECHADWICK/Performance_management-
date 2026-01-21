@@ -2,7 +2,7 @@
  * EvaluationService (Prisma Schema v2.1 aligned)
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 interface AuthContext {
   userId: number;

@@ -6,7 +6,7 @@
  * - Access checks use Job.managerProfileId / Job.partnerProfileId
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 interface AuthContext {
   userId: number;
@@ -36,7 +36,7 @@ export class TimeEntryService {
 
     // Filter by job if specified
     if (jobId) {
-      where.job_id = jobId;
+      where.jobId = jobId;
     }
 
     // Filter by status if specified
@@ -46,20 +46,20 @@ export class TimeEntryService {
 
     // Filter by date range if specified
     if (dateFrom) {
-      where.date_worked = { ...where.date_worked, gte: dateFrom };
+      where.dateWorked = { ...where.dateWorked, gte: dateFrom };
     }
     if (dateTo) {
-      where.date_worked = { ...where.date_worked, lte: dateTo };
+      where.dateWorked = { ...where.dateWorked, lte: dateTo };
     }
 
     // Access control based on role
     if (!['admin', 'manager', 'partner'].includes(auth.roleName || '')) {
       // Regular employees only see their own entries
-      where.employee_profile_id = auth.profileId;
+      where.employeeProfileId = auth.profileId;
     } else if (auth.roleName === 'partner') {
       // Partners only see their own jobs' time entries
       where.job = {
-        partner_id: auth.profileId,
+        partnerProfileId: auth.profileId,
       };
     }
 
@@ -70,36 +70,36 @@ export class TimeEntryService {
           job: {
             select: {
               id: true,
-              name: true,
-              budget_cap: true,
-              client_id: true,
+              jobName: true,
+              budgetHours: true,
+              clientId: true,
             },
           },
           employee: {
             select: {
               id: true,
-              first_name: true,
-              last_name: true,
-              email: true,
+              firstName: true,
+              lastName: true,
+              user: { select: { email: true } },
             },
           },
           approver: {
             select: {
               id: true,
-              first_name: true,
-              last_name: true,
+              firstName: true,
+              lastName: true,
             },
           },
           task: {
             select: {
               id: true,
-              name: true,
+              title: true,
             },
           },
         },
         skip,
         take: pageSize,
-        orderBy: { date_worked: 'desc' },
+        orderBy: { dateWorked: 'desc' },
       }),
       prisma.timeEntry.count({ where }),
     ]);
@@ -111,24 +111,19 @@ export class TimeEntryService {
    * Create a new time entry
    */
   static async createTimeEntry(input: any, auth: AuthContext) {
-    const {
-      job_id,
-      hours,
-      description,
-      date_worked,
-      task_id,
-    } = input;
+    const { jobId, taskId, dateWorked, hours, description } = input;
 
     // ✅ VERIFY JOB EXISTS
     const job = await prisma.job.findUnique({
-      where: { id: job_id },
+      where: { id: Number(jobId) },
       include: {
-        budget: true,
         staffing: {
           where: {
-            employee_profile_id: auth.profileId,
-            status: 'active',
+            employeeProfileId: auth.profileId,
           },
+        },
+        jobCosting: {
+          include: { budgetCap: true },
         },
       },
     });
@@ -149,10 +144,11 @@ export class TimeEntryService {
     }
 
     // ✅ CHECK BUDGET AVAILABILITY
-    if (job.budget_cap && job.budget_cap > 0) {
+    const budgetHours = Number(job.jobCosting?.budgetCap?.totalAllocatedHours ?? job.budgetHours ?? 0);
+    if (budgetHours > 0) {
       const existingHours = await prisma.timeEntry.aggregate({
         where: {
-          job_id: job_id,
+          jobId: Number(jobId),
           status: { in: ['approved', 'submitted'] },
         },
         _sum: { hours: true },
@@ -160,21 +156,21 @@ export class TimeEntryService {
 
       const totalHours = (existingHours._sum.hours || 0) + hours;
 
-      if (totalHours > job.budget_cap) {
+      if (totalHours > budgetHours) {
         throw {
           statusCode: 400,
-          message: `Time entry exceeds job budget. Available: ${(job.budget_cap - (existingHours._sum.hours || 0)).toFixed(2)} hours, requested: ${hours} hours`,
+          message: `Time entry exceeds job budget. Available: ${(budgetHours - (existingHours._sum.hours || 0)).toFixed(2)} hours, requested: ${hours} hours`,
         };
       }
     }
 
     // ✅ VERIFY TASK EXISTS IF PROVIDED
-    if (task_id) {
-      const task = await prisma.jobTask.findUnique({
-        where: { id: task_id },
+    if (taskId) {
+      const task = await prisma.task.findUnique({
+        where: { id: Number(taskId) },
       });
 
-      if (!task || task.job_id !== job_id) {
+      if (!task || task.jobId !== Number(jobId)) {
         throw {
           statusCode: 404,
           message: 'Task not found or does not belong to this job',
@@ -185,21 +181,21 @@ export class TimeEntryService {
     // ✅ CREATE TIME ENTRY
     const timeEntry = await prisma.timeEntry.create({
       data: {
-        job_id: job_id,
-        employee_profile_id: auth.profileId,
+        jobId: Number(jobId),
+        employeeProfileId: auth.profileId,
         hours,
         description,
-        date_worked: new Date(date_worked),
-        task_id: task_id || null,
-        status: 'draft',
-        created_at: new Date(),
+        dateWorked: new Date(dateWorked),
+        taskId: taskId ? Number(taskId) : null,
+        billable: input.billable ?? true,
+        status: 'pending',
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -217,30 +213,31 @@ export class TimeEntryService {
         job: {
           select: {
             id: true,
-            name: true,
-            budget_cap: true,
-            client_id: true,
+            jobName: true,
+            budgetHours: true,
+            clientId: true,
+            partnerProfileId: true,
           },
         },
         employee: {
           select: {
             id: true,
-            first_name: true,
-            last_name: true,
-            email: true,
+            firstName: true,
+            lastName: true,
+            user: { select: { email: true } },
           },
         },
         approver: {
           select: {
             id: true,
-            first_name: true,
-            last_name: true,
+            firstName: true,
+            lastName: true,
           },
         },
         task: {
           select: {
             id: true,
-            name: true,
+            title: true,
           },
         },
       },
@@ -257,8 +254,8 @@ export class TimeEntryService {
     const canView =
       auth.roleName === 'admin' ||
       auth.roleName === 'manager' ||
-      (auth.roleName === 'partner' && timeEntry.job.client_id === auth.profileId) ||
-      timeEntry.employee_profile_id === auth.profileId;
+      (auth.roleName === 'partner' && timeEntry.job.partnerProfileId === auth.profileId) ||
+      timeEntry.employeeProfileId === auth.profileId;
 
     if (!canView) {
       throw {
@@ -282,7 +279,13 @@ export class TimeEntryService {
 
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
-      include: { job: true },
+      include: {
+        job: {
+          include: {
+            jobCosting: { include: { budgetCap: true } },
+          },
+        },
+      },
     });
 
     if (!timeEntry) {
@@ -294,7 +297,7 @@ export class TimeEntryService {
 
     // ✅ VERIFY OWNERSHIP
     if (
-      timeEntry.employee_profile_id !== auth.profileId &&
+      timeEntry.employeeProfileId !== auth.profileId &&
       auth.roleName !== 'admin'
     ) {
       throw {
@@ -304,7 +307,7 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY STATUS - can only update draft entries
-    if (timeEntry.status !== 'draft') {
+    if (timeEntry.status !== 'pending') {
       throw {
         statusCode: 400,
         message: `Cannot update time entry with status: ${timeEntry.status}`,
@@ -313,10 +316,11 @@ export class TimeEntryService {
 
     // ✅ CHECK BUDGET IF HOURS CHANGED
     if (hours && hours !== timeEntry.hours) {
-      if (timeEntry.job.budget_cap && timeEntry.job.budget_cap > 0) {
+      const budgetHours = Number(timeEntry.job.jobCosting?.budgetCap?.totalAllocatedHours ?? timeEntry.job.budgetHours ?? 0);
+      if (budgetHours > 0) {
         const existingHours = await prisma.timeEntry.aggregate({
           where: {
-            job_id: timeEntry.job_id,
+            jobId: timeEntry.jobId,
             status: { in: ['approved', 'submitted'] },
             id: { not: timeEntryId },
           },
@@ -325,7 +329,7 @@ export class TimeEntryService {
 
         const totalHours = (existingHours._sum.hours || 0) + hours;
 
-        if (totalHours > timeEntry.job.budget_cap) {
+        if (totalHours > budgetHours) {
           throw {
             statusCode: 400,
             message: `Updated hours would exceed job budget`,
@@ -339,14 +343,14 @@ export class TimeEntryService {
       data: {
         hours: hours || timeEntry.hours,
         description: description || timeEntry.description,
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -371,7 +375,7 @@ export class TimeEntryService {
 
     // ✅ VERIFY OWNERSHIP
     if (
-      timeEntry.employee_profile_id !== auth.profileId &&
+      timeEntry.employeeProfileId !== auth.profileId &&
       auth.roleName !== 'admin'
     ) {
       throw {
@@ -381,7 +385,7 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY STATUS - can only delete draft/rejected entries
-    if (!['draft', 'rejected'].includes(timeEntry.status)) {
+    if (!['pending', 'rejected'].includes(timeEntry.status)) {
       throw {
         statusCode: 400,
         message: `Cannot delete time entry with status: ${timeEntry.status}`,
@@ -412,7 +416,7 @@ export class TimeEntryService {
 
     // ✅ VERIFY OWNERSHIP
     if (
-      timeEntry.employee_profile_id !== auth.profileId &&
+      timeEntry.employeeProfileId !== auth.profileId &&
       auth.roleName !== 'admin'
     ) {
       throw {
@@ -422,7 +426,7 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY STATUS
-    if (timeEntry.status !== 'draft') {
+    if (timeEntry.status !== 'pending') {
       throw {
         statusCode: 400,
         message: `Cannot submit time entry with status: ${timeEntry.status}`,
@@ -433,15 +437,14 @@ export class TimeEntryService {
       where: { id: timeEntryId },
       data: {
         status: 'submitted',
-        submitted_at: new Date(),
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -483,8 +486,8 @@ export class TimeEntryService {
     if (auth.roleName === 'partner') {
       const isPartnerOfJob = await prisma.job.findFirst({
         where: {
-          id: timeEntry.job_id,
-          partner_id: auth.profileId,
+          id: timeEntry.jobId,
+          partnerProfileId: auth.profileId,
         },
       });
 
@@ -508,20 +511,19 @@ export class TimeEntryService {
       where: { id: timeEntryId },
       data: {
         status: 'approved',
-        approver_profile_id: auth.profileId,
-        approval_notes: approvalNotes,
-        approved_at: new Date(),
-        updated_at: new Date(),
+        approvedByProfileId: auth.profileId,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
         approver: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -563,8 +565,8 @@ export class TimeEntryService {
     if (auth.roleName === 'partner') {
       const isPartnerOfJob = await prisma.job.findFirst({
         where: {
-          id: timeEntry.job_id,
-          partner_id: auth.profileId,
+          id: timeEntry.jobId,
+          partnerProfileId: auth.profileId,
         },
       });
 
@@ -588,20 +590,19 @@ export class TimeEntryService {
       where: { id: timeEntryId },
       data: {
         status: 'rejected',
-        approver_profile_id: auth.profileId,
-        approval_notes: rejectionReason,
-        approved_at: new Date(),
-        updated_at: new Date(),
+        approvedByProfileId: auth.profileId,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
         approver: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -628,7 +629,7 @@ export class TimeEntryService {
 
     // ✅ VERIFY OWNERSHIP
     if (
-      timeEntry.employee_profile_id !== auth.profileId &&
+      timeEntry.employeeProfileId !== auth.profileId &&
       auth.roleName !== 'admin'
     ) {
       throw {
@@ -638,7 +639,7 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY STATUS
-    if (!['draft', 'submitted'].includes(timeEntry.status)) {
+    if (!['pending', 'submitted'].includes(timeEntry.status)) {
       throw {
         statusCode: 400,
         message: `Cannot start timer for entry with status: ${timeEntry.status}`,
@@ -646,7 +647,7 @@ export class TimeEntryService {
     }
 
     // ✅ CHECK IF TIMER ALREADY RUNNING
-    if (timeEntry.timer_started_at) {
+    if (timeEntry.startedAt) {
       throw {
         statusCode: 400,
         message: 'Timer is already running for this entry',
@@ -656,12 +657,13 @@ export class TimeEntryService {
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        timer_started_at: new Date(),
-        updated_at: new Date(),
+        startedAt: new Date(),
+        endedAt: null,
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
       },
     });
@@ -686,7 +688,7 @@ export class TimeEntryService {
 
     // ✅ VERIFY OWNERSHIP
     if (
-      timeEntry.employee_profile_id !== auth.profileId &&
+      timeEntry.employeeProfileId !== auth.profileId &&
       auth.roleName !== 'admin'
     ) {
       throw {
@@ -696,7 +698,7 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY TIMER WAS STARTED
-    if (!timeEntry.timer_started_at) {
+    if (!timeEntry.startedAt) {
       throw {
         statusCode: 400,
         message: 'Timer was not started for this entry',
@@ -704,26 +706,28 @@ export class TimeEntryService {
     }
 
     // ✅ CALCULATE ELAPSED TIME
-    const elapsedMs = new Date().getTime() - new Date(timeEntry.timer_started_at).getTime();
+    const elapsedMs = new Date().getTime() - new Date(timeEntry.startedAt).getTime();
     const elapsedHours = elapsedMs / (1000 * 60 * 60);
     const totalHours = Number((timeEntry.hours + elapsedHours).toFixed(2));
 
     // ✅ VERIFY BUDGET AFTER ADDING TIME
     const job = await prisma.job.findUnique({
-      where: { id: timeEntry.job_id },
+      where: { id: timeEntry.jobId },
+      include: { jobCosting: { include: { budgetCap: true } } },
     });
 
-    if (job?.budget_cap && job.budget_cap > 0) {
+    const budgetHours = Number(job?.jobCosting?.budgetCap?.totalAllocatedHours ?? job?.budgetHours ?? 0);
+    if (budgetHours > 0) {
       const existingHours = await prisma.timeEntry.aggregate({
         where: {
-          job_id: timeEntry.job_id,
+          jobId: timeEntry.jobId,
           status: { in: ['approved', 'submitted'] },
           id: { not: timeEntryId },
         },
         _sum: { hours: true },
       });
 
-      if (totalHours + (existingHours._sum.hours || 0) > job.budget_cap) {
+      if (totalHours + (existingHours._sum.hours || 0) > budgetHours) {
         throw {
           statusCode: 400,
           message: `Adding timer duration would exceed job budget`,
@@ -734,13 +738,13 @@ export class TimeEntryService {
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        timer_started_at: null,
+        startedAt: null,
         hours: totalHours,
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         job: {
-          select: { id: true, name: true },
+          select: { id: true, jobName: true },
         },
       },
     });
@@ -765,7 +769,7 @@ export class TimeEntryService {
     // Verify ownership for non-admin users
     if (auth.roleName !== 'admin') {
       const unauthorized = entries.filter(
-        e => e.employee_profile_id !== auth.profileId
+        e => e.employeeProfileId !== auth.profileId
       );
       if (unauthorized.length > 0) {
         throw {
@@ -778,12 +782,11 @@ export class TimeEntryService {
     const result = await prisma.timeEntry.updateMany({
       where: {
         id: { in: timeEntryIds },
-        status: 'draft',
+        status: 'pending',
       },
       data: {
         status: 'submitted',
-        submitted_at: new Date(),
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
     });
 
@@ -818,7 +821,7 @@ export class TimeEntryService {
         include: { job: true },
       });
 
-      const unauthorized = entries.filter(e => e.job.partner_id !== auth.profileId);
+      const unauthorized = entries.filter(e => e.job.partnerProfileId !== auth.profileId);
       if (unauthorized.length > 0) {
         throw {
           statusCode: 403,
@@ -834,9 +837,9 @@ export class TimeEntryService {
       },
       data: {
         status: 'approved',
-        approver_profile_id: auth.profileId,
-        approved_at: new Date(),
-        updated_at: new Date(),
+        approvedByProfileId: auth.profileId,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
       },
     });
 
@@ -866,7 +869,7 @@ export class TimeEntryService {
     const canView =
       auth.roleName === 'admin' ||
       auth.roleName === 'manager' ||
-      (auth.roleName === 'partner' && job.partner_id === auth.profileId);
+      (auth.roleName === 'partner' && job.partnerProfileId === auth.profileId);
 
     if (!canView) {
       throw {
@@ -877,10 +880,10 @@ export class TimeEntryService {
 
     // Get all time entries for the job
     const timeEntries = await prisma.timeEntry.findMany({
-      where: { job_id: jobId },
+      where: { jobId: jobId },
       include: {
         employee: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -891,17 +894,18 @@ export class TimeEntryService {
       totalHours: 0,
       approvedHours: 0,
       submittedHours: 0,
-      draftHours: 0,
+      pendingHours: 0,
       rejectedHours: 0,
-      budgetCap: job.budget_cap,
+      budgetCap: job.budgetHours,
       budgetUsed: 0,
-      budgetRemaining: job.budget_cap,
+      budgetRemaining: job.budgetHours,
       percentageUsed: 0,
       entriesByStatus: {
-        draft: 0,
+        pending: 0,
         submitted: 0,
         approved: 0,
         rejected: 0,
+        cancelled: 0,
       },
       entriesByEmployee: {} as Record<number, any>,
     };
@@ -914,14 +918,14 @@ export class TimeEntryService {
         summary.approvedHours += entry.hours;
       } else if (entry.status === 'submitted') {
         summary.submittedHours += entry.hours;
-      } else if (entry.status === 'draft') {
-        summary.draftHours += entry.hours;
+      } else if (entry.status === 'pending') {
+        summary.pendingHours += entry.hours;
       } else if (entry.status === 'rejected') {
         summary.rejectedHours += entry.hours;
       }
 
       // Group by employee
-      const empId = entry.employee_profile_id;
+      const empId = entry.employeeProfileId;
       if (!summary.entriesByEmployee[empId]) {
         summary.entriesByEmployee[empId] = {
           employee: entry.employee,
@@ -930,4 +934,19 @@ export class TimeEntryService {
         };
       }
       summary.entriesByEmployee[empId].totalHours += entry.hours;
-      if
+      if (entry.status === 'approved') {
+        summary.entriesByEmployee[empId].approvedHours += entry.hours;
+      }
+    }
+
+    // Calculate budget metrics
+    summary.budgetUsed = summary.approvedHours;
+    summary.budgetRemaining = Math.max(0, summary.budgetCap - summary.budgetUsed);
+    summary.percentageUsed =
+      summary.budgetCap > 0 ? (summary.budgetUsed / summary.budgetCap) * 100 : 0;
+
+    return summary;
+  }
+}
+
+

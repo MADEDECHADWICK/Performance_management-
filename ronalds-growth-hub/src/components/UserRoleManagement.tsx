@@ -89,7 +89,7 @@ const UserRoleManagement = () => {
   const loadUsers = useCallback(async () => {
     try {
       setIsLoading(true);
-      const data = await apiFetch("GET", "/user_roles/list/all");
+      const data = await apiFetch("GET", "/user-roles/list/all");
       setUsers(data || []);
 
       // Extract unique departments
@@ -183,7 +183,7 @@ const UserRoleManagement = () => {
 
     try {
       setIsChanging(true);
-      await apiFetch("PUT", "/user_roles/change", {
+      await apiFetch("PUT", "/user-roles/change", {
         userId: roleChangeRequest.userId,
         oldRole: roleChangeRequest.oldRole,
         newRole: roleChangeRequest.newRole,
@@ -476,3 +476,4 @@ const UserRoleManagement = () => {
 };
 
 export default UserRoleManagement;
+

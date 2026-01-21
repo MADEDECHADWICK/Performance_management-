@@ -1,33 +1,54 @@
 import { Router } from 'express';
 import bcrypt from "bcryptjs";
 import jwt from 'jsonwebtoken';
+import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
 router.post('/register', async (req, res) => {
-  const { email, password, name, first_name, last_name } = req.body;
+  const { email, password, name, first_name, last_name, firstName, lastName } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   try {
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+
     const hashed = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({ data: { email, password: hashed, name } });
     
-    // Create corresponding profile
-    const [firstName, lastName] = name ? name.split(' ') : [first_name || '', last_name || ''];
+    // User model only has email, password - no name field
+    const user = await prisma.user.create({ 
+      data: { email, password: hashed } 
+    });
+    
+    // Parse name into first/last or use provided first_name/last_name
+    const [parsedFirst, ...restName] = name ? name.split(' ') : [];
+    const parsedLast = restName.join(' ');
+    const resolvedFirstName = firstName || first_name || parsedFirst || 'User';
+    const resolvedLastName = lastName || last_name || parsedLast || '';
+    
+    // Create corresponding profile with the name
     await prisma.profile.create({
       data: {
         userId: user.id,
-        first_name: firstName || 'User',
-        last_name: lastName || '',
-        email: user.email,
+        firstName: resolvedFirstName,
+        lastName: resolvedLastName,
         status: 'active',
       }
     });
     
-    res.json({ id: user.id, email: user.email, name: user.name });
+    res.json({ 
+      id: user.id, 
+      email: user.email, 
+      name: `${resolvedFirstName} ${resolvedLastName}`.trim() 
+    });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    res.status(500).json({ error: 'Failed to register user' });
   }
 });
 
@@ -38,7 +59,7 @@ router.post('/login', async (req, res) => {
     const user = await prisma.user.findUnique({ 
       where: { email },
       include: { 
-        roles: true,
+        roles: { include: { role: true } },
         profile: { include: { role: true } }  // Include job role
       }
     });
@@ -47,7 +68,7 @@ router.post('/login', async (req, res) => {
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     
     // Extract auth role names from user.roles (for access control)
-    const authRoles = user.roles.map(r => r.role);
+    const authRoles = user.roles.map(r => r.role.name);
     
     // Extract job role info (for billing and permissions)
     const jobRole = user.profile?.role ? {
@@ -59,8 +80,10 @@ router.post('/login', async (req, res) => {
     
     const secret = process.env.JWT_SECRET || 'change-me';
     const token = jwt.sign({ 
-      sub: user.id, 
+      userId: user.id,
+      sub: user.id,
       email: user.email, 
+      profileId: user.profile?.id,
       authRoles,  // Authentication roles: super_admin, hr_manager, partner, employee
       jobRole     // Job role with billing rate
     }, secret, { expiresIn: '7d' });
@@ -82,14 +105,14 @@ router.post('/login', async (req, res) => {
 });
 
 router.get('/debug-me', authMiddleware, async (req: AuthRequest, res) => {
-  const userId = req.user?.sub;
+  const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   
   try {
     const user = await prisma.user.findUnique({ 
       where: { id: userId },
       include: {
-        roles: true,
+        roles: { include: { role: true } },
         profile: true
       }
     });
@@ -102,7 +125,7 @@ router.get('/debug-me', authMiddleware, async (req: AuthRequest, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
-        roles_in_db: user.roles.map(r => r.role)
+        roles_in_db: user.roles.map(r => r.role.name)
       }
     });
   } catch (error: any) {
@@ -111,14 +134,14 @@ router.get('/debug-me', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
-  const userId = req.user?.sub;
+  const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   
   try {
     const user = await prisma.user.findUnique({ 
       where: { id: userId },
       include: {
-        roles: true,
+        roles: { include: { role: true } },
         profile: true
       }
     });
@@ -128,26 +151,32 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
     let partner = null;
     if (user.profile) {
       partner = await prisma.partner.findUnique({
-        where: { profile_id: user.profile.id },
+        where: { profileId: user.profile.id },
         include: { company: true }
       });
     }
     
-    const roles = user.roles.map(r => r.role);
+    const roles = user.roles.map(r => r.role.name);
     
     res.json({ 
       id: user.id, 
       email: user.email, 
       name: user.name,
+      profileId: user.profile?.id,
       profile_id: user.profile?.id,
       roles,
+      isPartner: roles.includes('partner'),
       is_partner: roles.includes('partner'),
       partner: partner ? {
         id: partner.id,
-        profile_id: partner.profile_id,
-        company_name: partner.company?.company_name,
-        group_name: partner.group_name,
-        commission_rate: partner.commission_rate
+        profileId: partner.profileId,
+        profile_id: partner.profileId,
+        companyName: partner.company?.companyName,
+        company_name: partner.company?.companyName,
+        groupName: partner.groupName,
+        group_name: partner.groupName,
+        commissionRate: partner.commissionRate,
+        commission_rate: partner.commissionRate
       } : null
     });
   } catch (err: any) {

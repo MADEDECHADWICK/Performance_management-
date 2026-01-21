@@ -93,7 +93,7 @@ router.patch(
   '/:feedbackId/status',
   authMiddleware,
   loadProfile,
-  requireRole(['admin']),
+  requireRole('admin'),
   ...updateStatusValidators,
   handleValidationErrors,
   FeedbackController.updateFeedbackStatus

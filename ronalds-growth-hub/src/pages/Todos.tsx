@@ -12,26 +12,24 @@ import { CheckCircle2, Clock, AlertCircle, FileText, DollarSign, Calendar } from
 import { format } from "date-fns";
 
 interface Job {
-  id: string;
-  title: string;
+  id: number;
+  jobName: string;
   description: string | null;
-  start_date: string;
-  due_date: string | null;
-  billable_hours: number | null;
-  hourly_rate: number | null;
-  fees: number | null;
+  startDate: string | null;
+  dueDate: string | null;
+  budgetHours: number | null;
+  fixedFeeAmount: number | null;
   status: string;
   department?: { name: string };
-  client?: { client_name: string };
+  client?: { clientName: string };
 }
 
 interface Todo {
-  id: string;
-  job_id: string;
+  id: number;
+  jobId: number;
   status: string;
-  notes: string | null;
-  progress_percentage: number;
-  jobs: Job;
+  description: string | null;
+  job: Job;
 }
 
 export default function Todos() {
@@ -68,9 +66,9 @@ export default function Todos() {
 
       // If marking as completed, also update the job status
       if (newStatus === 'completed') {
-        const todo = todos.find(t => t.id === todoId);
+        const todo = todos.find(t => t.id === Number(todoId));
         if (todo) {
-          await apiFetch('PATCH', `/jobs/${todo.job_id}`, { status: 'completed' });
+          await apiFetch('PATCH', `/jobs/${todo.jobId}`, { status: 'completed' });
         }
       }
 
@@ -88,7 +86,7 @@ export default function Todos() {
 
   const updateNotes = async (todoId: string) => {
     try {
-      await apiFetch('PATCH', `/todos/${todoId}/notes`, { notes });
+      await apiFetch('PATCH', `/todos/${todoId}/notes`, { description: notes });
 
       toast({ title: 'Success', description: 'Notes updated successfully' });
 
@@ -119,11 +117,8 @@ export default function Todos() {
 
   const calculateFinancialValue = (job: Job) => {
     let total = 0;
-    if (job.billable_hours && job.hourly_rate) {
-      total += job.billable_hours * job.hourly_rate;
-    }
-    if (job.fees) {
-      total += job.fees;
+    if (job.fixedFeeAmount) {
+      total += job.fixedFeeAmount;
     }
     return total;
   };
@@ -134,7 +129,7 @@ export default function Todos() {
     const completed = todos.filter(t => t.status === "completed").length;
     const totalValue = todos
       .filter(t => t.status === "completed")
-      .reduce((sum, todo) => sum + calculateFinancialValue(todo.jobs), 0);
+      .reduce((sum, todo) => sum + calculateFinancialValue(todo.job), 0);
 
     return { pending, inProgress, completed, totalValue, total: todos.length };
   };
@@ -225,7 +220,7 @@ export default function Todos() {
                 onStatusChange={updateTodoStatus}
                 onNotesClick={(t) => {
                   setSelectedTodo(t);
-                  setNotes(t.notes || "");
+                  setNotes(t.description || "");
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
@@ -241,7 +236,7 @@ export default function Todos() {
                 onStatusChange={updateTodoStatus}
                 onNotesClick={(t) => {
                   setSelectedTodo(t);
-                  setNotes(t.notes || "");
+                  setNotes(t.description || "");
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
@@ -257,7 +252,7 @@ export default function Todos() {
                 onStatusChange={updateTodoStatus}
                 onNotesClick={(t) => {
                   setSelectedTodo(t);
-                  setNotes(t.notes || "");
+                  setNotes(t.description || "");
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
@@ -273,7 +268,7 @@ export default function Todos() {
                 onStatusChange={updateTodoStatus}
                 onNotesClick={(t) => {
                   setSelectedTodo(t);
-                  setNotes(t.notes || "");
+                  setNotes(t.description || "");
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
@@ -286,7 +281,7 @@ export default function Todos() {
         {selectedTodo && (
           <Card className="mt-4 border-primary">
             <CardHeader>
-              <CardTitle>Add Notes - {selectedTodo.jobs.title}</CardTitle>
+              <CardTitle>Add Notes - {selectedTodo.job.jobName}</CardTitle>
               <CardDescription>Update progress notes for this task</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -329,7 +324,7 @@ function TodoCard({
   calculateFinancialValue: (job: Job) => number;
   getStatusBadge: (status: string) => JSX.Element;
 }) {
-  const isOverdue = todo.jobs.due_date && new Date(todo.jobs.due_date) < new Date() && todo.status !== "completed";
+  const isOverdue = todo.job.dueDate && new Date(todo.job.dueDate) < new Date() && todo.status !== "completed";
 
   return (
     <Card className={isOverdue ? "border-destructive" : ""}>
@@ -337,49 +332,49 @@ function TodoCard({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-2">
-              <CardTitle className="text-lg">{todo.jobs.title}</CardTitle>
+              <CardTitle className="text-lg">{todo.job.jobName}</CardTitle>
               {getStatusBadge(todo.status)}
               {isOverdue && (
                 <Badge variant="destructive">Overdue</Badge>
               )}
             </div>
             <CardDescription className="space-y-1">
-              {todo.jobs.description && <p>{todo.jobs.description}</p>}
-              {todo.jobs.department && (
+              {todo.job.description && <p>{todo.job.description}</p>}
+              {todo.job.department && (
                 <p className="flex items-center gap-1">
                   <FileText className="w-3 h-3" />
-                  {todo.jobs.department.name}
+                  {todo.job.department.name}
                 </p>
               )}
-              {todo.jobs.client && (
+              {todo.job.client && (
                 <p className="flex items-center gap-1">
-                  Client: {todo.jobs.client.client_name}
+                  Client: {todo.job.client.clientName}
                 </p>
               )}
               <p className="flex items-center gap-1">
                 <Calendar className="w-3 h-3" />
-                Start: {format(new Date(todo.jobs.start_date), "MMM dd, yyyy")}
-                {todo.jobs.due_date && ` • Due: ${format(new Date(todo.jobs.due_date), "MMM dd, yyyy")}`}
+                Start: {todo.job.startDate ? format(new Date(todo.job.startDate), "MMM dd, yyyy") : "TBD"}
+                {todo.job.dueDate && ` - Due: ${format(new Date(todo.job.dueDate), "MMM dd, yyyy")}`}
               </p>
             </CardDescription>
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold text-success">
-              KES {calculateFinancialValue(todo.jobs).toLocaleString()}
+              KES {calculateFinancialValue(todo.job).toLocaleString()}
             </div>
-            {todo.jobs.billable_hours && (
+            {todo.job.budgetHours && (
               <p className="text-xs text-muted-foreground">
-                {todo.jobs.billable_hours}h × KES {todo.jobs.hourly_rate?.toLocaleString()}
+                {todo.job.budgetHours}h budgeted
               </p>
             )}
           </div>
         </div>
       </CardHeader>
       <CardContent>
-        {todo.notes && (
+        {todo.description && (
           <div className="mb-4 p-3 bg-muted rounded-md">
             <p className="text-sm text-muted-foreground">Notes:</p>
-            <p className="text-sm">{todo.notes}</p>
+            <p className="text-sm">{todo.description}</p>
           </div>
         )}
         <div className="flex gap-2 flex-wrap">
@@ -414,3 +409,4 @@ function TodoCard({
     </Card>
   );
 }
+

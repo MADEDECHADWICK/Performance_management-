@@ -3,7 +3,7 @@
  * Handles all profile-related operations
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 interface AuthContext {
   userId: number;
@@ -20,10 +20,14 @@ interface ListOptions {
 }
 
 interface UpdateProfileInput {
+  firstName?: string;
+  lastName?: string;
+  phoneNumber?: string;
+  profilePicture?: string;
+  departmentId?: number;
   first_name?: string;
   last_name?: string;
   phone_number?: string;
-  bio?: string;
   avatar_url?: string;
   department_id?: number;
 }
@@ -41,15 +45,15 @@ export class ProfileService {
     // ✅ SEARCH FILTERING
     if (search) {
       where.OR = [
-        { first_name: { contains: search, mode: 'insensitive' } },
-        { last_name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { user: { email: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
     // ✅ ROLE FILTERING
     if (roleId) {
-      where.role_id = roleId;
+      where.roleId = roleId;
     }
 
     // ✅ STATUS FILTERING
@@ -69,10 +73,11 @@ export class ProfileService {
         include: {
           role: { select: { id: true, name: true } },
           department: { select: { id: true, name: true } },
+          user: { select: { email: true } },
         },
         skip,
         take: pageSize,
-        orderBy: { created_at: 'desc' },
+        orderBy: { createdAt: 'desc' },
       }),
       prisma.profile.count({ where }),
     ]);
@@ -80,6 +85,7 @@ export class ProfileService {
     // ✅ REDACT SENSITIVE DATA
     const sanitized = profiles.map(p => ({
       ...p,
+      email: p.user?.email,
       password: undefined,
     }));
 
@@ -121,6 +127,7 @@ export class ProfileService {
     // ✅ REDACT SENSITIVE DATA
     return {
       ...profile,
+      email: profile.user?.email,
       password: undefined,
     };
   }
@@ -154,23 +161,32 @@ export class ProfileService {
 
     // ✅ WHITELIST FIELDS
     const allowedFields = [
+      'firstName',
+      'lastName',
+      'phoneNumber',
+      'profilePicture',
       'first_name',
       'last_name',
       'phone_number',
-      'bio',
       'avatar_url',
     ];
 
     // Only admins can update department
-    if (auth.roleName === 'admin' && 'department_id' in input) {
-      allowedFields.push('department_id');
+    if (auth.roleName === 'admin' && ('departmentId' in input || 'department_id' in input)) {
+      allowedFields.push('departmentId', 'department_id');
     }
 
     const updateData: Record<string, any> = {};
 
     for (const field of allowedFields) {
-      if (field in input && input[field as keyof UpdateProfileInput] !== undefined) {
-        updateData[field] = input[field as keyof UpdateProfileInput];
+      const value = input[field as keyof UpdateProfileInput];
+      if (value !== undefined) {
+        if (field === 'first_name') updateData.firstName = value;
+        else if (field === 'last_name') updateData.lastName = value;
+        else if (field === 'phone_number') updateData.phoneNumber = value;
+        else if (field === 'avatar_url') updateData.profilePicture = value;
+        else if (field === 'department_id') updateData.departmentId = value;
+        else updateData[field] = value;
       }
     }
 
@@ -178,16 +194,18 @@ export class ProfileService {
       where: { id: profileId },
       data: {
         ...updateData,
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         role: { select: { id: true, name: true } },
         department: { select: { id: true, name: true } },
+        user: { select: { email: true } },
       },
     });
 
     return {
       ...updated,
+      email: updated.user?.email,
       password: undefined,
     };
   }
@@ -196,15 +214,19 @@ export class ProfileService {
    * Get profile by email
    */
   static async getProfileByEmail(email: string) {
-    const profile = await prisma.profile.findUnique({
+    const user = await prisma.user.findUnique({
       where: { email },
       include: {
-        role: { select: { id: true, name: true } },
-        department: { select: { id: true, name: true } },
+        profile: {
+          include: {
+            role: { select: { id: true, name: true } },
+            department: { select: { id: true, name: true } },
+          },
+        },
       },
     });
 
-    if (!profile) {
+    if (!user?.profile) {
       throw {
         statusCode: 404,
         message: 'Profile not found',
@@ -212,7 +234,8 @@ export class ProfileService {
     }
 
     return {
-      ...profile,
+      ...user.profile,
+      email: user.email,
       password: undefined,
     };
   }
@@ -322,22 +345,25 @@ export class ProfileService {
     const profiles = await prisma.profile.findMany({
       where: {
         OR: [
-          { first_name: { contains: query, mode: 'insensitive' } },
-          { last_name: { contains: query, mode: 'insensitive' } },
-          { email: { contains: query, mode: 'insensitive' } },
+          { firstName: { contains: query, mode: 'insensitive' } },
+          { lastName: { contains: query, mode: 'insensitive' } },
+          { user: { email: { contains: query, mode: 'insensitive' } } },
         ],
         status: 'active',
       },
       select: {
         id: true,
-        first_name: true,
-        last_name: true,
-        email: true,
+        firstName: true,
+        lastName: true,
+        user: { select: { email: true } },
         role: { select: { name: true } },
       },
       take: limit,
     });
 
-    return profiles;
+    return profiles.map(profile => ({
+      ...profile,
+      email: profile.user?.email,
+    }));
   }
 }

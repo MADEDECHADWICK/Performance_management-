@@ -72,7 +72,7 @@ router.get(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole(['admin', 'manager']),
+  requireRole('admin', 'manager'),
   ...listProfileValidators,
   handleValidationErrors,
   ProfileController.listProfiles

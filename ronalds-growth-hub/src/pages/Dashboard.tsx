@@ -45,17 +45,20 @@ const Dashboard = () => {
       // Store user in sessionStorage for component access
       sessionStorage.setItem('currentUser', JSON.stringify(user));
 
-      const roles = await apiFetch("GET", `/user_roles?user_id=${user.id}`);
+      const roles = await apiFetch("GET", `/user-roles?userId=${user.id}`);
       const userRoles = roles?.map((r: any) => r.role) || [];
       
       // Get user profile to check for GMP position
-      const profiles = await apiFetch('GET', "/profiles");
-      const userProfile = profiles?.find((p: any) => p.email === user.email);
+      const profileResponse = await apiFetch(
+        'GET',
+        `/profiles/email/${encodeURIComponent(user.email)}`
+      );
+      const userProfile = profileResponse?.data ?? profileResponse;
       
       // Check if user is Group Managing Partner
-      const isGMP = userProfile?.position?.toLowerCase().includes('group_managing_partner') || 
-                    userProfile?.position?.toLowerCase().includes('group managing partner') ||
-                    userProfile?.position === 'group_managing_partner' ||
+      const isGMP = userProfile?.positionTitle?.toLowerCase().includes('group_managing_partner') || 
+                    userProfile?.positionTitle?.toLowerCase().includes('group managing partner') ||
+                    userProfile?.positionTitle === 'group_managing_partner' ||
                     userRoles.includes('group_managing_partner');
       
       // Redirect GMP to executive dashboard
@@ -71,8 +74,8 @@ const Dashboard = () => {
       }
 
       // Check if user is a partner (not GMP) - redirect to partner dashboard
-      const isPartner = userProfile?.position?.toLowerCase() === 'partner' || 
-                        userProfile?.is_partner === true ||
+      const isPartner = userProfile?.positionTitle?.toLowerCase() === 'partner' || 
+                        userProfile?.isPartner === true ||
                         userRoles.includes('partner');
       
       if (isPartner) {
@@ -81,8 +84,8 @@ const Dashboard = () => {
       }
 
       // Check if user is a manager - redirect to manager dashboard
-      const isManager = userProfile?.position?.toLowerCase().includes('manager') ||
-                        userProfile?.position?.toLowerCase() === 'manager' ||
+      const isManager = userProfile?.positionTitle?.toLowerCase().includes('manager') ||
+                        userProfile?.positionTitle?.toLowerCase() === 'manager' ||
                         userRoles.includes('manager');
       
       if (isManager) {
@@ -219,7 +222,8 @@ const Dashboard = () => {
     try {
       setIsPartner(true);
       
-      if (!user.profile_id) {
+      const profileId = user.profile_id ?? user.profileId;
+      if (!profileId) {
         throw new Error('No profile ID found for partner');
       }
 

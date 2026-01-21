@@ -66,22 +66,31 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       try {
         const me = await authAPI.me();
         setUser(me);
-        // Get the user's profile to check their role
-        const profiles = await apiFetch('GET', "/profiles");
-        const profile = profiles?.find((p: any) => p.email === me.email);
+
+        if (Array.isArray(me?.roles) && me.roles.length > 0) {
+          setUserRoles(me.roles);
+        }
+
+        const profileResponse = await apiFetch(
+          'GET',
+          `/profiles/email/${encodeURIComponent(me.email)}`
+        );
+        const profile = profileResponse?.data ?? profileResponse;
         setUserProfile(profile);
         
         // Get the user's role - handle both object and string formats
         if (profile?.role) {
           const roleName = typeof profile.role === 'object' ? profile.role.name : profile.role;
+          const mergedRoles = new Set<string>(Array.isArray(me?.roles) ? me.roles : []);
+          if (roleName) mergedRoles.add(roleName);
           console.log('=== ROLE DETECTION DEBUG ===');
           console.log('User email:', me.email);
           console.log('User role object:', profile.role);
           console.log('User role name:', roleName);
-          console.log('User position:', profile.position);
-          console.log('User is_partner:', profile.is_partner);
+          console.log('User position:', profile.positionTitle);
+          console.log('User is_partner:', profile.isPartner);
           console.log('Profile data:', profile);
-          setUserRoles([roleName]);
+          setUserRoles(Array.from(mergedRoles));
         } else {
           console.log('No role found in profile');
           await loadUserRoles(me.id);
@@ -96,7 +105,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const loadUserRoles = async (userId: any) => {
     try {
       const uid = typeof userId === 'number' ? userId : Number(userId);
-      const data = await apiFetch('GET', `/user_roles?userId=${uid}`);
+      const data = await apiFetch('GET', `/user-roles?userId=${uid}`);
       setUserRoles((data as UserRole[]).map((r) => r.role) || []);
     } catch (error: any) {
       console.error("Error loading roles:", error);
@@ -104,18 +113,24 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   };
 
   // Role detection flags - moved before useEffect
-  const isHROrAdmin = userRoles.some(r => r === 'super_admin' || r === 'hr_manager') || 
-                      userProfile?.position?.toLowerCase().includes('administrator');
-  const isManager = userRoles.some(r => r === 'Manager') || 
-                    userProfile?.position?.toLowerCase().includes('manager');
-  const isPartner = userProfile?.is_partner || userRoles.some(r => r === 'Partner');
+  const isHROrAdmin =
+    userRoles.some(r => r === 'super_admin' || r === 'hr_manager') ||
+    userProfile?.positionTitle?.toLowerCase().includes('administrator') ||
+    false;
+  const isManager =
+    userRoles.some(r => r === 'Manager') ||
+    userProfile?.positionTitle?.toLowerCase().includes('manager') ||
+    false;
+  const isPartner = userProfile?.isPartner || userRoles.some(r => r === 'Partner') || false;
   const isSeniorAssociate = userRoles.some(r => r === 'Senior Associate');
   const isAssociate = userRoles.some(r => r === 'Associate');
-  const isGMP = userProfile?.position?.toLowerCase().includes('group_managing_partner') || 
-                userProfile?.position?.toLowerCase().includes('group managing partner') ||
-                userProfile?.position === 'group_managing_partner' ||
-                userRoles.some(r => r === 'group_managing_partner') ||
-                userRoles.some(r => r === 'Group Managing Partner');
+  const isGMP =
+    userProfile?.positionTitle?.toLowerCase().includes('group_managing_partner') ||
+    userProfile?.positionTitle?.toLowerCase().includes('group managing partner') ||
+    userProfile?.positionTitle === 'group_managing_partner' ||
+    userRoles.some(r => r === 'group_managing_partner') ||
+    userRoles.some(r => r === 'Group Managing Partner') ||
+    false;
   
   console.log('=== ROLE FLAGS DEBUG ===');
   console.log('isHROrAdmin:', isHROrAdmin);
@@ -123,7 +138,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   console.log('isPartner:', isPartner);
   console.log('isGMP:', isGMP);
   console.log('userRoles:', userRoles);
-  console.log('userProfile position:', userProfile?.position);
+  console.log('userProfile position:', userProfile?.positionTitle);
   
   const isActive = (path: string) => location.pathname === path;
 
@@ -161,15 +176,15 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const getRoleDisplay = () => {
     // Check if user is GMP first (highest level)
     if (userRoles.some(r => r === 'Group Managing Partner') || 
-        userProfile?.position?.toLowerCase().includes('group managing partner')) {
+        userProfile?.positionTitle?.toLowerCase().includes('group managing partner')) {
       return "Group Managing Partner";
     }
     
     // Check if user is partner based on is_partner flag
-    if (userProfile?.is_partner) return "Partner";
+    if (userProfile?.isPartner) return "Partner";
     
     // Check position for admin
-    if (userProfile?.position?.toLowerCase().includes('administrator')) return "System Administrator";
+    if (userProfile?.positionTitle?.toLowerCase().includes('administrator')) return "System Administrator";
     
     // Check role from database
     if (userRoles.length > 0) {
@@ -183,7 +198,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     }
     
     // Check position for manager roles
-    if (userProfile?.position?.toLowerCase().includes('manager')) return "Manager";
+    if (userProfile?.positionTitle?.toLowerCase().includes('manager')) return "Manager";
     
     return "Employee";
   };

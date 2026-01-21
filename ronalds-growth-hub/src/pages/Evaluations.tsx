@@ -146,7 +146,7 @@ export default function Evaluations() {
       }
 
       // Load active cycle
-      const cycles = await apiFetch<any[]>('GET', "/evaluation_cycles?status=active&limit=1");
+      const cycles = await apiFetch<any[]>('GET', "/evaluation-cycles?status=active&limit=1");
 
       if (!cycles || cycles.length === 0) {
         setSummary({
@@ -795,3 +795,4 @@ export default function Evaluations() {
     </DashboardLayout>
   );
 }
+

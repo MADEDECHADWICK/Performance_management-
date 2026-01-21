@@ -1,127 +1,141 @@
-import { Router } from 'express';
-import prisma from '../prisma';
-import { authMiddleware } from '../middleware/auth';
+import { Router } from "express";
+import prisma from "../prisma";
+import { authMiddleware } from "../middleware/auth";
+import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 
 const router = Router();
 
-// GET /employees - Returns employees in expected format for frontend
-router.get('/', authMiddleware, async (req, res) => {
+const parseId = (value: string) => {
+  const id = Number(value);
+  return Number.isFinite(id) ? id : null;
+};
+
+// GET /employees - List employees with optional filters
+router.get("/", authMiddleware, async (req, res) => {
   try {
-    const profiles = await prisma.profile.findMany({
-      where: {
-        status: 'active'
-      },
-      include: {
-        role: {
-          select: {
-            id: true,
-            name: true,
-            billing_rate: true
-          }
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.pageSize) || 10;
+    const skip = (page - 1) * pageSize;
+
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const departmentId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
+    const roleId = req.query.roleId ? Number(req.query.roleId) : undefined;
+    const managerId = req.query.managerId ? Number(req.query.managerId) : undefined;
+    const isPartner = req.query.isPartner === "true" ? true : req.query.isPartner === "false" ? false : undefined;
+    const onboardingStatus = typeof req.query.onboardingStatus === "string" ? req.query.onboardingStatus : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+
+    const where: any = {};
+    if (status) where.status = status;
+    if (Number.isFinite(departmentId)) where.departmentId = departmentId;
+    if (Number.isFinite(roleId)) where.roleId = roleId;
+    if (Number.isFinite(managerId)) where.managerId = managerId;
+    if (typeof isPartner === "boolean") where.isPartner = isPartner;
+    if (onboardingStatus) where.onboardingStatus = onboardingStatus;
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: "insensitive" } },
+        { lastName: { contains: search, mode: "insensitive" } },
+        { user: { email: { contains: search, mode: "insensitive" } } },
+      ];
+    }
+
+    const [employees, total] = await Promise.all([
+      prisma.profile.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { createdAt: "desc" },
+        include: {
+          user: { select: { id: true, email: true } },
+          role: { select: { id: true, name: true, billingRate: true, costRate: true } },
+          department: { select: { id: true, name: true, departmentCode: true } },
         },
-        department: {
-          select: {
-            id: true,
-            name: true,
-            department_code: true
-          }
-        }
-      }
-    });
+      }),
+      prisma.profile.count({ where }),
+    ]);
 
-    // Transform to expected frontend format
-    const employees = profiles.map(profile => ({
-      id: profile.userId,
-      first_name: profile.first_name,
-      last_name: profile.last_name,
-      email: profile.email,
-      position: profile.position,
-      department: profile.department?.name || 'Not assigned',
-      department_id: profile.departmentId,
-      role: profile.role?.name || 'Employee',
-      role_id: profile.role_id,
-      hourly_rate: profile.role?.billing_rate || 0,
-      cost_rate: profile.role?.billing_rate || 0,
-      experience_years: profile.position_level === 'senior' ? 5 : 
-                       profile.position_level === 'manager' ? 4 : 
-                       profile.position_level === 'partner' ? 6 : 1,
-      is_partner: profile.is_partner || profile.position?.toLowerCase().includes('partner') || false,
-      status: profile.status
-    }));
-
-    res.json({ employees });
-
-  } catch (error) {
-    console.error('Error fetching employees:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch employees',
-      details: error.message
-    });
+    res.json(paginatedResponse(employees, total, page, pageSize, "Employees retrieved"));
+  } catch (error: any) {
+    console.error("Error fetching employees:", error);
+    res.status(500).json(errorResponse("Failed to fetch employees", 500));
   }
 });
 
-// GET /employees/partners - Get only partners
-router.get('/partners', authMiddleware, async (req, res) => {
+// GET /employees/partners - Get partner profiles
+router.get("/partners/list", authMiddleware, async (_req, res) => {
   try {
-    const profiles = await prisma.profile.findMany({
+    const partners = await prisma.profile.findMany({
       where: {
-        status: 'active',
-        OR: [
-          { position: { contains: 'Partner', mode: 'insensitive' } },
-          { position: { contains: 'Managing', mode: 'insensitive' } }
-        ]
+        status: "active",
+        isPartner: true,
       },
       include: {
-        role: true,
-        department: true
-      }
+        user: { select: { id: true, email: true } },
+        role: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: { lastName: "asc" },
     });
 
-    const partners = profiles.map(profile => ({
-      id: profile.userId,
-      first_name: profile.firstName,
-      last_name: profile.lastName,
-      position: profile.position,
-      department: profile.department?.name,
-      role: profile.role?.name
-    }));
-
-    res.json({ partners });
-
-  } catch (error) {
-    console.error('Error fetching partners:', error);
-    res.status(500).json({ error: 'Failed to fetch partners' });
+    res.json(successResponse(partners, "Partners retrieved"));
+  } catch (error: any) {
+    console.error("Error fetching partners:", error);
+    res.status(500).json(errorResponse("Failed to fetch partners", 500));
   }
 });
 
-// GET /employees/managers - Get only managers
-router.get('/managers', authMiddleware, async (req, res) => {
+// GET /employees/managers - Get manager profiles
+router.get("/managers/list", authMiddleware, async (_req, res) => {
   try {
-    const profiles = await prisma.profile.findMany({
+    const managers = await prisma.profile.findMany({
       where: {
-        status: 'active',
-        position: { contains: 'Manager', mode: 'insensitive' }
+        status: "active",
+        positionTitle: { contains: "manager", mode: "insensitive" },
       },
       include: {
-        role: true,
-        department: true
-      }
+        user: { select: { id: true, email: true } },
+        role: { select: { id: true, name: true } },
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: { lastName: "asc" },
     });
 
-    const managers = profiles.map(profile => ({
-      id: profile.userId,
-      first_name: profile.firstName,
-      last_name: profile.lastName,
-      position: profile.position,
-      department: profile.department?.name,
-      role: profile.role?.name
-    }));
+    res.json(successResponse(managers, "Managers retrieved"));
+  } catch (error: any) {
+    console.error("Error fetching managers:", error);
+    res.status(500).json(errorResponse("Failed to fetch managers", 500));
+  }
+});
 
-    res.json({ managers });
+// GET /employees/:employeeId - Get employee profile
+router.get("/:employeeId", authMiddleware, async (req, res) => {
+  try {
+    const employeeId = parseId(req.params.employeeId);
+    if (!employeeId) {
+      res.status(400).json(errorResponse("Invalid employee id", 400));
+      return;
+    }
 
-  } catch (error) {
-    console.error('Error fetching managers:', error);
-    res.status(500).json({ error: 'Failed to fetch managers' });
+    const employee = await prisma.profile.findUnique({
+      where: { id: employeeId },
+      include: {
+        user: { select: { id: true, email: true } },
+        role: { select: { id: true, name: true, billingRate: true, costRate: true } },
+        department: { select: { id: true, name: true, departmentCode: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!employee) {
+      res.status(404).json(errorResponse("Employee not found", 404));
+      return;
+    }
+
+    res.json(successResponse(employee, "Employee retrieved"));
+  } catch (error: any) {
+    console.error("Error fetching employee:", error);
+    res.status(500).json(errorResponse("Failed to fetch employee", 500));
   }
 });
 

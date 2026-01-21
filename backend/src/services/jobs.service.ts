@@ -23,9 +23,10 @@ export interface JobCreateInput {
   billingType: 'hourly' | 'fixed_fee';
   fixedFeeAmount?: number;
   budgetHours?: number;
+  engagementLetterId?: number;
   startDate?: Date;
   dueDate?: Date;
-  priority?: 'low' | 'medium' | 'high';
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
 }
 
 export interface JobUpdateInput {
@@ -33,17 +34,24 @@ export interface JobUpdateInput {
   description?: string;
   status?: string;
   dueDate?: Date;
-  priority?: 'low' | 'medium' | 'high';
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
   billingType?: 'hourly' | 'fixed_fee';
   fixedFeeAmount?: number;
   budgetHours?: number;
+}
+
+export interface JobStaffAssignmentInput {
+  employeeProfileId: number;
+  assignedRoleId: number;
+  assignedHourlyRate: number;
+  roleOnJob?: string;
 }
 
 export interface ListJobsOptions {
   page: number;
   pageSize: number;
   filters?: {
-    status?: string;
+    status?: string | string[];
     clientId?: number;
     partnerProfileId?: number;
     managerProfileId?: number;
@@ -88,6 +96,7 @@ class JobService {
         billingType: input.billingType,
         fixedFeeAmount: input.fixedFeeAmount || 0,
         budgetHours: input.budgetHours || 0,
+        engagementLetterId: input.engagementLetterId,
         startDate: input.startDate,
         dueDate: input.dueDate,
         priority: input.priority || 'medium',
@@ -150,7 +159,13 @@ class JobService {
     }
 
     // Apply filters
-    if (filters.status) whereClause.status = filters.status;
+    if (filters.status) {
+      if (Array.isArray(filters.status)) {
+        whereClause.status = { in: filters.status };
+      } else {
+        whereClause.status = filters.status;
+      }
+    }
     if (filters.clientId) whereClause.clientId = filters.clientId;
     if (filters.partnerProfileId) whereClause.partnerProfileId = filters.partnerProfileId;
     if (filters.managerProfileId) whereClause.managerProfileId = filters.managerProfileId;
@@ -357,9 +372,7 @@ class JobService {
    */
   async assignJobTeam(
     jobId: number,
-    employeeProfileId: number,
-    roleId: number,
-    hourlyRate: number,
+    input: JobStaffAssignmentInput,
     authContext: AuthContext
   ) {
     const job = await this.getJobById(jobId);
@@ -375,7 +388,7 @@ class JobService {
 
     // Check for duplicate assignment
     const existing = await prisma.jobStaffAssignment.findFirst({
-      where: { jobId, employeeProfileId },
+      where: { jobId, employeeProfileId: input.employeeProfileId },
     });
 
     if (existing) {
@@ -385,9 +398,10 @@ class JobService {
     const assignment = await prisma.jobStaffAssignment.create({
       data: {
         jobId,
-        employeeProfileId,
-        roleId,
-        hourlyRate,
+        employeeProfileId: input.employeeProfileId,
+        assignedRoleId: input.assignedRoleId,
+        assignedHourlyRate: input.assignedHourlyRate,
+        roleOnJob: input.roleOnJob,
         assignedByProfileId: authContext.profileId,
         assignedAt: new Date(),
       },

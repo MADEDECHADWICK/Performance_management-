@@ -15,7 +15,6 @@ import {
   timerStartValidators,
   timerStopValidators,
   batchSubmitValidators,
-  batchApproveValidators,
   listTimeEntriesValidators,
   getJobSummaryValidators,
 } from "../validators/time-entry.validators";
@@ -108,7 +107,7 @@ router.patch(
   "/:timeEntryId/approve",
   authMiddleware,
   loadProfile,
-  requireRole(["manager", "partner", "admin"]),
+  requireRole("manager", "partner", "admin"),
   requireTimeEntryAccess,
   ...approveTimeEntryValidators,
   handleValidationErrors,
@@ -123,7 +122,7 @@ router.patch(
   "/:timeEntryId/reject",
   authMiddleware,
   loadProfile,
-  requireRole(["manager", "partner", "admin"]),
+  requireRole("manager", "partner", "admin"),
   requireTimeEntryAccess,
   ...rejectTimeEntryValidators,
   handleValidationErrors,
@@ -179,8 +178,7 @@ router.post(
   "/batch/approve",
   authMiddleware,
   loadProfile,
-  requireRole(["manager", "partner", "admin"]),
-  ...batchApproveValidators,
+  requireRole("manager", "partner", "admin"),
   handleValidationErrors,
   TimeEntryController.batchApproveTimeEntries
 );

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { rolesAPI } from '@/integrations/apiClient';
+import { rolesAPI } from '@/lib/api';
 
 interface Role {
   id: number;

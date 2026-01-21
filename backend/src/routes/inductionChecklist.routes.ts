@@ -6,7 +6,7 @@ import {
   createInductionChecklistValidators,
   getInductionChecklistValidators,
   completeInductionItemValidators,
-} from "../validators/inductionChecklist.validators.js";
+} from "../validators/inductionChecklist.validators";
 
 const router = Router();
 

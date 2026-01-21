@@ -13,8 +13,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/error';
 import routes from './routes';
-import businessLogicRoutes from './routes/businessLogic';
-import phase6Routes from './routes/phase6.routes';
 
 dotenv.config();
 
@@ -62,12 +60,6 @@ app.get('/health', (_req, res) => res.json({
  */
 
 app.use('/api', routes);
-
-// ✅ REGISTER BUSINESS LOGIC ROUTES
-app.use('/api/business-logic', businessLogicRoutes);
-
-// ✅ REGISTER PHASE 6 ROUTES (Real-time, Reports, Analytics)
-app.use('/api/phase6', phase6Routes);
 
 /**
  * ==========================================

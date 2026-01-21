@@ -376,8 +376,8 @@ class ReportGenerationService {
     ];
 
     if (Array.isArray(evaluations)) {
-      for (const eval of evaluations) {
-        sheet.addRow([eval.employeeName, eval.score, eval.rating]);
+      for (const evaluation of evaluations) {
+        sheet.addRow([evaluation.employeeName, evaluation.score, evaluation.rating]);
       }
     }
   }

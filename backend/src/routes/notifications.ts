@@ -97,7 +97,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole(['admin', 'manager']),
+  requireRole('admin', 'manager'),
   ...createNotificationValidators,
   handleValidationErrors,
   NotificationController.createNotification
@@ -152,7 +152,7 @@ router.post(
   '/batch',
   authMiddleware,
   loadProfile,
-  requireRole(['admin', 'manager']),
+  requireRole('admin', 'manager'),
   ...batchNotificationValidators,
   handleValidationErrors,
   NotificationController.sendBatchNotifications

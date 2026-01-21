@@ -39,7 +39,7 @@ const DevelopmentPlan = () => {
         return;
       }
 
-      const data = await apiFetch('GET', `/development_recommendations?employee_id=${user.id}`);
+      const data = await apiFetch('GET', `/development-recommendations?employee_id=${user.id}`);
       setRecommendations(data || []);
     } catch (error: any) {
       toast({
@@ -54,7 +54,7 @@ const DevelopmentPlan = () => {
 
   const updateStatus = async (id: string, status: string) => {
     try {
-      await apiFetch('PATCH', `/development_recommendations/${id}`, { status });
+      await apiFetch('PATCH', `/development-recommendations/${id}`, { status });
       toast({ title: "Status updated successfully" });
       loadRecommendations();
     } catch (error: any) {

@@ -38,16 +38,20 @@ export default function EmployeeProfile() {
       }
 
       // Check if user is HR/Admin
-      const roles = await apiFetch('GET', `/user_roles?userId=${user.id}`);
+      const roles = await apiFetch('GET', `/user-roles?userId=${user.id}`);
       const hasHRAdminRole = roles?.some((r: any) => r.role === "hr_manager" || r.role === "super_admin");
       setIsHRAdmin(hasHRAdminRole || false);
 
       // Check if viewing another employee's profile
-      const viewingUserId = searchParams.get("id");
-      const targetUserId = viewingUserId || user.id.toString();
-      setIsViewingOther(!!viewingUserId && Number(viewingUserId) !== user.id);
+      const viewingProfileId = searchParams.get("id");
+      const currentProfileId = user.profile_id ?? user.profileId;
+      setIsViewingOther(
+        !!viewingProfileId && Number(viewingProfileId) !== Number(currentProfileId)
+      );
 
-      const data = await apiFetch('GET', `/profiles?user_id=${targetUserId}&include_department=true`);
+      const data = viewingProfileId
+        ? await apiFetch('GET', `/profiles/${viewingProfileId}`)
+        : await apiFetch('GET', `/profiles/email/${encodeURIComponent(user.email)}`);
       setProfile(data);
 
       // Load departments and managers if HR/Admin viewing another employee
@@ -56,8 +60,8 @@ export default function EmployeeProfile() {
         setDepartments(depts || []);
 
         // Load all employees for manager selection (exclude current employee)
-        const allEmployees = await apiFetch('GET', `/profiles?exclude_id=${data.id}`);
-        setManagers(allEmployees || []);
+        const allEmployees = await apiFetch('GET', `/profiles`);
+        setManagers((allEmployees || []).filter((item: any) => item.id !== data.id));
       }
     } catch (error: any) {
       toast({
@@ -76,18 +80,17 @@ export default function EmployeeProfile() {
       
       // Personal fields that anyone can edit (only valid Prisma fields)
       const updateData: any = {
-        first_name: profile.first_name,
-        last_name: profile.last_name,
-        phone_number: profile.phone_number || '',
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        phoneNumber: profile.phoneNumber || '',
       };
 
       // Only HR/Admin can update email, hire_date, department, position, and manager
       if (isHRAdmin) {
-        updateData.email = profile.email;
-        updateData.position = profile.position || '';
-        updateData.hire_date = profile.hire_date || null;
-        updateData.department_id = profile.departmentId || null;
-        updateData.manager_id = profile.manager_id || null;
+        updateData.positionTitle = profile.positionTitle || '';
+        updateData.hireDate = profile.hireDate || null;
+        updateData.departmentId = profile.departmentId || null;
+        updateData.managerId = profile.managerId || null;
       }
 
       console.log('Saving profile with data:', updateData);
@@ -161,16 +164,16 @@ export default function EmployeeProfile() {
                     <Label htmlFor="firstName">First Name</Label>
                     <Input
                       id="firstName"
-                      value={profile?.first_name || ""}
-                      onChange={(e) => setProfile({ ...profile, first_name: e.target.value })}
+                      value={profile?.firstName || ""}
+                      onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="lastName">Last Name</Label>
                     <Input
                       id="lastName"
-                      value={profile?.last_name || ""}
-                      onChange={(e) => setProfile({ ...profile, last_name: e.target.value })}
+                      value={profile?.lastName || ""}
+                      onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
                     />
                   </div>
                 </div>
@@ -200,8 +203,8 @@ export default function EmployeeProfile() {
                   <Input 
                     id="phoneNumber" 
                     type="tel" 
-                    value={profile?.phone_number || ""} 
-                    onChange={(e) => setProfile({ ...profile, phone_number: e.target.value })}
+                    value={profile?.phoneNumber || ""} 
+                    onChange={(e) => setProfile({ ...profile, phoneNumber: e.target.value })}
                     placeholder="Enter phone number"
                   />
                 </div>
@@ -223,8 +226,8 @@ export default function EmployeeProfile() {
                   <Label htmlFor="position">Position</Label>
                   <Input
                     id="position"
-                    value={profile?.position || ""}
-                    onChange={(e) => setProfile({ ...profile, position: e.target.value })}
+                    value={profile?.positionTitle || ""}
+                    onChange={(e) => setProfile({ ...profile, positionTitle: e.target.value })}
                     disabled={!isHRAdmin}
                   />
                   {!isHRAdmin && (
@@ -241,14 +244,14 @@ export default function EmployeeProfile() {
                     id="hireDate"
                     type="date"
                     value={
-                      profile?.hire_date 
-                        ? new Date(profile.hire_date).toISOString().split('T')[0] 
+                      profile?.hireDate 
+                        ? new Date(profile.hireDate).toISOString().split('T')[0] 
                         : ""
                     }
-                    onChange={(e) => setProfile({ ...profile, hire_date: e.target.value })}
+                    onChange={(e) => setProfile({ ...profile, hireDate: e.target.value })}
                     disabled={!isHRAdmin}
                   />
-                  {isHRAdmin && !profile?.hire_date && (
+                  {isHRAdmin && !profile?.hireDate && (
                     <p className="text-sm text-muted-foreground">Set the employee's hire date</p>
                   )}
                 </div>
@@ -292,11 +295,11 @@ export default function EmployeeProfile() {
                   <Label>Manager/Supervisor</Label>
                   {isHRAdmin ? (
                     <Select
-                      value={profile?.manager_id ? String(profile.manager_id) : "none"}
+                      value={profile?.managerId ? String(profile.managerId) : "none"}
                       onValueChange={(value) => 
                         setProfile({ 
                           ...profile, 
-                          manager_id: value === "none" ? null : Number(value) 
+                          managerId: value === "none" ? null : Number(value) 
                         })
                       }
                     >
@@ -307,7 +310,7 @@ export default function EmployeeProfile() {
                         <SelectItem value="none">No Manager</SelectItem>
                         {managers.map((mgr) => (
                           <SelectItem key={mgr.id} value={mgr.id}>
-                            {mgr.first_name} {mgr.last_name} {mgr.position ? `(${mgr.position})` : ""}
+                            {mgr.firstName} {mgr.lastName} {mgr.positionTitle ? `(${mgr.positionTitle})` : ""}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -318,7 +321,7 @@ export default function EmployeeProfile() {
                       disabled 
                     />
                   )}
-                  {isHRAdmin && !profile?.manager_id && (
+                  {isHRAdmin && !profile?.managerId && (
                     <p className="text-sm text-muted-foreground">Assign a manager to this employee</p>
                   )}
                 </div>
@@ -353,3 +356,4 @@ export default function EmployeeProfile() {
     </DashboardLayout>
   );
 }
+

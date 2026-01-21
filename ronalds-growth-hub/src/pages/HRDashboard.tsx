@@ -164,7 +164,7 @@ const HRDashboard = () => {
       const totalEmployees = profiles?.length || 0;
 
       // Get active evaluations
-      const evalCycles = await apiFetch('GET', '/evaluation_cycles?status=active');
+      const evalCycles = await apiFetch('GET', '/evaluation-cycles?status=active');
       const activeEvaluations = evalCycles?.length || 0;
 
       // Get pending evaluation assignments
@@ -676,3 +676,4 @@ const HRDashboard = () => {
 };
 
 export default HRDashboard;
+

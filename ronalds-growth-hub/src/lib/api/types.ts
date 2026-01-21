@@ -1,0 +1,526 @@
+/**
+ * API Types - TypeScript interfaces matching Prisma schema
+ */
+
+// Enums
+export type EmployeeStatus = 'active' | 'inactive' | 'separated';
+export type OnboardingStatus = 'pending' | 'in_progress' | 'completed';
+export type DocumentAccessLevel = 'employee' | 'manager' | 'hr' | 'admin';
+export type DocumentVerificationStatus = 'pending' | 'verified' | 'rejected';
+export type ClientStatus = 'active' | 'inactive';
+export type ClientOnboardingStatus = 'pending_hr_review' | 'approved' | 'rejected' | 'client_created' | 'job_created';
+export type EngagementLetterStatus = 'uploaded' | 'pending_review' | 'approved' | 'rejected';
+export type JobStatus = 'planned' | 'in_progress' | 'on_hold' | 'completed' | 'cancelled';
+export type BillingType = 'hourly' | 'fixed_fee';
+export type Priority = 'low' | 'medium' | 'high' | 'urgent';
+export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+export type TimeEntryStatus = 'pending' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
+export type OverBudgetRequestStatus = 'pending' | 'manager_approved' | 'manager_rejected' | 'partner_approved' | 'partner_rejected' | 'auto_rejected';
+export type BillableType = 'billable' | 'non_billable' | 'loss';
+export type EvaluatorType = 'self' | 'manager' | 'peer' | 'direct_report' | 'client' | 'custom';
+export type EvaluationDefinitionStatus = 'draft' | 'published' | 'closed';
+export type EvaluationAssignmentStatus = 'pending' | 'in_progress' | 'submitted' | 'cancelled';
+export type BackgroundCheckStatus = 'pending' | 'cleared' | 'flagged' | 'failed';
+export type ChecklistStatus = 'pending' | 'in_progress' | 'completed';
+export type JobCostingStatus = 'draft' | 'submitted' | 'partner_review' | 'approved' | 'rejected';
+export type RecruitmentStage = 'applied' | 'shortlisted' | 'interviewed' | 'offered' | 'accepted' | 'rejected' | 'hired';
+
+// Core Models
+export interface User {
+  id: number;
+  email: string;
+  isActive: boolean;
+  isVerified: boolean;
+  lastLogin?: string;
+  createdAt: string;
+  updatedAt: string;
+  profile?: Profile;
+  roles?: UserAuthRole[];
+}
+
+export interface Profile {
+  id: number;
+  userId?: number;
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  phoneNumber?: string;
+  profilePicture?: string;
+  employeeId?: string;
+  kraPin?: string;
+  nssfNumber?: string;
+  dateOfBirth?: string;
+  status: EmployeeStatus;
+  positionTitle?: string;
+  departmentId?: number;
+  roleId?: number;
+  hireDate?: string;
+  separationDate?: string;
+  managerId?: number;
+  isPartner: boolean;
+  onboardingStatus: OnboardingStatus;
+  onboardingChecklistCompleted: boolean;
+  inductionCompleted: boolean;
+  backgroundCheckRequired: boolean;
+  backgroundCheckStatus?: BackgroundCheckStatus;
+  backgroundCheckDate?: string;
+  financialTarget?: number;
+  utilizationTarget: number;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  user?: User;
+  department?: Department;
+  role?: PositionRole;
+  manager?: Profile;
+  directReports?: Profile[];
+}
+
+export interface Department {
+  id: number;
+  name: string;
+  description?: string;
+  departmentCode?: string;
+  departmentHeadId?: number;
+  createdAt: string;
+  updatedAt: string;
+  departmentHead?: Profile;
+}
+
+export interface PositionRole {
+  id: number;
+  name: string;
+  description?: string;
+  billingRate: number;
+  costRate: number;
+  isActive: boolean;
+  defaultAccess: any;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthRole {
+  id: number;
+  name: string;
+  description?: string;
+  isActive: boolean;
+}
+
+export interface UserAuthRole {
+  userId: number;
+  roleId: number;
+  role: AuthRole;
+}
+
+// Client & Job Models
+export interface Client {
+  id: number;
+  clientName: string;
+  clientCode?: string;
+  industry?: string;
+  contactPerson?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  address?: string;
+  location?: string;
+  status: ClientStatus;
+  partnerProfileId?: number;
+  managerProfileId?: number;
+  departmentId?: number;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  partner?: Profile;
+  manager?: Profile;
+  department?: Department;
+  jobs?: Job[];
+}
+
+export interface EngagementLetter {
+  id: number;
+  clientId: number;
+  documentId?: number;
+  jobTitle?: string;
+  engagementType: string;
+  startDate?: string;
+  endDate?: string;
+  feeAmount?: number;
+  currency?: string;
+  scopeDescription?: string;
+  termsConditions?: string;
+  status: EngagementLetterStatus;
+  uploadedByProfileId?: number;
+  approvedByProfileId?: number;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  document?: Document;
+}
+
+export interface Job {
+  id: number;
+  jobName: string;
+  jobCode?: string;
+  description?: string;
+  clientId?: number;
+  departmentId?: number;
+  partnerProfileId?: number;
+  managerProfileId?: number;
+  startDate?: string;
+  dueDate?: string;
+  completionDate?: string;
+  status: JobStatus;
+  priority: Priority;
+  billingType: BillingType;
+  fixedFeeAmount: number;
+  budgetHours: number;
+  engagementLetterId?: number;
+  costingCompleted: boolean;
+  teamAssigned: boolean;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  client?: Client;
+  partner?: Profile;
+  manager?: Profile;
+  department?: Department;
+  engagementLetter?: EngagementLetter;
+  staffing?: JobStaffAssignment[];
+  tasks?: Task[];
+  timeEntries?: TimeEntry[];
+  jobCosting?: JobCosting;
+}
+
+export interface JobStaffAssignment {
+  id: number;
+  jobId: number;
+  employeeProfileId: number;
+  assignedRoleId: number;
+  assignedHourlyRate: number;
+  roleOnJob?: string;
+  assignedAt: string;
+  assignedByProfileId?: number;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  job?: Job;
+  employee?: Profile;
+  role?: PositionRole;
+  assignedBy?: Profile;
+}
+
+export interface JobCosting {
+  id: number;
+  jobId: number;
+  status: JobCostingStatus;
+  totalBudgetHours: number;
+  totalBudgetAmount: number;
+  totalBillableAmount: number;
+  totalCostAmount: number;
+  profitMargin: number;
+  managerProfileId?: number;
+  submittedAt?: string;
+  approvedAt?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Task {
+  id: number;
+  jobId: number;
+  title: string;
+  description?: string;
+  assignedToProfileId?: number;
+  estimatedHours?: number;
+  billable: boolean;
+  status: TaskStatus;
+  priority: Priority;
+  dueDate?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  job?: Job;
+  assignedTo?: Profile;
+}
+
+// Time Entry Models
+export interface TimeEntry {
+  id: number;
+  jobId: number;
+  employeeProfileId: number;
+  taskId?: number;
+  date: string;
+  hours: number;
+  description?: string;
+  billableType: BillableType;
+  hourlyRate: number;
+  billableAmount: number;
+  costAmount: number;
+  profitLoss: number;
+  status: TimeEntryStatus;
+  submittedAt?: string;
+  approvedByProfileId?: number;
+  approvedAt?: string;
+  rejectionReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  job?: Job;
+  employee?: Profile;
+  task?: Task;
+  approvedBy?: Profile;
+}
+
+export interface TimeOverBudgetRequest {
+  id: number;
+  employeeProfileId: number;
+  jobId: number;
+  requestedHours: number;
+  reason: string;
+  billableType: BillableType;
+  status: OverBudgetRequestStatus;
+  managerApprovedAt?: string;
+  partnerApprovedAt?: string;
+  rejectionReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Document Models
+export interface Document {
+  id: number;
+  fileName: string;
+  filePath: string;
+  fileSize?: number;
+  mimeType?: string;
+  documentType: string;
+  entityType: string;
+  entityId?: number;
+  accessLevel: DocumentAccessLevel;
+  isRequired: boolean;
+  verificationStatus: DocumentVerificationStatus;
+  rejectionReason?: string;
+  uploadedBy?: number;
+  verifiedBy?: number;
+  verifiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Evaluation Models
+export interface EvaluationCycle {
+  id: number;
+  name: string;
+  description?: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EvaluationDefinition {
+  id: number;
+  cycleId?: number;
+  name: string;
+  description?: string;
+  evaluatorType: EvaluatorType;
+  isAnonymous: boolean;
+  hideFromEvaluatee: boolean;
+  requireSignature: boolean;
+  excludeFromScoreComputation: boolean;
+  financialWeight: number;
+  nonFinancialWeight: number;
+  status: EvaluationDefinitionStatus;
+  dueDate?: string;
+  departmentId?: number;
+  createdByProfileId?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EvaluationAssignment {
+  id: number;
+  definitionId: number;
+  evaluatorProfileId: number;
+  evaluateeProfileId: number;
+  status: EvaluationAssignmentStatus;
+  dueDate?: string;
+  submittedAt?: string;
+  overallScore?: number;
+  financialScore?: number;
+  nonFinancialScore?: number;
+  comments?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  definition?: EvaluationDefinition;
+  evaluator?: Profile;
+  evaluatee?: Profile;
+}
+
+// KPI Models
+export interface Kpi {
+  id: number;
+  name: string;
+  description?: string;
+  category: string;
+  isFinancial: boolean;
+  departmentId?: number;
+  roleId?: number;
+  targetValue?: number;
+  targetCurrency?: string;
+  frequency?: string;
+  weight: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  department?: Department;
+  role?: PositionRole;
+}
+
+export interface EmployeeKpiAssignment {
+  id: number;
+  employeeProfileId: number;
+  kpiId: number;
+  targetValue?: number;
+  currentValue?: number;
+  status: string;
+  periodStart?: string;
+  periodEnd?: string;
+  createdAt: string;
+  updatedAt: string;
+  employee?: Profile;
+  kpi?: Kpi;
+}
+
+// Notification
+export interface Notification {
+  id: number;
+  profileId: number;
+  type: string;
+  title: string;
+  message: string;
+  link?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+// Induction & Onboarding
+export interface InductionChecklist {
+  id: number;
+  onboardingCaseId?: number;
+  employeeProfileId: number;
+  checklistName: string;
+  status: ChecklistStatus;
+  totalItems: number;
+  completedItems: number;
+  completionPercent: number;
+  assignedByProfileId?: number;
+  dueDate?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  items?: InductionChecklistItem[];
+}
+
+export interface InductionChecklistItem {
+  id: number;
+  checklistId: number;
+  itemName: string;
+  description?: string;
+  orderIndex: number;
+  isCompleted: boolean;
+  completedByProfileId?: number;
+  completedAt?: string;
+  requiresDocument: boolean;
+  documentId?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmployeeOnboardingCase {
+  id: number;
+  candidateId?: number;
+  profileId?: number;
+  status: OnboardingStatus;
+  startDate?: string;
+  dueDate?: string;
+  hrOwnerProfileId?: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  employee?: Profile;
+  hrOwner?: Profile;
+  inductionChecklist?: InductionChecklist;
+}
+
+// API Response Types
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+// Dashboard Types
+export interface DashboardMetrics {
+  totalEmployees: number;
+  activeJobs: number;
+  pendingTimeEntries: number;
+  completedEvaluations: number;
+  totalRevenue: number;
+  totalProfit: number;
+  utilizationRate: number;
+}
+
+export interface PartnerDashboardData {
+  totalJobs: number;
+  totalRevenue: number;
+  profit: number;
+  teamSize: number;
+  pendingJobs: number;
+  overdueJobs: number;
+  completedJobs: number;
+  utilizationRate: number;
+  jobs: Job[];
+}
+
+export interface GMPDashboardData {
+  firmOverview: {
+    totalEmployees: number;
+    activeJobs: number;
+    totalPartners: number;
+    totalDepartments: number;
+  };
+  financials: {
+    totalRevenue: number;
+    totalProfit: number;
+    projectedRevenue: number;
+    collectedAmount: number;
+  };
+  jobStatus: {
+    planned: number;
+    ongoing: number;
+    onHold: number;
+    completed: number;
+    overdue: number;
+  };
+  departmentPerformance: Array<{
+    departmentId: number;
+    departmentName: string;
+    revenue: number;
+    profit: number;
+    utilization: number;
+  }>;
+}

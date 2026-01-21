@@ -9,7 +9,7 @@
  * - Forecasting
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 import cacheService from './cache.service';
 
 class AnalyticsService {

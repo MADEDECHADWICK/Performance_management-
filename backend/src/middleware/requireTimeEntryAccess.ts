@@ -1,6 +1,6 @@
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "./auth";
-import { prisma } from "../lib/prisma";
+import { prisma } from "../prisma";
 
 /**
  * Verify user has access to time entry
@@ -43,7 +43,7 @@ export const requireTimeEntryAccess = async (
 
     // ✅ ACCESS CONTROL LOGIC
     const isAdmin = requesterRole === "admin";
-    const isOwner = timeEntry.employee_profile_id === requesterProfileId;
+    const isOwner = timeEntry.employeeProfileId === requesterProfileId;
 
     // Check if user is manager of the employee
     const isManager = requesterRole === "manager";
@@ -51,7 +51,7 @@ export const requireTimeEntryAccess = async (
     // Check if user is partner of the job
     const isPartner =
       requesterRole === "partner" &&
-      timeEntry.job.partner_id === requesterProfileId;
+      timeEntry.job.partnerProfileId === requesterProfileId;
 
     const hasAccess = isAdmin || isOwner || isManager || isPartner;
 

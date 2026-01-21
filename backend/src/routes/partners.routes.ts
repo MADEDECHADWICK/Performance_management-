@@ -6,10 +6,15 @@ import {
   createPartnerValidators,
   getPartnerJobsValidators,
   getPartnerRevenueValidators,
-  upsertPartnerCompanyValidators,
 } from "../validators/partner.validators";
 
 const router = Router();
+
+/**
+ * GET /partners
+ * List all partners
+ */
+router.get("/", withRoles("admin", "super_admin"), PartnerController.listPartners);
 
 /**
  * POST /partners (Admin)
@@ -29,6 +34,11 @@ router.post(
 router.get("/:partnerId", withPartnerAccess(), PartnerController.getPartner);
 
 /**
+ * PATCH /partners/:partnerId (Partner/Admin)
+ */
+router.patch("/:partnerId", withPartnerAccess(), PartnerController.updatePartner);
+
+/**
  * GET /partners/:partnerId/jobs (Partner/Admin)
  * Query: page, pageSize, status?
  */
@@ -37,16 +47,7 @@ router.get(
   withPartnerAccess(),
   validateRequest(getPartnerJobsValidators),
   handleValidationErrors,
-  PartnerController.listPartnerJobs
-);
-
-/**
- * GET /partners/:partnerId/dashboard (Partner/Admin)
- */
-router.get(
-  "/:partnerId/dashboard",
-  withPartnerAccess(),
-  PartnerController.getPartnerDashboard
+  PartnerController.getPartnerJobs
 );
 
 /**
@@ -59,37 +60,6 @@ router.get(
   validateRequest(getPartnerRevenueValidators),
   handleValidationErrors,
   PartnerController.getPartnerRevenue
-);
-
-/**
- * GET /partners/:partnerId/commissions (Partner/Admin)
- * NOTE: Schema v2.1 has no Commission model; we return computed commissions.
- */
-router.get(
-  "/:partnerId/commissions",
-  withPartnerAccess(),
-  PartnerController.getPartnerCommissions
-);
-
-/**
- * POST /partners/:partnerId/company (Partner/Admin)
- * Body: companyName, registrationNumber?, taxId?, bankAccountDetails?, contractTerms?
- */
-router.post(
-  "/:partnerId/company",
-  withPartnerAccess(),
-  validateRequest(upsertPartnerCompanyValidators),
-  handleValidationErrors,
-  PartnerController.savePartnerCompany
-);
-
-/**
- * GET /partners/:partnerId/company (Partner/Admin)
- */
-router.get(
-  "/:partnerId/company",
-  withPartnerAccess(),
-  PartnerController.getPartnerCompany
 );
 
 export default router;

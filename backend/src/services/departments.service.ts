@@ -14,7 +14,7 @@
  * - kpis
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma } from '../prisma';
 
 export interface DepartmentCreateInput {
   name: string;

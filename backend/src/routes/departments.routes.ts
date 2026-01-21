@@ -63,72 +63,17 @@ router.patch(
 router.get(
   "/:departmentId/employees",
   ...authenticated(),
-  DepartmentController.listDepartmentEmployees
+  DepartmentController.getDepartmentEmployees
 );
 
 /**
- * GET /departments/:departmentId/kpis
- * List department KPIs
- * Query: page, pageSize
- */
-router.get("/:departmentId/kpis", ...authenticated(), DepartmentController.listDepartmentKPIs);
-
-/**
- * POST /departments/:departmentId/kpis
- * Create department KPI
- */
-router.post(
-  "/:departmentId/kpis",
-  ...authenticated(),
-  validateRequest(createDepartmentKpiValidators),
-  handleValidationErrors,
-  DepartmentController.createDepartmentKPI
-);
-
-/**
- * GET /departments/:departmentId/revenue
- * Get department revenue report
- * Query: dateFrom, dateTo, groupBy
+ * GET /departments/:departmentId/manager
+ * Get department manager
  */
 router.get(
-  "/:departmentId/revenue",
+  "/:departmentId/manager",
   ...authenticated(),
-  DepartmentController.getDepartmentRevenue
-);
-
-/**
- * GET /departments/:departmentId/jobs
- * List jobs assigned to department
- * Query: page, pageSize, status
- */
-router.get("/:departmentId/jobs", ...authenticated(), DepartmentController.listDepartmentJobs);
-
-/**
- * GET /departments/:departmentId/dashboard
- */
-router.get(
-  "/:departmentId/dashboard",
-  ...authenticated(),
-  DepartmentController.getDepartmentDashboard
-);
-
-/**
- * GET /departments/:departmentId/utilization
- */
-router.get(
-  "/:departmentId/utilization",
-  ...authenticated(),
-  DepartmentController.getDepartmentUtilization
-);
-
-/**
- * GET /departments/:departmentId/profitability
- * Query: dateFrom, dateTo
- */
-router.get(
-  "/:departmentId/profitability",
-  ...authenticated(),
-  DepartmentController.getDepartmentProfitability
+  DepartmentController.getDepartmentManager
 );
 
 export default router;

@@ -1,26 +1,31 @@
 interface StaffAssignment {
   id?: number;
-  employee_id: number;
+  employeeProfileId: number;
   name: string;
-  role_name: string;
-  assigned_hourly_rate: number;
-  assigned_at?: string;
+  roleName: string;
+  assignedHourlyRate: number;
+  assignedAt?: string;
 }
 
 interface StaffAssignmentListProps {
   staff: StaffAssignment[];
-  onRemove?: (employeeId: number) => void;
+  onRemove?: (employeeProfileId: number) => void;
   loading?: boolean;
   editable?: boolean;
 }
 
-export function StaffAssignmentList({ staff, onRemove, loading, editable = true }: StaffAssignmentListProps) {
-  const totalRate = staff.reduce((sum, s) => sum + (s.assigned_hourly_rate || 0), 0);
+export function StaffAssignmentList({
+  staff,
+  onRemove,
+  loading,
+  editable = true,
+}: StaffAssignmentListProps) {
+  const totalRate = staff.reduce((sum, s) => sum + (s.assignedHourlyRate || 0), 0);
 
   return (
     <div className="border rounded-lg p-4">
       <h3 className="font-semibold mb-3">Assigned Staff</h3>
-      
+
       {staff.length === 0 ? (
         <p className="text-sm text-gray-500 py-4">No staff assigned yet</p>
       ) : (
@@ -37,19 +42,24 @@ export function StaffAssignmentList({ staff, onRemove, loading, editable = true 
               </thead>
               <tbody>
                 {staff.map((member) => (
-                  <tr key={`${member.employee_id}-${member.id || 'new'}`} className="border-b hover:bg-gray-50">
+                  <tr
+                    key={`${member.employeeProfileId}-${member.id || 'new'}`}
+                    className="border-b hover:bg-gray-50"
+                  >
                     <td className="px-3 py-2">{member.name}</td>
-                    <td className="px-3 py-2">{member.role_name}</td>
-                    <td className="text-right px-3 py-2">{member.assigned_hourly_rate.toLocaleString()}</td>
+                    <td className="px-3 py-2">{member.roleName}</td>
+                    <td className="text-right px-3 py-2">
+                      {member.assignedHourlyRate.toLocaleString()}
+                    </td>
                     {editable && (
                       <td className="text-center px-3 py-2">
                         {onRemove && (
                           <button
-                            onClick={() => onRemove(member.employee_id)}
+                            onClick={() => onRemove(member.employeeProfileId)}
                             disabled={loading}
                             className="text-red-600 hover:text-red-800 text-sm font-medium disabled:text-gray-400"
                           >
-                            ✕ Remove
+                            Remove
                           </button>
                         )}
                       </td>
@@ -59,7 +69,7 @@ export function StaffAssignmentList({ staff, onRemove, loading, editable = true 
               </tbody>
             </table>
           </div>
-          
+
           <div className="mt-4 pt-3 border-t flex justify-between items-center">
             <span className="font-medium">Total Hourly Rate:</span>
             <span className="text-lg font-bold">{totalRate.toLocaleString()} KES/hr</span>

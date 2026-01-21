@@ -9,10 +9,10 @@ import DashboardLayout from "@/components/DashboardLayout";
 
 interface UserProfile {
   id: string;
-  position_level: string | null;
-  department_id: string | null;
-  first_name: string;
-  last_name: string;
+  positionTitle: string | null;
+  departmentId: string | null;
+  firstName: string;
+  lastName: string;
 }
 
 interface PerformanceData {
@@ -46,16 +46,16 @@ const Scorecard = () => {
       if (!user) return;
 
       // Get user profile
-      const profile = await apiFetch('GET', `/profiles?user_id=${user.id}`);
+      const profile = await apiFetch('GET', `/profiles/email/${encodeURIComponent(user.email)}`);
       setUserProfile(profile);
 
       // Check if user is admin or HR
-      const roles = await apiFetch('GET', `/user_roles?user_id=${user.id}`);
+      const roles = await apiFetch('GET', `/user-roles?userId=${user.id}`);
       const hasAdminRole = roles?.some((r: any) => r.role === "hr_manager" || r.role === "super_admin");
       setIsAdmin(hasAdminRole || false);
 
       // Load employee's performance data
-      await loadEmployeePerformance(user.id);
+      await loadEmployeePerformance(user.id, user.email);
 
     } catch (error: any) {
       toast({
@@ -68,7 +68,7 @@ const Scorecard = () => {
     }
   };
 
-  const loadEmployeePerformance = async (employeeId: string) => {
+  const loadEmployeePerformance = async (employeeId: string, userEmail: string) => {
     try {
       // Fetch BSC scores from employee_evaluations
       const evaluations = await apiFetch('GET', `/employee_evaluations?employee_id=${employeeId}&not_null=bsc_learning_growth_score`);
@@ -110,11 +110,11 @@ const Scorecard = () => {
       const overallScore = Math.round((financialScore * 0.7) + (nonFinancialScore * 0.3));
 
       // Get employee name
-      const profileData = await apiFetch('GET', `/profiles?user_id=${employeeId}`);
+      const profileData = await apiFetch('GET', `/profiles/email/${encodeURIComponent(userEmail)}`);
 
       setPerformanceData({
         employee_id: employeeId,
-        employee_name: profileData ? `${profileData.first_name} ${profileData.last_name}` : "Unknown",
+        employee_name: profileData ? `${profileData.firstName} ${profileData.lastName}` : "Unknown",
         financial_score: financialScore,
         non_financial_score: nonFinancialScore,
         overall_score: overallScore,
@@ -161,7 +161,7 @@ const Scorecard = () => {
     if (!isAdmin || activeTab === "my-performance") {
       return "Detailed breakdown of your performance metrics";
     }
-    if (userProfile?.position_level === "manager") {
+    if (userProfile?.positionTitle === "manager") {
       return "Team performance overview";
     }
     return "Company-wide performance metrics";
@@ -181,7 +181,7 @@ const Scorecard = () => {
             <TabsList>
               <TabsTrigger value="my-performance">My Performance</TabsTrigger>
               <TabsTrigger value="company-overview">
-                {userProfile?.position_level === "manager" ? "Team Overview" : "Company Overview"}
+                {userProfile?.positionTitle === "manager" ? "Team Overview" : "Company Overview"}
               </TabsTrigger>
             </TabsList>
           </Tabs>

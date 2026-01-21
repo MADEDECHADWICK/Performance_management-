@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
-import { PartnerService } from '../services/partner.service';
+import { PartnerService } from '../services/partners.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
 export class PartnerController {

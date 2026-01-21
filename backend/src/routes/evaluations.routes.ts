@@ -5,143 +5,86 @@
 import { Router } from "express";
 import { EvaluationController } from "../controllers/evaluation.controller";
 import { authenticated } from "../utils/middleware";
-import { withRoles } from "../utils/middleware";
 import { requireEvaluationAccess } from "../middleware/requireEvaluationAccess";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
-
-import {
-  createEvaluationCycleValidators,
-  listEvaluationCyclesValidators,
-  createEvaluationDefinitionValidators,
-  listEvaluationDefinitionsValidators,
-  createEvaluationAssignmentValidators,
-  listEvaluationAssignmentsValidators,
-  getEvaluationAssignmentValidators,
-  submitEvaluationValidators,
-  acknowledgeEvaluationValidators,
-} from "../validators/evaluation.validators";
 
 const router = Router();
 
 /**
- * GET /evaluations/cycles
+ * GET /evaluations
+ * List evaluations
+ */
+router.get("/", ...authenticated(), EvaluationController.listEvaluations);
+
+/**
+ * POST /evaluations
+ * Create evaluation
+ */
+router.post("/", ...authenticated(), EvaluationController.createEvaluation);
+
+/**
+ * GET /evaluations/:evaluationId
+ * Get evaluation details
  */
 router.get(
-  "/cycles",
-  authenticated(),
-  validateRequest(listEvaluationCyclesValidators),
-  handleValidationErrors,
-  EvaluationController.listEvaluationCycles
-);
-
-/**
- * POST /evaluations/cycles
- */
-router.post(
-  "/cycles",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
-  validateRequest(createEvaluationCycleValidators),
-  handleValidationErrors,
-  EvaluationController.createEvaluationCycle
-);
-
-/**
- * GET /evaluations/definitions
- */
-router.get(
-  "/definitions",
-  authenticated(),
-  validateRequest(listEvaluationDefinitionsValidators),
-  handleValidationErrors,
-  EvaluationController.listEvaluationDefinitions
-);
-
-/**
- * POST /evaluations/definitions
- */
-router.post(
-  "/definitions",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
-  validateRequest(createEvaluationDefinitionValidators),
-  handleValidationErrors,
-  EvaluationController.createEvaluationDefinition
-);
-
-/**
- * GET /evaluations/assignments
- */
-router.get(
-  "/assignments",
-  authenticated(),
-  validateRequest(listEvaluationAssignmentsValidators),
-  handleValidationErrors,
-  EvaluationController.listEvaluationAssignments
-);
-
-/**
- * POST /evaluations/assignments
- */
-router.post(
-  "/assignments",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
-  validateRequest(createEvaluationAssignmentValidators),
-  handleValidationErrors,
-  EvaluationController.createEvaluationAssignment
-);
-
-/**
- * GET /evaluations/assignments/:assignmentId
- */
-router.get(
-  "/assignments/:assignmentId",
+  "/:evaluationId",
   ...authenticated(),
   requireEvaluationAccess("view"),
-  validateRequest(getEvaluationAssignmentValidators),
-  handleValidationErrors,
-  EvaluationController.getEvaluationAssignment
+  EvaluationController.getEvaluation
 );
 
 /**
- * PATCH /evaluations/assignments/:assignmentId/submit
+ * PATCH /evaluations/:evaluationId
+ * Update evaluation
  */
 router.patch(
-  "/assignments/:assignmentId/submit",
+  "/:evaluationId",
   ...authenticated(),
   requireEvaluationAccess("submit"),
-  validateRequest(submitEvaluationValidators),
-  handleValidationErrors,
+  EvaluationController.updateEvaluation
+);
+
+/**
+ * POST /evaluations/:evaluationId/submit
+ * Submit evaluation
+ */
+router.post(
+  "/:evaluationId/submit",
+  ...authenticated(),
+  requireEvaluationAccess("submit"),
   EvaluationController.submitEvaluation
 );
 
 /**
- * PATCH /evaluations/assignments/:assignmentId/acknowledge
+ * POST /evaluations/:evaluationId/approve
+ * Approve evaluation
  */
-router.patch(
-  "/assignments/:assignmentId/acknowledge",
+router.post(
+  "/:evaluationId/approve",
   ...authenticated(),
   requireEvaluationAccess("view"),
-  validateRequest(acknowledgeEvaluationValidators),
-  handleValidationErrors,
-  EvaluationController.acknowledgeEvaluation
+  EvaluationController.approveEvaluation
 );
 
 /**
- * GET /evaluations/assignments/:assignmentId/summary
+ * GET /evaluations/cycle/:cycleId
+ * Get evaluations by cycle
  */
 router.get(
-  "/assignments/:assignmentId/summary",
+  "/cycle/:cycleId",
   ...authenticated(),
-  requireEvaluationAccess("view"),
-  EvaluationController.getEvaluationSummary
+  EvaluationController.getEvaluationsByCycle
 );
 
 /**
- * GET /evaluations/dashboard
+ * GET /evaluations/:evaluationId/scores
+ * Get evaluation scores
  */
 router.get(
-  "/dashboard",
-  authenticated(),
-  EvaluationController.getEvaluationDashboard
+  "/:evaluationId/scores",
+  ...authenticated(),
+  requireEvaluationAccess("view"),
+  EvaluationController.getEvaluationScores
 );
 
 export default router;
