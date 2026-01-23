@@ -152,4 +152,31 @@ export class PartnerController {
       );
     }
   }
+
+  /**
+   * GET /partners/dashboard-summary
+   * Get partner dashboard summary (uses current user's profile by default)
+   */
+  static async getPartnerDashboardSummary(
+    req: AuthRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      const profileId = req.profile?.id;
+      const partnerId = Number(req.query.partnerId) || profileId;
+
+      if (!partnerId) {
+        res.status(400).json(errorResponse('Partner id is required', 400));
+        return;
+      }
+
+      const summary = await PartnerService.getPartnerDashboardSummary(partnerId);
+
+      res.json(successResponse(summary, 'Partner dashboard summary retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
 }

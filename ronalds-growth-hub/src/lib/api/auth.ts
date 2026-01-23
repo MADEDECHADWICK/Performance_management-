@@ -48,11 +48,12 @@ export const authAPI = {
    * Get current authenticated user
    */
   me: async (): Promise<User & { profile?: Profile }> => {
-    const response = await api.get<{ user: User & { profile?: Profile } }>('/auth/me');
-    if (response.user) {
-      setUser(response.user);
+    const response = await api.get<User & { profile?: Profile } | { user: User & { profile?: Profile } }>('/auth/me');
+    const resolvedUser = 'user' in response ? response.user : response;
+    if (resolvedUser) {
+      setUser(resolvedUser);
     }
-    return response.user;
+    return resolvedUser;
   },
 
   /**

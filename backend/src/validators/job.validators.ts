@@ -10,8 +10,9 @@ import { body, param, query } from "express-validator";
  */
 export const createJobValidators = [
   body("clientId")
+    .optional()
     .isInt({ min: 1 })
-    .withMessage("Valid clientId (integer) required"),
+    .withMessage("Valid clientId (integer) required if provided"),
 
   body("jobName")
     .isString()
@@ -71,6 +72,17 @@ export const createJobValidators = [
     .optional()
     .isInt({ min: 1 })
     .withMessage("Valid engagementLetterId required if provided"),
+
+  body().custom((value) => {
+    const hasClientId = value.clientId !== undefined && value.clientId !== null && value.clientId !== "";
+    const hasEngagementLetter = value.engagementLetterId !== undefined && value.engagementLetterId !== null && value.engagementLetterId !== "";
+
+    if (!hasClientId && !hasEngagementLetter) {
+      throw new Error("Provide either clientId or engagementLetterId");
+    }
+
+    return true;
+  }),
 ];
 
 /**
@@ -223,4 +235,65 @@ export const updateJobStatusValidator = [
     .optional()
     .isString()
     .trim(),
+];
+
+/**
+ * Validators for POST /jobs/:jobId/costing
+ */
+export const upsertJobCostingValidators = [
+  param("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId (integer) required"),
+
+  body("jobFee")
+    .isFloat({ min: 0.01 })
+    .withMessage("jobFee must be greater than 0"),
+
+  body("allocations")
+    .isArray({ min: 1 })
+    .withMessage("allocations must be a non-empty array"),
+
+  body("allocations.*.employeeProfileId")
+    .isInt({ min: 1 })
+    .withMessage("allocations[].employeeProfileId must be a valid integer"),
+
+  body("allocations.*.roleId")
+    .isInt({ min: 1 })
+    .withMessage("allocations[].roleId must be a valid integer"),
+
+  body("allocations.*.allocatedHours")
+    .isFloat({ min: 0.25 })
+    .withMessage("allocations[].allocatedHours must be >= 0.25"),
+
+  body("allocations.*.hourlyRate")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("allocations[].hourlyRate must be >= 0"),
+
+  body("allocations.*.billable")
+    .optional()
+    .isBoolean()
+    .withMessage("allocations[].billable must be boolean"),
+
+  body("allocations.*.taskDescription")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 2000 })
+    .withMessage("allocations[].taskDescription must be <= 2000 characters"),
+
+  body("capEnforced")
+    .optional()
+    .isBoolean()
+    .withMessage("capEnforced must be boolean"),
+
+  body("allowOverage")
+    .optional()
+    .isBoolean()
+    .withMessage("allowOverage must be boolean"),
+
+  body("maxOveragePercent")
+    .optional()
+    .isFloat({ min: 0, max: 1 })
+    .withMessage("maxOveragePercent must be between 0 and 1"),
 ];

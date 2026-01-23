@@ -169,8 +169,8 @@ export default function TimesheetsNew() {
 
   const [additionalTimeRequest, setAdditionalTimeRequest] = useState({
     jobId: '',
-    hoursRequested: 0,
-    reason: '',
+    additionalHours: 0,
+    justification: '',
     billable: false,
   });
 
@@ -201,7 +201,9 @@ export default function TimesheetsNew() {
   // Get jobs with budget info
   const myJobs = myJobsData?.data || [];
   const timeEntries = timeEntriesData?.data || [];
-  const pendingApprovals = pendingApprovalsData || [];
+  const pendingApprovals = Array.isArray(pendingApprovalsData)
+    ? pendingApprovalsData
+    : pendingApprovalsData?.data || [];
 
   // Calculate budget info for each job
   const getJobBudgetInfo = useCallback((jobId: number): JobBudgetInfo => {
@@ -262,6 +264,35 @@ export default function TimesheetsNew() {
         title: 'Entries approved', 
         description: `${result.approved} entries approved.` 
       });
+    },
+  });
+
+  const requestApprovalMutation = useMutation({
+    mutationFn: (payload: { jobId: number; additionalHours: number; justification: string; requestType?: string }) =>
+      timeEntriesAPI.createApprovalRequest(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
+      setShowRequestTimeDialog(false);
+      setAdditionalTimeRequest({
+        jobId: '',
+        additionalHours: 0,
+        justification: '',
+        billable: false,
+      });
+      toast({ title: 'Request sent', description: 'Additional hours request submitted for approval.' });
+    },
+    onError: (error: any) => {
+      const message = error?.message || 'Unable to save time entry.';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
+      if (message.toLowerCase().includes('allocation')) {
+        if (entryForm.jobId) {
+          setAdditionalTimeRequest((prev) => ({
+            ...prev,
+            jobId: entryForm.jobId,
+          }));
+          setShowRequestTimeDialog(true);
+        }
+      }
     },
   });
 
@@ -383,6 +414,28 @@ export default function TimesheetsNew() {
       hours: entryForm.hours,
       description: entryForm.description,
       billable,
+    });
+  };
+
+  const handleRequestAdditionalTime = () => {
+    if (!additionalTimeRequest.jobId) {
+      toast({ title: 'Error', description: 'Select a job before requesting hours.', variant: 'destructive' });
+      return;
+    }
+    if (!additionalTimeRequest.additionalHours || additionalTimeRequest.additionalHours <= 0) {
+      toast({ title: 'Error', description: 'Enter the hours you need.', variant: 'destructive' });
+      return;
+    }
+    if (!additionalTimeRequest.justification.trim()) {
+      toast({ title: 'Error', description: 'Provide a justification for the request.', variant: 'destructive' });
+      return;
+    }
+
+    requestApprovalMutation.mutate({
+      jobId: Number(additionalTimeRequest.jobId),
+      additionalHours: Number(additionalTimeRequest.additionalHours),
+      justification: additionalTimeRequest.justification.trim(),
+      requestType: additionalTimeRequest.billable ? 'billable' : 'non_billable',
     });
   };
 
@@ -784,7 +837,12 @@ export default function TimesheetsNew() {
                             size="sm"
                             variant="outline"
                             onClick={() => {
-                              setAdditionalTimeRequest(prev => ({ ...prev, jobId: String(job.id) }));
+                              setAdditionalTimeRequest({
+                                jobId: String(job.id),
+                                additionalHours: 0,
+                                justification: '',
+                                billable: false,
+                              });
                               setShowRequestTimeDialog(true);
                             }}
                           >
@@ -1026,20 +1084,20 @@ export default function TimesheetsNew() {
                 <Input
                   type="number"
                   min="1"
-                  value={additionalTimeRequest.hoursRequested}
+                  value={additionalTimeRequest.additionalHours}
                   onChange={(e) => setAdditionalTimeRequest(prev => ({
                     ...prev,
-                    hoursRequested: Number(e.target.value)
+                    additionalHours: Number(e.target.value)
                   }))}
                 />
               </div>
               <div>
                 <Label>Reason *</Label>
                 <Textarea
-                  value={additionalTimeRequest.reason}
+                  value={additionalTimeRequest.justification}
                   onChange={(e) => setAdditionalTimeRequest(prev => ({
                     ...prev,
-                    reason: e.target.value
+                    justification: e.target.value
                   }))}
                   placeholder="Why do you need additional time?"
                   rows={4}
@@ -1060,8 +1118,12 @@ export default function TimesheetsNew() {
               <Button variant="outline" onClick={() => setShowRequestTimeDialog(false)}>
                 Cancel
               </Button>
-              <Button>
-                <Send className="h-4 w-4 mr-2" />
+              <Button onClick={handleRequestAdditionalTime} disabled={requestApprovalMutation.isPending}>
+                {requestApprovalMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4 mr-2" />
+                )}
                 Submit Request
               </Button>
             </DialogFooter>

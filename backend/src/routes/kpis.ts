@@ -7,10 +7,19 @@ const router = Router();
 // GET /kpis - List all KPIs
 router.get('/', async (req, res) => {
   try {
+    const isActiveQuery = req.query.is_active ?? req.query.isActive;
+    const isActive =
+      typeof isActiveQuery === 'string'
+        ? isActiveQuery.toLowerCase() === 'true'
+        : undefined;
+
     const kpis = await prisma.kpi.findMany({
+      where: typeof isActive === 'boolean' ? { isActive } : undefined,
       include: {
         department: true,
-        employeeKpiAssignments: true,
+        role: true,
+        employeeAssignments: true,
+        employeeScores: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -29,7 +38,9 @@ router.get('/:id', async (req, res) => {
       where: { id: parseInt(id) },
       include: {
         department: true,
-        employeeKpiAssignments: true,
+        role: true,
+        employeeAssignments: true,
+        employeeScores: true,
       },
     });
     if (!kpi) {
@@ -45,7 +56,28 @@ router.get('/:id', async (req, res) => {
 // POST /kpis
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { name, description, category, measurement_unit, target_value, weight, bsc_category, department_id } = req.body;
+    const {
+      name,
+      description,
+      category,
+      kpiType,
+      kpi_type,
+      measurementUnit,
+      measurement_unit,
+      targetValue,
+      target_value,
+      targetFrequency,
+      target_frequency,
+      targetDescription,
+      target_description,
+      weight,
+      departmentId,
+      department_id,
+      roleId,
+      role_id,
+      isActive,
+      is_active,
+    } = req.body;
 
     if (!name) {
       return res.status(400).json({ error: 'KPI name is required' });
@@ -55,12 +87,16 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       data: {
         name,
         description,
-        category,
-        measurement_unit,
-        target_value: target_value ? parseFloat(target_value) : undefined,
+        category: category || 'general',
+        kpiType: kpiType || kpi_type || 'general',
+        measurementUnit: measurementUnit || measurement_unit,
+        targetValue: targetValue ?? (target_value ? parseFloat(target_value) : undefined),
+        targetFrequency: targetFrequency || target_frequency,
+        targetDescription: targetDescription || target_description,
         weight: weight ? parseFloat(weight) : undefined,
-        bsc_category,
-        department_id: department_id ? parseInt(department_id) : undefined,
+        departmentId: departmentId ?? (department_id ? parseInt(department_id) : undefined),
+        roleId: roleId ?? (role_id ? parseInt(role_id) : undefined),
+        isActive: typeof isActive === 'boolean' ? isActive : (typeof is_active === 'boolean' ? is_active : undefined),
       },
     });
     return res.status(201).json(kpi);
@@ -74,7 +110,28 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const id = req.params.id;
-    const { name, description, category, measurement_unit, target_value, weight, bsc_category, department_id } = req.body;
+    const {
+      name,
+      description,
+      category,
+      kpiType,
+      kpi_type,
+      measurementUnit,
+      measurement_unit,
+      targetValue,
+      target_value,
+      targetFrequency,
+      target_frequency,
+      targetDescription,
+      target_description,
+      weight,
+      departmentId,
+      department_id,
+      roleId,
+      role_id,
+      isActive,
+      is_active,
+    } = req.body;
 
     const kpi = await prisma.kpi.update({
       where: { id: parseInt(id) },
@@ -82,11 +139,15 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
         ...(name && { name }),
         ...(description && { description }),
         ...(category && { category }),
-        ...(measurement_unit && { measurement_unit }),
-        ...(target_value && { target_value: parseFloat(target_value) }),
+        ...(kpiType || kpi_type ? { kpiType: kpiType || kpi_type } : {}),
+        ...(measurementUnit || measurement_unit ? { measurementUnit: measurementUnit || measurement_unit } : {}),
+        ...(targetValue || target_value ? { targetValue: targetValue ?? parseFloat(target_value) } : {}),
+        ...(targetFrequency || target_frequency ? { targetFrequency: targetFrequency || target_frequency } : {}),
+        ...(targetDescription || target_description ? { targetDescription: targetDescription || target_description } : {}),
         ...(weight && { weight: parseFloat(weight) }),
-        ...(bsc_category && { bsc_category }),
-        ...(department_id && { department_id: parseInt(department_id) }),
+        ...(departmentId || department_id ? { departmentId: departmentId ?? parseInt(department_id) } : {}),
+        ...(roleId || role_id ? { roleId: roleId ?? parseInt(role_id) } : {}),
+        ...(typeof isActive === 'boolean' ? { isActive } : typeof is_active === 'boolean' ? { isActive: is_active } : {}),
       },
     });
     return res.json(kpi);

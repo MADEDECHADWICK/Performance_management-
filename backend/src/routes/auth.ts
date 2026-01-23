@@ -60,14 +60,13 @@ router.post('/login', async (req, res) => {
       where: { email },
       include: { 
         roles: { include: { role: true } },
-        profile: { include: { role: true } }  // Include job role
+        profile: { include: { role: true, department: true } }
       }
     });
     if (!user || !user.password) return res.status(401).json({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     
-    // Extract auth role names from user.roles (for access control)
     const authRoles = user.roles.map(r => r.role.name);
     
     // Extract job role info (for billing and permissions)
@@ -94,8 +93,12 @@ router.post('/login', async (req, res) => {
         id: user.id, 
         email: user.email, 
         name: user.name,
+        roles: authRoles,
         authRoles,
-        jobRole
+        jobRole,
+        profile: user.profile ?? null,
+        isPartner: authRoles.includes('partner') || !!user.profile?.isPartner,
+        is_partner: authRoles.includes('partner') || !!user.profile?.isPartner
       } 
     });
   } catch (err: any) {
@@ -113,7 +116,7 @@ router.get('/debug-me', authMiddleware, async (req: AuthRequest, res) => {
       where: { id: userId },
       include: {
         roles: { include: { role: true } },
-        profile: true
+        profile: { include: { role: true, department: true } }
       }
     });
     if (!user) return res.status(404).json({ error: 'Not found' });
@@ -164,6 +167,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
       name: user.name,
       profileId: user.profile?.id,
       profile_id: user.profile?.id,
+      profile: user.profile ?? null,
       roles,
       isPartner: roles.includes('partner'),
       is_partner: roles.includes('partner'),

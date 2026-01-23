@@ -67,22 +67,34 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         const me = await authAPI.me();
         setUser(me);
 
-        if (Array.isArray(me?.roles) && me.roles.length > 0) {
-          setUserRoles(me.roles);
+        const roleCandidates = Array.isArray(me?.roles)
+          ? me.roles
+          : Array.isArray(me?.authRoles)
+            ? me.authRoles
+            : [];
+        const normalizedRoles = roleCandidates
+          .map((role: any) => (typeof role === 'string' ? role : role?.role?.name))
+          .filter(Boolean)
+          .map((role: string) => role.toLowerCase());
+        if (normalizedRoles.length > 0) {
+          setUserRoles(normalizedRoles);
         }
 
-        const profileResponse = await apiFetch(
-          'GET',
-          `/profiles/email/${encodeURIComponent(me.email)}`
-        );
-        const profile = profileResponse?.data ?? profileResponse;
+        let profile = me?.profile;
+        if (!profile) {
+          const profileResponse = await apiFetch(
+            'GET',
+            `/profiles/email/${encodeURIComponent(me.email)}`
+          );
+          profile = profileResponse?.data ?? profileResponse;
+        }
         setUserProfile(profile);
         
         // Get the user's role - handle both object and string formats
         if (profile?.role) {
           const roleName = typeof profile.role === 'object' ? profile.role.name : profile.role;
-          const mergedRoles = new Set<string>(Array.isArray(me?.roles) ? me.roles : []);
-          if (roleName) mergedRoles.add(roleName);
+          const mergedRoles = new Set<string>(normalizedRoles);
+          if (roleName) mergedRoles.add(String(roleName).toLowerCase());
           console.log('=== ROLE DETECTION DEBUG ===');
           console.log('User email:', me.email);
           console.log('User role object:', profile.role);
@@ -106,36 +118,50 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     try {
       const uid = typeof userId === 'number' ? userId : Number(userId);
       const data = await apiFetch('GET', `/user-roles?userId=${uid}`);
-      setUserRoles((data as UserRole[]).map((r) => r.role) || []);
+      setUserRoles((data as UserRole[]).map((r) => r.role.toLowerCase()) || []);
     } catch (error: any) {
       console.error("Error loading roles:", error);
     }
   };
 
   // Role detection flags - moved before useEffect
+  const normalizedRoles = userRoles.map((role) => role.toLowerCase());
+  const normalizedPosition = userProfile?.positionTitle?.toLowerCase() || '';
   const isHROrAdmin =
-    userRoles.some(r => r === 'super_admin' || r === 'hr_manager') ||
-    userProfile?.positionTitle?.toLowerCase().includes('administrator') ||
+    normalizedRoles.some(r => ['super_admin', 'admin', 'hr', 'hr_manager'].includes(r)) ||
+    normalizedPosition.includes('administrator') ||
+    normalizedPosition.includes('hr') ||
     false;
   const isManager =
-    userRoles.some(r => r === 'Manager') ||
-    userProfile?.positionTitle?.toLowerCase().includes('manager') ||
+    normalizedRoles.includes('manager') ||
+    normalizedPosition.includes('manager') ||
     false;
-  const isPartner = userProfile?.isPartner || userRoles.some(r => r === 'Partner') || false;
-  const isSeniorAssociate = userRoles.some(r => r === 'Senior Associate');
-  const isAssociate = userRoles.some(r => r === 'Associate');
+  const isPartner = userProfile?.isPartner || normalizedRoles.includes('partner') || false;
+  const isSeniorAssociate = normalizedRoles.includes('senior associate');
+  const isAssociate = normalizedRoles.includes('associate');
+  const isMarketing =
+    normalizedRoles.includes('marketing') ||
+    normalizedRoles.includes('business_development') ||
+    normalizedPosition.includes('marketing') ||
+    normalizedPosition.includes('business development') ||
+    false;
+  const isFinance =
+    normalizedRoles.includes('finance') ||
+    normalizedPosition.includes('finance') ||
+    false;
   const isGMP =
-    userProfile?.positionTitle?.toLowerCase().includes('group_managing_partner') ||
-    userProfile?.positionTitle?.toLowerCase().includes('group managing partner') ||
-    userProfile?.positionTitle === 'group_managing_partner' ||
-    userRoles.some(r => r === 'group_managing_partner') ||
-    userRoles.some(r => r === 'Group Managing Partner') ||
+    normalizedRoles.includes('gmp') ||
+    normalizedRoles.includes('group_managing_partner') ||
+    normalizedPosition.includes('group managing partner') ||
+    normalizedPosition.includes('group_managing_partner') ||
     false;
   
   console.log('=== ROLE FLAGS DEBUG ===');
   console.log('isHROrAdmin:', isHROrAdmin);
   console.log('isManager:', isManager); 
   console.log('isPartner:', isPartner);
+  console.log('isMarketing:', isMarketing);
+  console.log('isFinance:', isFinance);
   console.log('isGMP:', isGMP);
   console.log('userRoles:', userRoles);
   console.log('userProfile position:', userProfile?.positionTitle);
@@ -144,7 +170,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   // Auto-redirect to appropriate dashboard based on role
   useEffect(() => {
-    if (user && userProfile && location.pathname === '/dashboard') {
+    if (user && location.pathname === '/dashboard') {
       console.log('=== DASHBOARD REDIRECT LOGIC ===');
       console.log('Current path:', location.pathname);
       console.log('isGMP:', isGMP);
@@ -164,9 +190,26 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       } else if (isManager) {
         console.log('Redirecting to Manager dashboard');
         navigate('/manager-dashboard', { replace: true });
+      } else if (isMarketing) {
+        console.log('Redirecting to Marketing intake');
+        navigate('/clients', { replace: true });
+      } else if (isFinance) {
+        console.log('Redirecting to Finance dashboard');
+        navigate('/finance-dashboard', { replace: true });
       }
     }
-  }, [user, userProfile, isGMP, isHROrAdmin, isPartner, isManager, location.pathname, navigate]);
+  }, [
+    user,
+    userProfile,
+    isGMP,
+    isHROrAdmin,
+    isPartner,
+    isManager,
+    isMarketing,
+    isFinance,
+    location.pathname,
+    navigate,
+  ]);
 
   const handleSignOut = async () => {
     setToken(null);
@@ -175,7 +218,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   const getRoleDisplay = () => {
     // Check if user is GMP first (highest level)
-    if (userRoles.some(r => r === 'Group Managing Partner') || 
+    if (normalizedRoles.includes('group managing partner') || normalizedRoles.includes('group_managing_partner') || normalizedRoles.includes('gmp') ||
         userProfile?.positionTitle?.toLowerCase().includes('group managing partner')) {
       return "Group Managing Partner";
     }
@@ -187,20 +230,22 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     if (userProfile?.positionTitle?.toLowerCase().includes('administrator')) return "System Administrator";
     
     // Check role from database
-    if (userRoles.length > 0) {
-      const role = userRoles[0];
-      if (role === 'Partner') return "Partner";
-      if (role === 'Manager') return "Manager";
-      if (role === 'Senior Associate') return "Senior Associate";
-      if (role === 'Associate') return "Associate";
-      if (role === 'super_admin') return "Super Administrator";
-      if (role === 'hr_manager') return "HR Manager";
+    if (normalizedRoles.length > 0) {
+      const role = normalizedRoles[0];
+      if (role === 'partner') return "Partner";
+      if (role === 'manager') return "Manager";
+      if (role === 'marketing') return "Marketing";
+      if (role === 'finance') return "Finance";
+      if (role === 'senior associate') return "Senior Associate";
+      if (role === 'associate') return "Associate";
+      if (role === 'super_admin' || role === 'admin') return "Super Administrator";
+      if (role === 'hr_manager' || role === 'hr') return "HR Manager";
     }
     
     // Check position for manager roles
     if (userProfile?.positionTitle?.toLowerCase().includes('manager')) return "Manager";
     
-    return "Employee";
+  return "Employee";
   };
 
   return (
@@ -213,6 +258,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           isGMP={isGMP} 
           isSeniorAssociate={isSeniorAssociate}
           isAssociate={isAssociate}
+          isMarketing={isMarketing}
+          isFinance={isFinance}
           isActive={isActive} 
         />
 
@@ -266,10 +313,22 @@ interface AppSidebarProps {
   isGMP: boolean;
   isSeniorAssociate: boolean;
   isAssociate: boolean;
+  isMarketing: boolean;
+  isFinance: boolean;
   isActive: (path: string) => boolean;
 }
 
-function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isSeniorAssociate, isAssociate, isActive }: AppSidebarProps) {
+function AppSidebar({
+  isHROrAdmin,
+  isManager,
+  isPartner,
+  isGMP,
+  isSeniorAssociate,
+  isAssociate,
+  isMarketing,
+  isFinance,
+  isActive,
+}: AppSidebarProps) {
   const location = useLocation();
   const { state } = useSidebar();
 
@@ -312,6 +371,10 @@ function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isSeniorAssociat
                 <NavItem path="/partner-dashboard" icon={BarChart3} label="Partner Dashboard" />
               ) : isManager ? (
                 <NavItem path="/manager-dashboard" icon={BarChart3} label="Manager Dashboard" />
+              ) : isMarketing ? (
+                <NavItem path="/clients" icon={BarChart3} label="Marketing Overview" />
+              ) : isFinance ? (
+                <NavItem path="/finance-dashboard" icon={BarChart3} label="Finance Overview" />
               ) : (
                 <NavItem path="/dashboard" icon={BarChart3} label="Dashboard" />
               )}
@@ -373,10 +436,59 @@ function AppSidebar({ isHROrAdmin, isManager, isPartner, isGMP, isSeniorAssociat
           <SidebarGroupLabel>Financials</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <NavItem path="/financial-summary" icon={DollarSign} label="Financial Summary" />
+              <NavItem
+                path={isFinance ? "/finance-dashboard" : "/financial-summary"}
+                icon={DollarSign}
+                label={isFinance ? "Finance Dashboard" : "Financial Summary"}
+              />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* Marketing */}
+        {isMarketing && (
+          <Collapsible className="group/collapsible">
+            <SidebarGroup>
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="flex w-full items-center justify-between">
+                  Marketing
+                  <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <NavItem path="/clients" icon={Users} label="Client Intake" />
+                    <NavItem path="/clients/new" icon={Plus} label="New Client" />
+                    <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" />
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
+
+        {/* Finance */}
+        {isFinance && (
+          <Collapsible className="group/collapsible">
+            <SidebarGroup>
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="flex w-full items-center justify-between">
+                  Finance
+                  <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <NavItem path="/finance-dashboard" icon={DollarSign} label="Finance Dashboard" />
+                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" />
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
 
         {/* HR/Admin: Management */}
         {isHROrAdmin && (

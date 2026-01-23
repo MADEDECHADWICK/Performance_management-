@@ -57,6 +57,7 @@ const ContinuousFeedback = lazy(() => import("./pages/ContinuousFeedback"));
 const Reports = lazy(() => import("./pages/Reports"));
 const NonFinancialAnalytics = lazy(() => import("./pages/NonFinancialAnalytics"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
+const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
 const AuditLogs = lazy(() => import("./pages/AuditLogs"));
 
 // Team & Development
@@ -153,6 +154,7 @@ const App = () => (
               <Route path="/reports" element={<Reports />} />
               <Route path="/non-financial-analytics" element={<NonFinancialAnalytics />} />
               <Route path="/financial-summary" element={<FinancialSummary />} />
+              <Route path="/finance-dashboard" element={<FinanceDashboard />} />
               <Route path="/audit-logs" element={<AuditLogs />} />
               
               {/* Team & Development */}

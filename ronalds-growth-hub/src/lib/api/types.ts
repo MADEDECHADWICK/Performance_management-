@@ -17,6 +17,7 @@ export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | '
 export type TimeEntryStatus = 'pending' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
 export type OverBudgetRequestStatus = 'pending' | 'manager_approved' | 'manager_rejected' | 'partner_approved' | 'partner_rejected' | 'auto_rejected';
 export type BillableType = 'billable' | 'non_billable' | 'loss';
+export type TimeEntryApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 export type EvaluatorType = 'self' | 'manager' | 'peer' | 'direct_report' | 'client' | 'custom';
 export type EvaluationDefinitionStatus = 'draft' | 'published' | 'closed';
 export type EvaluationAssignmentStatus = 'pending' | 'in_progress' | 'submitted' | 'cancelled';
@@ -157,6 +158,33 @@ export interface EngagementLetter {
   document?: Document;
 }
 
+export interface ClientOnboarding {
+  id: number;
+  clientId?: number;
+  engagementLetterId: number;
+  clientName?: string;
+  industry?: string;
+  contactPerson?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  location?: string;
+  departmentId?: number;
+  jobId?: number;
+  status: ClientOnboardingStatus;
+  notes?: string;
+  uploadedByProfileId?: number;
+  hrReviewerProfileId?: number;
+  createdAt: string;
+  updatedAt: string;
+  // Relations
+  client?: Client;
+  engagementLetter?: EngagementLetter;
+  department?: Department;
+  uploadedBy?: Profile;
+  hrReviewer?: Profile;
+  job?: Job;
+}
+
 export interface Job {
   id: number;
   jobName: string;
@@ -224,6 +252,34 @@ export interface JobCosting {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  allocations?: JobTimeAllocation[];
+  budgetCap?: BudgetCap;
+}
+
+export interface JobTimeAllocation {
+  id: number;
+  jobCostingId: number;
+  employeeProfileId: number;
+  roleId: number;
+  allocatedHours: number;
+  hourlyRate: number;
+  estimatedCost: number;
+  billable: boolean;
+  taskDescription?: string;
+  createdAt: string;
+  updatedAt: string;
+  employee?: Profile;
+  role?: PositionRole;
+}
+
+export interface BudgetCap {
+  id: number;
+  jobCostingId: number;
+  totalAllocatedHours: number;
+  capEnforced: boolean;
+  allowOverage: boolean;
+  maxOveragePercent: number;
+  autoLockOnExceed: boolean;
 }
 
 export interface Task {
@@ -271,6 +327,25 @@ export interface TimeEntry {
   employee?: Profile;
   task?: Task;
   approvedBy?: Profile;
+}
+
+export interface TimeEntryApprovalRequest {
+  id: number;
+  timeEntryId?: number;
+  jobId: number;
+  employeeProfileId: number;
+  currentAllocatedHours: number;
+  currentLoggedHours: number;
+  additionalHoursRequested: number;
+  justification: string;
+  requestType: string;
+  status: TimeEntryApprovalRequestStatus;
+  approvedByProfileId?: number;
+  approvalNotes?: string;
+  approvedAt?: string;
+  requestedAt: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TimeOverBudgetRequest {

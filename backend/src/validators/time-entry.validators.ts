@@ -258,6 +258,38 @@ export const batchSubmitValidators = [
 ];
 
 /**
+ * Approval request validators
+ */
+export const approvalRequestIdParamValidator = [
+  param("requestId")
+    .isInt({ min: 1 })
+    .withMessage("Valid requestId (integer) required"),
+];
+
+export const createApprovalRequestValidators = [
+  body("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId required"),
+
+  body("additionalHours")
+    .isFloat({ min: 0.25 })
+    .withMessage("additionalHours must be >= 0.25"),
+
+  body("justification")
+    .isString()
+    .trim()
+    .isLength({ min: 5, max: 2000 })
+    .withMessage("justification must be 5-2000 characters"),
+
+  body("requestType")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage("requestType must be <= 100 characters"),
+];
+
+/**
  * Validators for creating time entry
  */
 export const createTimeEntryV2Validators = [

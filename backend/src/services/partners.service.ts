@@ -273,4 +273,107 @@ export class PartnerService {
       averageBudgetPerJob: jobs.length > 0 ? totalBudget / jobs.length : 0,
     };
   }
+
+  /**
+   * Get partner dashboard summary
+   */
+  static async getPartnerDashboardSummary(partnerId: number) {
+    const jobs = await prisma.job.findMany({
+      where: { partnerProfileId: partnerId },
+      include: {
+        client: { select: { clientName: true } },
+        staffing: { select: { employeeProfileId: true } },
+        timeEntries: {
+          where: { status: 'approved' },
+          select: { hours: true, billable: true, profitLoss: true, billableAmount: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const jobIds = jobs.map((job) => job.id);
+    const payments = await prisma.clientPayment.findMany({
+      where: { jobId: { in: jobIds } },
+      select: { jobId: true, paymentAmount: true },
+    });
+
+    const paymentsByJob = new Map<number, number>();
+    payments.forEach((payment) => {
+      if (!payment.jobId) return;
+      const current = paymentsByJob.get(payment.jobId) || 0;
+      paymentsByJob.set(payment.jobId, current + Number(payment.paymentAmount));
+    });
+
+    const pendingTimeEntriesCount = await prisma.timeEntry.count({
+      where: { jobId: { in: jobIds }, status: 'submitted' },
+    });
+
+    const uniqueTeamMembers = new Set<number>();
+    let totalRevenueCollected = 0;
+    let totalProfit = 0;
+    let efficiencySum = 0;
+    let efficiencyCount = 0;
+    let marginSum = 0;
+    let marginCount = 0;
+
+    const topJobs = jobs.map((job) => {
+      job.staffing.forEach((assignment) => uniqueTeamMembers.add(assignment.employeeProfileId));
+
+      const estimatedHours = Number(job.budgetHours || 0);
+      const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours), 0);
+      const billableHours = job.timeEntries
+        .filter((entry) => entry.billable)
+        .reduce((sum, entry) => sum + Number(entry.hours), 0);
+      const amountCollected = paymentsByJob.get(job.id) || 0;
+      const profit = job.timeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0);
+
+      const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
+      const margin = amountCollected > 0 ? (profit / amountCollected) * 100 : 0;
+
+      if (efficiency > 0) {
+        efficiencySum += efficiency;
+        efficiencyCount += 1;
+      }
+      if (margin || margin === 0) {
+        marginSum += margin;
+        marginCount += 1;
+      }
+
+      totalRevenueCollected += amountCollected;
+      totalProfit += profit;
+
+      return {
+        jobId: job.id,
+        jobCode: job.jobCode,
+        jobName: job.jobName,
+        title: job.jobName,
+        status: job.status,
+        estimatedHours,
+        actualHours,
+        billableHours,
+        amountCollected,
+        profit,
+        efficiencyRatio: efficiency,
+        marginPercentage: margin,
+      };
+    });
+
+    const activeJobs = jobs.filter((job) => ['planned', 'in_progress', 'on_hold'].includes(job.status)).length;
+    const completedJobs = jobs.filter((job) => job.status === 'completed').length;
+
+    return {
+      portfolio: {
+        totalJobs: jobs.length,
+        activeJobs,
+        completedJobs,
+        totalRevenueCollected,
+        totalProfit,
+        averageEfficiency: efficiencyCount > 0 ? efficiencySum / efficiencyCount : 0,
+        averageMargin: marginCount > 0 ? marginSum / marginCount : 0,
+        totalTeamSize: uniqueTeamMembers.size,
+      },
+      topJobs: topJobs.slice(0, 5),
+      pendingTimeEntriesCount,
+    };
+  }
 }

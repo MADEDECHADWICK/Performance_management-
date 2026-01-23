@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { EngagementLetterStatus } from "@prisma/client";
+import { ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
@@ -403,6 +403,28 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
         document: { select: { id: true, fileName: true, filePath: true } },
       },
     });
+
+    const existingOnboarding = await prisma.clientOnboarding.findFirst({
+      where: { engagementLetterId: letter.id },
+    });
+
+    if (!existingOnboarding) {
+      await prisma.clientOnboarding.create({
+        data: {
+          engagementLetterId: letter.id,
+          clientId: client.id,
+          clientName: client.clientName,
+          industry: client.industry || "",
+          contactPerson: client.contactPerson || "",
+          contactEmail: client.contactEmail || "",
+          contactPhone: client.contactPhone || "",
+          location: client.location || "",
+          departmentId: client.departmentId,
+          uploadedByProfileId: req.user?.profileId!,
+          status: ClientOnboardingStatus.pending_hr_review,
+        },
+      });
+    }
 
     res.status(201).json(successResponse(letter, "Engagement letter created", 201));
   } catch (error: any) {

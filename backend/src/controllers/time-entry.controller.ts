@@ -46,6 +46,113 @@ export class TimeEntryController {
   }
 
   /**
+   * GET /time-entries/approval-requests
+   * List approval requests
+   */
+  static async listApprovalRequests(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const employeeProfileId = req.query.employeeProfileId ? Number(req.query.employeeProfileId) : undefined;
+      const status = (req.query.status as string) || undefined;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const requests = await TimeEntryService.listApprovalRequests(
+        { jobId, employeeProfileId, status },
+        auth
+      );
+
+      res.json(successResponse(requests, "Approval requests retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * POST /time-entries/approval-requests
+   * Create approval request for additional hours
+   */
+  static async createApprovalRequest(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const request = await TimeEntryService.createApprovalRequest(req.body, auth);
+
+      res.status(201).json(successResponse(request, "Approval request created", 201));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * PATCH /time-entries/approval-requests/:requestId/approve
+   */
+  static async approveApprovalRequest(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const requestId = Number(req.params.requestId);
+      const { approvalNotes } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const request = await TimeEntryService.approveApprovalRequest(
+        requestId,
+        approvalNotes,
+        auth
+      );
+
+      res.json(successResponse(request, "Approval request approved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * PATCH /time-entries/approval-requests/:requestId/reject
+   */
+  static async rejectApprovalRequest(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const requestId = Number(req.params.requestId);
+      const { approvalNotes } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const request = await TimeEntryService.rejectApprovalRequest(
+        requestId,
+        approvalNotes,
+        auth
+      );
+
+      res.json(successResponse(request, "Approval request rejected"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
    * POST /time-entries
    * Create a new time entry
    */

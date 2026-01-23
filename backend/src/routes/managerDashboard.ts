@@ -4,56 +4,178 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+const allowedManagerRoles = new Set([
+  'manager',
+  'admin',
+  'super_admin',
+  'hr',
+  'hr_manager',
+]);
+
+const getManagerContext = async (req: AuthRequest) => {
+  const userId = req.user?.userId;
+  if (!userId) {
+    return { error: { status: 401, message: 'Unauthorized' } };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      roles: { include: { role: true } },
+      profile: { include: { role: true, department: true } },
+    },
+  });
+
+  if (!user?.profile) {
+    return { error: { status: 404, message: 'User profile not found' } };
+  }
+
+  const roles = user.roles.map((r) => r.role.name.toLowerCase());
+  const roleName = user.profile.role?.name?.toLowerCase();
+  const positionTitle = user.profile.positionTitle?.toLowerCase();
+  const isManager =
+    roles.some((role) => allowedManagerRoles.has(role)) ||
+    roleName === 'manager' ||
+    (positionTitle ? positionTitle.includes('manager') : false);
+
+  if (!isManager) {
+    return { error: { status: 403, message: 'Access denied. Manager role required.' } };
+  }
+
+  return { user, profile: user.profile, roles };
+};
+
 // GET /manager-dashboard/team
 // Get manager's direct reports and team overview
 router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    // Check if user is a manager by looking at user roles
-    const userRoles = req.user?.authRoles || [];
-    const isManager = userRoles.includes('manager');
-    
-    if (!isManager) {
-      return res.status(403).json({ error: 'Access denied. Manager role required.' });
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    // Get the user's profile ID
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { profile: true }
+    const profileId = context.profile.id;
+
+    const teamMembers = await prisma.profile.findMany({
+      where: { managerId: profileId },
+      include: {
+        role: { select: { name: true } },
+        department: { select: { name: true } },
+      },
+      orderBy: { lastName: 'asc' },
     });
 
-    if (!userProfile?.profile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
+    const teamMemberIds = teamMembers.map((member) => member.id);
 
-    // Get team members using the SQL function
-    const teamMembers = await prisma.$queryRaw`
-      SELECT * FROM get_manager_team(${userProfile.profile.id})
-    `;
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
 
-    // Get team financials
-    const teamFinancials = await prisma.$queryRaw`
-      SELECT * FROM manager_team_financials WHERE manager_id = ${userProfile.profile.id}
-    `;
+    const totalHoursAgg = await prisma.timeEntry.aggregate({
+      _sum: { hours: true, billableAmount: true, costAmount: true },
+      where: {
+        status: 'approved',
+        employeeProfileId: { in: teamMemberIds },
+      },
+    });
 
-    // Get team performance summary
-    const teamPerformance = await prisma.$queryRaw`
-      SELECT * FROM get_team_performance_summary(${userProfile.profile.id})
-    `;
+    const billableHoursAgg = await prisma.timeEntry.aggregate({
+      _sum: { hours: true },
+      where: {
+        status: 'approved',
+        billable: true,
+        employeeProfileId: { in: teamMemberIds },
+      },
+    });
+
+    const timeEntriesThisMonth = await prisma.timeEntry.findMany({
+      where: {
+        status: 'approved',
+        dateWorked: { gte: monthStart },
+        employeeProfileId: { in: teamMemberIds },
+      },
+      select: {
+        employeeProfileId: true,
+        hours: true,
+        billable: true,
+      },
+    });
+
+    const performanceScores = await prisma.performanceScore.findMany({
+      where: { employeeProfileId: { in: teamMemberIds } },
+      select: {
+        employeeProfileId: true,
+        financialWeighted: true,
+        nonFinancialWeighted: true,
+        totalScore: true,
+        calculatedAt: true,
+      },
+      orderBy: { calculatedAt: 'desc' },
+    });
+
+    const performanceByEmployee = new Map<number, typeof performanceScores>();
+    performanceScores.forEach((score) => {
+      const existing = performanceByEmployee.get(score.employeeProfileId) || [];
+      existing.push(score);
+      performanceByEmployee.set(score.employeeProfileId, existing);
+    });
+
+    const monthlyHoursByEmployee = new Map<number, { total: number; billable: number }>();
+    timeEntriesThisMonth.forEach((entry) => {
+      const current = monthlyHoursByEmployee.get(entry.employeeProfileId) || { total: 0, billable: 0 };
+      const hours = Number(entry.hours || 0);
+      current.total += hours;
+      if (entry.billable) current.billable += hours;
+      monthlyHoursByEmployee.set(entry.employeeProfileId, current);
+    });
+
+    const performance = teamMembers.map((member) => {
+      const monthlyHours = monthlyHoursByEmployee.get(member.id) || { total: 0, billable: 0 };
+      const scores = performanceByEmployee.get(member.id) || [];
+      const avg = (values: number[]) =>
+        values.length ? values.reduce((sum, val) => sum + val, 0) / values.length : 0;
+
+      const financialScores = scores.map((score) => Number(score.financialWeighted || 0));
+      const nonFinancialScores = scores.map((score) => Number(score.nonFinancialWeighted || 0));
+      const overallScores = scores.map((score) => Number(score.totalScore || 0));
+
+      const utilization = monthlyHours.total > 0
+        ? Math.round((monthlyHours.billable / monthlyHours.total) * 100)
+        : 0;
+
+      return {
+        employeeId: member.id,
+        employeeName: `${member.firstName} ${member.lastName}`.trim(),
+        jobPosition: member.positionTitle ?? member.role?.name ?? 'Employee',
+        avgFinancialScore: avg(financialScores),
+        avgNonFinancialScore: avg(nonFinancialScores),
+        avgOverallRating: avg(overallScores),
+        totalHoursThisMonth: monthlyHours.total,
+        billableHoursThisMonth: monthlyHours.billable,
+        utilizationRate: utilization,
+        lastReviewDate: scores[0]?.calculatedAt ?? null,
+      };
+    });
 
     return res.json({
-      teamMembers,
-      financials: Array.isArray(teamFinancials) && teamFinancials.length > 0 ? teamFinancials[0] : {
-        active_team_members: 0,
-        total_team_hours: 0,
-        billable_hours: 0,
-        total_revenue: 0,
-        total_cost: 0
+      teamMembers: teamMembers.map((member) => ({
+        employeeId: member.id,
+        firstName: member.firstName,
+        lastName: member.lastName,
+        jobPosition: member.positionTitle ?? member.role?.name ?? 'Employee',
+        departmentName: member.department?.name ?? null,
+        status: member.status,
+        roleName: member.role?.name ?? null,
+        hireDate: member.hireDate ?? null,
+      })),
+      financials: {
+        activeTeamMembers: teamMembers.length,
+        totalTeamHours: Number(totalHoursAgg._sum.hours || 0),
+        billableHours: Number(billableHoursAgg._sum.hours || 0),
+        totalRevenue: Number(totalHoursAgg._sum.billableAmount || 0),
+        totalCost: Number(totalHoursAgg._sum.costAmount || 0),
       },
-      performance: teamPerformance
+      performance,
     });
   } catch (error: any) {
     console.error('Error fetching team data:', error);
@@ -65,40 +187,61 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
 // Get manager's job portfolio
 router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const userRoles = req.user?.authRoles || [];
-    const isManager = userRoles.includes('manager');
-    
-    if (!isManager) {
-      return res.status(403).json({ error: 'Access denied. Manager role required.' });
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    // Get the user's profile ID
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { profile: true }
+    const profileId = context.profile.id;
+
+    const jobs = await prisma.job.findMany({
+      where: { managerProfileId: profileId },
+      include: {
+        client: { select: { clientName: true } },
+        department: { select: { name: true } },
+        timeEntries: {
+          where: { status: 'approved' },
+          select: { hours: true, billableAmount: true, costAmount: true },
+        },
+      },
+      orderBy: { jobName: 'asc' },
     });
 
-    if (!userProfile?.profile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
+    const portfolio = jobs.map((job) => {
+      const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+      const revenue = job.timeEntries.reduce(
+        (sum, entry) => sum + Number(entry.billableAmount || 0),
+        0
+      );
+      const cost = job.timeEntries.reduce(
+        (sum, entry) => sum + Number(entry.costAmount || 0),
+        0
+      );
+      const budgetHours = Number(job.budgetHours || 0);
+      const budgetUtilization = budgetHours > 0 ? Math.round((actualHours / budgetHours) * 100) : 0;
 
-    // Get manager's job portfolio
-    const jobPortfolio = await prisma.$queryRaw`
-      SELECT * FROM manager_job_portfolio WHERE manager_id = ${userProfile.profile.id}
-      ORDER BY title
-    `;
-
-    // Get team job assignments
-    const teamJobs = await prisma.$queryRaw`
-      SELECT * FROM get_manager_team_jobs(${userProfile.profile.id})
-    `;
+      return {
+        jobId: job.id,
+        title: job.jobName,
+        jobNumber: job.jobCode,
+        status: job.status,
+        billingType: job.billingType,
+        budgetHours,
+        actualHours,
+        revenue,
+        cost,
+        budgetUtilization,
+        clientName: job.client?.clientName ?? 'Unassigned',
+        departmentName: job.department?.name ?? null,
+        startDate: job.startDate,
+        dueDate: job.dueDate,
+        completionPercentage: job.status === 'completed' ? 100 : budgetUtilization,
+      };
+    });
 
     return res.json({
-      portfolio: jobPortfolio,
-      teamJobs: teamJobs
+      portfolio,
+      teamJobs: [],
     });
   } catch (error: any) {
     console.error('Error fetching job data:', error);
@@ -110,86 +253,119 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
 // Get manager's financial summary
 router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const userRoles = req.user?.authRoles || [];
-    const isManager = userRoles.includes('manager');
-    
-    if (!isManager) {
-      return res.status(403).json({ error: 'Access denied. Manager role required.' });
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    // Get the user's profile ID
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { profile: true }
+    const profileId = context.profile.id;
+
+    const sinceDate = new Date();
+    sinceDate.setMonth(sinceDate.getMonth() - 12);
+
+    const timeEntries = await prisma.timeEntry.findMany({
+      where: {
+        status: 'approved',
+        dateWorked: { gte: sinceDate },
+        employee: { managerId: profileId },
+      },
+      select: {
+        dateWorked: true,
+        billableAmount: true,
+        costAmount: true,
+        hours: true,
+        billable: true,
+        employeeProfileId: true,
+      },
     });
 
-    if (!userProfile?.profile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
+    const monthlyMap = new Map<string, { revenue: number; cost: number; totalHours: number; billableHours: number }>();
+    timeEntries.forEach((entry) => {
+      const monthKey = new Date(entry.dateWorked.getFullYear(), entry.dateWorked.getMonth(), 1)
+        .toISOString()
+        .slice(0, 10);
+      const current = monthlyMap.get(monthKey) || { revenue: 0, cost: 0, totalHours: 0, billableHours: 0 };
+      current.revenue += Number(entry.billableAmount || 0);
+      current.cost += Number(entry.costAmount || 0);
+      current.totalHours += Number(entry.hours || 0);
+      if (entry.billable) current.billableHours += Number(entry.hours || 0);
+      monthlyMap.set(monthKey, current);
+    });
 
-    const profileId = userProfile.profile.id;
+    const monthlyFinancials = Array.from(monthlyMap.entries())
+      .map(([month, values]) => ({ month, ...values }))
+      .sort((a, b) => (a.month < b.month ? 1 : -1));
 
-    // Get team financial summary for last 12 months
-    const monthlyFinancials = await prisma.$queryRaw`
-      SELECT 
-        DATE_TRUNC('month', te.date_worked) AS month,
-        COALESCE(SUM(te.billable_amount), 0) AS revenue,
-        COALESCE(SUM(te.cost), 0) AS cost,
-        COALESCE(SUM(te.hours), 0) AS total_hours,
-        COALESCE(SUM(CASE WHEN te.billable THEN te.hours ELSE 0 END), 0) AS billable_hours
-      FROM time_entries te
-      JOIN profiles p ON te.employee_id = p.id
-      WHERE p.manager_id = ${profileId}
-        AND te.status = 'approved'
-        AND te.date_worked >= CURRENT_DATE - INTERVAL '12 months'
-      GROUP BY DATE_TRUNC('month', te.date_worked)
-      ORDER BY month DESC
-    `;
+    const jobs = await prisma.job.findMany({
+      where: { managerProfileId: profileId },
+      include: {
+        client: { select: { clientName: true } },
+        timeEntries: {
+          where: { status: 'approved' },
+          select: { billableAmount: true, costAmount: true },
+        },
+      },
+    });
 
-    // Get job profitability for manager's jobs
-    const jobProfitability = await prisma.$queryRaw`
-      SELECT 
-        j.job_name,
-        j.job_code,
-        c.client_name,
-        COALESCE(SUM(te.billable_amount), 0) AS revenue,
-        COALESCE(SUM(te.cost), 0) AS cost,
-        COALESCE(SUM(te.billable_amount), 0) - COALESCE(SUM(te.cost), 0) AS profit
-      FROM jobs j
-      LEFT JOIN time_entries te ON j.id = te.job_id AND te.status = 'approved'
-      LEFT JOIN clients c ON j.client_id = c.id
-      WHERE j.manager_id = ${profileId}
-      GROUP BY j.id, j.job_name, j.job_code, c.client_name
-      HAVING COALESCE(SUM(te.billable_amount), 0) > 0
-      ORDER BY profit DESC
-    `;
+    const jobProfitability = jobs.map((job) => {
+      const revenue = job.timeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
+      const cost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
+      return {
+        jobName: job.jobName,
+        jobCode: job.jobCode,
+        clientName: job.client?.clientName ?? 'Unassigned',
+        revenue,
+        cost,
+        profit: revenue - cost,
+      };
+    });
 
-    // Get team member contributions
-    const teamContributions = await prisma.$queryRaw`
-      SELECT 
-        p.first_name || ' ' || p.last_name AS employee_name,
-        r.name AS role_name,
-        COALESCE(SUM(te.billable_amount), 0) AS revenue_contribution,
-        COALESCE(SUM(te.hours), 0) AS total_hours,
-        COALESCE(SUM(CASE WHEN te.billable THEN te.hours ELSE 0 END), 0) AS billable_hours
-      FROM profiles p
-      LEFT JOIN roles r ON p.role_id = r.id
-      LEFT JOIN time_entries te ON p.id = te.employee_id 
-        AND te.status = 'approved'
-        AND te.date_worked >= date_trunc('month', CURRENT_DATE)
-      WHERE p.manager_id = ${profileId}
-        AND p.status = 'active'
-      GROUP BY p.id, p.first_name, p.last_name, r.name
-      ORDER BY revenue_contribution DESC
-    `;
+    const teamMembers = await prisma.profile.findMany({
+      where: { managerId: profileId, status: 'active' },
+      include: { role: { select: { name: true } } },
+    });
+
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const memberEntries = await prisma.timeEntry.findMany({
+      where: {
+        status: 'approved',
+        dateWorked: { gte: monthStart },
+        employeeProfileId: { in: teamMembers.map((m) => m.id) },
+      },
+      select: { employeeProfileId: true, billableAmount: true, hours: true, billable: true },
+    });
+
+    const contributionsMap = new Map<number, { revenue: number; totalHours: number; billableHours: number }>();
+    memberEntries.forEach((entry) => {
+      const current = contributionsMap.get(entry.employeeProfileId) || {
+        revenue: 0,
+        totalHours: 0,
+        billableHours: 0,
+      };
+      current.revenue += Number(entry.billableAmount || 0);
+      current.totalHours += Number(entry.hours || 0);
+      if (entry.billable) current.billableHours += Number(entry.hours || 0);
+      contributionsMap.set(entry.employeeProfileId, current);
+    });
+
+    const teamContributions = teamMembers.map((member) => {
+      const totals = contributionsMap.get(member.id) || { revenue: 0, totalHours: 0, billableHours: 0 };
+      return {
+        employeeName: `${member.firstName} ${member.lastName}`.trim(),
+        roleName: member.role?.name ?? null,
+        revenueContribution: totals.revenue,
+        totalHours: totals.totalHours,
+        billableHours: totals.billableHours,
+      };
+    });
 
     return res.json({
       monthlyFinancials,
       jobProfitability,
-      teamContributions
+      teamContributions,
     });
   } catch (error: any) {
     console.error('Error fetching financial data:', error);
@@ -201,110 +377,46 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
 // Get pending evaluations and team performance data
 router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const userRoles = req.user?.authRoles || [];
-    const isManager = userRoles.includes('manager');
-    
-    if (!isManager) {
-      return res.status(403).json({ error: 'Access denied. Manager role required.' });
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    // Get the user's profile ID
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { profile: true }
-    });
+    const profileId = context.profile.id;
 
-    if (!userProfile?.profile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
-
-    const profileId = userProfile.profile.id;
-
-    // Get pending performance reviews for team members
-    const pendingReviews = await prisma.performanceReview.findMany({
+    const pendingReviews = await prisma.evaluationAssignment.findMany({
       where: {
-        employee: {
-          manager_id: profileId
-        },
-        status: 'draft'
+        evaluatorProfileId: profileId,
+        status: 'pending',
       },
       include: {
-        employee: {
-          select: {
-            id: true,
-            first_name: true,
-            last_name: true,
-            position: true
-          }
-        }
+        evaluatee: {
+          select: { id: true, firstName: true, lastName: true, positionTitle: true },
+        },
+        definition: {
+          select: { title: true },
+        },
       },
-      orderBy: {
-        createdAt: 'asc'
-      }
+      orderBy: { createdAt: 'asc' },
     });
 
-    // Get team goals progress
-    const teamGoals = await prisma.employeeGoal.findMany({
-      where: {
-        employee: {
-          manager_id: profileId
-        },
-        target_date: {
-          gte: new Date()
-        }
-      },
-      include: {
-        employee: {
-          select: {
-            first_name: true,
-            last_name: true
-          }
-        },
-        kpi: {
-          select: {
-            name: true,
-            category: true
-          }
-        }
-      },
-      orderBy: [
-        { target_date: 'asc' },
-        { employee: { last_name: 'asc' } }
-      ]
-    });
+    const teamGoals: any[] = [];
 
-    // Get recent performance scores
-    const recentPerformance = await prisma.performanceReview.findMany({
+    const recentPerformance = await prisma.performanceScore.findMany({
       where: {
-        employee: {
-          manager_id: profileId
-        },
-        status: 'submitted',
-        review_period_end: {
-          gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) // Last 90 days
-        }
+        employee: { managerId: profileId },
+        calculatedAt: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
       },
       include: {
-        employee: {
-          select: {
-            first_name: true,
-            last_name: true,
-            position: true
-          }
-        }
+        employee: { select: { firstName: true, lastName: true, positionTitle: true } },
       },
-      orderBy: {
-        review_period_end: 'desc'
-      }
+      orderBy: { calculatedAt: 'desc' },
     });
 
     return res.json({
       pendingReviews,
       teamGoals,
-      recentPerformance
+      recentPerformance,
     });
   } catch (error: any) {
     console.error('Error fetching evaluation data:', error);
@@ -316,91 +428,65 @@ router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
 // Get high-level dashboard overview metrics
 router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const userRoles = req.user?.authRoles || [];
-    const isManager = userRoles.includes('manager');
-    
-    if (!isManager) {
-      return res.status(403).json({ error: 'Access denied. Manager role required.' });
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    // Get the user's profile ID
-    const userProfile = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { profile: true }
-    });
+    const profileId = context.profile.id;
 
-    if (!userProfile?.profile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
-
-    const profileId = userProfile.profile.id;
-
-    // Get team size
     const teamSize = await prisma.profile.count({
-      where: {
-        manager_id: profileId,
-        status: 'active'
-      }
+      where: { managerId: profileId, status: 'active' },
     });
 
-    // Get active jobs count
     const activeJobs = await prisma.job.count({
       where: {
-        manager_id: profileId,
-        status: 'active'
-      }
+        managerProfileId: profileId,
+        status: { in: ['planned', 'in_progress', 'on_hold'] },
+      },
     });
 
-    // Get this month's metrics
-    const thisMonth = new Date();
-    thisMonth.setDate(1);
-    thisMonth.setHours(0, 0, 0, 0);
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
 
-    const monthlyMetrics = await prisma.$queryRaw`
-      SELECT 
-        COALESCE(SUM(te.billable_amount), 0) AS revenue,
-        COALESCE(SUM(te.cost), 0) AS cost,
-        COALESCE(SUM(te.hours), 0) AS total_hours,
-        COALESCE(SUM(CASE WHEN te.billable THEN te.hours ELSE 0 END), 0) AS billable_hours
-      FROM time_entries te
-      JOIN profiles p ON te.employee_id = p.id
-      WHERE p.manager_id = ${profileId}
-        AND te.status = 'approved'
-        AND te.date_worked >= ${thisMonth}
-    `;
-
-    const metrics = Array.isArray(monthlyMetrics) && monthlyMetrics.length > 0 ? monthlyMetrics[0] : {
-      revenue: 0,
-      cost: 0,
-      total_hours: 0,
-      billable_hours: 0
-    };
-
-    // Calculate utilization rate
-    const utilizationRate = metrics.total_hours > 0 
-      ? Math.round((metrics.billable_hours / metrics.total_hours) * 100) 
-      : 0;
-
-    // Get pending items count
-    const pendingReviews = await prisma.performanceReview.count({
+    const totals = await prisma.timeEntry.aggregate({
+      _sum: { billableAmount: true, costAmount: true, hours: true },
       where: {
-        employee: {
-          manager_id: profileId
-        },
-        status: 'draft'
-      }
+        status: 'approved',
+        dateWorked: { gte: monthStart },
+        employee: { managerId: profileId },
+      },
+    });
+
+    const billableTotals = await prisma.timeEntry.aggregate({
+      _sum: { hours: true },
+      where: {
+        status: 'approved',
+        billable: true,
+        dateWorked: { gte: monthStart },
+        employee: { managerId: profileId },
+      },
+    });
+
+    const totalHours = Number(totals._sum.hours || 0);
+    const billableHours = Number(billableTotals._sum.hours || 0);
+    const utilizationRate = totalHours > 0 ? Math.round((billableHours / totalHours) * 100) : 0;
+
+    const pendingReviews = await prisma.evaluationAssignment.count({
+      where: {
+        evaluatorProfileId: profileId,
+        status: 'pending',
+      },
     });
 
     return res.json({
       teamSize,
       activeJobs,
-      monthlyRevenue: metrics.revenue,
-      monthlyProfit: metrics.revenue - metrics.cost,
+      monthlyRevenue: Number(totals._sum.billableAmount || 0),
+      monthlyProfit: Number(totals._sum.billableAmount || 0) - Number(totals._sum.costAmount || 0),
       utilizationRate,
-      pendingReviews
+      pendingReviews,
     });
   } catch (error: any) {
     console.error('Error fetching overview data:', error);

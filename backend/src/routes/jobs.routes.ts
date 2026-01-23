@@ -13,6 +13,7 @@ import {
   updateJobValidators,
   listJobsValidators,
   assignJobTeamValidators,
+  upsertJobCostingValidators,
 } from "../validators/job.validators";
 
 const router = Router();
@@ -35,7 +36,7 @@ router.get(
  */
 router.post(
   "/",
-  withRoles("manager", "partner", "admin"),
+  withRoles("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
   validateRequest(createJobValidators),
   handleValidationErrors,
   JobController.createJob
@@ -85,6 +86,19 @@ router.get(
   ...authenticated(),
   requireJobAccess("view"),
   JobController.getJobCosting
+);
+
+/**
+ * POST /jobs/:jobId/costing
+ * Create or update job costing + allocations
+ */
+router.post(
+  "/:jobId/costing",
+  withRoles("manager", "partner", "admin", "super_admin"),
+  requireJobAccess("manage"),
+  validateRequest(upsertJobCostingValidators),
+  handleValidationErrors,
+  JobController.upsertJobCosting
 );
 
 /**

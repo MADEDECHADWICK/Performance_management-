@@ -11,9 +11,8 @@ router.get('/', async (req, res) => {
     const cycles = await prisma.evaluationCycle.findMany({
       where: status ? { status: status as string } : undefined,
       include: {
-        employeeEvaluations: true,
-        peerEvaluations: true,
-        upwardEvaluations: true,
+        definitions: true,
+        performanceScores: true,
       },
     });
     return res.json(cycles);
@@ -30,9 +29,8 @@ router.get('/:id', async (req, res) => {
     const cycle = await prisma.evaluationCycle.findUnique({
       where: { id: parseInt(id) },
       include: {
-        employeeEvaluations: true,
-        peerEvaluations: true,
-        upwardEvaluations: true,
+        definitions: true,
+        performanceScores: true,
       },
     });
     if (!cycle) {
@@ -48,21 +46,35 @@ router.get('/:id', async (req, res) => {
 // POST /evaluation_cycles
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { cycle_name, description, start_date, end_date, status } = req.body;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const {
+      cycle_name,
+      cycleName,
+      description,
+      start_date,
+      startDate,
+      end_date,
+      endDate,
+      status
+    } = req.body;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
 
-    if (!cycle_name || !start_date || !end_date) {
+    const resolvedName = cycleName || cycle_name;
+    const resolvedStart = startDate || start_date;
+    const resolvedEnd = endDate || end_date;
+
+    if (!resolvedName || !resolvedStart || !resolvedEnd) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     const cycle = await prisma.evaluationCycle.create({
       data: {
-        cycle_name,
+        cycleName: resolvedName,
         description,
-        start_date: new Date(start_date),
-        end_date: new Date(end_date),
+        startDate: new Date(resolvedStart),
+        endDate: new Date(resolvedEnd),
         status: status || 'draft',
-        created_by: userId,
+        createdByProfileId: profileId || undefined,
       },
     });
     return res.status(201).json(cycle);
@@ -76,15 +88,24 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { cycle_name, description, start_date, end_date, status } = req.body;
+    const {
+      cycle_name,
+      cycleName,
+      description,
+      start_date,
+      startDate,
+      end_date,
+      endDate,
+      status
+    } = req.body;
 
     const cycle = await prisma.evaluationCycle.update({
       where: { id: parseInt(id) },
       data: {
-        ...(cycle_name && { cycle_name }),
+        ...(cycleName || cycle_name ? { cycleName: cycleName || cycle_name } : {}),
         ...(description && { description }),
-        ...(start_date && { start_date: new Date(start_date) }),
-        ...(end_date && { end_date: new Date(end_date) }),
+        ...(startDate || start_date ? { startDate: new Date(startDate || start_date) } : {}),
+        ...(endDate || end_date ? { endDate: new Date(endDate || end_date) } : {}),
         ...(status && { status }),
       },
     });

@@ -24,6 +24,34 @@ interface ListOptions {
 }
 
 export class TimeEntryService {
+  private static async getAllocationSummary(jobId: number, employeeProfileId: number) {
+    const jobCosting = await prisma.jobCosting.findUnique({
+      where: { jobId },
+      include: { allocations: true, budgetCap: true },
+    });
+
+    if (!jobCosting) {
+      return {
+        requiresAllocation: false,
+        employeeAllocatedHours: 0,
+        jobAllocatedHours: 0,
+      };
+    }
+
+    const employeeAllocatedHours = jobCosting.allocations
+      .filter((alloc) => alloc.employeeProfileId === employeeProfileId)
+      .reduce((sum, alloc) => sum + Number(alloc.allocatedHours), 0);
+
+    const jobAllocatedHours = Number(
+      jobCosting.budgetCap?.totalAllocatedHours ?? jobCosting.totalEstimatedHours ?? 0
+    );
+
+    return {
+      requiresAllocation: true,
+      employeeAllocatedHours,
+      jobAllocatedHours,
+    };
+  }
   /**
    * List time entries with access control
    */
@@ -123,7 +151,7 @@ export class TimeEntryService {
           },
         },
         jobCosting: {
-          include: { budgetCap: true },
+          include: { budgetCap: true, allocations: true },
         },
       },
     });
@@ -143,25 +171,78 @@ export class TimeEntryService {
       };
     }
 
-    // ✅ CHECK BUDGET AVAILABILITY
-    const budgetHours = Number(job.jobCosting?.budgetCap?.totalAllocatedHours ?? job.budgetHours ?? 0);
-    if (budgetHours > 0) {
-      const existingHours = await prisma.timeEntry.aggregate({
-        where: {
-          jobId: Number(jobId),
-          status: { in: ['approved', 'submitted'] },
-        },
-        _sum: { hours: true },
-      });
+    // CHECK ALLOCATION LIMITS
+    const allocationSummary = await TimeEntryService.getAllocationSummary(
+      Number(jobId),
+      auth.profileId
+    );
 
-      const totalHours = (existingHours._sum.hours || 0) + hours;
+    if (allocationSummary?.requiresAllocation && allocationSummary.employeeAllocatedHours <= 0) {
+      throw {
+        statusCode: 400,
+        message: 'No time allocation assigned for this job',
+      };
+    }
 
-      if (totalHours > budgetHours) {
-        throw {
-          statusCode: 400,
-          message: `Time entry exceeds job budget. Available: ${(budgetHours - (existingHours._sum.hours || 0)).toFixed(2)} hours, requested: ${hours} hours`,
-        };
-      }
+    const approvedExtra = await prisma.timeEntryApprovalRequest.aggregate({
+      where: {
+        jobId: Number(jobId),
+        status: 'approved',
+      },
+      _sum: { additionalHoursRequested: true },
+    });
+
+    const approvedExtraEmployee = await prisma.timeEntryApprovalRequest.aggregate({
+      where: {
+        jobId: Number(jobId),
+        employeeProfileId: auth.profileId,
+        status: 'approved',
+      },
+      _sum: { additionalHoursRequested: true },
+    });
+
+    const approvedExtraJobHours = Number(approvedExtra._sum.additionalHoursRequested || 0);
+    const approvedExtraEmployeeHours = Number(
+      approvedExtraEmployee._sum.additionalHoursRequested || 0
+    );
+
+    const allowedJobHours =
+      Number(allocationSummary?.jobAllocatedHours ?? job.budgetHours ?? 0) + approvedExtraJobHours;
+    const allowedEmployeeHours =
+      Number(allocationSummary?.employeeAllocatedHours ?? 0) + approvedExtraEmployeeHours;
+
+    const loggedJobHoursResult = await prisma.timeEntry.aggregate({
+      where: {
+        jobId: Number(jobId),
+        status: { in: ['pending', 'submitted', 'approved'] },
+      },
+      _sum: { hours: true },
+    });
+
+    const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
+      where: {
+        jobId: Number(jobId),
+        employeeProfileId: auth.profileId,
+        status: { in: ['pending', 'submitted', 'approved'] },
+      },
+      _sum: { hours: true },
+    });
+
+    const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
+    const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+    if (allowedEmployeeHours > 0 && loggedEmployeeHours + hours > allowedEmployeeHours) {
+      throw {
+        statusCode: 400,
+        message: `Time entry exceeds your allocation. Available: ${(allowedEmployeeHours - loggedEmployeeHours).toFixed(2)} hours`,
+      };
+    }
+
+    if (allowedJobHours > 0 && loggedJobHours + hours > allowedJobHours) {
+      throw {
+        statusCode: 400,
+        message: `Time entry exceeds job allocation. Available: ${(allowedJobHours - loggedJobHours).toFixed(2)} hours`,
+      };
     }
 
     // ✅ VERIFY TASK EXISTS IF PROVIDED
@@ -848,6 +929,185 @@ export class TimeEntryService {
       total: timeEntryIds.length,
       failed: timeEntryIds.length - result.count,
     };
+  }
+
+  /**
+   * Request additional hours for a job
+   */
+  static async createApprovalRequest(
+    input: { jobId: number; additionalHours: number; justification: string; requestType?: string },
+    auth: AuthContext
+  ) {
+    const job = await prisma.job.findUnique({
+      where: { id: input.jobId },
+      include: {
+        staffing: {
+          where: { employeeProfileId: auth.profileId },
+        },
+        jobCosting: {
+          include: { allocations: true, budgetCap: true },
+        },
+      },
+    });
+
+    if (!job) {
+      throw { statusCode: 404, message: 'Job not found' };
+    }
+
+    if (auth.roleName !== 'admin' && job.staffing.length === 0) {
+      throw { statusCode: 403, message: 'You are not assigned to this job' };
+    }
+
+    const allocationSummary = await TimeEntryService.getAllocationSummary(
+      input.jobId,
+      auth.profileId
+    );
+
+    const currentAllocatedHours = Number(allocationSummary?.employeeAllocatedHours || 0);
+
+    if (allocationSummary?.requiresAllocation && currentAllocatedHours <= 0) {
+      throw { statusCode: 400, message: 'No time allocation assigned for this job' };
+    }
+
+    const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
+      where: {
+        jobId: input.jobId,
+        employeeProfileId: auth.profileId,
+        status: { in: ['pending', 'submitted', 'approved'] },
+      },
+      _sum: { hours: true },
+    });
+
+    const currentLoggedHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+    if (currentLoggedHours < currentAllocatedHours) {
+      throw {
+        statusCode: 400,
+        message: 'You still have remaining allocated hours',
+      };
+    }
+
+    const request = await prisma.timeEntryApprovalRequest.create({
+      data: {
+        jobId: input.jobId,
+        employeeProfileId: auth.profileId,
+        currentAllocatedHours,
+        currentLoggedHours,
+        additionalHoursRequested: input.additionalHours,
+        justification: input.justification,
+        requestType: input.requestType || 'additional_hours',
+        status: 'pending',
+      },
+    });
+
+    return request;
+  }
+
+  /**
+   * List approval requests
+   */
+  static async listApprovalRequests(
+    filters: { jobId?: number; employeeProfileId?: number; status?: string },
+    auth: AuthContext
+  ) {
+    const where: any = {};
+    if (filters.jobId) where.jobId = filters.jobId;
+    if (filters.status) where.status = filters.status;
+
+    const isElevated = ['admin', 'manager', 'partner'].includes(auth.roleName || '');
+
+    if (!isElevated) {
+      where.employeeProfileId = auth.profileId;
+    } else if (filters.employeeProfileId) {
+      where.employeeProfileId = filters.employeeProfileId;
+    }
+
+    const requests = await prisma.timeEntryApprovalRequest.findMany({
+      where,
+      orderBy: { requestedAt: 'desc' },
+    });
+
+    return requests;
+  }
+
+  /**
+   * Approve additional hours request
+   */
+  static async approveApprovalRequest(
+    requestId: number,
+    approvalNotes: string | undefined,
+    auth: AuthContext
+  ) {
+    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+      throw { statusCode: 403, message: 'Not authorized to approve requests' };
+    }
+
+    const request = await prisma.timeEntryApprovalRequest.findUnique({
+      where: { id: requestId },
+      include: { job: true },
+    });
+
+    if (!request) {
+      throw { statusCode: 404, message: 'Request not found' };
+    }
+
+    const isJobManager = request.job.managerProfileId === auth.profileId;
+    const isJobPartner = request.job.partnerProfileId === auth.profileId;
+    const isAdmin = auth.roleName === 'admin';
+
+    if (!isAdmin && !isJobManager && !isJobPartner) {
+      throw { statusCode: 403, message: 'Not authorized to approve this request' };
+    }
+
+    return prisma.timeEntryApprovalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'approved',
+        approvedByProfileId: auth.profileId,
+        approvalNotes,
+        approvedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Reject additional hours request
+   */
+  static async rejectApprovalRequest(
+    requestId: number,
+    approvalNotes: string | undefined,
+    auth: AuthContext
+  ) {
+    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+      throw { statusCode: 403, message: 'Not authorized to reject requests' };
+    }
+
+    const request = await prisma.timeEntryApprovalRequest.findUnique({
+      where: { id: requestId },
+      include: { job: true },
+    });
+
+    if (!request) {
+      throw { statusCode: 404, message: 'Request not found' };
+    }
+
+    const isJobManager = request.job.managerProfileId === auth.profileId;
+    const isJobPartner = request.job.partnerProfileId === auth.profileId;
+    const isAdmin = auth.roleName === 'admin';
+
+    if (!isAdmin && !isJobManager && !isJobPartner) {
+      throw { statusCode: 403, message: 'Not authorized to reject this request' };
+    }
+
+    return prisma.timeEntryApprovalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'rejected',
+        approvedByProfileId: auth.profileId,
+        approvalNotes,
+        approvedAt: new Date(),
+      },
+    });
   }
 
   /**

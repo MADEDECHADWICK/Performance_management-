@@ -17,6 +17,8 @@ import {
   batchSubmitValidators,
   listTimeEntriesValidators,
   getJobSummaryValidators,
+  createApprovalRequestValidators,
+  approvalRequestIdParamValidator,
 } from "../validators/time-entry.validators";
 
 const router = Router();
@@ -32,6 +34,58 @@ router.get(
   ...listTimeEntriesValidators,
   handleValidationErrors,
   TimeEntryController.listTimeEntries
+);
+
+/**
+ * GET /time-entries/approval-requests
+ * List approval requests
+ */
+router.get(
+  "/approval-requests",
+  authMiddleware,
+  loadProfile,
+  TimeEntryController.listApprovalRequests
+);
+
+/**
+ * POST /time-entries/approval-requests
+ * Request additional hours
+ */
+router.post(
+  "/approval-requests",
+  authMiddleware,
+  loadProfile,
+  ...createApprovalRequestValidators,
+  handleValidationErrors,
+  TimeEntryController.createApprovalRequest
+);
+
+/**
+ * PATCH /time-entries/approval-requests/:requestId/approve
+ * Approve additional hours
+ */
+router.patch(
+  "/approval-requests/:requestId/approve",
+  authMiddleware,
+  loadProfile,
+  requireRole("manager", "partner", "admin"),
+  ...approvalRequestIdParamValidator,
+  handleValidationErrors,
+  TimeEntryController.approveApprovalRequest
+);
+
+/**
+ * PATCH /time-entries/approval-requests/:requestId/reject
+ * Reject additional hours
+ */
+router.patch(
+  "/approval-requests/:requestId/reject",
+  authMiddleware,
+  loadProfile,
+  requireRole("manager", "partner", "admin"),
+  ...approvalRequestIdParamValidator,
+  handleValidationErrors,
+  TimeEntryController.rejectApprovalRequest
 );
 
 /**

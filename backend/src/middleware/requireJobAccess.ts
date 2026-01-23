@@ -39,10 +39,11 @@ export function requireJobAccess(action: string = 'view') {
       // ✅ ACCESS CONTROL LOGIC
       const isAdmin = requesterRole === 'admin';
       const isManager = requesterRole === 'manager';
+      const isHr = requesterRole === 'hr' || requesterRole === 'hr_manager';
       const isPartner = requesterRole === 'partner' && job.partnerProfileId === requesterProfileId;
       const isStaffAssigned = job.staffing.length > 0;
 
-      const hasAccess = isAdmin || isManager || isPartner || isStaffAssigned;
+      const hasAccess = isAdmin || isManager || isHr || isPartner || isStaffAssigned;
 
       if (!hasAccess) {
         return res.status(403).json({

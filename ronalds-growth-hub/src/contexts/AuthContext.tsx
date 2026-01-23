@@ -46,11 +46,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthenticated = !!user && !!getToken();
 
   // Role checks based on user's auth roles or position
-  const userRoles = user?.roles?.map(r => r.role.name.toLowerCase()) || [];
+  const rawRoles = Array.isArray(user?.roles) ? user.roles : [];
+  const roleNames = rawRoles
+    .map((role) => (typeof role === 'string' ? role : role?.role?.name))
+    .filter(Boolean) as string[];
+  if (Array.isArray((user as any)?.authRoles)) {
+    roleNames.push(...((user as any).authRoles as string[]));
+  }
+  const userRoles = Array.from(new Set(roleNames.map((role) => role.toLowerCase())));
   const positionRole = profile?.role?.name?.toLowerCase() || '';
 
-  const isAdmin = userRoles.includes('admin') || userRoles.includes('administrator');
-  const isHR = userRoles.includes('hr') || userRoles.includes('human_resources') || positionRole.includes('hr');
+  const isAdmin = userRoles.includes('admin') || userRoles.includes('super_admin') || userRoles.includes('administrator');
+  const isHR = userRoles.includes('hr') || userRoles.includes('hr_manager') || userRoles.includes('human_resources') || positionRole.includes('hr');
   const isGMP = userRoles.includes('gmp') || userRoles.includes('group_managing_partner') || positionRole.includes('gmp');
   const isPartner = profile?.isPartner || userRoles.includes('partner') || positionRole.includes('partner');
   const isManager = userRoles.includes('manager') || positionRole.includes('manager');

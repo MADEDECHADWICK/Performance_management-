@@ -26,7 +26,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
+        roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
       const result = await jobService.listJobs(
@@ -76,13 +76,22 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
+        roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
-      // Add managerProfileId if not provided
+      const requesterRoles = auth.roles || [];
+      const isManager = requesterRoles.includes("manager");
+
+      const managerProfileId = req.body.managerProfileId ?? (isManager ? auth.profileId : undefined);
+
+      if (!managerProfileId) {
+        res.status(400).json(errorResponse("managerProfileId is required", 400));
+        return;
+      }
+
       const input = {
         ...req.body,
-        managerProfileId: req.body.managerProfileId || auth.profileId,
+        managerProfileId,
       };
 
       const newJob = await jobService.createJob(input, auth);
@@ -105,7 +114,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
+        roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
       const updatedJob = await jobService.updateJob(jobId, req.body, auth);
@@ -129,7 +138,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
+        roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
       const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth);
@@ -164,6 +173,29 @@ export class JobController {
   }
 
   /**
+   * POST /jobs/:jobId/costing
+   * Create or update job costing and allocations
+   */
+  static async upsertJobCosting(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: (req as any).userRoles || req.user?.authRoles || [],
+      };
+
+      const costing = await jobService.upsertJobCosting(jobId, req.body, auth);
+
+      res.json(successResponse(costing, "Job costing saved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
    * POST /jobs/:jobId/staff
    * Assign staff to job
    */
@@ -174,7 +206,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || [],
+        roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
       const assignment = await jobService.assignJobTeam(jobId, req.body, auth);

@@ -47,6 +47,22 @@ export interface JobStaffAssignmentInput {
   roleOnJob?: string;
 }
 
+export interface JobCostingInput {
+  jobFee: number;
+  allocations: Array<{
+    employeeProfileId: number;
+    roleId: number;
+    allocatedHours: number;
+    hourlyRate?: number;
+    billable?: boolean;
+    taskDescription?: string;
+  }>;
+  notes?: string;
+  capEnforced?: boolean;
+  allowOverage?: boolean;
+  maxOveragePercent?: number;
+}
+
 export interface ListJobsOptions {
   page: number;
   pageSize: number;
@@ -79,17 +95,54 @@ class JobService {
   async createJob(input: JobCreateInput, authContext: AuthContext) {
     // Authorization: manager creating their own job, or admin
     const isAdmin = authContext.roles?.includes('admin');
+    const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
     const isCreatingOwnJob = input.managerProfileId === authContext.profileId;
 
-    if (!isAdmin && !isCreatingOwnJob) {
+    if (!isAdmin && !isHr && !isCreatingOwnJob) {
       throw new Error('Not authorized to create job for another manager');
+    }
+
+    let resolvedClientId = input.clientId;
+
+    if (input.engagementLetterId) {
+      const engagementLetter = await prisma.engagementLetter.findUnique({
+        where: { id: input.engagementLetterId },
+        select: { id: true, status: true, clientId: true },
+      });
+
+      if (!engagementLetter) {
+        throw new Error('Engagement letter not found');
+      }
+
+      if (engagementLetter.status !== 'approved') {
+        throw new Error('Engagement letter must be approved before job creation');
+      }
+
+      if (resolvedClientId && resolvedClientId !== engagementLetter.clientId) {
+        throw new Error('Engagement letter does not match clientId');
+      }
+
+      const onboarding = await prisma.clientOnboarding.findFirst({
+        where: { engagementLetterId: engagementLetter.id },
+        select: { id: true, status: true },
+      });
+
+      if (onboarding && !['approved', 'client_created'].includes(onboarding.status)) {
+        throw new Error('Client onboarding must be approved before job creation');
+      }
+
+      resolvedClientId = engagementLetter.clientId;
+    }
+
+    if (!resolvedClientId) {
+      throw new Error('clientId is required for job creation');
     }
 
     const job = await prisma.job.create({
       data: {
         jobName: input.jobName,
         description: input.description,
-        clientId: input.clientId,
+        clientId: resolvedClientId,
         departmentId: input.departmentId,
         partnerProfileId: input.partnerProfileId,
         managerProfileId: input.managerProfileId,
@@ -109,6 +162,16 @@ class JobService {
         department: { select: { id: true, name: true } },
       },
     });
+
+    if (input.engagementLetterId) {
+      await prisma.clientOnboarding.updateMany({
+        where: { engagementLetterId: input.engagementLetterId },
+        data: {
+          jobId: job.id,
+          status: 'job_created',
+        },
+      });
+    }
 
     return job;
   }
@@ -200,7 +263,9 @@ class JobService {
             select: {
               id: true,
               budgetCap: true,
-              estimatedCost: true,
+              totalEstimatedCost: true,
+              allocatedCost: true,
+              remainingBudget: true,
             },
           },
         },
@@ -240,7 +305,14 @@ class JobService {
           },
         } : false,
         tasks: include?.includes('tasks'),
-        engagementLetter: { select: { id: true, fileName: true } },
+        engagementLetter: {
+          select: {
+            id: true,
+            jobTitle: true,
+            status: true,
+            document: { select: { id: true, fileName: true, filePath: true } },
+          },
+        },
       } as any,
     });
 
@@ -424,6 +496,130 @@ class JobService {
   }
 
   /**
+   * Create or update job costing and allocations
+   */
+  async upsertJobCosting(
+    jobId: number,
+    input: JobCostingInput,
+    authContext: AuthContext
+  ) {
+    const job = await this.getJobById(jobId);
+
+    const isAdmin = authContext.roles?.includes('admin');
+    const isJobManager = job.managerProfileId === authContext.profileId;
+    const isPartner = job.partnerProfileId === authContext.profileId;
+
+    if (!isAdmin && !isJobManager && !isPartner) {
+      throw new Error('Not authorized to update job costing');
+    }
+
+    if (!Array.isArray(input.allocations) || input.allocations.length === 0) {
+      throw new Error('Allocations are required');
+    }
+
+    const roleIds = Array.from(new Set(input.allocations.map((alloc) => alloc.roleId)));
+    const roles = await prisma.positionRole.findMany({
+      where: { id: { in: roleIds } },
+      select: { id: true, billingRate: true },
+    });
+
+    const roleRateMap = new Map<number, number>(
+      roles.map((role) => [role.id, Number(role.billingRate)])
+    );
+
+    const allocationData = input.allocations.map((alloc) => {
+      const rate = alloc.hourlyRate ?? roleRateMap.get(alloc.roleId) ?? 0;
+      const hours = Number(alloc.allocatedHours);
+      const estimatedCost = hours * rate;
+
+      return {
+        employeeProfileId: alloc.employeeProfileId,
+        roleId: alloc.roleId,
+        allocatedHours: hours,
+        hourlyRate: rate,
+        estimatedCost,
+        billable: alloc.billable ?? true,
+        taskDescription: alloc.taskDescription,
+      };
+    });
+
+    const totalEstimatedHours = allocationData.reduce(
+      (sum, alloc) => sum + Number(alloc.allocatedHours),
+      0
+    );
+    const totalEstimatedCost = allocationData.reduce(
+      (sum, alloc) => sum + Number(alloc.estimatedCost),
+      0
+    );
+
+    const jobFee = Number(input.jobFee);
+    const remainingBudget = jobFee - totalEstimatedCost;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const costing = await tx.jobCosting.upsert({
+        where: { jobId },
+        create: {
+          jobId,
+          managerProfileId: job.managerProfileId || authContext.profileId,
+          jobFee,
+          allocatedCost: totalEstimatedCost,
+          remainingBudget,
+          totalEstimatedHours,
+          totalEstimatedCost,
+          costingStatus: 'draft',
+          notes: input.notes,
+        },
+        update: {
+          jobFee,
+          allocatedCost: totalEstimatedCost,
+          remainingBudget,
+          totalEstimatedHours,
+          totalEstimatedCost,
+          costingStatus: 'draft',
+          notes: input.notes,
+        },
+      });
+
+      await tx.jobTimeAllocation.deleteMany({ where: { jobCostingId: costing.id } });
+      await tx.jobTimeAllocation.createMany({
+        data: allocationData.map((alloc) => ({
+          ...alloc,
+          jobCostingId: costing.id,
+        })),
+      });
+
+      await tx.budgetCap.upsert({
+        where: { jobCostingId: costing.id },
+        create: {
+          jobCostingId: costing.id,
+          totalAllocatedHours: totalEstimatedHours,
+          capEnforced: input.capEnforced ?? true,
+          allowOverage: input.allowOverage ?? false,
+          maxOveragePercent: input.maxOveragePercent ?? 0.2,
+        },
+        update: {
+          totalAllocatedHours: totalEstimatedHours,
+          capEnforced: input.capEnforced ?? true,
+          allowOverage: input.allowOverage ?? false,
+          maxOveragePercent: input.maxOveragePercent ?? 0.2,
+        },
+      });
+
+      await tx.job.update({
+        where: { id: jobId },
+        data: { costingCompleted: true },
+      });
+
+      return tx.jobCosting.findUnique({
+        where: { id: costing.id },
+        include: { allocations: true, budgetCap: true },
+      });
+    });
+
+    return result;
+  }
+
+  /**
    * Get job staff assignments
    */
   async getJobStaff(jobId: number) {
@@ -454,6 +650,7 @@ class JobService {
       where: { jobId },
       include: {
         budgetCap: true,
+        allocations: true,
       },
     });
 
@@ -613,7 +810,7 @@ class JobService {
     const allocations = await prisma.revenueAllocation.findMany({
       where: { jobId },
       include: {
-        allocatedTo: { select: { id: true, firstName: true, lastName: true, email: true } },
+        employee: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
     });
 

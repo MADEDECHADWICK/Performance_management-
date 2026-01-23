@@ -93,6 +93,26 @@ const Dashboard = () => {
         return;
       }
 
+      const isMarketing =
+        userRoles.includes('marketing') ||
+        userRoles.includes('business_development') ||
+        userProfile?.positionTitle?.toLowerCase().includes('marketing') ||
+        userProfile?.positionTitle?.toLowerCase().includes('business development');
+
+      if (isMarketing) {
+        navigate("/clients", { replace: true });
+        return;
+      }
+
+      const isFinance =
+        userRoles.includes('finance') ||
+        userProfile?.positionTitle?.toLowerCase().includes('finance');
+
+      if (isFinance) {
+        navigate("/finance-dashboard", { replace: true });
+        return;
+      }
+
       // Default: Load employee dashboard data
       await loadPersonalPerformance(user.id);
       await loadRecentActivity(user.id);

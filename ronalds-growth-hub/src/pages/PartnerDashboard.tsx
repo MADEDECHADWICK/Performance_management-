@@ -35,18 +35,18 @@ interface PortfolioMetrics {
 }
 
 interface JobSummary {
-  job_id: number;
-  job_code: string | null;
-  job_name: string;
+  jobId: number;
+  jobCode: string | null;
+  jobName: string;
   title: string;
   status: string;
-  estimated_hours: number;
-  actual_hours: number;
-  billable_hours: number;
-  amount_collected: number;
+  estimatedHours: number;
+  actualHours: number;
+  billableHours: number;
+  amountCollected: number;
   profit: number;
-  efficiency_ratio: number;
-  margin_percentage: number;
+  efficiencyRatio: number;
+  marginPercentage: number;
 }
 
 interface DashboardSummary {
@@ -83,7 +83,7 @@ const PartnerDashboard = () => {
         return;
       }
 
-      const data = await apiFetch('GET', `/partner/dashboard-summary?user_id=${user.id}`);
+      const data = await apiFetch('GET', '/partners/dashboard-summary');
       setSummary(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
@@ -255,26 +255,26 @@ const PartnerDashboard = () => {
                   <div className="space-y-4">
                     {summary.topJobs.map((job) => (
                       <div
-                        key={job.job_id}
+                        key={job.jobId}
                         className="flex items-center justify-between border-b pb-4 last:border-0"
                       >
                         <div className="space-y-1 flex-1">
                           <p className="font-semibold">{job.title}</p>
                           <p className="text-sm text-muted-foreground">
-                            {job.job_code || `Job #${job.job_id}`}
+                            {job.jobCode || `Job #${job.jobId}`}
                           </p>
                         </div>
                         <div className="flex gap-4 text-sm">
                           <div className="text-right">
                             <p className="text-muted-foreground text-xs">Efficiency</p>
                             <p className="font-medium">
-                              {job.efficiency_ratio.toFixed(1)}%
+                              {job.efficiencyRatio.toFixed(1)}%
                             </p>
                           </div>
                           <div className="text-right">
                             <p className="text-muted-foreground text-xs">Margin</p>
                             <p className="font-medium">
-                              {job.margin_percentage.toFixed(1)}%
+                              {job.marginPercentage.toFixed(1)}%
                             </p>
                           </div>
                           <div className="text-right">

@@ -11,6 +11,7 @@ export * from './types';
 // API modules
 export { default as authAPI } from './auth';
 export { default as clientsAPI } from './clients';
+export { default as clientOnboardingsAPI } from './clientOnboardings';
 export { default as jobsAPI } from './jobs';
 export { default as timeEntriesAPI } from './timeEntries';
 export { default as employeesAPI } from './employees';
@@ -24,6 +25,7 @@ export { default as rolesAPI } from './roles';
 // Convenience grouped import
 import authAPI from './auth';
 import clientsAPI from './clients';
+import clientOnboardingsAPI from './clientOnboardings';
 import jobsAPI from './jobs';
 import timeEntriesAPI from './timeEntries';
 import employeesAPI from './employees';
@@ -37,6 +39,7 @@ import rolesAPI from './roles';
 const API = {
   auth: authAPI,
   clients: clientsAPI,
+  clientOnboardings: clientOnboardingsAPI,
   jobs: jobsAPI,
   timeEntries: timeEntriesAPI,
   employees: employeesAPI,

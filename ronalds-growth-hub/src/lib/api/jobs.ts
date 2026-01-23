@@ -51,6 +51,22 @@ interface AssignStaffPayload {
   roleOnJob?: string;
 }
 
+interface JobCostingPayload {
+  jobFee: number;
+  allocations: Array<{
+    employeeProfileId: number;
+    roleId: number;
+    allocatedHours: number;
+    hourlyRate?: number;
+    billable?: boolean;
+    taskDescription?: string;
+  }>;
+  notes?: string;
+  capEnforced?: boolean;
+  allowOverage?: boolean;
+  maxOveragePercent?: number;
+}
+
 export const jobsAPI = {
   /**
    * List all jobs with pagination and filters
@@ -131,6 +147,13 @@ export const jobsAPI = {
    */
   getCosting: async (jobId: number): Promise<JobCosting> => {
     return api.get(`/jobs/${jobId}/costing`);
+  },
+
+  /**
+   * Create or update job costing
+   */
+  upsertCosting: async (jobId: number, data: JobCostingPayload): Promise<JobCosting> => {
+    return api.post(`/jobs/${jobId}/costing`, data);
   },
 
   // ==================

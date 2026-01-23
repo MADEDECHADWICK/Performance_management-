@@ -36,6 +36,7 @@ export interface AuthRequest extends Request {
     userId: number;      // User.id (set by authMiddleware)
     email: string;       // User.email (set by authMiddleware)
     profileId?: number;  // Profile.id (ALWAYS set by loadProfile before using resource access)
+    authRoles?: string[];
   };
   profile?: RequestProfile; // populated by loadProfile (user profile data)
   token?: string;       // JWT token (set by authMiddleware)
@@ -68,6 +69,7 @@ type AccessTokenPayload = {
   userId?: number;
   sub?: number;
   email: string;
+  authRoles?: string[];
   iat: number;
   exp: number;
 };
@@ -123,6 +125,7 @@ export async function authMiddleware(
       userId: resolvedUserId,
       email: decoded.email,
       profileId: user.profile?.id,
+      authRoles: decoded.authRoles || [],
     };
 
     next();

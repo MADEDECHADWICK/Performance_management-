@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { apiFetch, authAPI } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 import { 
   Users, 
   DollarSign, 
@@ -23,53 +23,53 @@ import {
 } from 'lucide-react';
 
 interface TeamMember {
-  employee_id: number;
-  first_name: string;
-  last_name: string;
-  job_position: string;
-  department_name: string;
+  employeeId: number;
+  firstName: string;
+  lastName: string;
+  jobPosition: string;
+  departmentName: string;
   status: string;
-  role_name: string;
-  hire_date: string;
+  roleName: string | null;
+  hireDate: string | null;
 }
 
 interface TeamFinancials {
-  active_team_members: number;
-  total_team_hours: number;
-  billable_hours: number;
-  total_revenue: number;
-  total_cost: number;
+  activeTeamMembers: number;
+  totalTeamHours: number;
+  billableHours: number;
+  totalRevenue: number;
+  totalCost: number;
 }
 
 interface TeamPerformance {
-  employee_id: number;
-  employee_name: string;
-  job_position: string;
-  avg_financial_score: number;
-  avg_non_financial_score: number;
-  avg_overall_rating: number;
-  total_hours_this_month: number;
-  billable_hours_this_month: number;
-  utilization_rate: number;
-  last_review_date: string;
+  employeeId: number;
+  employeeName: string;
+  jobPosition: string;
+  avgFinancialScore: number;
+  avgNonFinancialScore: number;
+  avgOverallRating: number;
+  totalHoursThisMonth: number;
+  billableHoursThisMonth: number;
+  utilizationRate: number;
+  lastReviewDate: string | null;
 }
 
 interface Job {
-  job_id: number;
+  jobId: number;
   title: string;
-  job_number: string;
+  jobNumber: string | null;
   status: string;
-  billing_type: string;
-  budget_hours: number;
-  actual_hours: number;
+  billingType: string;
+  budgetHours: number;
+  actualHours: number;
   revenue: number;
   cost: number;
-  budget_utilization: number;
-  client_name: string;
-  department_name: string;
-  start_date: string;
-  due_date: string;
-  completion_percentage: number;
+  budgetUtilization: number;
+  clientName: string;
+  departmentName: string | null;
+  startDate: string | null;
+  dueDate: string | null;
+  completionPercentage: number;
 }
 
 interface OverviewMetrics {
@@ -371,7 +371,7 @@ const ManagerDashboard = () => {
                       <CardTitle className="text-sm">Active Members</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{teamData.financials.active_team_members}</div>
+                      <div className="text-2xl font-bold">{teamData.financials.activeTeamMembers}</div>
                     </CardContent>
                   </Card>
                   <Card>
@@ -379,7 +379,7 @@ const ManagerDashboard = () => {
                       <CardTitle className="text-sm">Total Hours</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{Number(teamData.financials.total_team_hours).toFixed(1)}</div>
+                      <div className="text-2xl font-bold">{Number(teamData.financials.totalTeamHours).toFixed(1)}</div>
                     </CardContent>
                   </Card>
                   <Card>
@@ -387,7 +387,7 @@ const ManagerDashboard = () => {
                       <CardTitle className="text-sm">Team Revenue</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.total_revenue)}</div>
+                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.totalRevenue)}</div>
                     </CardContent>
                   </Card>
                   <Card>
@@ -395,7 +395,7 @@ const ManagerDashboard = () => {
                       <CardTitle className="text-sm">Team Profit</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.total_revenue - teamData.financials.total_cost)}</div>
+                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.totalRevenue - teamData.financials.totalCost)}</div>
                     </CardContent>
                   </Card>
                 </div>
@@ -419,13 +419,13 @@ const ManagerDashboard = () => {
                       </TableHeader>
                       <TableBody>
                         {teamData.teamMembers.map((member) => (
-                          <TableRow key={member.employee_id}>
+                          <TableRow key={member.employeeId}>
                             <TableCell className="font-medium">
-                              {member.first_name} {member.last_name}
+                              {member.firstName} {member.lastName}
                             </TableCell>
-                            <TableCell>{member.job_position}</TableCell>
-                            <TableCell>{member.department_name || 'Unassigned'}</TableCell>
-                            <TableCell>{member.role_name || 'No Role'}</TableCell>
+                            <TableCell>{member.jobPosition}</TableCell>
+                            <TableCell>{member.departmentName || 'Unassigned'}</TableCell>
+                            <TableCell>{member.roleName || 'No Role'}</TableCell>
                             <TableCell>{getStatusBadge(member.status)}</TableCell>
                           </TableRow>
                         ))}
@@ -453,18 +453,18 @@ const ManagerDashboard = () => {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {teamData.performance.map((perf) => (
-                            <TableRow key={perf.employee_id}>
-                              <TableCell className="font-medium">{perf.employee_name}</TableCell>
-                              <TableCell>{Number(perf.total_hours_this_month).toFixed(1)}</TableCell>
-                              <TableCell>{Number(perf.billable_hours_this_month).toFixed(1)}</TableCell>
+                        {teamData.performance.map((perf) => (
+                            <TableRow key={perf.employeeId}>
+                              <TableCell className="font-medium">{perf.employeeName}</TableCell>
+                              <TableCell>{Number(perf.totalHoursThisMonth).toFixed(1)}</TableCell>
+                              <TableCell>{Number(perf.billableHoursThisMonth).toFixed(1)}</TableCell>
                               <TableCell>
                                 <div className="flex items-center space-x-2">
-                                  <Progress value={perf.utilization_rate} className="w-16" />
-                                  <span className="text-sm">{perf.utilization_rate}%</span>
+                                  <Progress value={perf.utilizationRate} className="w-16" />
+                                  <span className="text-sm">{perf.utilizationRate}%</span>
                                 </div>
                               </TableCell>
-                              <TableCell>{Number(perf.avg_overall_rating).toFixed(1)}</TableCell>
+                              <TableCell>{Number(perf.avgOverallRating).toFixed(1)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -498,22 +498,22 @@ const ManagerDashboard = () => {
                     </TableHeader>
                     <TableBody>
                       {jobData.portfolio.map((job) => (
-                        <TableRow key={job.job_id}>
+                        <TableRow key={job.jobId}>
                           <TableCell>
                             <div>
                               <div className="font-medium">{job.title}</div>
-                              <div className="text-sm text-muted-foreground">{job.job_number}</div>
+                              <div className="text-sm text-muted-foreground">{job.jobNumber}</div>
                             </div>
                           </TableCell>
-                          <TableCell>{job.client_name}</TableCell>
+                          <TableCell>{job.clientName}</TableCell>
                           <TableCell>{getStatusBadge(job.status)}</TableCell>
-                          <TableCell>{Number(job.budget_hours).toFixed(1)}h</TableCell>
-                          <TableCell>{Number(job.actual_hours).toFixed(1)}h</TableCell>
+                          <TableCell>{Number(job.budgetHours).toFixed(1)}h</TableCell>
+                          <TableCell>{Number(job.actualHours).toFixed(1)}h</TableCell>
                           <TableCell>{formatCurrency(job.revenue)}</TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">
-                              <Progress value={job.budget_utilization} className="w-16" />
-                              <span className="text-sm">{job.budget_utilization}%</span>
+                              <Progress value={job.budgetUtilization} className="w-16" />
+                              <span className="text-sm">{job.budgetUtilization}%</span>
                             </div>
                           </TableCell>
                         </TableRow>

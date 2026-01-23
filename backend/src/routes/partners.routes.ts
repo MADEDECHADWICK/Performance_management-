@@ -17,6 +17,16 @@ const router = Router();
 router.get("/", withRoles("admin", "super_admin"), PartnerController.listPartners);
 
 /**
+ * GET /partners/dashboard-summary
+ * Partner dashboard summary (uses current user's profile by default)
+ */
+router.get(
+  "/dashboard-summary",
+  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  PartnerController.getPartnerDashboardSummary
+);
+
+/**
  * POST /partners (Admin)
  * Body: profileId, companyId?, commissionRate, performanceThreshold?
  */
