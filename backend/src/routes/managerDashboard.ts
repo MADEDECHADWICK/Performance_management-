@@ -79,6 +79,11 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
+    const allocationAgg = await prisma.revenueAllocation.aggregate({
+      _sum: { allocatedAmount: true, employeeProfit: true, employeeLoss: true },
+      where: { employeeProfileId: { in: teamMemberIds } },
+    });
+
     const billableHoursAgg = await prisma.timeEntry.aggregate({
       _sum: { hours: true },
       where: {
@@ -172,7 +177,7 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
         activeTeamMembers: teamMembers.length,
         totalTeamHours: Number(totalHoursAgg._sum.hours || 0),
         billableHours: Number(billableHoursAgg._sum.hours || 0),
-        totalRevenue: Number(totalHoursAgg._sum.billableAmount || 0),
+        totalRevenue: Number(allocationAgg._sum.allocatedAmount || 0),
         totalCost: Number(totalHoursAgg._sum.costAmount || 0),
       },
       performance,
@@ -207,12 +212,25 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
       orderBy: { jobName: 'asc' },
     });
 
+    const jobIds = jobs.map((job) => job.id);
+    const allocations = await prisma.revenueAllocation.findMany({
+      where: { jobId: { in: jobIds } },
+      select: { jobId: true, allocatedAmount: true },
+    });
+
+    const revenueByJob = new Map<number, number>();
+    allocations.forEach((allocation) => {
+      const current = revenueByJob.get(allocation.jobId) || 0;
+      revenueByJob.set(allocation.jobId, current + Number(allocation.allocatedAmount || 0));
+    });
+
     const portfolio = jobs.map((job) => {
       const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
-      const revenue = job.timeEntries.reduce(
+      const timeEntryRevenue = job.timeEntries.reduce(
         (sum, entry) => sum + Number(entry.billableAmount || 0),
         0
       );
+      const revenue = revenueByJob.get(job.id) ?? timeEntryRevenue;
       const cost = job.timeEntries.reduce(
         (sum, entry) => sum + Number(entry.costAmount || 0),
         0
@@ -285,10 +303,31 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
         .toISOString()
         .slice(0, 10);
       const current = monthlyMap.get(monthKey) || { revenue: 0, cost: 0, totalHours: 0, billableHours: 0 };
-      current.revenue += Number(entry.billableAmount || 0);
       current.cost += Number(entry.costAmount || 0);
       current.totalHours += Number(entry.hours || 0);
       if (entry.billable) current.billableHours += Number(entry.hours || 0);
+      monthlyMap.set(monthKey, current);
+    });
+
+    const allocations = await prisma.revenueAllocation.findMany({
+      where: {
+        employee: { managerId: profileId },
+        allocationMonth: { gte: sinceDate },
+      },
+      select: {
+        allocationMonth: true,
+        allocatedAmount: true,
+        employeeProfit: true,
+        employeeLoss: true,
+      },
+    });
+
+    allocations.forEach((allocation) => {
+      const monthKey = new Date(allocation.allocationMonth.getFullYear(), allocation.allocationMonth.getMonth(), 1)
+        .toISOString()
+        .slice(0, 10);
+      const current = monthlyMap.get(monthKey) || { revenue: 0, cost: 0, totalHours: 0, billableHours: 0 };
+      current.revenue += Number(allocation.allocatedAmount || 0);
       monthlyMap.set(monthKey, current);
     });
 
@@ -307,8 +346,21 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
+    const jobIds = jobs.map((job) => job.id);
+    const jobAllocations = await prisma.revenueAllocation.findMany({
+      where: { jobId: { in: jobIds } },
+      select: { jobId: true, allocatedAmount: true },
+    });
+
+    const revenueByJob = new Map<number, number>();
+    jobAllocations.forEach((allocation) => {
+      const current = revenueByJob.get(allocation.jobId) || 0;
+      revenueByJob.set(allocation.jobId, current + Number(allocation.allocatedAmount || 0));
+    });
+
     const jobProfitability = jobs.map((job) => {
-      const revenue = job.timeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
+      const timeEntryRevenue = job.timeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
+      const revenue = revenueByJob.get(job.id) ?? timeEntryRevenue;
       const cost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
       return {
         jobName: job.jobName,
@@ -345,10 +397,30 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
         totalHours: 0,
         billableHours: 0,
       };
-      current.revenue += Number(entry.billableAmount || 0);
       current.totalHours += Number(entry.hours || 0);
       if (entry.billable) current.billableHours += Number(entry.hours || 0);
       contributionsMap.set(entry.employeeProfileId, current);
+    });
+
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+
+    const allocationContributions = await prisma.revenueAllocation.findMany({
+      where: {
+        employeeProfileId: { in: teamMembers.map((m) => m.id) },
+        allocationMonth: { gte: monthStart, lt: monthEnd },
+      },
+      select: { employeeProfileId: true, allocatedAmount: true },
+    });
+
+    allocationContributions.forEach((allocation) => {
+      const current = contributionsMap.get(allocation.employeeProfileId) || {
+        revenue: 0,
+        totalHours: 0,
+        billableHours: 0,
+      };
+      current.revenue += Number(allocation.allocatedAmount || 0);
+      contributionsMap.set(allocation.employeeProfileId, current);
     });
 
     const teamContributions = teamMembers.map((member) => {
@@ -439,6 +511,12 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       where: { managerId: profileId, status: 'active' },
     });
 
+    const teamMembers = await prisma.profile.findMany({
+      where: { managerId: profileId, status: 'active' },
+      select: { id: true },
+    });
+    const teamMemberIds = teamMembers.map((member) => member.id);
+
     const activeJobs = await prisma.job.count({
       where: {
         managerProfileId: profileId,
@@ -449,13 +527,15 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
 
     const totals = await prisma.timeEntry.aggregate({
       _sum: { billableAmount: true, costAmount: true, hours: true },
       where: {
         status: 'approved',
         dateWorked: { gte: monthStart },
-        employee: { managerId: profileId },
+        employeeProfileId: { in: teamMemberIds },
       },
     });
 
@@ -465,7 +545,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         status: 'approved',
         billable: true,
         dateWorked: { gte: monthStart },
-        employee: { managerId: profileId },
+        employeeProfileId: { in: teamMemberIds },
       },
     });
 
@@ -480,11 +560,23 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
+    const allocationTotals = await prisma.revenueAllocation.aggregate({
+      _sum: { allocatedAmount: true, employeeProfit: true, employeeLoss: true },
+      where: {
+        employeeProfileId: { in: teamMemberIds },
+        allocationMonth: { gte: monthStart, lt: monthEnd },
+      },
+    });
+
+    const monthlyRevenue = Number(allocationTotals._sum.allocatedAmount || 0);
+    const monthlyProfit =
+      Number(allocationTotals._sum.employeeProfit || 0) - Number(allocationTotals._sum.employeeLoss || 0);
+
     return res.json({
       teamSize,
       activeJobs,
-      monthlyRevenue: Number(totals._sum.billableAmount || 0),
-      monthlyProfit: Number(totals._sum.billableAmount || 0) - Number(totals._sum.costAmount || 0),
+      monthlyRevenue,
+      monthlyProfit,
       utilizationRate,
       pendingReviews,
     });

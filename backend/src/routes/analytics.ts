@@ -9,20 +9,51 @@ const router = Router();
  * Helper function to build analytics context from authenticated user
  */
 const buildAnalyticsContext = async (userId: number): Promise<AnalyticsContext> => {
-  const roles = await prisma.userRole.findMany({
-    where: { userId },
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      roles: { include: { role: true } },
+      profile: true,
+    },
   });
 
-  const roleNames = roles.map(r => r.role);
-  const isAdmin = roleNames.includes('admin') || roleNames.includes('super_admin');
-  const isPartner = roleNames.includes('partner');
-  const isEmployee = roleNames.includes('associate') || roleNames.includes('intern') || (!isAdmin && !isPartner);
+  const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
+  const positionTitle = user?.profile?.positionTitle?.toLowerCase() || "";
+
+  const isAdmin = roleNames.includes("admin") || roleNames.includes("super_admin");
+  const isPartner = roleNames.includes("partner") || Boolean(user?.profile?.isPartner);
+  const isManager =
+    roleNames.includes("manager") ||
+    positionTitle.includes("manager") ||
+    positionTitle.includes("team lead");
+  const isHr =
+    roleNames.includes("hr") ||
+    roleNames.includes("hr_manager") ||
+    positionTitle.includes("hr") ||
+    positionTitle.includes("human resource");
+  const isFinance = roleNames.includes("finance") || positionTitle.includes("finance");
+  const isMarketing = roleNames.includes("marketing") || positionTitle.includes("marketing");
+  const isGmp =
+    roleNames.includes("gmp") ||
+    roleNames.includes("group_managing_partner") ||
+    positionTitle.includes("group managing partner");
+
+  const isEmployee =
+    roleNames.includes("associate") ||
+    roleNames.includes("intern") ||
+    (!isAdmin && !isPartner && !isManager && !isHr && !isFinance && !isMarketing && !isGmp);
 
   return {
     userId,
+    profileId: user?.profile?.id,
     roles: roleNames,
     isAdmin,
     isPartner,
+    isManager,
+    isHr,
+    isFinance,
+    isMarketing,
+    isGmp,
     isEmployee,
   };
 };
@@ -42,7 +73,7 @@ const buildAnalyticsContext = async (userId: number): Promise<AnalyticsContext> 
  */
 router.get('/non-financial', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -72,7 +103,7 @@ router.get('/non-financial', authMiddleware, async (req: AuthRequest, res) => {
  */
 router.get('/financial', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -95,7 +126,7 @@ router.get('/financial', authMiddleware, async (req: AuthRequest, res) => {
  */
 router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -114,9 +145,15 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     return res.json({
-      userRole: context.roles[0] || 'employee',
+      userRole: context.roles[0] || "employee",
+      roles: context.roles,
       isAdmin: context.isAdmin,
       isPartner: context.isPartner,
+      isManager: context.isManager,
+      isHr: context.isHr,
+      isFinance: context.isFinance,
+      isMarketing: context.isMarketing,
+      isGmp: context.isGmp,
       isEmployee: context.isEmployee,
       userProfile: profile,
       nonFinancial,
@@ -142,7 +179,7 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
  */
 router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }

@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { jobsAPI } from '@/lib/api';
+import { jobsAPI, timeEntriesAPI } from '@/lib/api';
 import type { Job, JobStaffAssignment } from '@/lib/api/types';
 import { Briefcase, Calendar, RefreshCw, Users, Loader2 } from 'lucide-react';
 
@@ -40,6 +40,14 @@ interface CostingFormState {
   allocations: AllocationInput[];
 }
 
+interface AllocationSummary {
+  jobId: number;
+  remainingJobHours: number;
+  allowedJobHours: number;
+  loggedJobHours: number;
+  remainingEmployeeHours: number;
+}
+
 export default function JobWorkflowDashboard() {
   const { toast } = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -49,6 +57,8 @@ export default function JobWorkflowDashboard() {
   const [costingForm, setCostingForm] = useState<CostingFormState | null>(null);
   const [costingLoading, setCostingLoading] = useState(false);
   const [costingSaving, setCostingSaving] = useState(false);
+  const [allocationSummary, setAllocationSummary] = useState<AllocationSummary | null>(null);
+  const isFixedFeeJob = selectedJob?.billingType === 'fixed_fee';
 
   const loadJobs = async () => {
     try {
@@ -76,6 +86,7 @@ export default function JobWorkflowDashboard() {
       setSelectedJob(job);
       setStaff(staffAssignments);
       await initializeCosting(job, staffAssignments);
+      await loadAllocationSummary(jobId);
     } catch (error) {
       console.error('Failed to load job details:', error);
       toast({
@@ -83,6 +94,22 @@ export default function JobWorkflowDashboard() {
         description: 'Failed to load job details',
         variant: 'destructive',
       });
+    }
+  };
+
+  const loadAllocationSummary = async (jobId: number) => {
+    try {
+      const summary = await timeEntriesAPI.getJobAllocationSummary(jobId);
+      setAllocationSummary({
+        jobId: summary.jobId,
+        remainingJobHours: summary.remainingJobHours,
+        allowedJobHours: summary.allowedJobHours,
+        loggedJobHours: summary.loggedJobHours,
+        remainingEmployeeHours: summary.remainingEmployeeHours,
+      });
+    } catch (error) {
+      console.error('Failed to load allocation summary:', error);
+      setAllocationSummary(null);
     }
   };
 
@@ -133,8 +160,13 @@ export default function JobWorkflowDashboard() {
         };
       });
 
+      const jobFeeValue =
+        job.billingType === 'fixed_fee'
+          ? String(job.fixedFeeAmount || '')
+          : String(costing?.jobFee ?? job.fixedFeeAmount ?? '');
+
       setCostingForm({
-        jobFee: String(costing?.jobFee ?? job.fixedFeeAmount ?? ''),
+        jobFee: jobFeeValue,
         notes: costing?.notes || '',
         capEnforced: costing?.budgetCap?.capEnforced ?? true,
         allowOverage: costing?.budgetCap?.allowOverage ?? false,
@@ -144,7 +176,10 @@ export default function JobWorkflowDashboard() {
     } catch (error: any) {
       if (error?.status === 404) {
         setCostingForm({
-          jobFee: String(job.fixedFeeAmount || ''),
+          jobFee:
+            job.billingType === 'fixed_fee'
+              ? String(job.fixedFeeAmount || '')
+              : '',
           notes: '',
           capEnforced: true,
           allowOverage: false,
@@ -224,6 +259,7 @@ export default function JobWorkflowDashboard() {
         allowOverage: costingForm.allowOverage,
         maxOveragePercent: Number(costingForm.maxOveragePercent),
       });
+      await loadAllocationSummary(selectedJob.id);
       toast({
         title: 'Costing Saved',
         description: 'Job costing and allocations updated successfully.',
@@ -425,7 +461,48 @@ export default function JobWorkflowDashboard() {
                                     prev ? { ...prev, jobFee: event.target.value } : prev
                                   )
                                 }
+                                disabled={isFixedFeeJob}
                               />
+                              {isFixedFeeJob && (
+                                <p className="text-xs text-muted-foreground">
+                                  Job fee is locked to the approved engagement letter.
+                                </p>
+                              )}
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Allocation Summary</Label>
+                              <div className="rounded-lg border p-3 text-sm space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground">Allowed (Job)</span>
+                                  <span className="font-medium">
+                                    {allocationSummary
+                                      ? `${allocationSummary.allowedJobHours.toFixed(1)}h`
+                                      : '—'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground">Logged</span>
+                                  <span className="font-medium">
+                                    {allocationSummary
+                                      ? `${allocationSummary.loggedJobHours.toFixed(1)}h`
+                                      : '—'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground">Remaining</span>
+                                  <span
+                                    className={
+                                      allocationSummary && allocationSummary.remainingJobHours <= 0
+                                        ? 'font-medium text-red-600'
+                                        : 'font-medium text-green-600'
+                                    }
+                                  >
+                                    {allocationSummary
+                                      ? `${allocationSummary.remainingJobHours.toFixed(1)}h`
+                                      : '—'}
+                                  </span>
+                                </div>
+                              </div>
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="maxOveragePercent">Max Overage %</Label>

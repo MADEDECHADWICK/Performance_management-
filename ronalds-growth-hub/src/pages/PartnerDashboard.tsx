@@ -55,9 +55,29 @@ interface DashboardSummary {
   pendingTimeEntriesCount: number;
 }
 
+interface PersonalPerformance {
+  overallScore: number;
+  revenue: number;
+  netProfit: number;
+  utilizationRate: number;
+}
+
+interface NotificationItem {
+  id: number;
+  title: string;
+  message: string;
+  actionRequired?: boolean;
+  isRead?: boolean;
+  link?: string | null;
+  createdAt?: string;
+}
+
 const PartnerDashboard = () => {
   const navigate = useNavigate();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [personalPerformance, setPersonalPerformance] = useState<PersonalPerformance | null>(null);
+  const [alerts, setAlerts] = useState<NotificationItem[]>([]);
+  const [pendingAlertsCount, setPendingAlertsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +105,9 @@ const PartnerDashboard = () => {
 
       const data = await apiFetch('GET', '/partners/dashboard-summary');
       setSummary(data);
+
+      await loadAlerts();
+      await loadPersonalPerformance();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
       console.error('Dashboard error:', err);
@@ -92,6 +115,46 @@ const PartnerDashboard = () => {
       setLoading(false);
     }
   };
+
+  const loadAlerts = async () => {
+    try {
+      const response = await apiFetch('GET', '/notifications?status=unread&type=action&pageSize=20');
+      const payload = response?.data ?? response ?? {};
+      const list = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      setAlerts(list.slice(0, 4));
+      setPendingAlertsCount(list.length);
+    } catch (err) {
+      console.error('Failed to load partner alerts', err);
+    }
+  };
+
+  const loadPersonalPerformance = async () => {
+    try {
+      const performanceResponse = await apiFetch('GET', '/performance-scores/me');
+      const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
+
+      if (performancePayload?.financial && performancePayload?.overall) {
+        const financial = performancePayload.financial;
+        const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
+
+        setPersonalPerformance({
+          overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
+          revenue: Number(financial.revenue || 0),
+          netProfit: Number(financial.netProfit || 0),
+          utilizationRate: utilizationPercent,
+        });
+      }
+    } catch (err) {
+      console.error('Error loading personal performance:', err);
+    }
+  };
+
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 0,
+    }).format(amount);
 
   if (loading) {
     return (
@@ -147,6 +210,58 @@ const PartnerDashboard = () => {
         </div>
 
         {/* Key Metrics Grid */}
+        {personalPerformance && (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{personalPerformance.overallScore}</div>
+                <p className="text-xs text-muted-foreground">Financial + non-financial</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Revenue</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  KES {personalPerformance.revenue.toFixed(0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Net Profit</CardTitle>
+                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  KES {personalPerformance.netProfit.toFixed(0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Utilization</CardTitle>
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {personalPerformance.utilizationRate}%
+                </div>
+                <p className="text-xs text-muted-foreground">Billable vs allocated</p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -168,7 +283,7 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${(portfolio?.totalRevenueCollected || 0).toFixed(0)}
+                {formatCurrency(portfolio?.totalRevenueCollected || 0)}
               </div>
             </CardContent>
           </Card>
@@ -180,7 +295,7 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                ${(portfolio?.totalProfit || 0).toFixed(0)}
+                {formatCurrency(portfolio?.totalProfit || 0)}
               </div>
             </CardContent>
           </Card>
@@ -228,9 +343,9 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {summary?.pendingTimeEntriesCount || 0}
+                {pendingAlertsCount || summary?.pendingTimeEntriesCount || 0}
               </div>
-              <p className="text-xs text-muted-foreground">Time entries</p>
+              <p className="text-xs text-muted-foreground">Awaiting action</p>
             </CardContent>
           </Card>
         </div>
@@ -242,7 +357,39 @@ const PartnerDashboard = () => {
             <TabsTrigger value="details">Portfolio Details</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="jobs">
+          <TabsContent value="jobs" className="space-y-4">
+            {alerts.length > 0 && (
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle>Pending Alerts</CardTitle>
+                    <CardDescription>Role-specific actions that need attention.</CardDescription>
+                  </div>
+                  <Button variant="outline" onClick={() => navigate('/notifications')}>
+                    View all
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {alerts.map((alert) => (
+                    <div key={alert.id} className="rounded-md border p-3">
+                      <p className="font-medium">{alert.title}</p>
+                      <p className="text-sm text-muted-foreground">{alert.message}</p>
+                      {alert.link && (
+                        <Button
+                          className="mt-2"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(alert.link!)}
+                        >
+                          Review
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader>
                 <CardTitle>Top Performing Jobs</CardTitle>
@@ -280,7 +427,7 @@ const PartnerDashboard = () => {
                           <div className="text-right">
                             <p className="text-muted-foreground text-xs">Profit</p>
                             <p className="font-medium">
-                              ${job.profit.toFixed(0)}
+                              {formatCurrency(job.profit)}
                             </p>
                           </div>
                           <Badge
@@ -329,13 +476,13 @@ const PartnerDashboard = () => {
                   <div>
                     <p className="text-sm text-muted-foreground">Total Revenue</p>
                     <p className="text-2xl font-bold">
-                      ${(portfolio?.totalRevenueCollected || 0).toFixed(0)}
+                      {formatCurrency(portfolio?.totalRevenueCollected || 0)}
                     </p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">Total Profit</p>
                     <p className="text-2xl font-bold">
-                      ${(portfolio?.totalProfit || 0).toFixed(0)}
+                      {formatCurrency(portfolio?.totalProfit || 0)}
                     </p>
                   </div>
                   <div>

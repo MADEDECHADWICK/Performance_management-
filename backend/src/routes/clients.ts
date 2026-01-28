@@ -43,16 +43,25 @@ router.post(
         },
       });
 
-      await prisma.statusTransition.create({
-        data: {
-          entityType: "EngagementLetter",
-          entityId: letterId,
-          fromStatus: letter.status,
-          toStatus: EngagementLetterStatus.approved,
-          changedByProfileId: req.user?.profileId,
-          engagementLetterId: letterId,
-        },
-      });
+  await prisma.statusTransition.create({
+    data: {
+      entityType: "EngagementLetter",
+      entityId: letterId,
+      fromStatus: letter.status,
+      toStatus: EngagementLetterStatus.approved,
+      changedByProfileId: req.user?.profileId,
+      engagementLetterId: letterId,
+    },
+  });
+
+  await notifyHrGroup(
+    {
+      title: "Engagement letter approved",
+      body: `Engagement letter for client #${clientId} has been approved and is ready for HR job creation.`,
+      relatedEntityId: letterId,
+    },
+    req
+  );
 
       res.json(successResponse(updated, "Engagement letter approved"));
     } catch (error: any) {

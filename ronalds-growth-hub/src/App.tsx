@@ -43,6 +43,7 @@ const CompleteEvaluation = lazy(() => import("./pages/CompleteEvaluation"));
 const ManagerEvaluationPage = lazy(() => import("./pages/ManagerEvaluation"));
 const UpwardReviews = lazy(() => import("./pages/UpwardReviews"));
 const ClientEvaluation = lazy(() => import("./pages/ClientEvaluation"));
+const ProjectEvaluations = lazy(() => import("./pages/ProjectEvaluations"));
 
 // KPIs & Goals
 const KPIManagement = lazy(() => import("./pages/KPIManagement"));
@@ -58,7 +59,13 @@ const Reports = lazy(() => import("./pages/Reports"));
 const NonFinancialAnalytics = lazy(() => import("./pages/NonFinancialAnalytics"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
 const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
+const FinanceCollections = lazy(() => import("./pages/FinanceCollections"));
+const FinanceProjections = lazy(() => import("./pages/FinanceProjections"));
+const FinanceBalances = lazy(() => import("./pages/FinanceBalances"));
+const FinanceProfitability = lazy(() => import("./pages/FinanceProfitability"));
+const FinanceAllocations = lazy(() => import("./pages/FinanceAllocations"));
 const AuditLogs = lazy(() => import("./pages/AuditLogs"));
+const Notifications = lazy(() => import("./pages/Notifications"));
 
 // Team & Development
 const TeamPerformance = lazy(() => import("./pages/TeamPerformance"));
@@ -71,6 +78,11 @@ const WorkloadManagement = lazy(() => import("./pages/WorkloadManagement"));
 const ClientPortfolio = lazy(() => import("./pages/ClientPortfolio"));
 const BusinessDevelopment = lazy(() => import("./pages/BusinessDevelopment"));
 const PartnerMetrics = lazy(() => import("./pages/PartnerMetrics"));
+const MarketingDashboard = lazy(() => import("./pages/MarketingDashboard"));
+const EngagementLetters = lazy(() => import("./pages/EngagementLetters"));
+const ClientOnboardingQueue = lazy(() => import("./pages/ClientOnboardingQueue"));
+const PartnerPortfolioSummary = lazy(() => import("./pages/PartnerPortfolioSummary"));
+const Calibration = lazy(() => import("./pages/Calibration"));
 
 // Document & Surveys
 const DocumentManagement = lazy(() => import("./pages/DocumentManagement"));
@@ -80,6 +92,7 @@ const ClientSurveys = lazy(() => import("./pages/ClientSurveys"));
 const GMPLogin = lazy(() => import("./pages/GMPLogin"));
 const Todos = lazy(() => import("./pages/Todos"));
 const RoleManagement = lazy(() => import("./pages/RoleManagement"));
+const PositionsRates = lazy(() => import("./pages/PositionsRates"));
 
 const queryClient = new QueryClient();
 
@@ -117,6 +130,9 @@ const App = () => (
               <Route path="/clients/:id" element={<ClientDetailPage />} />
               <Route path="/clients/:id/edit" element={<ClientFormPage />} />
               <Route path="/client-portfolio" element={<ClientPortfolio />} />
+              <Route path="/marketing-dashboard" element={<MarketingDashboard />} />
+              <Route path="/engagement-letters" element={<EngagementLetters />} />
+              <Route path="/client-onboarding-queue" element={<ClientOnboardingQueue />} />
               
               {/* Job Management */}
               <Route path="/jobs" element={<JobWorkflowDashboard />} />
@@ -131,6 +147,8 @@ const App = () => (
               <Route path="/profile" element={<EmployeeProfile />} />
               <Route path="/employee-management" element={<EmployeeManagement />} />
               <Route path="/role-management" element={<RoleManagement />} />
+              <Route path="/positions-rates" element={<PositionsRates />} />
+              <Route path="/calibration" element={<Calibration />} />
               
               {/* Evaluations */}
               <Route path="/evaluations" element={<Evaluations />} />
@@ -138,6 +156,7 @@ const App = () => (
               <Route path="/create-evaluation" element={<CreateEvaluation />} />
               <Route path="/evaluation/:assignmentId" element={<CompleteEvaluation />} />
               <Route path="/manager-evaluation" element={<ManagerEvaluationPage />} />
+              <Route path="/project-evaluations" element={<ProjectEvaluations />} />
               <Route path="/upward-reviews" element={<UpwardReviews />} />
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
               
@@ -155,7 +174,13 @@ const App = () => (
               <Route path="/non-financial-analytics" element={<NonFinancialAnalytics />} />
               <Route path="/financial-summary" element={<FinancialSummary />} />
               <Route path="/finance-dashboard" element={<FinanceDashboard />} />
+              <Route path="/finance-collections" element={<FinanceCollections />} />
+              <Route path="/finance-projections" element={<FinanceProjections />} />
+              <Route path="/finance-balances" element={<FinanceBalances />} />
+              <Route path="/finance-profitability" element={<FinanceProfitability />} />
+              <Route path="/finance-allocations" element={<FinanceAllocations />} />
               <Route path="/audit-logs" element={<AuditLogs />} />
+              <Route path="/notifications" element={<Notifications />} />
               
               {/* Team & Development */}
               <Route path="/team-performance" element={<TeamPerformance />} />
@@ -167,6 +192,7 @@ const App = () => (
               <Route path="/workload-management" element={<WorkloadManagement />} />
               <Route path="/business-development" element={<BusinessDevelopment />} />
               <Route path="/partner-metrics" element={<PartnerMetrics />} />
+              <Route path="/partner-portfolio-summary" element={<PartnerPortfolioSummary />} />
               
               {/* Documents & Surveys */}
               <Route path="/documents" element={<DocumentManagement />} />

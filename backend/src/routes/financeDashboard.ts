@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { notifyProfile, notifyProfilesByRoles } from '../services/notificationRecipients';
 
 const router = Router();
 
@@ -190,13 +191,14 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'clientId, paymentAmount, and paymentDate are required' });
     }
 
+    const paymentDateValue = new Date(paymentDate);
     const payment = await prisma.clientPayment.create({
       data: {
         clientId: Number(clientId),
         jobId: jobId ? Number(jobId) : null,
         paymentAmount,
         currency: currency || 'KES',
-        paymentDate: new Date(paymentDate),
+        paymentDate: paymentDateValue,
         paymentMethod: paymentMethod || null,
         referenceNumber: referenceNumber || null,
         notes: notes || null,
@@ -204,6 +206,161 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
         recordedByProfileId: context.user.profile?.id ?? null,
       },
     });
+
+    if (payment.jobId) {
+      const job = await prisma.job.findUnique({
+        where: { id: payment.jobId },
+        select: {
+          id: true,
+          jobName: true,
+          departmentId: true,
+          partnerProfileId: true,
+          managerProfileId: true,
+          timeEntries: {
+            where: { status: 'approved' },
+            select: { employeeProfileId: true, billableAmount: true, profitLoss: true },
+          },
+        },
+      });
+
+      if (job) {
+        const allocationMonth = new Date(paymentDateValue.getFullYear(), paymentDateValue.getMonth(), 1);
+
+        const employeeTotals = new Map<
+          number,
+          { billable: number; profit: number; loss: number; base: number }
+        >();
+
+        job.timeEntries.forEach((entry) => {
+          const current = employeeTotals.get(entry.employeeProfileId) || {
+            billable: 0,
+            profit: 0,
+            loss: 0,
+            base: 0,
+          };
+          const billable = Number(entry.billableAmount || 0);
+          const profitLoss = Number(entry.profitLoss || 0);
+          current.billable += billable;
+          if (profitLoss >= 0) current.profit += profitLoss;
+          if (profitLoss < 0) current.loss += Math.abs(profitLoss);
+          employeeTotals.set(entry.employeeProfileId, current);
+        });
+
+        let totalJobBillable = 0;
+        let totalBase = 0;
+
+        employeeTotals.forEach((value) => {
+          totalJobBillable += value.billable;
+          const base = Math.max(0, value.billable + value.profit - value.loss);
+          value.base = base;
+          totalBase += base;
+        });
+
+        const allocationTotal = totalBase > 0 ? totalBase : totalJobBillable;
+
+        if (allocationTotal > 0) {
+          await Promise.all(
+            Array.from(employeeTotals.entries()).map(([employeeProfileId, value]) =>
+              prisma.revenueAllocation.upsert({
+                where: {
+                  jobId_clientPaymentId_employeeProfileId: {
+                    jobId: job.id,
+                    clientPaymentId: payment.id,
+                    employeeProfileId,
+                  },
+                },
+                update: {
+                  employeeBillable: value.billable,
+                  employeeProfit: value.profit,
+                  employeeLoss: value.loss,
+                  totalJobBillable,
+                  allocationPercentage: value.base / allocationTotal,
+                  allocatedAmount: (value.base / allocationTotal) * Number(payment.paymentAmount),
+                  allocationMonth,
+                },
+                create: {
+                  jobId: job.id,
+                  clientPaymentId: payment.id,
+                  employeeProfileId,
+                  employeeBillable: value.billable,
+                  employeeProfit: value.profit,
+                  employeeLoss: value.loss,
+                  totalJobBillable,
+                  allocationPercentage: value.base / allocationTotal,
+                  allocatedAmount: (value.base / allocationTotal) * Number(payment.paymentAmount),
+                  allocationMonth,
+                },
+              })
+            )
+          );
+        }
+
+        if (job.partnerProfileId) {
+          await notifyProfile(
+            job.partnerProfileId,
+            {
+              title: 'Revenue allocation updated',
+              message: `Payment recorded for "${job.jobName}". Revenue allocations have been refreshed.`,
+              link: `/jobs/${job.id}`,
+              relatedEntityId: job.id,
+              actionRequired: false,
+            },
+            req
+          );
+        }
+
+        const projectionMonthStart = allocationMonth;
+        const projectionMonthEnd = new Date(
+          projectionMonthStart.getFullYear(),
+          projectionMonthStart.getMonth() + 1,
+          1
+        );
+
+        const projectionTargets = await prisma.revenueProjection.findMany({
+          where: {
+            monthYear: { gte: projectionMonthStart, lt: projectionMonthEnd },
+            OR: [
+              { clientId: payment.clientId },
+              job.departmentId ? { departmentId: job.departmentId } : undefined,
+            ].filter(Boolean) as any,
+          },
+        });
+
+        await Promise.all(
+          projectionTargets.map(async (projection) => {
+            const actualCollected = Number(projection.actualCollected || 0) + Number(payment.paymentAmount);
+            const variance = actualCollected - Number(projection.projectedAmount || 0);
+            const variancePercent =
+              Number(projection.projectedAmount || 0) > 0
+                ? (variance / Number(projection.projectedAmount || 0)) * 100
+                : 0;
+
+            if (variancePercent <= -20) {
+              await notifyProfilesByRoles(
+                ['gmp'],
+                {
+                  title: 'Collection risk detected',
+                  message: `Collections are ${Math.abs(variancePercent).toFixed(1)}% below projection for ${projection.monthYear.toISOString().slice(0, 7)}.`,
+                  link: `/finance-dashboard?month=${projection.monthYear.toISOString().slice(0, 7)}`,
+                  relatedEntityId: job.id,
+                  actionRequired: false,
+                },
+                req
+              );
+            }
+
+            return prisma.revenueProjection.update({
+              where: { id: projection.id },
+              data: {
+                actualCollected,
+                variance,
+                variancePercent,
+              },
+            });
+          })
+        );
+      }
+    }
 
     res.status(201).json(payment);
   } catch (error: any) {
@@ -234,6 +391,7 @@ router.get('/projections', authMiddleware, async (req: AuthRequest, res) => {
         id: projection.id,
         monthYear: projection.monthYear,
         projectedAmount: Number(projection.projectedAmount),
+        currency: projection.currency,
         actualCollected: Number(projection.actualCollected),
         variance: Number(projection.variance),
         variancePercent: Number(projection.variancePercent),
@@ -337,6 +495,48 @@ router.get('/client-balances', authMiddleware, async (req: AuthRequest, res) => 
   } catch (error: any) {
     console.error('Finance client balances error:', error);
     res.status(500).json({ error: 'Failed to load client balances' });
+  }
+});
+
+// GET /finance-dashboard/job-balances
+router.get('/job-balances', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const jobs = await prisma.job.findMany({
+      include: {
+        client: { select: { clientName: true } },
+        jobCosting: true,
+        payments: true,
+      },
+      orderBy: { jobName: 'asc' },
+    });
+
+    const balances = jobs.map((job) => {
+      const fee = resolveJobFee(job);
+      const collected = job.payments.reduce(
+        (sum, payment) => sum + Number(payment.paymentAmount || 0),
+        0
+      );
+      return {
+        jobId: job.id,
+        jobCode: job.jobCode,
+        jobName: job.jobName,
+        clientName: job.client?.clientName ?? 'Unassigned',
+        fee,
+        collected,
+        balance: Math.max(0, fee - collected),
+        status: job.status,
+      };
+    });
+
+    res.json(balances);
+  } catch (error: any) {
+    console.error('Finance job balances error:', error);
+    res.status(500).json({ error: 'Failed to load job balances' });
   }
 });
 

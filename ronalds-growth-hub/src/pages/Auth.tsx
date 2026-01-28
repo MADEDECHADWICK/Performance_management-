@@ -57,7 +57,7 @@ const Auth = () => {
     if (isHROrAdmin) return '/hr-dashboard';
     if (isPartner) return '/partner-dashboard';
     if (isManager) return '/manager-dashboard';
-    if (isMarketing) return '/clients';
+    if (isMarketing) return '/marketing-dashboard';
     if (isFinance) return '/finance-dashboard';
     return '/dashboard';
   };

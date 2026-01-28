@@ -17,6 +17,7 @@ import {
   batchSubmitValidators,
   listTimeEntriesValidators,
   getJobSummaryValidators,
+  getJobAllocationSummaryValidators,
   createApprovalRequestValidators,
   approvalRequestIdParamValidator,
 } from "../validators/time-entry.validators";
@@ -248,6 +249,19 @@ router.get(
   ...getJobSummaryValidators,
   handleValidationErrors,
   TimeEntryController.getJobTimeSummary
+);
+
+/**
+ * GET /time-entries/job/:jobId/allocation
+ * Get job allocation summary
+ */
+router.get(
+  "/job/:jobId/allocation",
+  authMiddleware,
+  loadProfile,
+  ...getJobAllocationSummaryValidators,
+  handleValidationErrors,
+  TimeEntryController.getJobAllocationSummary
 );
 
 export default router;

@@ -5,26 +5,32 @@ import { createAudit } from '../utils/audit';
 
 const router = Router();
 
-// Role hierarchy for preventing certain escalations
+// Role hierarchy for escalation warnings (access roles only)
 const ROLE_HIERARCHY: Record<string, number> = {
-  'intern': 1,
-  'associate': 2,
-  'manager': 3,
-  'partner': 4,
-  'admin': 5,
-  'super_admin': 6
+  employee: 1,
+  marketing: 2,
+  finance: 2,
+  manager: 3,
+  partner: 4,
+  gmp: 5,
+  group_managing_partner: 5,
+  hr: 5,
+  hr_manager: 5,
+  admin: 6,
+  super_admin: 7,
 };
 
 /**
- * Check if current user is admin/superuser
- * Only admins can assign or modify roles
+ * Check if current user can manage access roles
+ * HR/Admin/Super Admin can assign or modify roles
  */
-const isAdmin = async (userId: number): Promise<boolean> => {
+const canManageRoles = async (userId: number): Promise<boolean> => {
   const roles = await prisma.userAuthRole.findMany({
     where: { userId },
     include: { role: true },
   });
-  return roles.some(r => r.role.name === 'admin' || r.role.name === 'super_admin');
+  const allowed = new Set(['admin', 'super_admin', 'hr', 'hr_manager']);
+  return roles.some((r) => allowed.has(r.role.name));
 };
 
 // GET /user_roles?userId=123
@@ -54,9 +60,9 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     
-    const isUserAdmin = await isAdmin(userId);
-    if (!isUserAdmin) {
-      return res.status(403).json({ error: 'Only admins can view user list' });
+    const canView = await canManageRoles(userId);
+    if (!canView) {
+      return res.status(403).json({ error: 'Only HR/Admin can view user list' });
     }
 
     // Get all users with their roles and profile info
@@ -75,6 +81,7 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
     // Format response
     const formattedUsers = users.map(user => ({
       id: user.id,
+      profileId: user.profile?.id,
       email: user.email,
       name: user.name,
       roles: user.roles.map(r => r.role.name),
@@ -82,6 +89,9 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
       department: user.profile?.department?.name || 'Unassigned',
       departmentId: user.profile?.departmentId,
       position: user.profile?.positionTitle,
+      positionRoleId: user.profile?.role?.id,
+      positionRoleName: user.profile?.role?.name,
+      billingRate: user.profile?.role?.billingRate ?? null,
       hireDate: user.profile?.hireDate,
       createdAt: user.createdAt,
     }));
@@ -104,9 +114,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
-    const isUserAdmin = await isAdmin(currentUserId);
-    if (!isUserAdmin) {
-      return res.status(403).json({ error: 'Only admins can assign roles' });
+    const canAssign = await canManageRoles(currentUserId);
+    if (!canAssign) {
+      return res.status(403).json({ error: 'Only HR/Admin can assign roles' });
     }
 
     // Prevent user from changing their own role
@@ -177,9 +187,9 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
-    const isUserAdmin = await isAdmin(currentUserId);
-    if (!isUserAdmin) {
-      return res.status(403).json({ error: 'Only admins can change roles' });
+    const canAssign = await canManageRoles(currentUserId);
+    if (!canAssign) {
+      return res.status(403).json({ error: 'Only HR/Admin can change roles' });
     }
 
     // Prevent user from changing their own role
@@ -270,9 +280,9 @@ router.delete('/', authMiddleware, async (req: AuthRequest, res) => {
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
     
-    const isUserAdmin = await isAdmin(currentUserId);
-    if (!isUserAdmin) {
-      return res.status(403).json({ error: 'Only admins can remove roles' });
+    const canAssign = await canManageRoles(currentUserId);
+    if (!canAssign) {
+      return res.status(403).json({ error: 'Only HR/Admin can remove roles' });
     }
 
     // Prevent user from removing their own roles

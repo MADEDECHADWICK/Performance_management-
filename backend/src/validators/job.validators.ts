@@ -59,9 +59,21 @@ export const createJobValidators = [
     .withMessage("Billing type must be: hourly or fixed_fee"),
 
   body("fixedFeeAmount")
-    .if(() => body("billingType").equals("fixed_fee"))
+    .optional()
     .isFloat({ min: 0.01 })
-    .withMessage("Fixed fee amount required and must be > 0"),
+    .withMessage("Fixed fee amount must be > 0 if provided"),
+
+  body().custom((value) => {
+    const billingType = value.billingType;
+    const hasEngagementLetter = value.engagementLetterId !== undefined && value.engagementLetterId !== null && value.engagementLetterId !== "";
+    const hasFixedFeeAmount = value.fixedFeeAmount !== undefined && value.fixedFeeAmount !== null && value.fixedFeeAmount !== "";
+
+    if (billingType === "fixed_fee" && !hasEngagementLetter && !hasFixedFeeAmount) {
+      throw new Error("Fixed fee amount required for fixed fee jobs");
+    }
+
+    return true;
+  }),
 
   body("budgetHours")
     .optional()
@@ -74,15 +86,69 @@ export const createJobValidators = [
     .withMessage("Valid engagementLetterId required if provided"),
 
   body().custom((value) => {
-    const hasClientId = value.clientId !== undefined && value.clientId !== null && value.clientId !== "";
     const hasEngagementLetter = value.engagementLetterId !== undefined && value.engagementLetterId !== null && value.engagementLetterId !== "";
 
-    if (!hasClientId && !hasEngagementLetter) {
-      throw new Error("Provide either clientId or engagementLetterId");
+    if (!hasEngagementLetter) {
+      throw new Error("engagementLetterId is required for job creation");
     }
 
     return true;
   }),
+];
+
+/**
+ * Validators for POST /jobs/from-onboarding/:clientOnboardingId
+ * Create job from an approved onboarding record (HR queue)
+ */
+export const createJobFromOnboardingValidators = [
+  param("clientOnboardingId")
+    .isInt({ min: 1 })
+    .withMessage("Valid clientOnboardingId (integer) required"),
+
+  body("jobName")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 3, max: 255 })
+    .withMessage("Job name must be 3-255 characters if provided"),
+
+  body("description")
+    .optional()
+    .isString()
+    .trim(),
+
+  body("departmentId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid departmentId required if provided"),
+
+  body("partnerProfileId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid partnerProfileId required if provided"),
+
+  body("managerProfileId")
+    .isInt({ min: 1 })
+    .withMessage("Valid managerProfileId required"),
+
+  body("startDate")
+    .isISO8601()
+    .withMessage("Valid startDate (ISO8601) required"),
+
+  body("dueDate")
+    .optional()
+    .isISO8601()
+    .withMessage("Valid dueDate (ISO8601) required if provided"),
+
+  body("priority")
+    .optional()
+    .isIn(["low", "medium", "high", "urgent"])
+    .withMessage("Priority must be one of: low, medium, high, urgent"),
+
+  body("budgetHours")
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage("Budget hours must be >= 0 if provided"),
 ];
 
 /**
@@ -210,8 +276,9 @@ export const assignJobTeamValidators = [
     .withMessage("Valid assignedRoleId required"),
 
   body("assignedHourlyRate")
+    .optional()
     .isFloat({ min: 0.01 })
-    .withMessage("Valid assignedHourlyRate required"),
+    .withMessage("assignedHourlyRate must be > 0 if provided"),
 
   body("roleOnJob")
     .optional()

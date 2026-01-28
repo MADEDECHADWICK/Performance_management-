@@ -4,6 +4,8 @@ import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/reqiureRole";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
+import { notifyHrGroup } from "../services/hrNotifications";
+import { NotificationService } from "../services/notifications.service";
 
 const router = Router();
 
@@ -204,8 +206,8 @@ router.post("/", async (req: AuthRequest, res) => {
       return;
     }
 
-    const onboarding = await prisma.clientOnboarding.create({
-      data: {
+  const onboarding = await prisma.clientOnboarding.create({
+    data: {
         engagementLetterId: letterId,
         clientId: engagementLetter.clientId,
         clientName: engagementLetter.client?.clientName || clientName,
@@ -218,14 +220,23 @@ router.post("/", async (req: AuthRequest, res) => {
         uploadedByProfileId: req.user?.profileId!,
         status: ClientOnboardingStatus.pending_hr_review,
         notes,
-      },
-      include: {
-        engagementLetter: { select: { id: true, jobTitle: true, status: true } },
-        client: { select: { id: true, clientName: true } },
-      },
-    });
+    },
+    include: {
+      engagementLetter: { select: { id: true, jobTitle: true, status: true } },
+      client: { select: { id: true, clientName: true } },
+    },
+  });
 
-    res.status(201).json(successResponse(onboarding, "Client onboarding created", 201));
+  await notifyHrGroup(
+    {
+      title: "New onboarding requires HR review",
+      body: `Client onboarding for "${onboarding.clientName}" is awaiting HR review.`,
+      relatedEntityId: onboarding.id,
+    },
+    req
+  );
+
+  res.status(201).json(successResponse(onboarding, "Client onboarding created", 201));
   } catch (error: any) {
     console.error("Error creating client onboarding:", error);
     res.status(500).json(errorResponse("Failed to create client onboarding", 500));
@@ -258,6 +269,37 @@ router.post("/:id/approve", requireRole("hr", "hr_manager", "admin", "super_admi
         hrReviewerProfileId: req.user?.profileId,
       },
     });
+
+    if (updated.departmentId) {
+      const managerProfiles = await prisma.profile.findMany({
+        where: {
+          departmentId: updated.departmentId,
+          user: {
+            roles: {
+              some: { role: { name: { in: ["manager"] } } },
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      await Promise.all(
+        managerProfiles.map((profile) =>
+          NotificationService.createNotification(
+            {
+              recipientProfileId: profile.id,
+              type: "action",
+              title: "Onboarding approved — manager review",
+              message: `Client onboarding for "${updated.clientName}" is approved and ready for job planning.`,
+              actionRequired: true,
+              link: `/hr-queue?onboardingId=${updated.id}`,
+              clientId: updated.clientId ?? undefined,
+            },
+            { userId: req.user?.userId ?? 0, profileId: req.user?.profileId ?? 0, roleName: "system" }
+          )
+        )
+      );
+    }
 
     res.json(successResponse(updated, "Client onboarding approved"));
   } catch (error: any) {

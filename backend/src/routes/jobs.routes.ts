@@ -14,6 +14,7 @@ import {
   listJobsValidators,
   assignJobTeamValidators,
   upsertJobCostingValidators,
+  createJobFromOnboardingValidators,
 } from "../validators/job.validators";
 
 const router = Router();
@@ -36,10 +37,22 @@ router.get(
  */
 router.post(
   "/",
-  withRoles("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
   validateRequest(createJobValidators),
   handleValidationErrors,
   JobController.createJob
+);
+
+/**
+ * POST /jobs/from-onboarding/:clientOnboardingId
+ * Create a job directly from approved client onboarding (HR queue)
+ */
+router.post(
+  "/from-onboarding/:clientOnboardingId",
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  validateRequest(createJobFromOnboardingValidators),
+  handleValidationErrors,
+  JobController.createJobFromOnboarding
 );
 
 /**

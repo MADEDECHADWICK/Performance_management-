@@ -6,6 +6,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { surveysAPI, clientsAPI, jobsAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -247,32 +248,35 @@ export default function ClientSurveys() {
 
   if (surveysLoading) {
     return (
-      <div className="p-6 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Star className="h-8 w-8 text-yellow-500" />
-            Client Satisfaction Surveys
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Measure and improve client satisfaction
-          </p>
+    <DashboardLayout>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center gap-2">
+              <Star className="h-8 w-8 text-yellow-500" />
+              Client Satisfaction Surveys
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Measure and improve client satisfaction
+            </p>
+          </div>
+          {(isPartner || isManager || isAdmin || isGMP) && (
+            <Button onClick={() => setShowCreateDialog(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Send New Survey
+            </Button>
+          )}
         </div>
-        {(isPartner || isManager || isAdmin || isGMP) && (
-          <Button onClick={() => setShowCreateDialog(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Send New Survey
-          </Button>
-        )}
-      </div>
 
       {/* Analytics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -871,6 +875,7 @@ export default function ClientSurveys() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }

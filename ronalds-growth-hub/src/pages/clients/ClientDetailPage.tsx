@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { clientsAPI } from '@/lib/api';
+import { clientsAPI, surveysAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -104,6 +104,11 @@ export function ClientDetailPage() {
     enabled: !!id,
   });
 
+  const { data: surveyByClient } = useQuery({
+    queryKey: ['surveys-by-client'],
+    queryFn: () => surveysAPI.getByClient(),
+  });
+
   // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: () => clientsAPI.delete(Number(id)),
@@ -149,6 +154,10 @@ export function ClientDetailPage() {
 
   const jobs = jobsData || [];
   const letters = engagementLetters || [];
+  const surveySummary =
+    surveyByClient?.find((item: any) => item.clientId === Number(id)) || null;
+  const formatDate = (value?: string | Date | null) =>
+    value ? new Date(value).toLocaleDateString() : '-';
 
   if (isLoading) {
     return (
@@ -351,6 +360,46 @@ export function ClientDetailPage() {
                     </p>
                     <p className="text-sm text-muted-foreground">Approved Letters</p>
                   </div>
+                  <div className="text-center p-4 bg-muted rounded-lg">
+                    <p className="text-2xl font-bold">
+                      {surveySummary ? surveySummary.avgSatisfaction.toFixed(1) : '-'}
+                    </p>
+                    <p className="text-sm text-muted-foreground">Avg Satisfaction</p>
+                  </div>
+                  <div className="text-center p-4 bg-muted rounded-lg">
+                    <p className="text-2xl font-bold">
+                      {surveySummary ? surveySummary.surveyCount : 0}
+                    </p>
+                    <p className="text-sm text-muted-foreground">Survey Responses</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Client Satisfaction */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Client Satisfaction</CardTitle>
+                <CardDescription>Survey feedback summary for this client</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Average rating</span>
+                  <span className="font-medium">
+                    {surveySummary ? `${surveySummary.avgSatisfaction.toFixed(1)}/5` : 'No surveys yet'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Would recommend</span>
+                  <span className="font-medium">
+                    {surveySummary ? `${surveySummary.wouldRecommendPercent.toFixed(0)}%` : '-'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Last survey</span>
+                  <span className="font-medium">
+                    {surveySummary?.lastSurveyDate ? formatDate(surveySummary.lastSurveyDate) : '-'}
+                  </span>
                 </div>
               </CardContent>
             </Card>

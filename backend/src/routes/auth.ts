@@ -29,6 +29,14 @@ router.post('/register', async (req, res) => {
     const resolvedFirstName = firstName || first_name || parsedFirst || 'User';
     const resolvedLastName = lastName || last_name || parsedLast || '';
     
+    const defaultBillingRole = await prisma.positionRole.findFirst({
+      where: {
+        name: { in: ['Associate', 'Trainee'] },
+        isActive: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
     // Create corresponding profile with the name
     await prisma.profile.create({
       data: {
@@ -36,6 +44,7 @@ router.post('/register', async (req, res) => {
         firstName: resolvedFirstName,
         lastName: resolvedLastName,
         status: 'active',
+        roleId: defaultBillingRole?.id,
       }
     });
     

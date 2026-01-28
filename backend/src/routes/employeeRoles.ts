@@ -7,11 +7,12 @@ const router = Router();
 
 // Middleware: Check if user is HR/Admin/SuperAdmin
 const requireHROrAdmin = (req: AuthRequest, res: any, next: any) => {
-  const userRoles = req.user?.roles || [];
+  const userRoles = req.user?.authRoles || (req.user as any)?.roles || [];
   const isHROrAdmin = 
     userRoles.includes('super_admin') || 
     userRoles.includes('hr_manager') || 
-    userRoles.includes('hr');
+    userRoles.includes('hr') ||
+    userRoles.includes('admin');
   
   if (!isHROrAdmin) {
     return res.status(403).json({ 
@@ -31,7 +32,7 @@ router.get('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) 
           select: { email: true },
         },
       },
-      orderBy: { first_name: 'asc' },
+      orderBy: { firstName: 'asc' },
     });
     
     res.json(employees);
@@ -71,11 +72,12 @@ router.get('/:employeeId', authMiddleware, requireHROrAdmin, async (req: AuthReq
 router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
   try {
     const { employeeId } = req.params;
-    const { role_id, notes } = req.body;
+    const roleId = req.body.roleId ?? req.body.role_id;
+    const { notes } = req.body;
     
     // Validate inputs
-    if (!role_id || typeof role_id !== 'number') {
-      return res.status(400).json({ error: 'Valid role_id is required' });
+    if (!roleId || typeof roleId !== 'number') {
+      return res.status(400).json({ error: 'Valid roleId is required' });
     }
     
     // Check if employee exists
@@ -89,15 +91,15 @@ router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: Au
     }
     
     // Check if new role exists
-    const newRole = await prisma.role.findUnique({
-      where: { id: role_id },
+    const newRole = await prisma.positionRole.findUnique({
+      where: { id: roleId },
     });
     
     if (!newRole) {
       return res.status(404).json({ error: 'Role not found' });
     }
     
-    if (!newRole.is_active) {
+    if (!newRole.isActive) {
       return res.status(400).json({ error: 'Cannot assign an inactive role' });
     }
     
@@ -107,7 +109,7 @@ router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: Au
     // Update employee role
     const updated = await prisma.profile.update({
       where: { id: parseInt(employeeId) },
-      data: { role_id },
+      data: { roleId },
       include: { role: true },
     });
     
@@ -116,6 +118,11 @@ router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: Au
       user_id: req.user?.sub,
       action: 'EMPLOYEE_ROLE_ASSIGNED',
       entity_type: 'Profile',
+      metadata: {
+        notes: notes ?? null,
+        oldRole: oldRoleName,
+        newRole: newRole.name,
+      },
     });
     
     res.json({

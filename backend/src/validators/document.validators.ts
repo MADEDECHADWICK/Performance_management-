@@ -58,6 +58,41 @@ export const uploadDocumentValidators = [
 ];
 
 /**
+ * Validators for POST /documents/upload - Upload document with file
+ */
+export const uploadDocumentFileValidators = [
+  body("documentType")
+    .isString()
+    .trim()
+    .isLength({ min: 1 })
+    .withMessage("Document type required"),
+
+  body("entityType")
+    .isString()
+    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate"])
+    .withMessage("EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate"),
+
+  body("entityId")
+    .isInt({ min: 1 })
+    .withMessage("Valid entityId (integer) required"),
+
+  body("accessLevel")
+    .optional()
+    .isIn(["employee", "manager", "hr", "admin"])
+    .withMessage("AccessLevel must be one of: employee, manager, hr, admin"),
+
+  body("isRequired")
+    .optional()
+    .isBoolean()
+    .withMessage("IsRequired must be a boolean"),
+
+  body("description")
+    .optional()
+    .isString()
+    .trim(),
+];
+
+/**
  * Validators for GET /documents/:documentId - Get document
  */
 export const getDocumentValidator = [

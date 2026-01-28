@@ -26,6 +26,8 @@ interface Profile {
   first_name: string;
   last_name: string;
   position: string;
+  department_id?: number | null;
+  manager_id?: number | null;
 }
 
 interface KPI {
@@ -66,9 +68,15 @@ export default function CreateEvaluation() {
   const [sendToManagers, setSendToManagers] = useState(false);
   const [sendToDownward, setSendToDownward] = useState(false);
   
-  // Assignments
-  const [selectedEvaluators, setSelectedEvaluators] = useState<string[]>([]);
+  // Assignments (360)
+  const [selectedPeerEvaluators, setSelectedPeerEvaluators] = useState<string[]>([]);
+  const [selectedUpwardEvaluators, setSelectedUpwardEvaluators] = useState<string[]>([]);
+  const [selectedDownwardEvaluators, setSelectedDownwardEvaluators] = useState<string[]>([]);
   const [selectedEvaluatees, setSelectedEvaluatees] = useState<string[]>([]);
+
+  const [autoAssignManager, setAutoAssignManager] = useState(true);
+  const [autoAssignPeers, setAutoAssignPeers] = useState(true);
+  const [autoAssignDirectReports, setAutoAssignDirectReports] = useState(true);
   
   // Result areas (KPIs)
   const [selectedKpis, setSelectedKpis] = useState<Array<{ kpi_id: string; weight: number }>>([]);
@@ -121,8 +129,8 @@ export default function CreateEvaluation() {
       return;
     }
 
-    if (selectedEvaluators.length === 0 || selectedEvaluatees.length === 0) {
-      toast({ title: "Please select evaluators and evaluatees", variant: "destructive" });
+    if (selectedEvaluatees.length === 0) {
+      toast({ title: "Please select evaluatees", variant: "destructive" });
       return;
     }
 
@@ -157,31 +165,86 @@ export default function CreateEvaluation() {
       });
 
       // Create assignments
-      const assignments = [];
-      for (const evaluatorId of selectedEvaluators) {
-        for (const evaluateeId of selectedEvaluatees) {
-          if (enableDownward) {
-            assignments.push({
-              ad_hoc_evaluation_id: parseInt(evaluation.id),
-              evaluator_id: parseInt(evaluatorId),
-              evaluatee_id: parseInt(evaluateeId),
-              evaluation_type: "downward"
-            });
+      const assignments: Array<{
+        ad_hoc_evaluation_id: number;
+        evaluator_id: number;
+        evaluatee_id: number;
+        evaluation_type: string;
+      }> = [];
+
+      const profileById = new Map(employees.map((emp) => [emp.id, emp]));
+
+      const addAssignment = (evaluatorId: string, evaluateeId: string, type: string) => {
+        if (!evaluatorId || evaluatorId === evaluateeId) return;
+        assignments.push({
+          ad_hoc_evaluation_id: parseInt(evaluation.id),
+          evaluator_id: parseInt(evaluatorId),
+          evaluatee_id: parseInt(evaluateeId),
+          evaluation_type: type,
+        });
+      };
+
+      for (const evaluateeId of selectedEvaluatees) {
+        const evaluateeProfile = profileById.get(evaluateeId);
+        const managerId =
+          evaluateeProfile?.manager_id ?? (evaluateeProfile as any)?.managerId;
+        const departmentId =
+          evaluateeProfile?.department_id ?? (evaluateeProfile as any)?.departmentId;
+
+        if (enableDownward) {
+          if (autoAssignManager && managerId) {
+            addAssignment(String(managerId), evaluateeId, "downward");
+          } else {
+            selectedDownwardEvaluators.forEach((evaluatorId) =>
+              addAssignment(evaluatorId, evaluateeId, "downward")
+            );
           }
-          if (enablePeer && evaluatorId !== evaluateeId) {
-            assignments.push({
-              ad_hoc_evaluation_id: parseInt(evaluation.id),
-              evaluator_id: parseInt(evaluatorId),
-              evaluatee_id: parseInt(evaluateeId),
-              evaluation_type: "peer"
-            });
+        }
+
+        if (enablePeer) {
+          if (!autoAssignPeers && selectedPeerEvaluators.length > 0) {
+            selectedPeerEvaluators.forEach((evaluatorId) =>
+              addAssignment(evaluatorId, evaluateeId, "peer")
+            );
+          } else {
+            const peerCandidates = employees.filter(
+              (emp) =>
+                (emp.department_id ?? (emp as any).departmentId) &&
+                (emp.department_id ?? (emp as any).departmentId) === departmentId &&
+                emp.id !== evaluateeId
+            );
+            peerCandidates.forEach((peer) => addAssignment(peer.id, evaluateeId, "peer"));
+          }
+        }
+
+        if (enableUpward) {
+          if (!autoAssignDirectReports && selectedUpwardEvaluators.length > 0) {
+            selectedUpwardEvaluators.forEach((evaluatorId) =>
+              addAssignment(evaluatorId, evaluateeId, "upward")
+            );
+          } else {
+            const directReports = employees.filter(
+              (emp) =>
+                (emp.manager_id ?? (emp as any).managerId) &&
+                String(emp.manager_id ?? (emp as any).managerId) === evaluateeId
+            );
+            directReports.forEach((report) => addAssignment(report.id, evaluateeId, "upward"));
           }
         }
       }
 
+      const dedupedAssignments = Array.from(
+        new Map(
+          assignments.map((item) => [
+            `${item.ad_hoc_evaluation_id}-${item.evaluator_id}-${item.evaluatee_id}-${item.evaluation_type}`,
+            item,
+          ])
+        ).values()
+      );
+
       if (enableSelf) {
         for (const evaluateeId of selectedEvaluatees) {
-          assignments.push({
+          dedupedAssignments.push({
             ad_hoc_evaluation_id: parseInt(evaluation.id),
             evaluator_id: parseInt(evaluateeId),
             evaluatee_id: parseInt(evaluateeId),
@@ -190,8 +253,8 @@ export default function CreateEvaluation() {
         }
       }
 
-      if (assignments.length > 0) {
-        await apiFetch('POST', '/evaluation_assignments', assignments);
+      if (dedupedAssignments.length > 0) {
+        await apiFetch('POST', '/evaluation_assignments', dedupedAssignments);
       }
 
       // Add KPIs
@@ -290,31 +353,104 @@ export default function CreateEvaluation() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Assign Evaluators</CardTitle>
+            <CardTitle>Assign Evaluators (360)</CardTitle>
+            <CardDescription>Auto-assign by reporting lines, or override with manual selections.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <Select onValueChange={(value) => setSelectedEvaluators([...selectedEvaluators, value])}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select evaluators" />
-              </SelectTrigger>
-              <SelectContent>
-                {employees.map(emp => (
-                  <SelectItem key={emp.id} value={emp.id}>
-                    {emp.first_name} {emp.last_name} - {emp.position}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {selectedEvaluators.map(id => {
-                const emp = employees.find(e => e.id === id);
-                return emp ? (
-                  <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
-                    {emp.first_name} {emp.last_name}
-                    <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedEvaluators(selectedEvaluators.filter(e => e !== id))} />
-                  </span>
-                ) : null;
-              })}
+          <CardContent className="space-y-6">
+            <div className="flex items-center justify-between">
+              <Label>Auto-assign managers for downward reviews</Label>
+              <Switch checked={autoAssignManager} onCheckedChange={setAutoAssignManager} />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Downward Evaluators (Override)</Label>
+              <Select onValueChange={(value) => setSelectedDownwardEvaluators([...selectedDownwardEvaluators, value])}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select managers" />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map(emp => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.first_name} {emp.last_name} - {emp.position}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedDownwardEvaluators.map(id => {
+                  const emp = employees.find(e => e.id === id);
+                  return emp ? (
+                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
+                      {emp.first_name} {emp.last_name}
+                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedDownwardEvaluators(selectedDownwardEvaluators.filter(e => e !== id))} />
+                    </span>
+                  ) : null;
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label>Auto-assign peers from same department</Label>
+              <Switch checked={autoAssignPeers} onCheckedChange={setAutoAssignPeers} />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Peer Evaluators (Override)</Label>
+              <Select onValueChange={(value) => setSelectedPeerEvaluators([...selectedPeerEvaluators, value])}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select peer evaluators" />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map(emp => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.first_name} {emp.last_name} - {emp.position}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedPeerEvaluators.map(id => {
+                  const emp = employees.find(e => e.id === id);
+                  return emp ? (
+                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
+                      {emp.first_name} {emp.last_name}
+                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedPeerEvaluators(selectedPeerEvaluators.filter(e => e !== id))} />
+                    </span>
+                  ) : null;
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label>Auto-assign direct reports for upward reviews</Label>
+              <Switch checked={autoAssignDirectReports} onCheckedChange={setAutoAssignDirectReports} />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Direct Reports (Override)</Label>
+              <Select onValueChange={(value) => setSelectedUpwardEvaluators([...selectedUpwardEvaluators, value])}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select direct reports" />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map(emp => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.first_name} {emp.last_name} - {emp.position}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedUpwardEvaluators.map(id => {
+                  const emp = employees.find(e => e.id === id);
+                  return emp ? (
+                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
+                      {emp.first_name} {emp.last_name}
+                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedUpwardEvaluators(selectedUpwardEvaluators.filter(e => e !== id))} />
+                    </span>
+                  ) : null;
+                })}
+              </div>
             </div>
           </CardContent>
         </Card>

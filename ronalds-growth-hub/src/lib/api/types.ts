@@ -241,6 +241,8 @@ export interface JobCosting {
   id: number;
   jobId: number;
   status: JobCostingStatus;
+  allocatedCost?: number;
+  remainingBudget?: number;
   totalBudgetHours: number;
   totalBudgetAmount: number;
   totalBillableAmount: number;

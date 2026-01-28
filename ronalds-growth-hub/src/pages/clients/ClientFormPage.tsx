@@ -7,6 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clientsAPI, employeesAPI, documentsAPI } from '@/lib/api';
 import type { Client } from '@/lib/api/types';
+import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -63,7 +64,7 @@ interface ClientFormData {
 
 interface EngagementLetterFormData {
   documentName: string;
-  documentPath: string;
+  documentFile: File | null;
   engagementType: string;
   jobTitle: string;
   feeAmount: string;
@@ -90,7 +91,7 @@ const initialFormData: ClientFormData = {
 
 const initialEngagementLetter: EngagementLetterFormData = {
   documentName: '',
-  documentPath: '',
+  documentFile: null,
   engagementType: '',
   jobTitle: '',
   feeAmount: '',
@@ -113,6 +114,8 @@ export function ClientFormPage() {
     initialEngagementLetter
   );
   const [errors, setErrors] = useState<Partial<Record<keyof ClientFormData, string>>>({});
+  const [duplicateClients, setDuplicateClients] = useState<Client[]>([]);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
 
   const { data: client, isLoading: isLoadingClient } = useQuery({
     queryKey: ['client', id],
@@ -151,10 +154,34 @@ export function ClientFormPage() {
     }
   }, [client]);
 
-  const hasEngagementLetter =
-    engagementLetter.documentName.trim() &&
-    engagementLetter.documentPath.trim() &&
-    engagementLetter.engagementType.trim();
+  useEffect(() => {
+    if (!formData.clientName && !formData.contactEmail && !formData.contactPhone) {
+      setDuplicateClients([]);
+      return;
+    }
+
+    const handle = setTimeout(async () => {
+      try {
+        setCheckingDuplicates(true);
+        const query = formData.clientName || formData.contactEmail || formData.contactPhone;
+        const result = await clientsAPI.list({ search: query, page: 1, pageSize: 5 });
+        const items = result?.data || [];
+        const filtered = items.filter((item: Client) => String(item.id) !== id);
+        setDuplicateClients(filtered);
+      } catch {
+        setDuplicateClients([]);
+      } finally {
+        setCheckingDuplicates(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(handle);
+  }, [formData.clientName, formData.contactEmail, formData.contactPhone, id]);
+
+const hasEngagementLetter =
+  engagementLetter.documentName.trim() &&
+  Boolean(engagementLetter.documentFile) &&
+  engagementLetter.engagementType.trim();
 
   const engagementStatusLabel = hasEngagementLetter
     ? 'Ready'
@@ -178,9 +205,8 @@ export function ClientFormPage() {
   const uploadEngagementLetter = async (clientId: number) => {
     if (!hasEngagementLetter) return;
 
-    const document = await documentsAPI.upload({
+    const document = await documentsAPI.uploadFile(engagementLetter.documentFile!, {
       fileName: engagementLetter.documentName.trim(),
-      filePath: engagementLetter.documentPath.trim(),
       documentType: 'engagement_letter',
       entityType: 'Client',
       entityId: clientId,
@@ -295,14 +321,16 @@ export function ClientFormPage() {
 
   if (isEditing && isLoadingClient) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="p-6">
+    <DashboardLayout>
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
@@ -529,20 +557,30 @@ export function ClientFormPage() {
                         onChange={(e) =>
                           setEngagementLetter((prev) => ({ ...prev, documentName: e.target.value }))
                         }
-                        placeholder="Engagement letter file name"
+                        placeholder="Engagement letter title"
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="documentPath">Document URL or Path *</Label>
+                      <Label htmlFor="documentFile">Upload Engagement Letter *</Label>
                       <Input
-                        id="documentPath"
-                        value={engagementLetter.documentPath}
-                        onChange={(e) =>
-                          setEngagementLetter((prev) => ({ ...prev, documentPath: e.target.value }))
-                        }
-                        placeholder="https://... or storage path"
+                        id="documentFile"
+                        type="file"
+                        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          setEngagementLetter((prev) => ({
+                            ...prev,
+                            documentFile: file,
+                            documentName: prev.documentName || file?.name || '',
+                          }));
+                        }}
                       />
+                      {engagementLetter.documentFile && (
+                        <p className="text-xs text-muted-foreground">
+                          Selected: {engagementLetter.documentFile.name}
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -702,6 +740,31 @@ export function ClientFormPage() {
 
               <Card>
                 <CardHeader>
+                  <CardTitle>Duplicate Check</CardTitle>
+                  <CardDescription>Helps avoid duplicate client records.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {checkingDuplicates && <p className="text-muted-foreground">Checking...</p>}
+                  {!checkingDuplicates && duplicateClients.length === 0 && (
+                    <p className="text-muted-foreground">No similar clients found.</p>
+                  )}
+                  {!checkingDuplicates &&
+                    duplicateClients.map((dup) => (
+                      <div key={dup.id} className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{dup.clientName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {dup.contactEmail || dup.contactPhone || 'No contact info'}
+                          </p>
+                        </div>
+                        <Badge variant="outline">Existing</Badge>
+                      </div>
+                    ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
                   <CardTitle>Engagement Summary</CardTitle>
                   <CardDescription>What HR will see in the queue</CardDescription>
                 </CardHeader>
@@ -779,7 +842,7 @@ export function ClientFormPage() {
           </div>
         </form>
       </div>
-    </div>
+    </DashboardLayout>
   );
 }
 

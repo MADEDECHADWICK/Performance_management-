@@ -16,19 +16,19 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Feedback {
-  id: string;
-  recipient_id: string;
-  giver_id: string | null;
-  feedback_type: string;
-  category: string | null;
-  message: string;
+  id: number;
+  recipient_profile_id: number;
+  giver_profile_id: number;
+  type: string;
+  title: string;
+  content: string;
   is_anonymous: boolean;
-  is_public: boolean;
   created_at: string;
+  status: string;
 }
 
 interface Employee {
-  id: string;
+  id: number;
   first_name: string;
   last_name: string;
 }
@@ -39,15 +39,15 @@ const ContinuousFeedback = () => {
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [surveySummary, setSurveySummary] = useState<any | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string>("");
+  const [currentProfileId, setCurrentProfileId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
-    recipient_id: "",
-    feedback_type: "kudos",
-    category: "",
-    message: "",
+    recipient_profile_id: "",
+    type: "praise",
+    title: "",
+    content: "",
     is_anonymous: false,
-    is_public: false,
   });
 
   useEffect(() => {
@@ -56,21 +56,31 @@ const ContinuousFeedback = () => {
 
   const loadData = async () => {
     try {
-          const user = await authAPI.me();
+      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
 
-      setCurrentUserId(user.id);
+      setCurrentProfileId(user.profileId ?? null);
 
       // Load feedback (received and given)
-      const feedbackData = await apiFetch("GET", `/continuous_feedback?user_id=${user.id}`);
-      setFeedback(feedbackData || []);
+      const feedbackResponse = await apiFetch("GET", "/feedback?page=1&pageSize=100");
+      const feedbackItems =
+        feedbackResponse?.data?.items ?? feedbackResponse?.data ?? feedbackResponse ?? [];
+      setFeedback(Array.isArray(feedbackItems) ? feedbackItems : []);
 
       // Load employees for selection - just get all profiles
-      const employeesData = await apiFetch("GET", `/profiles?exclude_id=${user.id}`);
-      setEmployees(employeesData || []);
+      const employeesResponse = await apiFetch("GET", "/employees?page=1&pageSize=200");
+      const employeesItems =
+        employeesResponse?.data?.items ?? employeesResponse?.data ?? employeesResponse ?? [];
+      const filteredEmployees = Array.isArray(employeesItems)
+        ? employeesItems.filter((emp: any) => emp.id !== user.profileId)
+        : [];
+      setEmployees(filteredEmployees);
+
+      const surveyAnalytics = await apiFetch("GET", "/surveys/analytics");
+      setSurveySummary(surveyAnalytics?.data ?? surveyAnalytics ?? null);
 
     } catch (error: any) {
       toast({
@@ -87,20 +97,18 @@ const ContinuousFeedback = () => {
     e.preventDefault();
     
     try {
-          const user = await authAPI.me();
+      const user = await authAPI.me();
       if (!user) return;
 
       const feedbackData = {
-        recipient_id: formData.recipient_id,
-        giver_id: formData.is_anonymous ? null : user.id,
-        feedback_type: formData.feedback_type,
-        category: formData.category || null,
-        message: formData.message,
+        recipient_profile_id: Number(formData.recipient_profile_id),
+        title: formData.title || "Continuous feedback",
+        content: formData.content,
+        type: formData.type,
         is_anonymous: formData.is_anonymous,
-        is_public: formData.is_public,
       };
 
-      await apiFetch("POST", "/continuous_feedback", feedbackData);
+      await apiFetch("POST", "/feedback", feedbackData);
 
       toast({ 
         title: "Feedback sent successfully",
@@ -120,20 +128,19 @@ const ContinuousFeedback = () => {
 
   const resetForm = () => {
     setFormData({
-      recipient_id: "",
-      feedback_type: "kudos",
-      category: "",
-      message: "",
+      recipient_profile_id: "",
+      type: "praise",
+      title: "",
+      content: "",
       is_anonymous: false,
-      is_public: false,
     });
   };
 
   const getIcon = (type: string) => {
     switch (type) {
-      case "kudos": return <Heart className="h-5 w-5 text-red-500" />;
+      case "praise": return <Heart className="h-5 w-5 text-red-500" />;
       case "recognition": return <Award className="h-5 w-5 text-yellow-500" />;
-      case "constructive": return <MessageSquare className="h-5 w-5 text-blue-500" />;
+      case "improvement": return <MessageSquare className="h-5 w-5 text-blue-500" />;
       default: return <ThumbsUp className="h-5 w-5" />;
     }
   };
@@ -148,8 +155,8 @@ const ContinuousFeedback = () => {
     );
   }
 
-  const receivedFeedback = feedback.filter(f => f.recipient_id === currentUserId);
-  const givenFeedback = feedback.filter(f => f.giver_id === currentUserId);
+  const receivedFeedback = feedback.filter(f => f.recipient_profile_id === currentProfileId);
+  const givenFeedback = feedback.filter(f => f.giver_profile_id === currentProfileId);
 
   return (
     <DashboardLayout>
@@ -176,8 +183,8 @@ const ContinuousFeedback = () => {
                 <div>
                   <Label htmlFor="recipient">Recipient</Label>
                   <Select
-                    value={formData.recipient_id}
-                    onValueChange={(value) => setFormData({ ...formData, recipient_id: value })}
+                    value={formData.recipient_profile_id}
+                    onValueChange={(value) => setFormData({ ...formData, recipient_profile_id: value })}
                     required
                   >
                     <SelectTrigger>
@@ -185,7 +192,7 @@ const ContinuousFeedback = () => {
                     </SelectTrigger>
                     <SelectContent>
                       {employees.map((emp) => (
-                        <SelectItem key={emp.id} value={emp.id}>
+                        <SelectItem key={emp.id} value={String(emp.id)}>
                           {emp.first_name} {emp.last_name}
                         </SelectItem>
                       ))}
@@ -195,40 +202,30 @@ const ContinuousFeedback = () => {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="feedback_type">Feedback Type</Label>
-                    <Select
-                      value={formData.feedback_type}
-                      onValueChange={(value) => setFormData({ ...formData, feedback_type: value })}
+                  <Label htmlFor="feedbackType">Feedback Type</Label>
+                  <Select
+                      value={formData.type}
+                      onValueChange={(value) => setFormData({ ...formData, type: value })}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="kudos">Kudos / Appreciation</SelectItem>
+                        <SelectItem value="praise">Praise / Appreciation</SelectItem>
                         <SelectItem value="recognition">Recognition</SelectItem>
-                        <SelectItem value="constructive">Constructive Feedback</SelectItem>
+                        <SelectItem value="improvement">Constructive Feedback</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
 
                   <div>
-                    <Label htmlFor="category">Category (Optional)</Label>
-                    <Select
-                      value={formData.category}
-                      onValueChange={(value) => setFormData({ ...formData, category: value === "none" ? "" : value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent className="z-50">
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="learning_growth">Learning & Growth</SelectItem>
-                        <SelectItem value="customer_satisfaction">Customer Satisfaction</SelectItem>
-                        <SelectItem value="internal_processes">Internal Processes</SelectItem>
-                        <SelectItem value="teamwork">Teamwork</SelectItem>
-                        <SelectItem value="leadership">Leadership</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="title">Title</Label>
+                    <Input
+                      id="title"
+                      value={formData.title}
+                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                      placeholder="Short summary (optional)"
+                    />
                   </div>
                 </div>
 
@@ -236,8 +233,8 @@ const ContinuousFeedback = () => {
                   <Label htmlFor="message">Message</Label>
                   <Textarea
                     id="message"
-                    value={formData.message}
-                    onChange={(e) => setFormData({ ...formData, message: e.target.value })}
+                    value={formData.content}
+                    onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                     rows={5}
                     placeholder="Share your feedback..."
                     required
@@ -258,20 +255,6 @@ const ContinuousFeedback = () => {
                   />
                 </div>
 
-                <div className="flex items-center justify-between space-x-2 p-4 border rounded-lg">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="public">Make Public</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Allow others to see this feedback
-                    </p>
-                  </div>
-                  <Switch
-                    id="public"
-                    checked={formData.is_public}
-                    onCheckedChange={(checked) => setFormData({ ...formData, is_public: checked })}
-                  />
-                </div>
-
                 <div className="flex justify-end gap-2 pt-4">
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                     Cancel
@@ -285,10 +268,38 @@ const ContinuousFeedback = () => {
 
         <Tabs defaultValue="received" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="received">Received ({feedback.length})</TabsTrigger>
+            <TabsTrigger value="received">Received ({receivedFeedback.length})</TabsTrigger>
             <TabsTrigger value="given">Given</TabsTrigger>
             <TabsTrigger value="public">Public Feed</TabsTrigger>
           </TabsList>
+
+          {surveySummary && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Client Survey Snapshot</CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <div className="text-sm text-muted-foreground">Average Rating</div>
+                  <div className="text-2xl font-semibold">
+                    {surveySummary.averageRating ?? surveySummary.average_rating ?? 0}/5
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Total Responses</div>
+                  <div className="text-2xl font-semibold">
+                    {surveySummary.totalResponses ?? surveySummary.total_responses ?? 0}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Recent Trend</div>
+                  <div className="text-2xl font-semibold">
+                    {surveySummary.trend ?? surveySummary.recent_trend ?? "Stable"}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <TabsContent value="received" className="space-y-4">
             {receivedFeedback.map((item) => (
@@ -296,17 +307,12 @@ const ContinuousFeedback = () => {
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      {getIcon(item.feedback_type)}
+                      {getIcon(item.type)}
                       <div>
-                        <CardTitle className="text-lg">
-                          {item.is_anonymous ? "Anonymous Colleague" : "Colleague"}
-                        </CardTitle>
+                        <CardTitle className="text-lg">{item.title || "Feedback"}</CardTitle>
                         <div className="flex gap-2 mt-1">
-                          <Badge variant="outline">{item.feedback_type}</Badge>
-                          {item.category && (
-                            <Badge variant="secondary">{item.category.replace(/_/g, ' ')}</Badge>
-                          )}
-                          {item.is_public && <Badge>Public</Badge>}
+                          <Badge variant="outline">{item.type}</Badge>
+                          {item.is_anonymous && <Badge>Anonymous</Badge>}
                         </div>
                       </div>
                     </div>
@@ -316,7 +322,7 @@ const ContinuousFeedback = () => {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm">{item.message}</p>
+                  <p className="text-sm">{item.content}</p>
                 </CardContent>
               </Card>
             ))}
@@ -339,14 +345,12 @@ const ContinuousFeedback = () => {
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      {getIcon(item.feedback_type)}
+                      {getIcon(item.type)}
                       <div>
-                        <CardTitle className="text-lg">To: Colleague</CardTitle>
+                        <CardTitle className="text-lg">{item.title || "Feedback"}</CardTitle>
                         <div className="flex gap-2 mt-1">
-                          <Badge variant="outline">{item.feedback_type}</Badge>
-                          {item.category && (
-                            <Badge variant="secondary">{item.category.replace(/_/g, ' ')}</Badge>
-                          )}
+                          <Badge variant="outline">{item.type}</Badge>
+                          {item.is_anonymous && <Badge>Anonymous</Badge>}
                         </div>
                       </div>
                     </div>
@@ -356,7 +360,7 @@ const ContinuousFeedback = () => {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm">{item.message}</p>
+                  <p className="text-sm">{item.content}</p>
                 </CardContent>
               </Card>
             ))}

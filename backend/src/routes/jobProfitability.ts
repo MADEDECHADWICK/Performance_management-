@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
+import { notifyJobLossAlert } from '../services/notificationRecipients';
 
 const router = Router();
 
@@ -187,11 +188,22 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
       return res.status(403).json({ error: 'Only HR, HR Manager, Super Admin, and Admin can recalculate profitability' });
     }
 
-    const profitability = await calculateJobProfitability(parseInt(jobId));
+    const jobIdNumber = parseInt(jobId);
+    const profitability = await calculateJobProfitability(jobIdNumber);
+
+    const job = await prisma.job.findUnique({
+      where: { id: jobIdNumber },
+      select: {
+        id: true,
+        jobName: true,
+        managerProfileId: true,
+        partnerProfileId: true,
+      },
+    });
 
     // Update the JobProfitability record
     const existing = await prisma.jobProfitability.findFirst({
-      where: { job_id: parseInt(jobId) },
+      where: { job_id: jobIdNumber },
     });
 
     let record;
@@ -209,7 +221,7 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
     } else {
       record = await prisma.jobProfitability.create({
         data: {
-          job_id: parseInt(jobId),
+          job_id: jobIdNumber,
           total_revenue: profitability.total_revenue,
           total_cost: profitability.total_cost,
           profit: profitability.profit,
@@ -217,6 +229,10 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
           calculated_at: new Date(),
         },
       });
+    }
+
+    if (job) {
+      await notifyJobLossAlert(job, profitability.profit, profitability.profit_margin, req);
     }
 
     res.json({

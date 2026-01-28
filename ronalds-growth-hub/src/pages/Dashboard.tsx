@@ -7,6 +7,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { apiFetch, authAPI } from "@/integrations/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { Bell } from "lucide-react";
 
 interface PerformanceData {
   overallScore: number;
@@ -19,6 +20,8 @@ interface PerformanceData {
   customerScore: number;
   internalProcessScore: number;
   learningGrowthScore: number;
+  okrScore: number;
+  projectEvaluationScore: number;
 }
 
 const Dashboard = () => {
@@ -27,6 +30,8 @@ const Dashboard = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [isPartner, setIsPartner] = useState(false);
   const [partnerData, setPartnerData] = useState<any>(null);
 
@@ -100,7 +105,7 @@ const Dashboard = () => {
         userProfile?.positionTitle?.toLowerCase().includes('business development');
 
       if (isMarketing) {
-        navigate("/clients", { replace: true });
+        navigate("/marketing-dashboard", { replace: true });
         return;
       }
 
@@ -116,6 +121,7 @@ const Dashboard = () => {
       // Default: Load employee dashboard data
       await loadPersonalPerformance(user.id);
       await loadRecentActivity(user.id);
+      await loadEmployeeNotifications();
     } catch (error) {
       console.error("Error loading dashboard:", error);
       toast({
@@ -128,8 +134,63 @@ const Dashboard = () => {
     }
   };
 
+  const loadEmployeeNotifications = async () => {
+    try {
+      const response = await apiFetch("GET", "/notifications?status=unread&page=1&pageSize=5");
+      const notifications = response?.data ?? response?.items ?? response ?? [];
+      const unread = Array.isArray(notifications) ? notifications : [];
+      setUnreadNotifications(unread);
+
+      const unreadCountResponse = await apiFetch("GET", "/notifications/unread-count");
+      const countPayload = unreadCountResponse?.data ?? unreadCountResponse ?? {};
+      setUnreadCount(countPayload.unreadCount ?? unread.length);
+
+      const lastSeenId = Number(sessionStorage.getItem("lastNotifiedId") || 0);
+      const newest = unread[0];
+      if (newest && newest.id && newest.id !== lastSeenId) {
+        toast({
+          title: newest.title || "New notification",
+          description: newest.message || "You have a new update.",
+        });
+        sessionStorage.setItem("lastNotifiedId", String(newest.id));
+      }
+    } catch (error) {
+      console.error("Error loading notifications:", error);
+    }
+  };
+
   const loadPersonalPerformance = async (userId: string) => {
     try {
+      // Prefer new performance score endpoint (financials tied to collections)
+      const performanceResponse = await apiFetch("GET", "/performance-scores/me");
+      const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
+
+      if (performancePayload?.financial && performancePayload?.overall) {
+        const financial = performancePayload.financial;
+        const nonFinancial = performancePayload.nonFinancial || {};
+        const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
+        const customerRating =
+          typeof nonFinancial.customerSatisfactionScore === "number"
+            ? Math.round((nonFinancial.customerSatisfactionScore / 20) * 10) / 10
+            : 0;
+
+        setPerformance({
+          overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
+          revenueContribution: financial.revenue || 0,
+          billableHours: financial.billableHours || 0,
+          utilizationRate: utilizationPercent,
+          clientRating: customerRating,
+          clientReviewCount: 0,
+          financialScore: Math.round(financial.financialWeighted || 0),
+          customerScore: Math.round(nonFinancial.customerSatisfactionScore || 0),
+          internalProcessScore: Math.round(nonFinancial.internalProcessesScore || 0),
+          learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
+          okrScore: Math.round(nonFinancial.okrScore || 0),
+          projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+        });
+        return;
+      }
+
       const allocations = await apiFetch("GET", `/employee_project_allocations?employee_id=${userId}`);
       const totalRevenue = allocations?.reduce((sum: number, a: any) => sum + (a.allocation_amount || 0), 0) || 0;
       const totalBillableHours = allocations?.reduce((sum: number, a: any) => sum + (a.billable_hours || 0), 0) || 0;
@@ -184,7 +245,9 @@ const Dashboard = () => {
         financialScore: Math.round(financialScore),
         customerScore: Math.round(customerScore),
         internalProcessScore: Math.round(internalProcessScore),
-        learningGrowthScore: Math.round(learningGrowthScore)
+        learningGrowthScore: Math.round(learningGrowthScore),
+        okrScore: 0,
+        projectEvaluationScore: 0
       });
     } catch (error) {
       console.error("Error loading performance:", error);
@@ -522,6 +585,48 @@ const Dashboard = () => {
                     />
                   </div>
                 </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium">OKR Progress</span>
+                    <span className="text-primary font-semibold">
+                      {performance?.okrScore || 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-primary to-success h-2 rounded-full"
+                      style={{ width: `${performance?.okrScore || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium">Project Evaluations</span>
+                    <span className="text-warning font-semibold">
+                      {performance?.projectEvaluationScore || 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
+                      style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium">Project Evaluations</span>
+                    <span className="text-warning font-semibold">
+                      {performance?.projectEvaluationScore || 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
+                      style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
+                    />
+                  </div>
+                </div>
               </div>
               <Link to="/scorecard" className="block mt-4">
                 <Button className="w-full" variant="outline">
@@ -537,6 +642,12 @@ const Dashboard = () => {
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-primary" />
                 Recent Activity
+                {unreadCount > 0 && (
+                  <Badge variant="secondary" className="ml-2">
+                    <Bell className="h-3 w-3 mr-1" />
+                    {unreadCount}
+                  </Badge>
+                )}
               </CardTitle>
               <CardDescription>Your latest updates and actions</CardDescription>
             </CardHeader>
@@ -567,6 +678,16 @@ const Dashboard = () => {
                   View All Activity
                 </Button>
               </Link>
+              {unreadNotifications.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {unreadNotifications.slice(0, 3).map((notif: any) => (
+                    <div key={notif.id} className="rounded-md border border-border/60 bg-muted/40 p-3 text-sm">
+                      <div className="font-medium">{notif.title}</div>
+                      <div className="text-muted-foreground">{notif.message}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

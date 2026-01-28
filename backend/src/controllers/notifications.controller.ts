@@ -18,6 +18,7 @@ export class NotificationController {
       const pageSize = Number(req.query.pageSize) || 10;
       const type = (req.query.type as string) || undefined;
       const status = (req.query.status as string) || undefined;
+      const scope = (req.query.scope as string) || 'mine';
 
       const auth = {
         userId: req.user!.userId,
@@ -25,10 +26,13 @@ export class NotificationController {
         roleName: req.profile!.role?.name,
       };
 
-      const result = await NotificationService.listNotifications(
-        { page, pageSize, type, status },
-        auth
-      );
+      const roleName = auth.roleName?.toLowerCase() || '';
+      const canViewAll = ['admin', 'super_admin', 'hr', 'hr_manager'].includes(roleName);
+
+      const result =
+        scope === 'all' && canViewAll
+          ? await NotificationService.listAllNotifications({ page, pageSize, type, status })
+          : await NotificationService.listNotifications({ page, pageSize, type, status }, auth);
 
       res.json(paginatedResponse(result.notifications, result.total, page, pageSize));
     } catch (error: any) {
@@ -50,8 +54,46 @@ export class NotificationController {
         roleName: req.profile!.role?.name,
       };
 
+      const {
+        recipientProfileId,
+        recipient_profile_id,
+        type,
+        title,
+        message,
+        actionRequired,
+        dueDate,
+        escalationLevel,
+        jobId,
+        clientId,
+        evaluationDefinitionId,
+        timeEntryId,
+        workflowAssignmentId,
+        link,
+        relatedEntityType,
+        related_entity_type,
+        relatedEntityId,
+        related_entity_id,
+      } = req.body;
+
+      const entityType = relatedEntityType ?? related_entity_type;
+      const entityId = relatedEntityId ?? related_entity_id;
+
       const notification = await NotificationService.createNotification(
-        req.body,
+        {
+          recipientProfileId: recipientProfileId ?? recipient_profile_id,
+          type,
+          title,
+          message,
+          actionRequired,
+          dueDate,
+          escalationLevel,
+          jobId: jobId ?? (entityType === 'Job' ? entityId : undefined),
+          clientId: clientId ?? (entityType === 'Client' ? entityId : undefined),
+          evaluationDefinitionId,
+          timeEntryId,
+          workflowAssignmentId,
+          link,
+        },
         auth
       );
 
@@ -188,7 +230,26 @@ export class NotificationController {
    */
   static async sendBatchNotifications(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { recipient_profile_ids, type, title, message, related_entity_type, related_entity_id } = req.body;
+      const {
+        recipientProfileIds,
+        recipient_profile_ids,
+        type,
+        title,
+        message,
+        relatedEntityType,
+        related_entity_type,
+        relatedEntityId,
+        related_entity_id,
+        actionRequired,
+        dueDate,
+        escalationLevel,
+        jobId,
+        clientId,
+        evaluationDefinitionId,
+        timeEntryId,
+        workflowAssignmentId,
+        link,
+      } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -196,20 +257,35 @@ export class NotificationController {
         roleName: req.profile!.role?.name,
       };
 
+      const recipients = recipientProfileIds ?? recipient_profile_ids ?? [];
+
+      const entityType = relatedEntityType ?? related_entity_type;
+      const entityId = relatedEntityId ?? related_entity_id;
+
+      const mappedJobId = jobId ?? (entityType === 'Job' ? entityId : undefined);
+      const mappedClientId = clientId ?? (entityType === 'Client' ? entityId : undefined);
+
       const result = await NotificationService.sendBatchNotifications(
-        recipient_profile_ids,
+        recipients,
         {
           type,
           title,
           message,
-          related_entity_type,
-          related_entity_id,
+          actionRequired,
+          dueDate,
+          escalationLevel,
+          jobId: mappedJobId,
+          clientId: mappedClientId,
+          evaluationDefinitionId,
+          timeEntryId,
+          workflowAssignmentId,
+          link,
         },
         auth
       );
 
       res.status(201).json(
-        successResponse(result, `Notifications sent to ${recipient_profile_ids.length} recipients`, 201)
+        successResponse(result, `Notifications sent to ${recipients.length} recipients`, 201)
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(

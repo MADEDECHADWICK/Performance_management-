@@ -7,6 +7,7 @@
  */
 
 import { prisma } from '../prisma';
+import { NotificationService } from './notifications.service';
 
 interface AuthContext {
   userId: number;
@@ -24,6 +25,35 @@ interface ListOptions {
 }
 
 export class TimeEntryService {
+  private static async resolveHourlyRate(jobId: number, employeeProfileId: number) {
+    const assignment = await prisma.jobStaffAssignment.findFirst({
+      where: { jobId, employeeProfileId },
+      select: { assignedHourlyRate: true },
+    });
+
+    return Number(assignment?.assignedHourlyRate || 0);
+  }
+
+  private static async calculateAmounts(
+    jobId: number,
+    employeeProfileId: number,
+    hours: number,
+    billable: boolean
+  ) {
+    const hourlyRate = await TimeEntryService.resolveHourlyRate(jobId, employeeProfileId);
+    const totalHours = Number(hours || 0);
+    const billableAmount = billable ? totalHours * hourlyRate : 0;
+    const costAmount = totalHours * hourlyRate;
+    const profitLoss = billableAmount - costAmount;
+
+    return {
+      hourlyRate,
+      billableAmount,
+      costAmount,
+      profitLoss,
+    };
+  }
+
   private static async getAllocationSummary(jobId: number, employeeProfileId: number) {
     const jobCosting = await prisma.jobCosting.findUnique({
       where: { jobId },
@@ -50,6 +80,116 @@ export class TimeEntryService {
       requiresAllocation: true,
       employeeAllocatedHours,
       jobAllocatedHours,
+    };
+  }
+
+  /**
+   * Get allocation + usage summary for a job (employee scoped)
+   */
+  static async getJobAllocationSummary(jobId: number, auth: AuthContext) {
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        staffing: {
+          where: { employeeProfileId: auth.profileId },
+        },
+        jobCosting: {
+          include: { allocations: true, budgetCap: true },
+        },
+      },
+    });
+
+    if (!job) {
+      throw { statusCode: 404, message: 'Job not found' };
+    }
+
+    const roleName = auth.roleName || '';
+    const isAdmin = roleName === 'admin';
+    const isHr = roleName === 'hr' || roleName === 'hr_manager';
+    const isPartner = roleName === 'partner' && job.partnerProfileId === auth.profileId;
+    const isManager = roleName === 'manager' && job.managerProfileId === auth.profileId;
+    const isStaffAssigned = job.staffing.length > 0;
+
+    if (!isAdmin && !isHr && !isPartner && !isManager && !isStaffAssigned) {
+      throw { statusCode: 403, message: 'You do not have permission to view this job summary' };
+    }
+
+    const jobCosting = job.jobCosting;
+    const requiresAllocation = !!jobCosting;
+
+    const employeeAllocatedHours = jobCosting
+      ? jobCosting.allocations
+          .filter((alloc) => alloc.employeeProfileId === auth.profileId)
+          .reduce((sum, alloc) => sum + Number(alloc.allocatedHours), 0)
+      : 0;
+
+    const jobAllocatedHours = Number(
+      jobCosting?.budgetCap?.totalAllocatedHours ?? jobCosting?.totalEstimatedHours ?? 0
+    );
+
+    const approvedExtraJob = await prisma.timeEntryApprovalRequest.aggregate({
+      where: {
+        jobId,
+        status: 'approved',
+      },
+      _sum: { additionalHoursRequested: true },
+    });
+
+    const approvedExtraEmployee = await prisma.timeEntryApprovalRequest.aggregate({
+      where: {
+        jobId,
+        employeeProfileId: auth.profileId,
+        status: 'approved',
+      },
+      _sum: { additionalHoursRequested: true },
+    });
+
+    const approvedExtraJobHours = Number(approvedExtraJob._sum.additionalHoursRequested || 0);
+    const approvedExtraEmployeeHours = Number(
+      approvedExtraEmployee._sum.additionalHoursRequested || 0
+    );
+
+    const loggedJobHoursResult = await prisma.timeEntry.aggregate({
+      where: {
+        jobId,
+        status: { in: ['pending', 'submitted', 'approved'] },
+      },
+      _sum: { hours: true },
+    });
+
+    const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
+      where: {
+        jobId,
+        employeeProfileId: auth.profileId,
+        status: { in: ['pending', 'submitted', 'approved'] },
+      },
+      _sum: { hours: true },
+    });
+
+    const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
+    const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+    const baseJobHours = Number(jobAllocatedHours || job.budgetHours || 0);
+    const allowedJobHours = baseJobHours + approvedExtraJobHours;
+    const allowedEmployeeHours = employeeAllocatedHours + approvedExtraEmployeeHours;
+
+    const remainingJobHours = Math.max(0, allowedJobHours - loggedJobHours);
+    const remainingEmployeeHours = Math.max(0, allowedEmployeeHours - loggedEmployeeHours);
+
+    return {
+      jobId,
+      jobBudgetHours: Number(job.budgetHours || 0),
+      requiresAllocation,
+      employeeAllocatedHours,
+      jobAllocatedHours: baseJobHours,
+      approvedExtraJobHours,
+      approvedExtraEmployeeHours,
+      loggedJobHours,
+      loggedEmployeeHours,
+      allowedJobHours,
+      allowedEmployeeHours,
+      remainingJobHours,
+      remainingEmployeeHours,
     };
   }
   /**
@@ -88,6 +228,11 @@ export class TimeEntryService {
       // Partners only see their own jobs' time entries
       where.job = {
         partnerProfileId: auth.profileId,
+      };
+    } else if (auth.roleName === 'manager') {
+      // Managers only see their own jobs' time entries
+      where.job = {
+        managerProfileId: auth.profileId,
       };
     }
 
@@ -259,6 +404,14 @@ export class TimeEntryService {
       }
     }
 
+    const billable = input.billable ?? true;
+    const amounts = await TimeEntryService.calculateAmounts(
+      Number(jobId),
+      auth.profileId,
+      Number(hours),
+      billable
+    );
+
     // ✅ CREATE TIME ENTRY
     const timeEntry = await prisma.timeEntry.create({
       data: {
@@ -268,7 +421,10 @@ export class TimeEntryService {
         description,
         dateWorked: new Date(dateWorked),
         taskId: taskId ? Number(taskId) : null,
-        billable: input.billable ?? true,
+        billable,
+        billableAmount: amounts.billableAmount,
+        costAmount: amounts.costAmount,
+        profitLoss: amounts.profitLoss,
         status: 'pending',
       },
       include: {
@@ -356,7 +512,7 @@ export class TimeEntryService {
     input: any,
     auth: AuthContext
   ) {
-    const { hours, description } = input;
+    const { hours, description, billable } = input;
 
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
@@ -419,11 +575,25 @@ export class TimeEntryService {
       }
     }
 
+    const updatedHours = typeof hours === 'number' ? hours : Number(timeEntry.hours || 0);
+    const updatedBillable =
+      typeof billable === 'boolean' ? billable : Boolean(timeEntry.billable);
+    const amounts = await TimeEntryService.calculateAmounts(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId,
+      updatedHours,
+      updatedBillable
+    );
+
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
-        hours: hours || timeEntry.hours,
+        hours: hours ?? timeEntry.hours,
         description: description || timeEntry.description,
+        billable: updatedBillable,
+        billableAmount: amounts.billableAmount,
+        costAmount: amounts.costAmount,
+        profitLoss: amounts.profitLoss,
         updatedAt: new Date(),
       },
       include: {
@@ -522,7 +692,7 @@ export class TimeEntryService {
       },
       include: {
         job: {
-          select: { id: true, jobName: true },
+          select: { id: true, jobName: true, managerProfileId: true },
         },
         employee: {
           select: { id: true, firstName: true, lastName: true },
@@ -530,7 +700,21 @@ export class TimeEntryService {
       },
     });
 
-    // TODO: Trigger notification to job manager/partner
+    if (updated.job.managerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: updated.job.managerProfileId,
+          type: 'action',
+          title: 'Time entry submitted for approval',
+          message: `${updated.employee.firstName} ${updated.employee.lastName} submitted time for "${updated.job.jobName}".`,
+          actionRequired: true,
+          jobId: updated.job.id,
+          timeEntryId: updated.id,
+          link: `/workload-management?jobId=${updated.job.id}`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+    }
 
     return updated;
   }
@@ -588,12 +772,22 @@ export class TimeEntryService {
       };
     }
 
-    const updated = await prisma.timeEntry.update({
-      where: { id: timeEntryId },
-      data: {
-        status: 'approved',
-        approvedByProfileId: auth.profileId,
+    const amounts = await TimeEntryService.calculateAmounts(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId,
+      Number(timeEntry.hours || 0),
+      Boolean(timeEntry.billable)
+    );
+
+      const updated = await prisma.timeEntry.update({
+        where: { id: timeEntryId },
+        data: {
+          status: 'approved',
+          approvedByProfileId: auth.profileId,
         approvedAt: new Date(),
+        billableAmount: amounts.billableAmount,
+        costAmount: amounts.costAmount,
+        profitLoss: amounts.profitLoss,
         updatedAt: new Date(),
       },
       include: {
@@ -606,13 +800,25 @@ export class TimeEntryService {
         approver: {
           select: { id: true, firstName: true, lastName: true },
         },
-      },
-    });
+        },
+      });
 
-    // TODO: Trigger notification to employee
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: timeEntry.employeeProfileId,
+          type: 'info',
+          title: 'Time entry approved',
+          message: `Your time entry for "${updated.job.jobName}" was approved.`,
+          actionRequired: false,
+          jobId: updated.job.id,
+          timeEntryId: updated.id,
+          link: `/timesheets`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
 
-    return updated;
-  }
+      return updated;
+    }
 
   /**
    * Reject time entry with reason
@@ -667,11 +873,11 @@ export class TimeEntryService {
       };
     }
 
-    const updated = await prisma.timeEntry.update({
-      where: { id: timeEntryId },
-      data: {
-        status: 'rejected',
-        approvedByProfileId: auth.profileId,
+      const updated = await prisma.timeEntry.update({
+        where: { id: timeEntryId },
+        data: {
+          status: 'rejected',
+          approvedByProfileId: auth.profileId,
         approvedAt: new Date(),
         updatedAt: new Date(),
       },
@@ -685,13 +891,25 @@ export class TimeEntryService {
         approver: {
           select: { id: true, firstName: true, lastName: true },
         },
-      },
-    });
+        },
+      });
 
-    // TODO: Trigger notification to employee
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: timeEntry.employeeProfileId,
+          type: 'action',
+          title: 'Time entry rejected',
+          message: `Your time entry for "${updated.job.jobName}" was rejected.`,
+          actionRequired: true,
+          jobId: updated.job.id,
+          timeEntryId: updated.id,
+          link: `/timesheets`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
 
-    return updated;
-  }
+      return updated;
+    }
 
   /**
    * Start real-time timer
@@ -816,11 +1034,21 @@ export class TimeEntryService {
       }
     }
 
+    const amounts = await TimeEntryService.calculateAmounts(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId,
+      totalHours,
+      Boolean(timeEntry.billable)
+    );
+
     const updated = await prisma.timeEntry.update({
       where: { id: timeEntryId },
       data: {
         startedAt: null,
         hours: totalHours,
+        billableAmount: amounts.billableAmount,
+        costAmount: amounts.costAmount,
+        profitLoss: amounts.profitLoss,
         updatedAt: new Date(),
       },
       include: {
@@ -911,23 +1139,41 @@ export class TimeEntryService {
       }
     }
 
-    const result = await prisma.timeEntry.updateMany({
+    const entries = await prisma.timeEntry.findMany({
       where: {
         id: { in: timeEntryIds },
         status: 'submitted',
       },
-      data: {
-        status: 'approved',
-        approvedByProfileId: auth.profileId,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      },
     });
 
+    const results = await Promise.all(
+      entries.map(async (entry) => {
+        const amounts = await TimeEntryService.calculateAmounts(
+          entry.jobId,
+          entry.employeeProfileId,
+          Number(entry.hours || 0),
+          Boolean(entry.billable)
+        );
+
+        return prisma.timeEntry.update({
+          where: { id: entry.id },
+          data: {
+            status: 'approved',
+            approvedByProfileId: auth.profileId,
+            approvedAt: new Date(),
+            billableAmount: amounts.billableAmount,
+            costAmount: amounts.costAmount,
+            profitLoss: amounts.profitLoss,
+            updatedAt: new Date(),
+          },
+        });
+      })
+    );
+
     return {
-      approved: result.count,
+      approved: results.length,
       total: timeEntryIds.length,
-      failed: timeEntryIds.length - result.count,
+      failed: timeEntryIds.length - results.length,
     };
   }
 
@@ -1000,6 +1246,76 @@ export class TimeEntryService {
       },
     });
 
+    const wouldExceedJobAllocation =
+      allocationSummary?.requiresAllocation &&
+      Number(allocationSummary.jobAllocatedHours || 0) > 0 &&
+      currentLoggedHours + input.additionalHours > Number(allocationSummary.jobAllocatedHours || 0);
+
+    if (wouldExceedJobAllocation) {
+      const gmpProfiles = await prisma.profile.findMany({
+        where: {
+          user: {
+            roles: {
+              some: {
+                role: { name: { in: ['gmp', 'group_managing_partner'] } },
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      await Promise.all(
+        gmpProfiles.map((profile) =>
+          NotificationService.createNotification(
+            {
+              recipientProfileId: profile.id,
+              type: 'alert',
+              title: `Over-budget hours requested for ${job.jobName}`,
+              message: `An additional hours request would exceed allocated hours on "${job.jobName}".`,
+              actionRequired: true,
+              jobId: job.id,
+              link: `/jobs/${job.id}`,
+            },
+            { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+          )
+        )
+      );
+    }
+
+    const requestTitle = `Additional hours requested for ${job.jobName}`;
+    const requestMessage = `A team member requested ${input.additionalHours} more hours for "${job.jobName}".`;
+
+    if (job.managerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.managerProfileId,
+          type: 'action',
+          title: requestTitle,
+          message: requestMessage,
+          actionRequired: true,
+          jobId: job.id,
+          link: `/workload-management?jobId=${job.id}`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+    }
+
+    if (job.partnerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.partnerProfileId,
+          type: 'action',
+          title: requestTitle,
+          message: requestMessage,
+          actionRequired: true,
+          jobId: job.id,
+          link: `/partner-dashboard?jobId=${job.id}`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+    }
+
     return request;
   }
 
@@ -1021,10 +1337,21 @@ export class TimeEntryService {
     } else if (filters.employeeProfileId) {
       where.employeeProfileId = filters.employeeProfileId;
     }
+    if (auth.roleName === 'manager') {
+      where.job = { managerProfileId: auth.profileId };
+    }
+    if (auth.roleName === 'partner') {
+      where.job = { partnerProfileId: auth.profileId };
+    }
 
     const requests = await prisma.timeEntryApprovalRequest.findMany({
       where,
       orderBy: { requestedAt: 'desc' },
+      include: {
+        job: { select: { id: true, jobName: true, client: { select: { id: true, clientName: true } } } },
+        employee: { select: { id: true, firstName: true, lastName: true } },
+        approver: { select: { id: true, firstName: true, lastName: true } },
+      },
     });
 
     return requests;
@@ -1059,16 +1386,31 @@ export class TimeEntryService {
       throw { statusCode: 403, message: 'Not authorized to approve this request' };
     }
 
-    return prisma.timeEntryApprovalRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'approved',
-        approvedByProfileId: auth.profileId,
-        approvalNotes,
-        approvedAt: new Date(),
-      },
-    });
-  }
+      const updated = await prisma.timeEntryApprovalRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'approved',
+          approvedByProfileId: auth.profileId,
+          approvalNotes,
+          approvedAt: new Date(),
+        },
+      });
+
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: request.employeeProfileId,
+          type: 'info',
+          title: 'Additional hours approved',
+          message: `Your additional hours request for "${request.job.jobName}" was approved.`,
+          actionRequired: false,
+          jobId: request.jobId,
+          link: `/timesheets`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+
+      return updated;
+    }
 
   /**
    * Reject additional hours request
@@ -1099,16 +1441,31 @@ export class TimeEntryService {
       throw { statusCode: 403, message: 'Not authorized to reject this request' };
     }
 
-    return prisma.timeEntryApprovalRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'rejected',
-        approvedByProfileId: auth.profileId,
-        approvalNotes,
-        approvedAt: new Date(),
-      },
-    });
-  }
+      const updated = await prisma.timeEntryApprovalRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'rejected',
+          approvedByProfileId: auth.profileId,
+          approvalNotes,
+          approvedAt: new Date(),
+        },
+      });
+
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: request.employeeProfileId,
+          type: 'action',
+          title: 'Additional hours rejected',
+          message: `Your additional hours request for "${request.job.jobName}" was rejected.`,
+          actionRequired: true,
+          jobId: request.jobId,
+          link: `/timesheets`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+
+      return updated;
+    }
 
   /**
    * Get time entry summary for a job

@@ -108,6 +108,28 @@ class EmployeeOnboardingCaseServiceImpl {
       }
     }
 
+    const defaultBillingRole = await prisma.positionRole.findFirst({
+      where: {
+        name: { in: ["Associate", "Trainee"] },
+        isActive: true,
+      },
+      orderBy: { name: "asc" },
+    });
+
+    if (input.profileId && defaultBillingRole) {
+      const profile = await prisma.profile.findUnique({
+        where: { id: input.profileId },
+        select: { id: true, roleId: true },
+      });
+
+      if (profile && !profile.roleId) {
+        await prisma.profile.update({
+          where: { id: profile.id },
+          data: { roleId: defaultBillingRole.id },
+        });
+      }
+    }
+
     const created = await prisma.employeeOnboardingCase.create({
       data: {
         candidateId: input.candidateId,

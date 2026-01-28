@@ -3,10 +3,26 @@ import UserRoleManagement from "@/components/UserRoleManagement";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { 
-  User, Star, TrendingUp, Target, FileText, Bell, Lock,
-  Building2, Users, Calendar, BarChart3, DollarSign, 
-  ChartCandlestick, TrendingDown, Award, AlertCircle, Shield
+import { Badge } from "@/components/ui/badge";
+import {
+  User,
+  Star,
+  TrendingUp,
+  Target,
+  FileText,
+  Bell,
+  Lock,
+  Building2,
+  Users,
+  Calendar,
+  BarChart3,
+  DollarSign,
+  ChartCandlestick,
+  TrendingDown,
+  Award,
+  AlertCircle,
+  Shield,
+  Circle
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
@@ -34,16 +50,35 @@ interface PerformanceData {
   customerScore: number;
   internalProcessScore: number;
   learningGrowthScore: number;
+  okrScore: number;
+  projectEvaluationScore: number;
 }
 
 interface CompanyMetrics {
   totalEmployees: number;
-  employeeGrowth: number;
   activeEvaluations: number;
   pendingEvaluations: number;
   avgPerformance: number;
-  performanceChange: number;
-  totalRevenue: number;
+  projectedMonth: number;
+  collectedMonth: number;
+  varianceMonth: number;
+  totalCollected: number;
+  totalOutstanding: number;
+  totalFees: number;
+  collectionRate: number;
+  firmProfit: number;
+  utilizationRate: number;
+  overdueJobs: number;
+}
+
+interface NotificationCard {
+  id: number;
+  title: string;
+  message: string;
+  type: string;
+  isRead: boolean;
+  createdAt: string;
+  link?: string;
 }
 
 const HRDashboard = () => {
@@ -52,6 +87,8 @@ const HRDashboard = () => {
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
   const [companyMetrics, setCompanyMetrics] = useState<CompanyMetrics | null>(null);
   const [subordinates, setSubordinates] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<NotificationCard[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
@@ -59,18 +96,34 @@ const HRDashboard = () => {
     loadAllData();
   }, []);
 
+  const mapProfile = (user: any) => {
+    const profile = user?.profile;
+    if (!profile) return null;
+    return {
+      first_name: profile.firstName ?? profile.first_name ?? "",
+      last_name: profile.lastName ?? profile.last_name ?? "",
+      email: user.email ?? profile.email ?? "",
+      position: profile.positionTitle ?? profile.position ?? profile.role?.name ?? "",
+      department_id: profile.departmentId ?? profile.department_id ?? "",
+      phone: profile.phoneNumber ?? profile.phone_number ?? "",
+    } as Profile;
+  };
+
   const loadAllData = async () => {
     try {
       const user = await authAPI.me();
       if (!user) return;
 
       await Promise.all([
-        loadProfile(user.id),
-        loadPendingTasks(user.id),
-        loadPersonalPerformance(user.id),
-        loadCompanyMetrics(),
-        loadSubordinates(user.id)
-      ]);
+      loadPendingTasks(user.id),
+      loadNotifications(),
+      loadPersonalPerformance(user.id),
+      loadCompanyMetrics(),
+      loadSubordinates(user.id)
+    ]);
+
+      const mapped = mapProfile(user);
+      if (mapped) setProfile(mapped);
     } catch (error) {
       console.error("Error loading data:", error);
       toast({
@@ -83,18 +136,76 @@ const HRDashboard = () => {
     }
   };
 
-  const loadProfile = async (userId: string) => {
-    const data = await apiFetch('GET', `/profiles?user_id=${userId}`);
-    setProfile(data);
-  };
-
   const loadPendingTasks = async (userId: string) => {
     const notifs = await apiFetch('GET', `/notifications?user_id=${userId}&is_read=false`);
     setPendingTasks((notifs || []).length || 0);
   };
 
+  const loadNotifications = async () => {
+    try {
+      const response = await apiFetch("GET", "/notifications?page=1&pageSize=5");
+      const payload = response?.data ?? response ?? {};
+      const items = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      setNotifications(Array.isArray(items) ? items : []);
+
+      const unreadResponse = await apiFetch("GET", "/notifications/unread-count");
+      const unreadPayload = unreadResponse?.data ?? unreadResponse ?? {};
+      const unread = unreadPayload.unreadCount ?? unreadPayload.unread ?? 0;
+      setUnreadCount(unread);
+    } catch (error) {
+      console.error("Error loading notifications:", error);
+    }
+  };
+
+  const markNotificationRead = async (id: number) => {
+    try {
+      await apiFetch("PATCH", `/notifications/${id}/read`);
+      await loadNotifications();
+    } catch (error) {
+      console.error("Error marking notification read", error);
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    try {
+      await apiFetch("PATCH", "/notifications/read-all");
+      await loadNotifications();
+    } catch (error) {
+      console.error("Error marking all notifications read", error);
+    }
+  };
+
   const loadPersonalPerformance = async (userId: string) => {
     try {
+      const performanceResponse = await apiFetch('GET', '/performance-scores/me');
+      const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
+
+      if (performancePayload?.financial && performancePayload?.overall) {
+        const financial = performancePayload.financial;
+        const nonFinancial = performancePayload.nonFinancial || {};
+        const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
+        const customerRating =
+          typeof nonFinancial.customerSatisfactionScore === 'number'
+            ? Math.round((nonFinancial.customerSatisfactionScore / 20) * 10) / 10
+            : 0;
+
+        setPerformance({
+          overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
+          revenueContribution: financial.revenue || 0,
+          billableHours: financial.billableHours || 0,
+          utilizationRate: utilizationPercent,
+          clientRating: customerRating,
+          clientReviewCount: 0,
+          financialScore: Math.round(financial.financialWeighted || 0),
+          customerScore: Math.round(nonFinancial.customerSatisfactionScore || 0),
+          internalProcessScore: Math.round(nonFinancial.internalProcessesScore || 0),
+          learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
+          okrScore: Math.round(nonFinancial.okrScore || 0),
+          projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+        });
+        return;
+      }
+
       // Get employee allocations for revenue contribution
       const allocations = await apiFetch('GET', `/employee_project_allocations?employee_id=${userId}`);
 
@@ -150,7 +261,9 @@ const HRDashboard = () => {
         financialScore: Math.round(financialScore),
         customerScore: Math.round(customerScore),
         internalProcessScore: Math.round(internalProcessScore),
-        learningGrowthScore: Math.round(learningGrowthScore)
+        learningGrowthScore: Math.round(learningGrowthScore),
+        okrScore: 0,
+        projectEvaluationScore: 0
       });
     } catch (error) {
       console.error("Error loading performance:", error);
@@ -159,35 +272,19 @@ const HRDashboard = () => {
 
   const loadCompanyMetrics = async () => {
     try {
-      // Get total employees count
-      const profiles = await apiFetch('GET', '/profiles?status=active');
-      const totalEmployees = profiles?.length || 0;
-
-      // Get active evaluations
-      const evalCycles = await apiFetch('GET', '/evaluation-cycles?status=active');
-      const activeEvaluations = evalCycles?.length || 0;
-
-      // Get pending evaluation assignments
-      const pendingAssignments = await apiFetch('GET', '/evaluation_assignments?status=pending');
-      const pendingEvaluations = pendingAssignments?.length || 0;
-
-      // Get average performance from all employee allocations
-      const allAllocations = await apiFetch('GET', '/employee_project_allocations');
-      const totalRevenue = allAllocations?.reduce((sum: any, a: any) => sum + (a.allocation_amount || 0), 0) || 0;
-
-      setCompanyMetrics({
-        totalEmployees: totalEmployees || 0,
-        employeeGrowth: 8, // TODO: Calculate from historical data
-        activeEvaluations: activeEvaluations || 0,
-        pendingEvaluations: pendingEvaluations || 0,
-        avgPerformance: 87.2, // TODO: Calculate from actual performance data
-        performanceChange: 3.2, // TODO: Calculate from historical data
-        totalRevenue: totalRevenue
-      });
+      const metrics = await apiFetch('GET', '/hr-dashboard/company-metrics');
+      setCompanyMetrics(metrics);
     } catch (error) {
       console.error("Error loading company metrics:", error);
     }
   };
+
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 0,
+    }).format(amount);
 
   const loadSubordinates = async (userId: string) => {
     try {
@@ -242,7 +339,7 @@ const HRDashboard = () => {
 
           {/* My Performance Tab - Personal Data Only */}
           <TabsContent value="personal" className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
@@ -296,6 +393,19 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     {performance?.clientReviewCount || 0} reviews
                   </p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Project Eval Score</CardTitle>
+                  <Award className="h-4 w-4 text-warning" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-foreground">
+                    {performance?.projectEvaluationScore || 0}%
+                  </div>
+                  <p className="text-xs text-muted-foreground">Job-based reviews</p>
                 </CardContent>
               </Card>
             </div>
@@ -366,6 +476,34 @@ const HRDashboard = () => {
                         />
                       </div>
                     </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium">OKR Progress</span>
+                        <span className="text-primary font-semibold">
+                          {performance?.okrScore || 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-2">
+                        <div
+                          className="bg-gradient-to-r from-primary to-success h-2 rounded-full"
+                          style={{ width: `${performance?.okrScore || 0}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium">Project Evaluations</span>
+                        <span className="text-warning font-semibold">
+                          {performance?.projectEvaluationScore || 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-2">
+                        <div
+                          className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
+                          style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
                   <Link to="/scorecard" className="block mt-4">
                     <Button className="w-full" variant="outline">
@@ -426,7 +564,7 @@ const HRDashboard = () => {
 
           {/* Company Overview Tab - Analytics for HR/Admin */}
           <TabsContent value="company" className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Total Employees</CardTitle>
@@ -436,9 +574,7 @@ const HRDashboard = () => {
                   <div className="text-2xl font-bold text-foreground">
                     {companyMetrics?.totalEmployees || 0}
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    +{companyMetrics?.employeeGrowth || 0} from last month
-                  </p>
+                  <p className="text-xs text-muted-foreground">Active employees</p>
                 </CardContent>
               </Card>
 
@@ -459,29 +595,59 @@ const HRDashboard = () => {
 
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Avg Performance</CardTitle>
+                  <CardTitle className="text-sm font-medium">Collected (Month)</CardTitle>
                   <TrendingUp className="h-4 w-4 text-success" />
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-foreground">
-                    {companyMetrics?.avgPerformance || 0}%
+                    {formatCurrency(companyMetrics?.collectedMonth || 0)}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    +{companyMetrics?.performanceChange || 0}% from last quarter
+                    Projected {formatCurrency(companyMetrics?.projectedMonth || 0)}
                   </p>
                 </CardContent>
               </Card>
 
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+                  <CardTitle className="text-sm font-medium">Firm Profit (Month)</CardTitle>
                   <DollarSign className="h-4 w-4 text-secondary" />
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-foreground">
-                    KES {((companyMetrics?.totalRevenue || 0) / 1000000).toFixed(0)}M
+                    {formatCurrency(companyMetrics?.firmProfit || 0)}
                   </div>
-                  <p className="text-xs text-muted-foreground">Current fiscal year</p>
+                  <p className="text-xs text-muted-foreground">
+                    Collection rate {(companyMetrics?.collectionRate || 0).toFixed(1)}%
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Utilization</CardTitle>
+                  <ChartCandlestick className="h-4 w-4 text-primary" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-foreground">
+                    {(companyMetrics?.utilizationRate || 0).toFixed(0)}%
+                  </div>
+                  <p className="text-xs text-muted-foreground">Billable vs total hours</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Overdue Jobs</CardTitle>
+                  <AlertCircle className="h-4 w-4 text-warning" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-foreground">
+                    {companyMetrics?.overdueJobs || 0}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Outstanding {formatCurrency(companyMetrics?.totalOutstanding || 0)}
+                  </p>
                 </CardContent>
               </Card>
             </div>
@@ -520,6 +686,74 @@ const HRDashboard = () => {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
+                    <Bell className="h-5 w-5 text-primary" />
+                    Notifications
+                  </CardTitle>
+                  <CardDescription>
+                    {unreadCount} new {unreadCount === 1 ? "notification" : "notifications"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {notifications.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No recent notifications.
+                    </p>
+                  ) : (
+                    notifications.map((notification) => (
+                      <div
+                        key={notification.id}
+                        className="border border-border rounded-lg p-3 bg-background flex justify-between gap-3"
+                      >
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{notification.title}</span>
+                            {!notification.isRead && (
+                              <Badge variant="secondary">Unread</Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-muted-foreground truncate">
+                            {notification.message}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(notification.createdAt).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="flex flex-col justify-between">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => markNotificationRead(notification.id)}
+                            disabled={notification.isRead}
+                          >
+                            {notification.isRead ? "Read" : "Mark read"}
+                          </Button>
+                          {notification.link && (
+                            <Link to={notification.link}>
+                              <Button size="sm" variant="link">
+                                View
+                              </Button>
+                            </Link>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+                <div className="flex items-center justify-between px-6 pb-4">
+                  <Button variant="ghost" size="sm" onClick={markAllNotificationsRead}>
+                    Mark all read
+                  </Button>
+                  <Link to="/notifications">
+                    <Button variant="link" size="sm">
+                      View all
+                    </Button>
+                  </Link>
+                </div>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
                     <Award className="h-5 w-5 text-primary" />
                     Performance Insights
                   </CardTitle>
@@ -529,22 +763,28 @@ const HRDashboard = () => {
                   <div className="flex items-start gap-3 text-sm">
                     <div className="w-2 h-2 rounded-full bg-success mt-2" />
                     <div>
-                      <p className="font-medium">Top performing department</p>
-                      <p className="text-muted-foreground text-xs">Tax Advisory at 92% overall score</p>
+                      <p className="font-medium">Average performance</p>
+                      <p className="text-muted-foreground text-xs">
+                        {companyMetrics?.avgPerformance ? `${companyMetrics.avgPerformance.toFixed(1)}%` : 'No recent scores'}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3 text-sm">
                     <div className="w-2 h-2 rounded-full bg-info mt-2" />
                     <div>
-                      <p className="font-medium">Evaluation completion</p>
-                      <p className="text-muted-foreground text-xs">75% of Q1 evaluations completed</p>
+                      <p className="font-medium">Projected vs collected</p>
+                      <p className="text-muted-foreground text-xs">
+                        Variance {formatCurrency(companyMetrics?.varianceMonth || 0)}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3 text-sm">
                     <div className="w-2 h-2 rounded-full bg-warning mt-2" />
                     <div>
-                      <p className="font-medium">Action required</p>
-                      <p className="text-muted-foreground text-xs">12 pending manager reviews</p>
+                      <p className="font-medium">Collections status</p>
+                      <p className="text-muted-foreground text-xs">
+                        Total collected {formatCurrency(companyMetrics?.totalCollected || 0)}
+                      </p>
                     </div>
                   </div>
                 </CardContent>
@@ -653,6 +893,24 @@ const HRDashboard = () => {
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
+                    <DollarSign className="h-5 w-5 text-primary" />
+                    Positions & Rates
+                  </CardTitle>
+                  <CardDescription>Manage billing positions and hourly rates</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Link to="/positions-rates">
+                    <Button className="w-full">
+                      <DollarSign className="h-4 w-4 mr-2" />
+                      Manage Positions
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
                     <FileText className="h-5 w-5 text-primary" />
                     System Settings
                   </CardTitle>
@@ -676,4 +934,3 @@ const HRDashboard = () => {
 };
 
 export default HRDashboard;
-

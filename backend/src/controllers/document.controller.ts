@@ -50,11 +50,13 @@ export class DocumentController {
     try {
       const auth = buildAuth(req);
 
+      const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+
       const {
-        fileName,
-        filePath,
-        fileSize,
-        mimeType,
+        fileName: bodyFileName,
+        filePath: bodyFilePath,
+        fileSize: bodyFileSize,
+        mimeType: bodyMimeType,
         documentType,
         entityType,
         entityId,
@@ -62,6 +64,19 @@ export class DocumentController {
         description,
         isRequired,
       } = req.body;
+
+      const fileName = bodyFileName || uploadedFile?.originalname;
+      const filePath = uploadedFile
+        ? `/uploads/documents/${uploadedFile.filename}`
+        : bodyFilePath;
+      const fileSize = uploadedFile?.size || bodyFileSize;
+      const mimeType = uploadedFile?.mimetype || bodyMimeType;
+
+      if (!fileName || !filePath) {
+        return res
+          .status(400)
+          .json(errorResponse("File upload or filePath is required", 400));
+      }
 
       const result = await DocumentService.uploadDocument(
         {

@@ -8,10 +8,11 @@ import { Label } from '@/components/ui/label';
 interface Role {
   id: number;
   name: string;
-  billing_rate: number;
+  billingRate: number;
+  costRate: number;
   description?: string;
   permissions: string[];
-  is_active: boolean;
+  isActive: boolean;
   createdAt: string;
 }
 
@@ -24,10 +25,11 @@ export default function RoleManagement() {
   
   const [formData, setFormData] = useState({
     name: '',
-    billing_rate: 0,
+    billingRate: 0,
+    costRate: 0,
     description: '',
     permissions: [] as string[],
-    is_active: true,
+    isActive: true,
   });
 
   useEffect(() => {
@@ -56,10 +58,11 @@ export default function RoleManagement() {
     setEditingRole(null);
     setFormData({
       name: '',
-      billing_rate: 0,
+      billingRate: 0,
+      costRate: 0,
       description: '',
       permissions: [],
-      is_active: true,
+      isActive: true,
     });
     setIsModalOpen(true);
   };
@@ -68,10 +71,11 @@ export default function RoleManagement() {
     setEditingRole(role);
     setFormData({
       name: role.name,
-      billing_rate: role.billing_rate,
+      billingRate: role.billingRate,
+      costRate: role.costRate,
       description: role.description || '',
       permissions: role.permissions || [],
-      is_active: role.is_active,
+      isActive: role.isActive,
     });
     setIsModalOpen(true);
   };
@@ -171,10 +175,11 @@ export default function RoleManagement() {
                   </div>
                 </td>
                 <td className="px-6 py-3">
-                  <span className="font-mono font-semibold">{role.billing_rate.toLocaleString()} KES/hr</span>
+                  <span className="font-mono font-semibold">{role.billingRate.toLocaleString()} KES/hr</span>
+                  <div className="text-xs text-gray-500">Cost {role.costRate.toLocaleString()} KES/hr</div>
                 </td>
                 <td className="px-6 py-3">
-                  {role.is_active ? (
+                  {role.isActive ? (
                     <span className="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded">Active</span>
                   ) : (
                     <span className="inline-block bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded">Inactive</span>
@@ -241,9 +246,19 @@ export default function RoleManagement() {
                 <Label>Billing Rate (KES/hr) *</Label>
                 <Input
                   type="number"
-                  value={formData.billing_rate}
-                  onChange={(e) => setFormData({ ...formData, billing_rate: parseFloat(e.target.value) })}
+                  value={formData.billingRate}
+                  onChange={(e) => setFormData({ ...formData, billingRate: parseFloat(e.target.value) })}
                   placeholder="e.g., 10000"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>Cost Rate (KES/hr)</Label>
+                <Input
+                  type="number"
+                  value={formData.costRate}
+                  onChange={(e) => setFormData({ ...formData, costRate: parseFloat(e.target.value) })}
+                  placeholder="e.g., 7500"
                   className="mt-1"
                 />
               </div>
@@ -263,8 +278,8 @@ export default function RoleManagement() {
                 <Label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={formData.is_active}
-                    onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                    checked={formData.isActive}
+                    onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
                   />
                   Active
                 </Label>

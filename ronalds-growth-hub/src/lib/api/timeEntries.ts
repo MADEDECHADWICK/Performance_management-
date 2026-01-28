@@ -34,6 +34,22 @@ interface TimeEntryFilters {
   dateTo?: string;
 }
 
+export interface JobAllocationSummary {
+  jobId: number;
+  jobBudgetHours: number;
+  requiresAllocation: boolean;
+  employeeAllocatedHours: number;
+  jobAllocatedHours: number;
+  approvedExtraJobHours: number;
+  approvedExtraEmployeeHours: number;
+  loggedJobHours: number;
+  loggedEmployeeHours: number;
+  allowedJobHours: number;
+  allowedEmployeeHours: number;
+  remainingJobHours: number;
+  remainingEmployeeHours: number;
+}
+
 export const timeEntriesAPI = {
   /**
    * List time entries with pagination and filters
@@ -238,6 +254,13 @@ export const timeEntriesAPI = {
     byDay: Record<string, number>;
   }> => {
     return api.get(`/time-entries/weekly-summary?weekStart=${weekStart}`);
+  },
+
+  /**
+   * Get allocation + usage summary for a job
+   */
+  getJobAllocationSummary: async (jobId: number): Promise<JobAllocationSummary> => {
+    return api.get(`/time-entries/job/${jobId}/allocation`);
   },
 };
 

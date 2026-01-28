@@ -467,3 +467,10 @@ export const getJobSummaryValidators = [
     .withMessage("jobId must be an integer")
     .toInt(),
 ];
+
+export const getJobAllocationSummaryValidators = [
+  param("jobId")
+    .isInt()
+    .withMessage("jobId must be an integer")
+    .toInt(),
+];

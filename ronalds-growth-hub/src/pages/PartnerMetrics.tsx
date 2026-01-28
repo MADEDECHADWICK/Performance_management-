@@ -97,6 +97,7 @@ const PartnerMetrics = () => {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState("current-year");
+  const [lossAlertCount, setLossAlertCount] = useState(0);
 
   useEffect(() => {
     loadPartnerMetrics();
@@ -191,6 +192,22 @@ const PartnerMetrics = () => {
       setPerformanceData(mockPerformanceData);
       setJobPerformance(mockJobPerformance);
       setTeamMembers(mockTeamMembers);
+
+      try {
+        const notifications: any = await apiFetch("GET", "/notifications?type=warning&status=unread&page=1&pageSize=50");
+        const payload = notifications?.data ?? notifications ?? {};
+        const items = Array.isArray(payload.items)
+          ? payload.items
+          : payload.items?.items ?? payload.notifications ?? payload.data ?? [];
+        const lossAlerts = (Array.isArray(items) ? items : []).filter((item: any) => {
+          const title = String(item?.title || "").toLowerCase();
+          const message = String(item?.message || "").toLowerCase();
+          return title.includes("loss") || message.includes("loss");
+        });
+        setLossAlertCount(lossAlerts.length);
+      } catch (error) {
+        setLossAlertCount(0);
+      }
     } catch (error: any) {
       console.error("Error loading partner metrics:", error);
       toast({
@@ -271,6 +288,9 @@ const PartnerMetrics = () => {
               Track performance, KPIs, and business outcomes
             </p>
           </div>
+          {lossAlertCount > 0 && (
+            <Badge variant="destructive">Loss alerts {lossAlertCount}</Badge>
+          )}
           <div className="flex items-center gap-3">
             <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
               <SelectTrigger className="w-48">

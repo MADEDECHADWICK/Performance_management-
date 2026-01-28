@@ -12,7 +12,13 @@ interface AnalyticsData {
   userRole: string;
   isAdmin: boolean;
   isPartner: boolean;
+  isManager?: boolean;
+  isHr?: boolean;
+  isFinance?: boolean;
+  isMarketing?: boolean;
+  isGmp?: boolean;
   isEmployee: boolean;
+  roles?: string[];
   userProfile: any;
   nonFinancial: any;
   financial: any;
@@ -25,11 +31,18 @@ const NonFinancialAnalytics = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
+  const [roleMetrics, setRoleMetrics] = useState<Record<string, any>>({});
   const [activeTab, setActiveTab] = useState("performance");
 
   useEffect(() => {
     loadAnalytics();
   }, []);
+
+  useEffect(() => {
+    if (analyticsData) {
+      loadRoleMetrics(analyticsData);
+    }
+  }, [analyticsData]);
 
   const loadAnalytics = async () => {
     try {
@@ -54,6 +67,49 @@ const NonFinancialAnalytics = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const unwrapResponse = (payload: any) => {
+    if (!payload) return payload;
+    return payload.data ?? payload.payload ?? payload;
+  };
+
+  const loadRoleMetrics = async (data: AnalyticsData) => {
+    const metrics: Record<string, any> = {};
+    try {
+      if (data.isHr || data.isAdmin) {
+        metrics.hr = await apiFetch("GET", "/hr-dashboard/company-metrics").catch(() => null);
+      }
+
+      if (data.isGmp) {
+        metrics.gmp = await apiFetch("GET", "/gmp-dashboard/overview").catch(() => null);
+      }
+
+      if (data.isManager) {
+        metrics.manager = await apiFetch("GET", "/manager-dashboard/overview").catch(() => null);
+      }
+
+      if (data.isPartner) {
+        metrics.partner = await apiFetch("GET", "/partners/dashboard-summary").catch(() => null);
+      }
+
+      if (data.isFinance) {
+        metrics.finance = await apiFetch("GET", "/finance-dashboard/overview").catch(() => null);
+      }
+
+      if (data.isMarketing) {
+        const [pipeline, surveys] = await Promise.all([
+          apiFetch("GET", "/proposals/metrics").catch(() => null),
+          apiFetch("GET", "/surveys/analytics").catch(() => null),
+        ]);
+        metrics.marketing = {
+          pipeline: unwrapResponse(pipeline),
+          surveys: unwrapResponse(surveys),
+        };
+      }
+    } finally {
+      setRoleMetrics(metrics);
     }
   };
 
@@ -87,10 +143,18 @@ const NonFinancialAnalytics = () => {
     );
   }
 
-  const roleLabel = analyticsData.isAdmin 
-    ? "Company-Wide" 
-    : analyticsData.isPartner 
-    ? "Partner Portfolio" 
+  const roleLabel = analyticsData.isAdmin || analyticsData.isHr
+    ? "Company-Wide"
+    : analyticsData.isGmp
+    ? "Executive"
+    : analyticsData.isPartner
+    ? "Partner Portfolio"
+    : analyticsData.isManager
+    ? "Team"
+    : analyticsData.isFinance
+    ? "Finance"
+    : analyticsData.isMarketing
+    ? "Marketing"
     : "Personal";
 
   return (
@@ -106,20 +170,6 @@ const NonFinancialAnalytics = () => {
             {analyticsData.isEmployee && "(Personal metrics)"}
           </p>
         </div>
-
-        {/* Role-based visibility notice */}
-        {analyticsData.isEmployee && (
-          <Card className="border-blue-200 bg-blue-50">
-            <CardHeader>
-              <CardTitle className="text-sm text-blue-900">Personal Metrics Only</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-blue-800">
-                As an employee, you see only your own performance metrics. Company-wide and partner portfolio data is restricted to authorized personnel.
-              </p>
-            </CardContent>
-          </Card>
-        )}
 
         {analyticsData.nonFinancial && (
           <>
@@ -185,7 +235,7 @@ const NonFinancialAnalytics = () => {
                 </CardContent>
               </Card>
 
-              {analyticsData.isAdmin && analyticsData.nonFinancial.totalEmployees && (
+              {(analyticsData.isAdmin || analyticsData.isHr) && analyticsData.nonFinancial.totalEmployees && (
                 <Card className="hover:shadow-lg transition-shadow">
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <CardTitle className="text-sm font-medium">Total Employees</CardTitle>
@@ -202,7 +252,7 @@ const NonFinancialAnalytics = () => {
             </div>
 
             {/* Admin-only section: Department breakdown */}
-            {analyticsData.isAdmin && analyticsData.nonFinancial.departmentAverages && analyticsData.nonFinancial.departmentAverages.length > 0 && (
+            {(analyticsData.isAdmin || analyticsData.isHr) && analyticsData.nonFinancial.departmentAverages && analyticsData.nonFinancial.departmentAverages.length > 0 && (
               <Card>
                 <CardHeader>
                   <CardTitle>Department Performance Breakdown</CardTitle>
@@ -232,6 +282,309 @@ const NonFinancialAnalytics = () => {
               </Card>
             )}
           </>
+        )}
+
+        {/* Role-specific analytics sections */}
+        {(analyticsData.isHr || analyticsData.isAdmin) && roleMetrics.hr && (
+          <Card>
+            <CardHeader>
+              <CardTitle>HR / Company Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Total Employees</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">{roleMetrics.hr.totalEmployees ?? 0}</CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Active Evaluations</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">{roleMetrics.hr.activeEvaluations ?? 0}</CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Pending Reviews</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">{roleMetrics.hr.pendingEvaluations ?? 0}</CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Avg Performance</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.hr.avgPerformance || 0).toFixed(1)}%
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Collections (Month)</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.hr.collectedMonth || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Utilization Rate</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.hr.utilizationRate || 0).toFixed(1)}%
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData.isGmp && roleMetrics.gmp && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Executive Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Total Employees</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.gmp.firmMetrics?.totalEmployees ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Active Jobs</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.gmp.firmMetrics?.activeJobs ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Collected Revenue</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.gmp.financials?.totalRevenue || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Projected Revenue</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.gmp.financials?.projectedRevenue || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Departments</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.gmp.firmMetrics?.totalDepartments ?? 0}
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData.isPartner && roleMetrics.partner && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Partner Portfolio Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Active Jobs</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.partner.portfolio?.activeJobs ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Completed Jobs</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.partner.portfolio?.completedJobs ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Revenue Collected</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.partner.portfolio?.totalRevenueCollected || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Total Profit</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.partner.portfolio?.totalProfit || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Team Size</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.partner.portfolio?.totalTeamSize ?? 0}
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData.isManager && roleMetrics.manager && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Manager Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Team Size</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.manager.teamSize ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Active Jobs</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.manager.activeJobs ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Pending Reviews</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.manager.pendingReviews ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Monthly Revenue</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.manager.monthlyRevenue || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Utilization</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.manager.utilizationRate || 0)}%
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData.isFinance && roleMetrics.finance && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Finance Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Projected (Month)</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.finance.projectedMonth || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Collected (Month)</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.finance.collectedMonth || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Outstanding</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.finance.totalOutstanding || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Total Collected</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.finance.totalCollected || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Collection Rate</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.finance.collectionRate || 0).toFixed(1)}%
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData.isMarketing && roleMetrics.marketing && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Marketing Analytics</CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Pipeline Value</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  KES {Number(roleMetrics.marketing.pipeline?.pipelineValue || 0).toLocaleString()}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Conversion Rate</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.marketing.pipeline?.conversionRate || 0).toFixed(1)}%
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Hot Leads</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.marketing.pipeline?.hotLeads ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Survey Responses</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {roleMetrics.marketing.surveys?.totalResponses ?? 0}
+                </CardContent>
+              </Card>
+              <Card className="border-none shadow-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Avg Rating</CardTitle>
+                </CardHeader>
+                <CardContent className="text-2xl font-bold">
+                  {Number(roleMetrics.marketing.surveys?.averageRating || 0).toFixed(1)}
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
         )}
       </div>
     </DashboardLayout>

@@ -174,6 +174,11 @@ enum EvaluationAssignmentStatus {
   cancelled
 }
 
+enum ProjectEvaluationStatus {
+  draft
+  submitted
+}
+
 enum NotificationType {
   info
   action
@@ -238,6 +243,26 @@ enum EvaluationCycleStatus {
   draft
   active
   closed
+}
+
+enum OkrStatus {
+  draft
+  active
+  completed
+  archived
+}
+
+enum OkrApprovalStatus {
+  draft
+  pending
+  approved
+  rejected
+}
+
+enum OkrChangeType {
+  progress_update
+  status_update
+  approval_update
 }
 
 enum DashboardStatus {
@@ -378,6 +403,7 @@ model Department {
   revenueProjections    RevenueProjection[]
   evaluationDefinitions EvaluationDefinition[]
   dashboardMetrics      DashboardMetric[]
+  okrObjectives         OkrObjective[]
 
   @@index([departmentHeadId])
   @@map("departments")
@@ -444,6 +470,8 @@ model Profile {
 
   revenueAllocations RevenueAllocation[] @relation("RevenueAllocationEmployee")
 
+  okrObjectivesOwned OkrObjective[] @relation("OkrObjectiveOwner")
+
   onboardingStatus             OnboardingStatus @default(pending) @map("onboarding_status")
   onboardingChecklistCompleted Boolean          @default(false) @map("onboarding_checklist_completed")
   inductionCompleted           Boolean          @default(false) @map("induction_completed")
@@ -493,14 +521,20 @@ model Profile {
   evaluationAssignmentsAsEvaluator EvaluationAssignment[] @relation("EvalEvaluator")
   evaluationAssignmentsAsEvaluatee EvaluationAssignment[] @relation("EvalEvaluatee")
   evaluationDefinitionsCreated     EvaluationDefinition[] @relation("EvalCreatedBy")
+  projectEvaluationsGiven          ProjectEvaluation[]   @relation("ProjectEvaluationEvaluator")
+  projectEvaluationsReceived       ProjectEvaluation[]   @relation("ProjectEvaluationEvaluatee")
 
   employeeKpiAssignments EmployeeKpiAssignment[]
   employeeKpiScores      EmployeeKpiScore[]
   performanceScores      PerformanceScore[]
+  calibratedPerformanceScores PerformanceScore[] @relation("PerformanceScoreCalibratedBy")
 
   notifications Notification[]
 
   tasksAssigned Task[] @relation("TaskAssignee")
+
+  feedbackGiven    Feedback[] @relation("FeedbackGiver")
+  feedbackReceived Feedback[] @relation("FeedbackRecipient")
 
   recruitmentCandidatesCreated RecruitmentCandidate[]   @relation("CandidateCreatedBy")
   onboardingCasesAsEmployee    EmployeeOnboardingCase[] @relation("OnboardingEmployee")
@@ -522,9 +556,39 @@ model Profile {
 
   engagementLettersUploaded EngagementLetter[] @relation("EngagementLetterUploader")
   engagementLettersApproved EngagementLetter[] @relation("EngagementLetterApprover")
+  approvedOkrs OkrObjective[] @relation("OkrObjectiveApprovedBy")
+  okrHistoryChanges OkrProgressHistory[] @relation("OkrHistoryChangedBy")
 
   @@index([isPartner])
   @@map("profiles")
+}
+
+// =============================
+// CONTINUOUS FEEDBACK
+// =============================
+
+model Feedback {
+  id Int @id @default(autoincrement())
+
+  giverProfileId     Int @map("giver_profile_id")
+  recipientProfileId Int @map("recipient_profile_id")
+
+  title   String
+  content String
+  type    String @default("general")
+
+  isAnonymous Boolean @default(false) @map("is_anonymous")
+  status      String  @default("pending")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  giver     Profile @relation("FeedbackGiver", fields: [giverProfileId], references: [id], onDelete: Cascade)
+  recipient Profile @relation("FeedbackRecipient", fields: [recipientProfileId], references: [id], onDelete: Cascade)
+
+  @@index([giverProfileId])
+  @@index([recipientProfileId])
+  @@map("feedback")
 }
 
 // =============================
@@ -900,12 +964,43 @@ model Job {
   statusTransitions  StatusTransition[]
 
   surveys ClientSatisfactionSurvey[]
+  projectEvaluations ProjectEvaluation[]
 
   @@index([status])
   @@index([partnerProfileId])
   @@index([managerProfileId])
   @@index([clientId])
   @@map("jobs")
+}
+
+model ProjectEvaluation {
+  id Int @id @default(autoincrement())
+
+  jobId Int @map("job_id")
+  evaluateeProfileId Int @map("evaluatee_profile_id")
+  evaluatorProfileId Int @map("evaluator_profile_id")
+
+  evaluatorType EvaluatorType @default(manager) @map("evaluator_type")
+  status ProjectEvaluationStatus @default(draft)
+
+  scores Json @default(dbgenerated("'{}'::jsonb"))
+  overallScore Decimal? @map("overall_score") @db.Decimal(7, 2)
+  comments String? @db.Text
+  submittedAt DateTime? @map("submitted_at")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  evaluatee Profile @relation("ProjectEvaluationEvaluatee", fields: [evaluateeProfileId], references: [id], onDelete: Cascade)
+  evaluator Profile @relation("ProjectEvaluationEvaluator", fields: [evaluatorProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, evaluateeProfileId, evaluatorProfileId, evaluatorType])
+  @@index([jobId])
+  @@index([evaluateeProfileId])
+  @@index([evaluatorProfileId])
+  @@index([status])
+  @@map("project_evaluations")
 }
 
 model Task {
@@ -1453,6 +1548,7 @@ model EvaluationCycle {
 
   definitions       EvaluationDefinition[]
   performanceScores PerformanceScore[]
+  okrObjectives     OkrObjective[]
 
   @@map("evaluation_cycles")
 }
@@ -1538,6 +1634,108 @@ model EvaluationAssignment {
 }
 
 // =============================
+// OKR (Objectives & Key Results)
+// =============================
+
+model OkrObjective {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  status      OkrStatus @default(active)
+  approvalStatus OkrApprovalStatus @default(pending) @map("approval_status")
+
+  ownerProfileId Int @map("owner_profile_id")
+  departmentId   Int? @map("department_id")
+  cycleId        Int? @map("cycle_id")
+
+  startDate DateTime? @map("start_date")
+  endDate   DateTime? @map("end_date")
+  submittedAt DateTime? @map("submitted_at")
+  approvedAt  DateTime? @map("approved_at")
+  approvedByProfileId Int? @map("approved_by_profile_id")
+  approvalNotes String? @map("approval_notes")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner      Profile     @relation("OkrObjectiveOwner", fields: [ownerProfileId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  cycle      EvaluationCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  approvedBy Profile? @relation("OkrObjectiveApprovedBy", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+
+  keyResults OkrKeyResult[]
+  history    OkrProgressHistory[]
+
+  @@index([ownerProfileId])
+  @@index([departmentId])
+  @@map("okr_objectives")
+}
+
+model OkrKeyResult {
+  id          Int     @id @default(autoincrement())
+  objectiveId Int     @map("objective_id")
+  title       String
+  unit        String? @map("unit")
+
+  targetValue Decimal @map("target_value") @db.Decimal(12, 2)
+  currentValue Decimal @default(0) @map("current_value") @db.Decimal(12, 2)
+  weight      Decimal? @map("weight") @db.Decimal(5, 2)
+
+  status OkrStatus @default(active)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  objective OkrObjective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  history   OkrProgressHistory[]
+
+  @@index([objectiveId])
+  @@map("okr_key_results")
+}
+
+model OkrProgressHistory {
+  id            Int          @id @default(autoincrement())
+  objectiveId   Int          @map("objective_id")
+  keyResultId   Int?         @map("key_result_id")
+  changeType    OkrChangeType @map("change_type")
+  field         String       @map("field")
+  previousValue String?      @map("previous_value")
+  newValue      String?      @map("new_value")
+  note          String?      @map("note")
+  changedAt     DateTime     @default(now()) @map("changed_at")
+
+  changedByProfileId Int? @map("changed_by_profile_id")
+
+  objective OkrObjective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  keyResult OkrKeyResult? @relation(fields: [keyResultId], references: [id], onDelete: SetNull)
+  changedBy Profile? @relation("OkrHistoryChangedBy", fields: [changedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([objectiveId])
+  @@index([keyResultId])
+  @@map("okr_progress_history")
+}
+
+model EvaluationTemplate {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String?
+
+  templateType String  @map("template_type")
+  bscCategory  String? @map("bsc_category")
+
+  competencies Json @default(dbgenerated("'[]'::jsonb"))
+  questions    Json @default(dbgenerated("'[]'::jsonb"))
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdBy Int?     @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([templateType])
+  @@map("evaluation_templates")
+}
+
+// =============================
 // PERFORMANCE SCORE
 // =============================
 
@@ -1561,6 +1759,11 @@ model PerformanceScore {
   totalScore Decimal @default(0) @map("total_score") @db.Decimal(7, 2)
   grade      String? @map("grade")
 
+  calibratedScore     Decimal?  @map("calibrated_score") @db.Decimal(7, 2)
+  calibrationNote     String?   @map("calibration_note")
+  calibratedByProfileId Int?    @map("calibrated_by_profile_id")
+  calibratedAt        DateTime? @map("calibrated_at")
+
   scoreBreakdown Json    @default(dbgenerated("'{}'::jsonb")) @map("score_breakdown")
   notes          String? @db.Text
 
@@ -1568,6 +1771,7 @@ model PerformanceScore {
 
   employee Profile          @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
   cycle    EvaluationCycle? @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
+  calibratedBy Profile?     @relation("PerformanceScoreCalibratedBy", fields: [calibratedByProfileId], references: [id], onDelete: SetNull)
 
   @@unique([employeeProfileId, evaluationCycleId, period])
   @@index([employeeProfileId])

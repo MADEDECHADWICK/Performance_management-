@@ -474,4 +474,28 @@ export class TimeEntryController {
       );
     }
   }
+
+  /**
+   * GET /time-entries/job/:jobId/allocation
+   * Get allocation + usage summary for a job (employee scoped)
+   */
+  static async getJobAllocationSummary(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const summary = await TimeEntryService.getJobAllocationSummary(jobId, auth);
+
+      res.json(successResponse(summary, 'Job allocation summary retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
 }

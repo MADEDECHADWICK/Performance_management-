@@ -292,9 +292,22 @@ export class PartnerService {
     });
 
     const jobIds = jobs.map((job) => job.id);
+    const allocations = await prisma.revenueAllocation.findMany({
+      where: { jobId: { in: jobIds } },
+      select: { jobId: true, allocatedAmount: true, employeeProfit: true, employeeLoss: true },
+    });
+
     const payments = await prisma.clientPayment.findMany({
       where: { jobId: { in: jobIds } },
       select: { jobId: true, paymentAmount: true },
+    });
+
+    const allocationByJob = new Map<number, { revenue: number; profit: number }>();
+    allocations.forEach((allocation) => {
+      const current = allocationByJob.get(allocation.jobId) || { revenue: 0, profit: 0 };
+      current.revenue += Number(allocation.allocatedAmount || 0);
+      current.profit += Number(allocation.employeeProfit || 0) - Number(allocation.employeeLoss || 0);
+      allocationByJob.set(allocation.jobId, current);
     });
 
     const paymentsByJob = new Map<number, number>();
@@ -324,8 +337,12 @@ export class PartnerService {
       const billableHours = job.timeEntries
         .filter((entry) => entry.billable)
         .reduce((sum, entry) => sum + Number(entry.hours), 0);
-      const amountCollected = paymentsByJob.get(job.id) || 0;
-      const profit = job.timeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0);
+      const allocationTotals = allocationByJob.get(job.id);
+      const paymentTotal = paymentsByJob.get(job.id) || 0;
+      const amountCollected = allocationTotals ? allocationTotals.revenue : paymentTotal;
+      const profit = allocationTotals
+        ? allocationTotals.profit
+        : job.timeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0);
 
       const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
       const margin = amountCollected > 0 ? (profit / amountCollected) * 100 : 0;

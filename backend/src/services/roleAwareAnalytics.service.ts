@@ -1,4 +1,3 @@
-import { PrismaClient } from '@prisma/client';
 import prisma from '../prisma';
 
 /**
@@ -11,9 +10,15 @@ import prisma from '../prisma';
 
 export interface AnalyticsContext {
   userId: number;
+  profileId?: number;
   roles: string[];
   isAdmin: boolean;
   isPartner: boolean;
+  isManager: boolean;
+  isHr: boolean;
+  isFinance: boolean;
+  isMarketing: boolean;
+  isGmp: boolean;
   isEmployee: boolean;
 }
 
@@ -81,14 +86,16 @@ export class RoleAwareAnalyticsService {
   static async getNonFinancialAnalytics(
     context: AnalyticsContext
   ): Promise<EmployeeNonFinancialMetrics | CompanyNonFinancialMetrics | null> {
-    if (context.isAdmin) {
+    if (context.isAdmin || context.isHr || context.isGmp) {
       return this.getCompanyNonFinancialMetrics();
     } else if (context.isPartner) {
       // Partners see their team's metrics
-      return this.getPartnerTeamMetrics(context.userId);
+      return this.getPartnerTeamMetrics(context.profileId);
+    } else if (context.isManager) {
+      return this.getManagerTeamMetrics(context.profileId);
     } else {
       // Employees see only their own metrics
-      return this.getEmployeeNonFinancialMetrics(context.userId);
+      return this.getEmployeeNonFinancialMetrics(context.profileId);
     }
   }
 
@@ -97,17 +104,14 @@ export class RoleAwareAnalyticsService {
    * Employee role restriction: Only own metrics
    */
   static async getEmployeeNonFinancialMetrics(
-    userId: number
+    profileId?: number
   ): Promise<EmployeeNonFinancialMetrics | null> {
     try {
+      if (!profileId) return null;
       // Get the most recent evaluation for this employee
-      const evaluation = await prisma.performanceReview.findFirst({
-        where: {
-          employee_id: userId,
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
+      const evaluation = await prisma.performanceScore.findFirst({
+        where: { employeeProfileId: profileId },
+        orderBy: { calculatedAt: 'desc' },
       });
 
       if (!evaluation) {
@@ -115,21 +119,23 @@ export class RoleAwareAnalyticsService {
       }
 
       const profile = await prisma.profile.findUnique({
-        where: { id: userId },
+        where: { id: profileId },
       });
 
-      // Use overall_rating or non_financial_score, default to 0
-      const nonFinScore = Number(evaluation.non_financial_score || evaluation.overall_rating || 0);
-      const overallScore = Number(evaluation.overall_rating || 0);
+      const scoreBreakdown = (evaluation.scoreBreakdown || {}) as Record<string, any>;
+      const nonFinScore = Number(
+        evaluation.nonFinancialWeighted || evaluation.evaluationScore || evaluation.kpiScore || 0
+      );
+      const overallScore = Number(evaluation.totalScore || evaluation.nonFinancialWeighted || 0);
       
-      // Estimate BSC breakdown if only overall score available
-      const learningGrowth = Math.round(nonFinScore * 0.85);
-      const customerSatisfaction = Math.round(nonFinScore * 0.90);
-      const internalProcesses = Math.round(nonFinScore * 0.80);
+      // Estimate BSC breakdown if no explicit breakdown exists
+      const learningGrowth = Number(scoreBreakdown.learningGrowth ?? Math.round(nonFinScore * 0.85));
+      const customerSatisfaction = Number(scoreBreakdown.customerSatisfaction ?? Math.round(nonFinScore * 0.9));
+      const internalProcesses = Number(scoreBreakdown.internalProcesses ?? Math.round(nonFinScore * 0.8));
 
       return {
-        employeeId: userId,
-        employeeName: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
+        employeeId: profileId,
+        employeeName: profile ? `${profile.firstName} ${profile.lastName}` : 'Unknown',
         learningGrowth: learningGrowth || 0,
         customerSatisfaction: customerSatisfaction || 0,
         internalProcesses: internalProcesses || 0,
@@ -146,13 +152,14 @@ export class RoleAwareAnalyticsService {
    * Partner role restriction: Only metrics for their team members
    */
   static async getPartnerTeamMetrics(
-    partnerId: number
+    partnerProfileId?: number
   ): Promise<EmployeeNonFinancialMetrics | null> {
     try {
+      if (!partnerProfileId) return null;
       // First get partner's jobs
       const partnerJobs = await prisma.job.findMany({
         where: {
-          partner_id: partnerId,
+          partnerProfileId,
         },
         select: { id: true },
       });
@@ -166,21 +173,21 @@ export class RoleAwareAnalyticsService {
       // Get team members on partner's jobs
       const jobStaffAssignments = await prisma.jobStaffAssignment.findMany({
         where: {
-          job_id: { in: jobIds },
+          jobId: { in: jobIds },
         },
-        select: { employee_id: true },
+        select: { employeeProfileId: true },
       });
 
-      const teamMemberIds = [...new Set(jobStaffAssignments.map(j => j.employee_id))];
+      const teamMemberIds = [...new Set(jobStaffAssignments.map(j => j.employeeProfileId))];
 
       if (teamMemberIds.length === 0) {
         return null;
       }
 
       // Get evaluations for team members
-      const evaluations = await prisma.performanceReview.findMany({
+      const evaluations = await prisma.performanceScore.findMany({
         where: {
-          employee_id: { in: teamMemberIds },
+          employeeProfileId: { in: teamMemberIds },
         },
       });
 
@@ -189,16 +196,17 @@ export class RoleAwareAnalyticsService {
       }
 
       // Calculate averages
-      const nonFinScores = evaluations.map(e => Number(e.non_financial_score || e.overall_rating || 0));
+      const nonFinScores = evaluations.map(e => Number(e.nonFinancialWeighted || e.evaluationScore || 0));
       const avgNonFinScore = nonFinScores.reduce((a, b) => a + b, 0) / nonFinScores.length;
-      const avgOverallScore = evaluations.reduce((a, b) => a + (Number(b.overall_rating) || 0), 0) / evaluations.length;
+      const avgOverallScore =
+        evaluations.reduce((a, b) => a + (Number(b.totalScore) || 0), 0) / evaluations.length;
       
       const avgLearningGrowth = Math.round(avgNonFinScore * 0.85);
       const avgCustomerSatisfaction = Math.round(avgNonFinScore * 0.90);
       const avgInternalProcesses = Math.round(avgNonFinScore * 0.80);
 
       return {
-        employeeId: partnerId,
+        employeeId: partnerProfileId,
         employeeName: 'Partner Portfolio',
         learningGrowth: avgLearningGrowth,
         customerSatisfaction: avgCustomerSatisfaction,
@@ -211,6 +219,43 @@ export class RoleAwareAnalyticsService {
     }
   }
 
+  static async getManagerTeamMetrics(
+    managerProfileId?: number
+  ): Promise<EmployeeNonFinancialMetrics | null> {
+    try {
+      if (!managerProfileId) return null;
+
+      const teamMembers = await prisma.profile.findMany({
+        where: { managerId: managerProfileId, status: 'active' },
+        select: { id: true },
+      });
+      const teamMemberIds = teamMembers.map((member) => member.id);
+      if (teamMemberIds.length === 0) return null;
+
+      const evaluations = await prisma.performanceScore.findMany({
+        where: { employeeProfileId: { in: teamMemberIds } },
+      });
+      if (evaluations.length === 0) return null;
+
+      const nonFinScores = evaluations.map((e) => Number(e.nonFinancialWeighted || e.evaluationScore || 0));
+      const avgNonFinScore = nonFinScores.reduce((a, b) => a + b, 0) / nonFinScores.length;
+      const avgOverallScore =
+        evaluations.reduce((a, b) => a + (Number(b.totalScore) || 0), 0) / evaluations.length;
+
+      return {
+        employeeId: managerProfileId,
+        employeeName: 'Manager Team',
+        learningGrowth: Math.round(avgNonFinScore * 0.85),
+        customerSatisfaction: Math.round(avgNonFinScore * 0.9),
+        internalProcesses: Math.round(avgNonFinScore * 0.8),
+        overallScore: avgOverallScore,
+      };
+    } catch (error) {
+      console.error('Error fetching manager team metrics:', error);
+      return null;
+    }
+  }
+
   /**
    * Get company-wide non-financial metrics
    * Admin only restriction: Aggregates across all employees
@@ -218,7 +263,7 @@ export class RoleAwareAnalyticsService {
   static async getCompanyNonFinancialMetrics(): Promise<CompanyNonFinancialMetrics> {
     try {
       // Get all performance reviews with evaluations
-      const evaluations = await prisma.performanceReview.findMany({
+      const evaluations = await prisma.performanceScore.findMany({
         include: {
           employee: {
             include: {
@@ -240,9 +285,9 @@ export class RoleAwareAnalyticsService {
       }
 
       // Calculate company averages
-      const nonFinScores = evaluations.map(e => Number(e.non_financial_score || e.overall_rating || 0));
+      const nonFinScores = evaluations.map(e => Number(e.nonFinancialWeighted || e.evaluationScore || 0));
       const avgNonFinScore = nonFinScores.length > 0 ? nonFinScores.reduce((a, b) => a + b, 0) / nonFinScores.length : 0;
-      const avgOverallScore = evaluations.length > 0 ? evaluations.reduce((a, b) => a + (Number(b.overall_rating) || 0), 0) / evaluations.length : 0;
+      const avgOverallScore = evaluations.length > 0 ? evaluations.reduce((a, b) => a + (Number(b.totalScore) || 0), 0) / evaluations.length : 0;
 
       const avgLearningGrowth = Math.round(avgNonFinScore * 0.85);
       const avgCustomerSatisfaction = Math.round(avgNonFinScore * 0.90);
@@ -256,7 +301,7 @@ export class RoleAwareAnalyticsService {
           departmentMap.set(dept, { scores: [], count: 0 });
         }
         const dept_data = departmentMap.get(dept)!;
-        dept_data.scores.push(e.overall_rating ? Number(e.overall_rating) : 0);
+        dept_data.scores.push(e.totalScore ? Number(e.totalScore) : 0);
         dept_data.count++;
       });
 
@@ -296,12 +341,14 @@ export class RoleAwareAnalyticsService {
   static async getFinancialAnalytics(
     context: AnalyticsContext
   ): Promise<any> {
-    if (context.isAdmin) {
+    if (context.isAdmin || context.isHr || context.isGmp || context.isFinance) {
       return this.getCompanyFinancialMetrics();
     } else if (context.isPartner) {
-      return this.getPartnerFinancialMetrics(context.userId);
+      return this.getPartnerFinancialMetrics(context.profileId);
+    } else if (context.isManager) {
+      return this.getManagerFinancialMetrics(context.profileId);
     } else {
-      return this.getEmployeeFinancialMetrics(context.userId);
+      return this.getEmployeeFinancialMetrics(context.profileId);
     }
   }
 
@@ -309,16 +356,18 @@ export class RoleAwareAnalyticsService {
    * Get employee's personal financial metrics (hours only, no monetary values)
    * Employee role restriction: Only personal hours, no revenue/profit data
    */
-  static async getEmployeeFinancialMetrics(userId: number): Promise<any> {
+  static async getEmployeeFinancialMetrics(profileId?: number): Promise<any> {
     try {
+      if (!profileId) return null;
       // Get employee's work logs and billable hours
-      const workLogs = await prisma.workLog.findMany({
+      const timeEntries = await prisma.timeEntry.findMany({
         where: {
-          employee_id: userId,
+          employeeProfileId: profileId,
         },
+        include: { job: true },
       });
 
-      if (workLogs.length === 0) {
+      if (timeEntries.length === 0) {
         return {
           totalHours: 0,
           billableHours: 0,
@@ -327,17 +376,39 @@ export class RoleAwareAnalyticsService {
         };
       }
 
-      // Calculate hours by job
-      const jobMap = new Map<number, { jobTitle: string; totalHours: number; billableHours: number }>();
       let totalHours = 0;
       let billableHours = 0;
+      const jobMap = new Map<number, { jobTitle: string; totalHours: number; billableHours: number; revenue: number; cost: number; profitLoss: number }>();
 
-      workLogs.forEach(log => {
-        totalHours += Number(log.hours_worked || 0);
-        billableHours += Number(log.billable_hours || 0);
+      timeEntries.forEach(entry => {
+        totalHours += Number(entry.hours || 0);
+        billableHours += entry.billable ? Number(entry.hours || 0) : 0;
+        if (!entry.jobId) return;
+        const current = jobMap.get(entry.jobId) || {
+          jobTitle: entry.job?.jobName || 'Job',
+          totalHours: 0,
+          billableHours: 0,
+          revenue: 0,
+          cost: 0,
+          profitLoss: 0,
+        };
+        current.totalHours += Number(entry.hours || 0);
+        current.billableHours += entry.billable ? Number(entry.hours || 0) : 0;
+        current.revenue += Number(entry.billableAmount || 0);
+        current.cost += Number(entry.costAmount || 0);
+        current.profitLoss += Number(entry.profitLoss || 0);
+        jobMap.set(entry.jobId, current);
       });
 
-      const jobBreakdown: any[] = [];
+      const jobBreakdown = Array.from(jobMap.entries()).map(([jobId, data]) => ({
+        jobId,
+        jobTitle: data.jobTitle,
+        totalHours: data.totalHours,
+        billableHours: data.billableHours,
+        revenue: data.revenue,
+        cost: data.cost,
+        profitLoss: data.profitLoss,
+      }));
 
       return {
         totalHours,
@@ -355,13 +426,15 @@ export class RoleAwareAnalyticsService {
    * Get partner's portfolio financial metrics
    * Partner role restriction: Only their jobs and revenue
    */
-  static async getPartnerFinancialMetrics(partnerId: number): Promise<PartnerFinancialMetrics | null> {
+  static async getPartnerFinancialMetrics(partnerId?: number): Promise<PartnerFinancialMetrics | null> {
     try {
+      if (!partnerId) return null;
       // Get all jobs owned by partner
       const jobs = await prisma.job.findMany({
         where: {
-          partner_id: partnerId,
+          partnerProfileId: partnerId,
         },
+        include: { timeEntries: true },
       });
 
       if (jobs.length === 0) {
@@ -375,23 +448,71 @@ export class RoleAwareAnalyticsService {
         };
       }
 
-      // Return basic metrics (financial data not fully setup in schema)
+      let totalRevenue = 0;
+      let totalProfit = 0;
+      const jobBreakdown = jobs.map(job => {
+        const approvedEntries = job.timeEntries.filter((entry) => entry.status === 'approved');
+        const revenue = approvedEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
+        const cost = approvedEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
+        const profit = revenue - cost;
+        const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
+        totalRevenue += revenue;
+        totalProfit += profit;
+        return {
+          jobId: job.id,
+          jobTitle: job.jobName || 'Unknown',
+          revenue,
+          profit,
+          profitMargin,
+        };
+      });
+
+      const averageProfitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+
       return {
         partnerId,
         totalJobs: jobs.length,
-        totalRevenue: 0,
-        totalProfit: 0,
-        averageProfitMargin: 0,
-        jobBreakdown: jobs.map(job => ({
-          jobId: job.id,
-          jobTitle: job.job_name || 'Unknown',
-          revenue: 0,
-          profit: 0,
-          profitMargin: 0,
-        })),
+        totalRevenue,
+        totalProfit,
+        averageProfitMargin,
+        jobBreakdown,
       };
     } catch (error) {
       console.error('Error fetching partner financial metrics:', error);
+      return null;
+    }
+  }
+
+  static async getManagerFinancialMetrics(managerProfileId?: number): Promise<any> {
+    try {
+      if (!managerProfileId) return null;
+      const teamMembers = await prisma.profile.findMany({
+        where: { managerId: managerProfileId, status: 'active' },
+        select: { id: true },
+      });
+      const teamMemberIds = teamMembers.map((member) => member.id);
+      if (teamMemberIds.length === 0) {
+        return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
+      }
+
+      const entries = await prisma.timeEntry.findMany({
+        where: { employeeProfileId: { in: teamMemberIds }, status: 'approved' },
+      });
+      const totals = entries.reduce(
+        (acc, entry) => {
+          acc.totalHours += Number(entry.hours || 0);
+          acc.billableHours += entry.billable ? Number(entry.hours || 0) : 0;
+          acc.revenue += Number(entry.billableAmount || 0);
+          acc.cost += Number(entry.costAmount || 0);
+          acc.profit += Number(entry.profitLoss || 0);
+          return acc;
+        },
+        { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 }
+      );
+
+      return totals;
+    } catch (error) {
+      console.error('Error fetching manager financial metrics:', error);
       return null;
     }
   }
@@ -402,10 +523,12 @@ export class RoleAwareAnalyticsService {
    */
   static async getCompanyFinancialMetrics(): Promise<CompanyFinancialMetrics> {
     try {
-      // Get all jobs
-      const jobs = await prisma.job.findMany();
+      const timeEntries = await prisma.timeEntry.findMany({
+        where: { status: 'approved' },
+        include: { job: { include: { department: true, partner: true } } },
+      });
 
-      if (jobs.length === 0) {
+      if (timeEntries.length === 0) {
         return {
           totalRevenue: 0,
           totalProfit: 0,
@@ -416,21 +539,55 @@ export class RoleAwareAnalyticsService {
         };
       }
 
-      // Count total employees
       const totalEmployees = await prisma.profile.count({
         where: {
           status: 'active',
         },
       });
 
-      // Return basic structure (financial data not fully setup in schema)
+      let totalRevenue = 0;
+      let totalProfit = 0;
+      const revenueByDepartment = new Map<string, { revenue: number; profit: number }>();
+      const revenueByPartner = new Map<string, { revenue: number; profit: number }>();
+
+      timeEntries.forEach((entry) => {
+        const revenue = Number(entry.billableAmount || 0);
+        const profit = Number(entry.profitLoss || 0);
+        totalRevenue += revenue;
+        totalProfit += profit;
+
+        const departmentName = entry.job?.department?.name || 'Unassigned';
+        const dept = revenueByDepartment.get(departmentName) || { revenue: 0, profit: 0 };
+        dept.revenue += revenue;
+        dept.profit += profit;
+        revenueByDepartment.set(departmentName, dept);
+
+        const partnerName = entry.job?.partner
+          ? `${entry.job.partner.firstName} ${entry.job.partner.lastName}`
+          : 'Unassigned';
+        const partner = revenueByPartner.get(partnerName) || { revenue: 0, profit: 0 };
+        partner.revenue += revenue;
+        partner.profit += profit;
+        revenueByPartner.set(partnerName, partner);
+      });
+
+      const averageProfitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+
       return {
-        totalRevenue: 0,
-        totalProfit: 0,
-        averageProfitMargin: 0,
+        totalRevenue,
+        totalProfit,
+        averageProfitMargin,
         totalEmployees,
-        revenueByDepartment: [],
-        revenueByPartner: [],
+        revenueByDepartment: Array.from(revenueByDepartment.entries()).map(([department, data]) => ({
+          department,
+          revenue: data.revenue,
+          profit: data.profit,
+        })),
+        revenueByPartner: Array.from(revenueByPartner.entries()).map(([partnerName, data]) => ({
+          partnerName,
+          revenue: data.revenue,
+          profit: data.profit,
+        })),
       };
     } catch (error) {
       console.error('Error fetching company financial metrics:', error);

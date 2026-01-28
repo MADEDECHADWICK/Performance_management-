@@ -5,7 +5,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { clientsAPI } from '@/lib/api';
+import DashboardLayout from '@/components/DashboardLayout';
+import { clientsAPI, jobsAPI, clientOnboardingsAPI, surveysAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -68,49 +69,82 @@ export function ClientsListPage() {
     }),
   });
 
+  const { data: jobsData } = useQuery({
+    queryKey: ['clients-active-jobs'],
+    queryFn: () => jobsAPI.list({ status: 'in_progress', page: 1, pageSize: 1 }),
+  });
+
+  const { data: pendingOnboardings } = useQuery({
+    queryKey: ['clients-pending-onboardings'],
+    queryFn: () => clientOnboardingsAPI.list({ status: 'pending_hr_review', page: 1, pageSize: 1 }),
+  });
+
+  const { data: upcomingOnboardings } = useQuery({
+    queryKey: ['clients-upcoming-onboardings'],
+    queryFn: () => clientOnboardingsAPI.getUpcomingJobs({ page: 1, pageSize: 1 }),
+  });
+
+  const { data: surveyAnalytics } = useQuery({
+    queryKey: ['survey-analytics'],
+    queryFn: () => surveysAPI.getAnalytics(),
+  });
+
+  const { data: surveyByClient } = useQuery({
+    queryKey: ['surveys-by-client'],
+    queryFn: () => surveysAPI.getByClient(),
+  });
+
   const clients = clientsData?.data || [];
   const total = clientsData?.total || 0;
   const totalPages = clientsData?.totalPages || Math.ceil(total / pageSize);
+  const activeJobsTotal = jobsData?.total || 0;
+  const pendingEngagementTotal = pendingOnboardings?.total || 0;
+  const upcomingJobsTotal = upcomingOnboardings?.total || 0;
+  const avgSatisfaction = surveyAnalytics?.averageRatings?.overall ?? 0;
+  const surveysByClient = surveyByClient || [];
 
   const canCreateClient = canAccess('clients', 'write');
 
   if (error) {
     return (
-      <div className="p-6">
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="p-6">
-            <p className="text-red-600">Failed to load clients. Please try again.</p>
-          </CardContent>
-        </Card>
-      </div>
+      <DashboardLayout>
+        <div className="space-y-6">
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="p-6">
+              <p className="text-red-600">Failed to load clients. Please try again.</p>
+            </CardContent>
+          </Card>
+        </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Building2 className="h-8 w-8 text-primary" />
-            Client Management
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Manage clients and their engagement details
-          </p>
+    <DashboardLayout>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center gap-2">
+              <Building2 className="h-8 w-8 text-primary" />
+              Client Management
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Manage clients and their engagement details
+            </p>
+          </div>
+          {canCreateClient && (
+            <Link to="/clients/new">
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Add New Client
+              </Button>
+            </Link>
+          )}
         </div>
-        {canCreateClient && (
-          <Link to="/clients/new">
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add New Client
-            </Button>
-          </Link>
-        )}
-      </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -128,7 +162,7 @@ export function ClientsListPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">-</div>
+            <div className="text-2xl font-bold text-green-600">{activeJobsTotal}</div>
           </CardContent>
         </Card>
         <Card>
@@ -138,7 +172,19 @@ export function ClientsListPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-yellow-600">-</div>
+            <div className="text-2xl font-bold text-yellow-600">{pendingEngagementTotal}</div>
+            <p className="text-xs text-muted-foreground">Awaiting HR review</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Upcoming Jobs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-primary">{upcomingJobsTotal}</div>
+            <p className="text-xs text-muted-foreground">Approved onboarding</p>
           </CardContent>
         </Card>
         <Card>
@@ -151,6 +197,19 @@ export function ClientsListPage() {
             <div className="text-2xl font-bold text-blue-600">
               {new Set(clients.map(c => c.industry)).size}
             </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Avg Satisfaction
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-amber-600">
+              {avgSatisfaction ? avgSatisfaction.toFixed(1) : '0.0'}
+            </div>
+            <p className="text-xs text-muted-foreground">Across all surveys</p>
           </CardContent>
         </Card>
       </div>
@@ -221,13 +280,17 @@ export function ClientsListPage() {
                   <TableHead>Industry</TableHead>
                   <TableHead>Contact Person</TableHead>
                   <TableHead>Location</TableHead>
+                  <TableHead>Satisfaction</TableHead>
                   <TableHead>Partner</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {clients.map((client) => (
+                {clients.map((client) => {
+                  const surveySummary =
+                    surveysByClient.find((item: any) => item.clientId === client.id) || null;
+                  return (
                   <TableRow key={client.id}>
                     <TableCell>
                       <div className="font-medium">{client.clientName}</div>
@@ -261,6 +324,9 @@ export function ClientsListPage() {
                       )}
                     </TableCell>
                     <TableCell>
+                      {surveySummary ? `${surveySummary.avgSatisfaction.toFixed(1)}/5` : '-'}
+                    </TableCell>
+                    <TableCell>
                       {client.partner
                         ? `${client.partner.firstName} ${client.partner.lastName}`
                         : '-'}
@@ -287,7 +353,8 @@ export function ClientsListPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -318,7 +385,8 @@ export function ClientsListPage() {
           </Button>
         </div>
       )}
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
 

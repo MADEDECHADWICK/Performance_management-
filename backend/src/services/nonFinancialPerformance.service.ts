@@ -1,11 +1,22 @@
-import prisma from '../prisma';
-import { Decimal } from '@prisma/client/runtime/library';
+import prisma from "../prisma";
 
 export interface BSCScores {
   learningGrowthScore: number;
   customerSatisfactionScore: number;
   internalProcessesScore: number;
   overallNonFinancialScore: number;
+  okrScore: number;
+  feedbackScore: number;
+  projectEvaluationScore: number;
+}
+
+export interface NonFinancialWeightConfig {
+  learningGrowthWeight?: number;
+  customerWeight?: number;
+  internalWeight?: number;
+  evaluationWeight?: number;
+  okrWeight?: number;
+  feedbackWeight?: number;
 }
 
 export interface KPIResult {
@@ -32,616 +43,342 @@ export interface BSCBreakdown {
   };
 }
 
+const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
+
+const normalizeFivePointScore = (value: number) => clamp((value / 5) * 100);
+
+const normalizeUnknownScale = (value: number) => {
+  if (value <= 5) return normalizeFivePointScore(value);
+  return clamp(value);
+};
+
 /**
  * Non-Financial Performance Service
- * Implements the Balanced Scorecard framework for audit and consulting firms
- * Calculates objective scores based on actual performance data
+ * Uses available data (evaluations, tasks, client surveys) to estimate BSC scores.
  */
 export class NonFinancialPerformanceService {
-  
-  /**
-   * Calculate comprehensive non-financial performance scores for an employee
-   * @param employeeId - The employee to calculate scores for
-   * @param evaluationCycleId - Optional evaluation cycle ID for period-specific calculations
-   * @param periodStart - Start date for the calculation period
-   * @param periodEnd - End date for the calculation period
-   */
   async calculateNonFinancialScores(
     employeeId: number,
-    evaluationCycleId?: number,
+    _evaluationCycleId?: number,
     periodStart?: Date,
-    periodEnd?: Date
+    periodEnd?: Date,
+    weights?: NonFinancialWeightConfig
   ): Promise<BSCScores> {
-    // Default to current evaluation period if not specified
-    const defaultPeriodStart = periodStart || new Date(new Date().getFullYear(), 0, 1); // Start of year
-    const defaultPeriodEnd = periodEnd || new Date(); // Today
+    const start = periodStart || new Date(new Date().getFullYear(), 0, 1);
+    const end = periodEnd || new Date();
 
-    // Calculate each BSC category
-    const learningGrowthScore = await this.calculateLearningGrowthScore(
-      employeeId, 
-      defaultPeriodStart, 
-      defaultPeriodEnd
-    );
-    
-    const customerSatisfactionScore = await this.calculateCustomerSatisfactionScore(
-      employeeId, 
-      defaultPeriodStart, 
-      defaultPeriodEnd
-    );
-    
-    const internalProcessesScore = await this.calculateInternalProcessesScore(
-      employeeId, 
-      defaultPeriodStart, 
-      defaultPeriodEnd
-    );
+    const [evaluationScore, okrScore, feedbackScore, customerSatisfactionScore, internalProcessesScore, projectEvaluationScore] =
+      await Promise.all([
+        this.calculateLearningGrowthScore(employeeId, start, end),
+        this.calculateOkrScore(employeeId, start, end),
+        this.calculateContinuousFeedbackScore(employeeId, start, end),
+        this.calculateCustomerSatisfactionScore(employeeId, start, end),
+        this.calculateInternalProcessesScore(employeeId, start, end),
+        this.calculateProjectEvaluationScore(employeeId, start, end),
+      ]);
 
-    // Weight the scores: Learning & Growth (35%), Customer Satisfaction (35%), Internal Processes (30%)
-    const overallNonFinancialScore = Math.min(100, 
-      (learningGrowthScore * 0.35) + 
-      (customerSatisfactionScore * 0.35) + 
-      (internalProcessesScore * 0.30)
-    );
+    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
+    const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
+    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.2);
+    const learningTotal = evalWeight + okrWeight + feedbackWeight;
+    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.5;
+    const okrFactor = learningTotal > 0 ? okrWeight / learningTotal : 0.3;
+    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.2;
 
-    // Store the calculated scores in EmployeeKpiScore table for audit trail
-    await this.storeKPIScores(employeeId, evaluationCycleId, defaultPeriodStart, defaultPeriodEnd, {
-      learningGrowthScore,
-      customerSatisfactionScore,
-      internalProcessesScore,
-      overallNonFinancialScore
-    });
+    const hasEvalOrOkr = evaluationScore > 0 || okrScore > 0;
+    const learningGrowthScore = hasEvalOrOkr
+      ? clamp(
+          evaluationScore * evalFactor +
+            okrScore * okrFactor +
+            feedbackScore * feedbackFactor
+        )
+      : feedbackScore || evaluationScore || okrScore;
+
+    const learningWeight = normalizeWeightValue(weights?.learningGrowthWeight, 0.35);
+    const customerWeight = normalizeWeightValue(weights?.customerWeight, 0.35);
+    const internalWeight = normalizeWeightValue(weights?.internalWeight, 0.3);
+    const nonFinancialTotal = learningWeight + customerWeight + internalWeight;
+    const learningFactor = nonFinancialTotal > 0 ? learningWeight / nonFinancialTotal : 0.35;
+    const customerFactor = nonFinancialTotal > 0 ? customerWeight / nonFinancialTotal : 0.35;
+    const internalFactor = nonFinancialTotal > 0 ? internalWeight / nonFinancialTotal : 0.3;
+
+    const overallNonFinancialScore = clamp(
+      learningGrowthScore * learningFactor +
+        customerSatisfactionScore * customerFactor +
+        internalProcessesScore * internalFactor
+    );
 
     return {
       learningGrowthScore: Math.round(learningGrowthScore * 100) / 100,
       customerSatisfactionScore: Math.round(customerSatisfactionScore * 100) / 100,
       internalProcessesScore: Math.round(internalProcessesScore * 100) / 100,
-      overallNonFinancialScore: Math.round(overallNonFinancialScore * 100) / 100
+      overallNonFinancialScore: Math.round(overallNonFinancialScore * 100) / 100,
+      okrScore: Math.round(okrScore * 100) / 100,
+      feedbackScore: Math.round(feedbackScore * 100) / 100,
+      projectEvaluationScore: Math.round(projectEvaluationScore * 100) / 100,
     };
   }
 
-  /**
-   * Get detailed breakdown of BSC scores with individual KPIs
-   */
   async getBSCBreakdown(
     employeeId: number,
     periodStart: Date,
-    periodEnd: Date
+    periodEnd: Date,
+    weights?: NonFinancialWeightConfig
   ): Promise<BSCBreakdown> {
-    const [learningGrowthKPIs, customerSatisfactionKPIs, internalProcessesKPIs] = await Promise.all([
-      this.calculateLearningGrowthKPIs(employeeId, periodStart, periodEnd),
-      this.calculateCustomerSatisfactionKPIs(employeeId, periodStart, periodEnd),
-      this.calculateInternalProcessesKPIs(employeeId, periodStart, periodEnd)
-    ]);
+    const [evaluationScore, okrScore, feedbackScore, customerSatisfactionScore, internalProcessesScore] =
+      await Promise.all([
+        this.calculateLearningGrowthScore(employeeId, periodStart, periodEnd),
+        this.calculateOkrScore(employeeId, periodStart, periodEnd),
+        this.calculateContinuousFeedbackScore(employeeId, periodStart, periodEnd),
+        this.calculateCustomerSatisfactionScore(employeeId, periodStart, periodEnd),
+        this.calculateInternalProcessesScore(employeeId, periodStart, periodEnd),
+      ]);
+
+    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
+    const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
+    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.2);
+    const learningTotal = evalWeight + okrWeight + feedbackWeight;
+    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.5;
+    const okrFactor = learningTotal > 0 ? okrWeight / learningTotal : 0.3;
+    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.2;
+
+    const hasEvalOrOkr = evaluationScore > 0 || okrScore > 0;
+    const learningGrowthScore = hasEvalOrOkr
+      ? clamp(
+          evaluationScore * evalFactor +
+            okrScore * okrFactor +
+            feedbackScore * feedbackFactor
+        )
+      : feedbackScore || evaluationScore || okrScore;
 
     return {
       learningGrowth: {
-        score: this.calculateCategoryScore(learningGrowthKPIs),
-        kpis: learningGrowthKPIs
+        score: learningGrowthScore,
+        kpis: [],
       },
       customerSatisfaction: {
-        score: this.calculateCategoryScore(customerSatisfactionKPIs),
-        kpis: customerSatisfactionKPIs
+        score: customerSatisfactionScore,
+        kpis: [],
       },
       internalProcesses: {
-        score: this.calculateCategoryScore(internalProcessesKPIs),
-        kpis: internalProcessesKPIs
-      }
+        score: internalProcessesScore,
+        kpis: [],
+      },
     };
   }
 
-  /**
-   * Learning & Growth Score Calculation (35% of total non-financial score)
-   */
   private async calculateLearningGrowthScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
   ): Promise<number> {
-    const kpis = await this.calculateLearningGrowthKPIs(employeeId, periodStart, periodEnd);
-    return this.calculateCategoryScore(kpis);
+    const [evaluationResult, projectResult] = await Promise.all([
+      prisma.evaluationAssignment.aggregate({
+        _avg: { score: true },
+        _count: { id: true },
+        where: {
+          evaluateeProfileId: employeeId,
+          submittedAt: { not: null },
+          createdAt: { gte: periodStart, lte: periodEnd },
+        },
+      }),
+      prisma.projectEvaluation.aggregate({
+        _avg: { overallScore: true },
+        _count: { id: true },
+        where: {
+          evaluateeProfileId: employeeId,
+          status: "submitted",
+          createdAt: { gte: periodStart, lte: periodEnd },
+        },
+      }),
+    ]);
+
+    const evalScore = evaluationResult._count.id
+      ? normalizeUnknownScale(Number(evaluationResult._avg.score || 0))
+      : 0;
+    const projectScore = projectResult._count.id
+      ? normalizeUnknownScale(Number(projectResult._avg.overallScore || 0))
+      : 0;
+
+    if (evalScore && projectScore) {
+      return clamp(evalScore * 0.5 + projectScore * 0.5);
+    }
+    return evalScore || projectScore || 0;
   }
 
-  private async calculateLearningGrowthKPIs(
+  private async calculateProjectEvaluationScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<KPIResult[]> {
-    // 1. Training Hours (Target: 40 hours/year) - Weight: 25%
-    const trainingHours = await this.getTrainingHours(employeeId, periodStart, periodEnd);
-    const trainingKPI: KPIResult = {
-      kpiName: 'training_hours',
-      calculatedValue: trainingHours,
-      targetValue: 40,
-      achievementPercentage: Math.min(100, (trainingHours / 40) * 100),
-      weightPercentage: 25,
-      weightedScore: Math.min(25, (trainingHours / 40) * 25)
-    };
+  ): Promise<number> {
+    const result = await prisma.projectEvaluation.aggregate({
+      _avg: { overallScore: true },
+      _count: { id: true },
+      where: {
+        evaluateeProfileId: employeeId,
+        status: "submitted",
+        createdAt: { gte: periodStart, lte: periodEnd },
+      },
+    });
 
-    // 2. Knowledge Sessions (Target: 4 sessions/year) - Weight: 20%
-    const knowledgeSessions = await this.getKnowledgeSessionsCount(employeeId, periodStart, periodEnd);
-    const knowledgeKPI: KPIResult = {
-      kpiName: 'knowledge_sessions',
-      calculatedValue: knowledgeSessions,
-      targetValue: 4,
-      achievementPercentage: Math.min(100, (knowledgeSessions / 4) * 100),
-      weightPercentage: 20,
-      weightedScore: Math.min(20, (knowledgeSessions / 4) * 20)
-    };
-
-    // 3. Mentoring Hours (Target: 20 hours/year) - Weight: 20%
-    const mentoringHours = await this.getMentoringHours(employeeId, periodStart, periodEnd);
-    const mentoringKPI: KPIResult = {
-      kpiName: 'mentoring_hours',
-      calculatedValue: mentoringHours,
-      targetValue: 20,
-      achievementPercentage: Math.min(100, (mentoringHours / 20) * 100),
-      weightPercentage: 20,
-      weightedScore: Math.min(20, (mentoringHours / 20) * 20)
-    };
-
-    // 4. Development Goals Completion (Target: 80% completion) - Weight: 35%
-    const developmentCompletion = await this.getDevelopmentGoalsCompletion(employeeId, periodStart, periodEnd);
-    const developmentKPI: KPIResult = {
-      kpiName: 'development_goals_completion',
-      calculatedValue: developmentCompletion,
-      targetValue: 80,
-      achievementPercentage: Math.min(100, (developmentCompletion / 80) * 100),
-      weightPercentage: 35,
-      weightedScore: Math.min(35, (developmentCompletion / 80) * 35)
-    };
-
-    return [trainingKPI, knowledgeKPI, mentoringKPI, developmentKPI];
+    return result._count.id
+      ? normalizeUnknownScale(Number(result._avg.overallScore || 0))
+      : 0;
   }
 
-  /**
-   * Customer Satisfaction Score Calculation (35% of total non-financial score)
-   */
+  private async calculateOkrScore(
+    employeeId: number,
+    periodStart: Date,
+    periodEnd: Date
+  ): Promise<number> {
+    const objectives = await prisma.okrObjective.findMany({
+      where: {
+        ownerProfileId: employeeId,
+        approvalStatus: "approved",
+        OR: [
+          { startDate: null, endDate: null },
+          {
+            startDate: { lte: periodEnd },
+            endDate: { gte: periodStart },
+          },
+        ],
+      },
+      include: { keyResults: true },
+    });
+
+    if (objectives.length === 0) return 0;
+
+    const objectiveScores = objectives.map((objective) => {
+      const keyResults = objective.keyResults || [];
+      if (keyResults.length === 0) return 0;
+
+      const totalWeight = keyResults.reduce(
+        (sum, kr) => sum + Number(kr.weight || 0),
+        0
+      );
+      const normalizedTotalWeight = totalWeight > 0 ? totalWeight : keyResults.length;
+
+      const weightedProgress = keyResults.reduce((sum, kr) => {
+        const target = Number(kr.targetValue || 0);
+        if (target <= 0) return sum;
+        const current = Number(kr.currentValue || 0);
+        const progress = clamp((current / target) * 100);
+        const weight = totalWeight > 0 ? Number(kr.weight || 0) : 1;
+        return sum + progress * weight;
+      }, 0);
+
+      return clamp(weightedProgress / normalizedTotalWeight);
+    });
+
+    const avgObjectiveScore =
+      objectiveScores.reduce((sum, score) => sum + score, 0) / objectiveScores.length;
+    return clamp(avgObjectiveScore);
+  }
+
   private async calculateCustomerSatisfactionScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
   ): Promise<number> {
-    const kpis = await this.calculateCustomerSatisfactionKPIs(employeeId, periodStart, periodEnd);
-    return this.calculateCategoryScore(kpis);
+    const surveys = await prisma.clientSatisfactionSurvey.findMany({
+      where: {
+        completedAt: { not: null },
+        createdAt: { gte: periodStart, lte: periodEnd },
+        job: {
+          staffing: {
+            some: {
+              employeeProfileId: employeeId,
+            },
+          },
+        },
+      },
+      select: {
+        overallSatisfaction: true,
+        wouldRecommend: true,
+      },
+    });
+
+    if (surveys.length === 0) return 0;
+
+    const ratings = surveys
+      .map((survey) => survey.overallSatisfaction)
+      .filter((value): value is number => value !== null && value !== undefined);
+    const avgRating =
+      ratings.length > 0 ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length : 0;
+
+    const recommendResponses = surveys.filter((survey) => survey.wouldRecommend !== null);
+    const recommendRate =
+      recommendResponses.length > 0
+        ? recommendResponses.filter((survey) => survey.wouldRecommend === true).length /
+          recommendResponses.length
+        : 0;
+
+    const ratingScore = avgRating > 0 ? normalizeFivePointScore(avgRating) : 0;
+    const recommendScore = clamp(recommendRate * 100);
+
+    return clamp(ratingScore * 0.7 + recommendScore * 0.3);
   }
 
-  private async calculateCustomerSatisfactionKPIs(
+  private async calculateContinuousFeedbackScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<KPIResult[]> {
-    // 1. Client Feedback Rating (Target: 4.0/5.0) - Weight: 40%
-    const avgClientRating = await this.getAverageClientFeedback(employeeId, periodStart, periodEnd);
-    const clientFeedbackKPI: KPIResult = {
-      kpiName: 'client_feedback_rating',
-      calculatedValue: avgClientRating,
-      targetValue: 4.0,
-      achievementPercentage: (avgClientRating / 4.0) * 100,
-      weightPercentage: 40,
-      weightedScore: (avgClientRating / 4.0) * 40
-    };
+  ): Promise<number> {
+    const [totalFeedback, resolvedFeedback] = await Promise.all([
+      prisma.feedback.count({
+        where: {
+          recipientProfileId: employeeId,
+          createdAt: { gte: periodStart, lte: periodEnd },
+        },
+      }),
+      prisma.feedback.count({
+        where: {
+          recipientProfileId: employeeId,
+          status: { in: ["reviewed", "resolved"] },
+          createdAt: { gte: periodStart, lte: periodEnd },
+        },
+      }),
+    ]);
 
-    // 2. On-Time Delivery (Target: 95%) - Weight: 30%
-    const onTimeDeliveryRate = await this.getOnTimeDeliveryRate(employeeId, periodStart, periodEnd);
-    const onTimeKPI: KPIResult = {
-      kpiName: 'on_time_delivery',
-      calculatedValue: onTimeDeliveryRate,
-      targetValue: 95,
-      achievementPercentage: (onTimeDeliveryRate / 95) * 100,
-      weightPercentage: 30,
-      weightedScore: (onTimeDeliveryRate / 95) * 30
-    };
+    if (totalFeedback === 0) return 0;
 
-    // 3. Client Retention (Target: 85%) - Weight: 30%
-    const clientRetentionRate = await this.getClientRetentionRate(employeeId, periodStart, periodEnd);
-    const clientRetentionKPI: KPIResult = {
-      kpiName: 'client_retention',
-      calculatedValue: clientRetentionRate,
-      targetValue: 85,
-      achievementPercentage: (clientRetentionRate / 85) * 100,
-      weightPercentage: 30,
-      weightedScore: (clientRetentionRate / 85) * 30
-    };
+    const volumeScore = clamp((totalFeedback / 4) * 100);
+    const resolutionRate = clamp((resolvedFeedback / totalFeedback) * 100);
 
-    return [clientFeedbackKPI, onTimeKPI, clientRetentionKPI];
+    return clamp(volumeScore * 0.7 + resolutionRate * 0.3);
   }
 
-  /**
-   * Internal Processes Score Calculation (30% of total non-financial score)
-   */
   private async calculateInternalProcessesScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
   ): Promise<number> {
-    const kpis = await this.calculateInternalProcessesKPIs(employeeId, periodStart, periodEnd);
-    return this.calculateCategoryScore(kpis);
-  }
-
-  private async calculateInternalProcessesKPIs(
-    employeeId: number,
-    periodStart: Date,
-    periodEnd: Date
-  ): Promise<KPIResult[]> {
-    // 1. Quality Review Score (Target: 4.0/5.0) - Weight: 35%
-    const avgQualityScore = await this.getAverageQualityScore(employeeId, periodStart, periodEnd);
-    const qualityKPI: KPIResult = {
-      kpiName: 'quality_review_score',
-      calculatedValue: avgQualityScore,
-      targetValue: 4.0,
-      achievementPercentage: (avgQualityScore / 4.0) * 100,
-      weightPercentage: 35,
-      weightedScore: (avgQualityScore / 4.0) * 35
-    };
-
-    // 2. Deadline Compliance (Target: 90%) - Weight: 30%
-    const deadlineCompliance = await this.getDeadlineComplianceRate(employeeId, periodStart, periodEnd);
-    const deadlineKPI: KPIResult = {
-      kpiName: 'deadline_compliance',
-      calculatedValue: deadlineCompliance,
-      targetValue: 90,
-      achievementPercentage: (deadlineCompliance / 90) * 100,
-      weightPercentage: 30,
-      weightedScore: (deadlineCompliance / 90) * 30
-    };
-
-    // 3. Process Improvement Ideas (Target: 2/year) - Weight: 20%
-    const improvementIdeas = await this.getImplementedImprovementIdeas(employeeId, periodStart, periodEnd);
-    const improvementKPI: KPIResult = {
-      kpiName: 'improvement_ideas',
-      calculatedValue: improvementIdeas,
-      targetValue: 2,
-      achievementPercentage: Math.min(100, (improvementIdeas / 2) * 100),
-      weightPercentage: 20,
-      weightedScore: Math.min(20, (improvementIdeas / 2) * 20)
-    };
-
-    // 4. Peer Collaboration Rating (Target: 4.0/5.0) - Weight: 15%
-    const peerRating = await this.getAveragePeerRating(employeeId, periodStart, periodEnd);
-    const peerKPI: KPIResult = {
-      kpiName: 'peer_collaboration',
-      calculatedValue: peerRating,
-      targetValue: 4.0,
-      achievementPercentage: (peerRating / 4.0) * 100,
-      weightPercentage: 15,
-      weightedScore: (peerRating / 4.0) * 15
-    };
-
-    return [qualityKPI, deadlineKPI, improvementKPI, peerKPI];
-  }
-
-  /**
-   * Helper method to calculate category score from KPIs
-   */
-  private calculateCategoryScore(kpis: KPIResult[]): number {
-    const totalWeightedScore = kpis.reduce((sum, kpi) => sum + kpi.weightedScore, 0);
-    return Math.min(100, totalWeightedScore);
-  }
-
-  // Data retrieval methods for individual KPIs
-
-  private async getTrainingHours(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const result = await prisma.trainingRecord.aggregate({
-      _sum: {
-        hours: true
-      },
-      where: {
-        employee_id: employeeId,
-        completed_at: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        status: 'completed'
-      }
-    });
-    
-    return result._sum.hours ? Number(result._sum.hours) : 0;
-  }
-
-  private async getKnowledgeSessionsCount(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    return await prisma.knowledgeSession.count({
-      where: {
-        presenter_id: employeeId,
-        session_date: {
-          gte: periodStart,
-          lte: periodEnd
-        }
-      }
-    });
-  }
-
-  private async getMentoringHours(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const result = await prisma.workLog.aggregate({
-      _sum: {
-        hours_worked: true
-      },
-      where: {
-        employee_id: employeeId,
-        work_date: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        activity_type: 'mentoring'
-      }
-    });
-    
-    return result._sum.hours_worked ? Number(result._sum.hours_worked) : 0;
-  }
-
-  private async getDevelopmentGoalsCompletion(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const totalGoals = await prisma.employeeGoal.count({
-      where: {
-        employee_id: employeeId,
-        createdAt: {
-          gte: periodStart,
-          lte: periodEnd
-        }
-      }
-    });
-
-    if (totalGoals === 0) return 100; // No goals = 100% completion
-
-    const completedGoals = await prisma.employeeGoal.count({
-      where: {
-        employee_id: employeeId,
-        createdAt: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        status: 'completed'
-      }
-    });
-
-    return (completedGoals / totalGoals) * 100;
-  }
-
-  private async getAverageClientFeedback(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const result = await prisma.clientEvaluation.aggregate({
-      _avg: {
-        overall_rating: true
-      },
-      where: {
-        employee_id: employeeId,
-        evaluation_date: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        submitted_at: {
-          not: null
-        }
-      }
-    });
-    
-    return result._avg.overall_rating ? Number(result._avg.overall_rating) : 0;
-  }
-
-  private async getOnTimeDeliveryRate(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    // Get jobs where the employee was assigned and completed
-    const completedJobs = await prisma.job.findMany({
-      include: {
-        jobStaffAssignments: {
-          where: {
-            employee_id: employeeId
-          }
-        }
-      },
-      where: {
-        jobStaffAssignments: {
-          some: {
-            employee_id: employeeId
-          }
-        },
-        completion_date: {
-          gte: periodStart,
-          lte: periodEnd,
-          not: null
-        },
-        due_date: {
-          not: null
-        }
-      }
-    });
-
-    if (completedJobs.length === 0) return 100; // No jobs = 100% on-time
-
-    const onTimeJobs = completedJobs.filter(job => 
-      job.completion_date && job.due_date && job.completion_date <= job.due_date
-    );
-
-    return (onTimeJobs.length / completedJobs.length) * 100;
-  }
-
-  private async getClientRetentionRate(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    // This is a simplified calculation - in practice, you might need more complex logic
-    // For now, we'll use client evaluation ratings as a proxy for retention
-    const totalEvaluations = await prisma.clientEvaluation.count({
-      where: {
-        employee_id: employeeId,
-        evaluation_date: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        submitted_at: { not: null }
-      }
-    });
-
-    if (totalEvaluations === 0) return 85; // Default to target
-
-    const positiveEvaluations = await prisma.clientEvaluation.count({
-      where: {
-        employee_id: employeeId,
-        evaluation_date: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        submitted_at: { not: null },
-        would_recommend: true
-      }
-    });
-
-    return (positiveEvaluations / totalEvaluations) * 100;
-  }
-
-  private async getAverageQualityScore(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const result = await prisma.qualityReview.aggregate({
-      _avg: {
-        overall_score: true
-      },
-      where: {
-        employee_id: employeeId,
-        review_date: {
-          gte: periodStart,
-          lte: periodEnd
-        }
-      }
-    });
-    
-    return result._avg.overall_score ? Number(result._avg.overall_score) : 0;
-  }
-
-  private async getDeadlineComplianceRate(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    // Get all tasks assigned to the employee in the period
-    const completedTasks = await prisma.task.findMany({
-      where: {
-        assigned_to: employeeId,
-        status: 'completed',
-        updatedAt: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        due_date: {
-          not: null
-        }
-      }
-    });
-
-    if (completedTasks.length === 0) return 100; // No tasks = 100% compliance
-
-    const onTimeTasks = completedTasks.filter(task => 
-      task.due_date && task.updatedAt <= task.due_date
-    );
-
-    return (onTimeTasks.length / completedTasks.length) * 100;
-  }
-
-  private async getImplementedImprovementIdeas(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    return await prisma.improvementIdea.count({
-      where: {
-        submitted_by: employeeId,
-        submitted_at: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        status: 'implemented'
-      }
-    });
-  }
-
-  private async getAveragePeerRating(employeeId: number, periodStart: Date, periodEnd: Date): Promise<number> {
-    const result = await prisma.peerEvaluation.aggregate({
-      _avg: {
-        overall_rating: true
-      },
-      where: {
-        evaluatee_id: employeeId,
-        createdAt: {
-          gte: periodStart,
-          lte: periodEnd
-        },
-        submitted_at: {
-          not: null
-        }
-      }
-    });
-    
-    return result._avg.overall_rating ? Number(result._avg.overall_rating) : 0;
-  }
-
-  /**
-   * Store calculated KPI scores in the database for audit trail
-   */
-  private async storeKPIScores(
-    employeeId: number,
-    evaluationCycleId: number | undefined,
-    periodStart: Date,
-    periodEnd: Date,
-    scores: BSCScores
-  ): Promise<void> {
-    const kpiScores = [
-      {
-        employee_id: employeeId,
-        evaluation_cycle_id: evaluationCycleId,
-        kpi_name: 'bsc_learning_growth',
-        kpi_category: 'learning_growth',
-        calculated_value: new Decimal(scores.learningGrowthScore),
-        target_value: new Decimal(100),
-        achievement_percentage: new Decimal(scores.learningGrowthScore),
-        weight_percentage: new Decimal(35),
-        weighted_score: new Decimal(scores.learningGrowthScore * 0.35),
-        calculation_period_start: periodStart,
-        calculation_period_end: periodEnd
-      },
-      {
-        employee_id: employeeId,
-        evaluation_cycle_id: evaluationCycleId,
-        kpi_name: 'bsc_customer_satisfaction',
-        kpi_category: 'customer_satisfaction',
-        calculated_value: new Decimal(scores.customerSatisfactionScore),
-        target_value: new Decimal(100),
-        achievement_percentage: new Decimal(scores.customerSatisfactionScore),
-        weight_percentage: new Decimal(35),
-        weighted_score: new Decimal(scores.customerSatisfactionScore * 0.35),
-        calculation_period_start: periodStart,
-        calculation_period_end: periodEnd
-      },
-      {
-        employee_id: employeeId,
-        evaluation_cycle_id: evaluationCycleId,
-        kpi_name: 'bsc_internal_processes',
-        kpi_category: 'internal_processes',
-        calculated_value: new Decimal(scores.internalProcessesScore),
-        target_value: new Decimal(100),
-        achievement_percentage: new Decimal(scores.internalProcessesScore),
-        weight_percentage: new Decimal(30),
-        weighted_score: new Decimal(scores.internalProcessesScore * 0.30),
-        calculation_period_start: periodStart,
-        calculation_period_end: periodEnd
-      },
-      {
-        employee_id: employeeId,
-        evaluation_cycle_id: evaluationCycleId,
-        kpi_name: 'bsc_overall_non_financial',
-        kpi_category: 'overall',
-        calculated_value: new Decimal(scores.overallNonFinancialScore),
-        target_value: new Decimal(100),
-        achievement_percentage: new Decimal(scores.overallNonFinancialScore),
-        weight_percentage: new Decimal(100),
-        weighted_score: new Decimal(scores.overallNonFinancialScore),
-        calculation_period_start: periodStart,
-        calculation_period_end: periodEnd
-      }
-    ];
-
-    // Upsert each KPI score
-    for (const kpiScore of kpiScores) {
-      await prisma.employeeKpiScore.upsert({
+    const [totalTasks, completedTasks] = await Promise.all([
+      prisma.task.count({
         where: {
-          employee_id_evaluation_cycle_id_kpi_name: {
-            employee_id: employeeId,
-            evaluation_cycle_id: evaluationCycleId || -1, // Use -1 for null cycle
-            kpi_name: kpiScore.kpi_name
-          }
+          assignedToProfileId: employeeId,
+          createdAt: { gte: periodStart, lte: periodEnd },
         },
-        update: {
-          calculated_value: kpiScore.calculated_value,
-          achievement_percentage: kpiScore.achievement_percentage,
-          weighted_score: kpiScore.weighted_score,
-          calculation_period_start: kpiScore.calculation_period_start,
-          calculation_period_end: kpiScore.calculation_period_end
+      }),
+      prisma.task.count({
+        where: {
+          assignedToProfileId: employeeId,
+          status: "completed",
+          updatedAt: { gte: periodStart, lte: periodEnd },
         },
-        create: kpiScore
-      });
-    }
+      }),
+    ]);
+
+    if (totalTasks === 0) return 100;
+
+    return clamp((completedTasks / totalTasks) * 100);
   }
 }
+
+const normalizeWeightValue = (value: number | undefined, fallback: number) => {
+  if (value === undefined || value === null) return fallback;
+  if (value > 1) return value / 100;
+  return value;
+};
 
 export const nonFinancialPerformanceService = new NonFinancialPerformanceService();

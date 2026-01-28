@@ -28,6 +28,18 @@ interface CreateJobPayload {
   engagementLetterId?: number;
 }
 
+interface CreateJobFromOnboardingPayload {
+  jobName?: string;
+  description?: string;
+  departmentId?: number;
+  partnerProfileId?: number;
+  managerProfileId: number;
+  startDate: string;
+  dueDate?: string;
+  priority?: Priority;
+  budgetHours?: number;
+}
+
 interface UpdateJobPayload extends Partial<CreateJobPayload> {
   status?: JobStatus;
   completionDate?: string;
@@ -104,6 +116,16 @@ export const jobsAPI = {
    */
   create: async (data: CreateJobPayload): Promise<Job> => {
     return api.post('/jobs', data);
+  },
+
+  /**
+   * Create a job from an approved onboarding record (HR queue)
+   */
+  createFromOnboarding: async (
+    clientOnboardingId: number,
+    data: CreateJobFromOnboardingPayload
+  ): Promise<Job> => {
+    return api.post(`/jobs/from-onboarding/${clientOnboardingId}`, data);
   },
 
   /**

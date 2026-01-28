@@ -119,6 +119,22 @@ interface JobBudgetInfo {
   isBillableAvailable: boolean;
 }
 
+interface JobAllocationSummary {
+  jobId: number;
+  jobBudgetHours: number;
+  requiresAllocation: boolean;
+  employeeAllocatedHours: number;
+  jobAllocatedHours: number;
+  approvedExtraJobHours: number;
+  approvedExtraEmployeeHours: number;
+  loggedJobHours: number;
+  loggedEmployeeHours: number;
+  allowedJobHours: number;
+  allowedEmployeeHours: number;
+  remainingJobHours: number;
+  remainingEmployeeHours: number;
+}
+
 const STATUS_COLORS = {
   pending: 'bg-gray-100 text-gray-800',
   submitted: 'bg-blue-100 text-blue-800',
@@ -143,6 +159,12 @@ export default function TimesheetsNew() {
   const [activeTab, setActiveTab] = useState('my-entries');
   const [showEntryDialog, setShowEntryDialog] = useState(false);
   const [showRequestTimeDialog, setShowRequestTimeDialog] = useState(false);
+  const [showRejectEntryDialog, setShowRejectEntryDialog] = useState(false);
+  const [rejectEntryId, setRejectEntryId] = useState<number | null>(null);
+  const [rejectEntryReason, setRejectEntryReason] = useState('');
+  const [showRejectRequestDialog, setShowRejectRequestDialog] = useState(false);
+  const [rejectRequestId, setRejectRequestId] = useState<number | null>(null);
+  const [rejectRequestReason, setRejectRequestReason] = useState('');
   const [selectedEntries, setSelectedEntries] = useState<number[]>([]);
   
   // Timer state
@@ -198,12 +220,39 @@ export default function TimesheetsNew() {
     enabled: isManager || isPartner,
   });
 
+  const { data: approvalRequestsData } = useQuery({
+    queryKey: ['approval-requests', isManager, isPartner],
+    queryFn: () =>
+      timeEntriesAPI.listApprovalRequests(
+        isManager || isPartner ? { status: 'pending' } : undefined
+      ),
+  });
+
   // Get jobs with budget info
   const myJobs = myJobsData?.data || [];
   const timeEntries = timeEntriesData?.data || [];
+
+  const { data: allocationSummariesData } = useQuery({
+    queryKey: ['job-allocation-summaries', myJobs.map((job: Job) => job.id)],
+    queryFn: async () => {
+      const summaries = await Promise.all(
+        myJobs.map((job: Job) => timeEntriesAPI.getJobAllocationSummary(job.id))
+      );
+      return summaries.reduce((acc, summary) => {
+        acc[summary.jobId] = summary;
+        return acc;
+      }, {} as Record<number, JobAllocationSummary>);
+    },
+    enabled: myJobs.length > 0,
+  });
   const pendingApprovals = Array.isArray(pendingApprovalsData)
     ? pendingApprovalsData
     : pendingApprovalsData?.data || [];
+  const approvalRequests = Array.isArray(approvalRequestsData)
+    ? approvalRequestsData
+    : approvalRequestsData?.data || [];
+  const approvalsBadgeCount = pendingApprovals.length + approvalRequests.length;
+  const allocationSummaries = (allocationSummariesData || {}) as Record<number, JobAllocationSummary>;
 
   // Calculate budget info for each job
   const getJobBudgetInfo = useCallback((jobId: number): JobBudgetInfo => {
@@ -211,15 +260,35 @@ export default function TimesheetsNew() {
     if (!job) {
       return { jobId, allocatedHours: 0, usedHours: 0, remainingHours: 0, isBillableAvailable: false };
     }
-    
+
+    const allocation = allocationSummaries[jobId];
+    if (allocation) {
+      const baseAllocatedHours = allocation.allowedEmployeeHours > 0
+        ? allocation.allowedEmployeeHours
+        : allocation.allowedJobHours > 0
+          ? allocation.allowedJobHours
+          : Number(job.budgetHours) || 0;
+
+      const usedHours = allocation.loggedEmployeeHours || 0;
+      const remainingHours = Math.max(0, baseAllocatedHours - usedHours);
+
+      return {
+        jobId,
+        allocatedHours: baseAllocatedHours,
+        usedHours,
+        remainingHours,
+        isBillableAvailable: remainingHours > 0,
+      };
+    }
+
     const jobEntries = timeEntries.filter(e => e.jobId === jobId);
     const usedHours = jobEntries
-      .filter(e => e.status === 'approved' && e.billable)
+      .filter(e => ['pending', 'submitted', 'approved'].includes(e.status))
       .reduce((sum, e) => sum + (e.hours || 0), 0);
-    
+
     const allocatedHours = Number(job.budgetHours) || 0;
     const remainingHours = Math.max(0, allocatedHours - usedHours);
-    
+
     return {
       jobId,
       allocatedHours,
@@ -227,7 +296,44 @@ export default function TimesheetsNew() {
       remainingHours,
       isBillableAvailable: remainingHours > 0,
     };
-  }, [myJobs, timeEntries]);
+  }, [allocationSummaries, myJobs, timeEntries]);
+
+  const getRemainingJobHours = (jobId: number) => {
+    const summary = allocationSummaries[jobId];
+    if (summary) {
+      return summary.remainingJobHours;
+    }
+    const job = myJobs.find(j => j.id === jobId);
+    if (!job) return null;
+    const jobEntries = timeEntries.filter(e => e.jobId === jobId);
+    const usedHours = jobEntries
+      .filter(e => ['pending', 'submitted', 'approved'].includes(e.status))
+      .reduce((sum, e) => sum + (e.hours || 0), 0);
+    const allocatedHours = Number(job.budgetHours) || 0;
+    return Math.max(0, allocatedHours - usedHours);
+  };
+
+  const getRequestLimits = (jobId: number | null) => {
+    if (!jobId) {
+      return {
+        remainingJobHours: null,
+        remainingEmployeeHours: null,
+        maxRequestableHours: null,
+      };
+    }
+    const summary = allocationSummaries[jobId];
+    const remainingJobHours = summary?.remainingJobHours ?? getRemainingJobHours(jobId) ?? null;
+    const remainingEmployeeHours = summary?.remainingEmployeeHours ?? null;
+    const maxRequestableHours =
+      remainingJobHours !== null && remainingEmployeeHours !== null
+        ? Math.min(remainingJobHours, remainingEmployeeHours)
+        : remainingEmployeeHours ?? remainingJobHours ?? null;
+    return {
+      remainingJobHours,
+      remainingEmployeeHours,
+      maxRequestableHours,
+    };
+  };
 
   // Mutations
   const createEntryMutation = useMutation({
@@ -239,7 +345,14 @@ export default function TimesheetsNew() {
       toast({ title: 'Time entry created', description: 'Your time entry has been saved.' });
     },
     onError: (error: any) => {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      const message = error?.message || 'Unable to save time entry.';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
+      if (message.toLowerCase().includes('allocation') || message.toLowerCase().includes('exceed')) {
+        if (entryForm.jobId) {
+          setAdditionalTimeRequest((prev) => ({ ...prev, jobId: entryForm.jobId }));
+          setShowRequestTimeDialog(true);
+        }
+      }
     },
   });
 
@@ -264,6 +377,33 @@ export default function TimesheetsNew() {
         title: 'Entries approved', 
         description: `${result.approved} entries approved.` 
       });
+    },
+  });
+
+  const rejectEntryMutation = useMutation({
+    mutationFn: (payload: { entryId: number; reason: string }) =>
+      timeEntriesAPI.reject(payload.entryId, payload.reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pending-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['my-time-entries'] });
+      toast({ title: 'Entry rejected', description: 'Time entry rejected.' });
+    },
+  });
+
+  const approveRequestMutation = useMutation({
+    mutationFn: (requestId: number) => timeEntriesAPI.approveApprovalRequest(requestId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
+      toast({ title: 'Request approved', description: 'Additional hours approved.' });
+    },
+  });
+
+  const rejectRequestMutation = useMutation({
+    mutationFn: (payload: { requestId: number; note?: string }) =>
+      timeEntriesAPI.rejectApprovalRequest(payload.requestId, payload.note),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
+      toast({ title: 'Request rejected', description: 'Additional hours rejected.' });
     },
   });
 
@@ -355,6 +495,11 @@ export default function TimesheetsNew() {
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const formatRequestType = (type?: string) => {
+    if (!type) return 'Additional hours';
+    return type.replace(/_/g, ' ');
   };
 
   const resetEntryForm = () => {
@@ -641,10 +786,15 @@ export default function TimesheetsNew() {
             {(isManager || isPartner) && (
               <TabsTrigger value="approvals">
                 Pending Approvals
-                {pendingApprovals.length > 0 && (
-                  <Badge variant="destructive" className="ml-2">
-                    {pendingApprovals.length}
-                  </Badge>
+                {(pendingApprovals.length > 0 || approvalRequests.length > 0) && (
+                  <span className="ml-2 flex items-center gap-1">
+                    {pendingApprovals.length > 0 && (
+                      <Badge variant="destructive">Entries {pendingApprovals.length}</Badge>
+                    )}
+                    {approvalRequests.length > 0 && (
+                      <Badge variant="secondary">Requests {approvalRequests.length}</Badge>
+                    )}
+                  </span>
                 )}
               </TabsTrigger>
             )}
@@ -781,6 +931,67 @@ export default function TimesheetsNew() {
                 )}
               </CardContent>
             </Card>
+
+            {!isManager && !isPartner && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Additional Hours Requests</CardTitle>
+                  <CardDescription>
+                    Track approvals for extra time on your jobs.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {approvalRequests.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <p>No requests yet</p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Job</TableHead>
+                          <TableHead>Requested</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Submitted</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {approvalRequests.map((request: any) => (
+                          <TableRow key={request.id}>
+                            <TableCell>
+                              <div>
+                                <p className="font-medium">{request.job?.jobName}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {request.job?.client?.clientName}
+                                </p>
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {Number(request.additionalHoursRequested ?? request.additionalHours ?? 0).toFixed(1)}h
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">
+                                {formatRequestType(request.requestType)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={STATUS_COLORS[request.status as keyof typeof STATUS_COLORS] || 'bg-gray-100 text-gray-800'}>
+                                {request.status || 'pending'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {request.requestedAt ? format(parseISO(request.requestedAt), 'MMM d') : '-'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* By Job Tab */}
@@ -872,7 +1083,7 @@ export default function TimesheetsNew() {
             <TabsContent value="approvals" className="space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Pending Approvals</CardTitle>
+                  <CardTitle>Pending Time Entries</CardTitle>
                   <CardDescription>
                     Review and approve time entries from your team
                   </CardDescription>
@@ -889,16 +1100,17 @@ export default function TimesheetsNew() {
                         <TableRow>
                           <TableHead>Employee</TableHead>
                           <TableHead>Date</TableHead>
-                          <TableHead>Job</TableHead>
-                          <TableHead>Description</TableHead>
-                          <TableHead className="text-right">Hours</TableHead>
-                          <TableHead>Type</TableHead>
-                          <TableHead>Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {pendingApprovals.map((entry: any) => (
-                          <TableRow key={entry.id}>
+                        <TableHead>Job</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead className="text-right">Hours</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Remaining (Job)</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingApprovals.map((entry: any) => (
+                        <TableRow key={entry.id}>
                             <TableCell>
                               {entry.employee?.firstName} {entry.employee?.lastName}
                             </TableCell>
@@ -918,6 +1130,17 @@ export default function TimesheetsNew() {
                               </Badge>
                             </TableCell>
                             <TableCell>
+                              {(() => {
+                                const remaining = getRemainingJobHours(entry.jobId);
+                                if (remaining === null) return '-';
+                                return (
+                                  <span className={remaining <= 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                                    {remaining.toFixed(1)}h
+                                  </span>
+                                );
+                              })()}
+                            </TableCell>
+                            <TableCell>
                               <div className="flex gap-1">
                                 <Button
                                   size="sm"
@@ -926,7 +1149,115 @@ export default function TimesheetsNew() {
                                 >
                                   <CheckCircle className="h-4 w-4" />
                                 </Button>
-                                <Button size="sm" variant="outline" className="text-red-600">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-red-600"
+                                  onClick={() => {
+                                    setRejectEntryId(entry.id);
+                                    setRejectEntryReason('');
+                                    setShowRejectEntryDialog(true);
+                                  }}
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Additional Hours Requests</CardTitle>
+                  <CardDescription>
+                    Approve extra time beyond allocated hours
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {approvalRequests.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <p>No additional hours requests</p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Job</TableHead>
+                        <TableHead>Requested</TableHead>
+                        <TableHead>Remaining (Job)</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Justification</TableHead>
+                        <TableHead>Submitted</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {approvalRequests.map((request: any) => (
+                          <TableRow key={request.id}>
+                            <TableCell>
+                              {request.employee?.firstName} {request.employee?.lastName}
+                            </TableCell>
+                            <TableCell>
+                              <div>
+                                <p className="font-medium">{request.job?.jobName}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {request.job?.client?.clientName}
+                                </p>
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {Number(request.additionalHoursRequested ?? request.additionalHours ?? 0).toFixed(1)}h
+                            </TableCell>
+                            <TableCell>
+                              {(() => {
+                                const remaining = getRemainingJobHours(request.jobId);
+                                if (remaining === null) return '-';
+                                return (
+                                  <span className={remaining <= 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                                    {remaining.toFixed(1)}h
+                                  </span>
+                                );
+                              })()}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="secondary">
+                                {formatRequestType(request.requestType)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-xs truncate">
+                              {request.justification || '-'}
+                            </TableCell>
+                            <TableCell>
+                              {request.requestedAt ? format(parseISO(request.requestedAt), 'MMM d') : '-'}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => approveRequestMutation.mutate(request.id)}
+                                  disabled={approveRequestMutation.isPending}
+                                >
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-red-600"
+                                  onClick={() => {
+                                    setRejectRequestId(request.id);
+                                    setRejectRequestReason('');
+                                    setShowRejectRequestDialog(true);
+                                  }}
+                                  disabled={rejectRequestMutation.isPending}
+                                >
                                   <XCircle className="h-4 w-4" />
                                 </Button>
                               </div>
@@ -1078,6 +1409,28 @@ export default function TimesheetsNew() {
                 Submit a request for additional hours on this job
               </DialogDescription>
             </DialogHeader>
+            {(() => {
+              const jobId = Number(additionalTimeRequest.jobId || entryForm.jobId) || null;
+              const limits = getRequestLimits(jobId);
+              return (
+                <Card className="border-dashed">
+                  <CardContent className="pt-4 text-sm space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Remaining (Job)</span>
+                      <span className={limits.remainingJobHours !== null && limits.remainingJobHours <= 0 ? 'text-red-600 font-medium' : 'font-medium'}>
+                        {limits.remainingJobHours !== null ? `${limits.remainingJobHours.toFixed(1)}h` : '—'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Remaining (You)</span>
+                      <span className={limits.remainingEmployeeHours !== null && limits.remainingEmployeeHours <= 0 ? 'text-red-600 font-medium' : 'font-medium'}>
+                        {limits.remainingEmployeeHours !== null ? `${limits.remainingEmployeeHours.toFixed(1)}h` : '—'}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })()}
             <div className="space-y-4">
               <div>
                 <Label>Hours Requested *</Label>
@@ -1090,6 +1443,44 @@ export default function TimesheetsNew() {
                     additionalHours: Number(e.target.value)
                   }))}
                 />
+                {(() => {
+                  const jobId = Number(additionalTimeRequest.jobId || entryForm.jobId) || null;
+                  const { maxRequestableHours } = getRequestLimits(jobId);
+                  if (maxRequestableHours === null) {
+                    return (
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Select a job to see remaining hours.
+                      </p>
+                    );
+                  }
+                  const exceeds = additionalTimeRequest.additionalHours > maxRequestableHours;
+                  if (maxRequestableHours <= 0) {
+                    return (
+                      <p className="text-xs text-red-600 mt-2">
+                        No remaining hours available. This request will be reviewed as non-billable.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="flex items-center justify-between mt-2">
+                      <p className={`text-xs ${exceeds ? 'text-red-600' : 'text-muted-foreground'}`}>
+                        Max suggested: {maxRequestableHours.toFixed(1)}h
+                        {exceeds ? ' (exceeds remaining)' : ''}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAdditionalTimeRequest((prev) => ({
+                          ...prev,
+                          additionalHours: Number(maxRequestableHours.toFixed(1)),
+                        }))}
+                      >
+                        Use remaining
+                      </Button>
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <Label>Reason *</Label>
@@ -1118,13 +1509,126 @@ export default function TimesheetsNew() {
               <Button variant="outline" onClick={() => setShowRequestTimeDialog(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleRequestAdditionalTime} disabled={requestApprovalMutation.isPending}>
+              <Button
+                onClick={handleRequestAdditionalTime}
+                disabled={(() => {
+                  const jobId = Number(additionalTimeRequest.jobId || entryForm.jobId) || null;
+                  const { maxRequestableHours } = getRequestLimits(jobId);
+                  if (requestApprovalMutation.isPending) return true;
+                  if (!jobId) return true;
+                  if (additionalTimeRequest.additionalHours <= 0) return true;
+                  if (maxRequestableHours !== null && additionalTimeRequest.additionalHours > maxRequestableHours) {
+                    return true;
+                  }
+                  return false;
+                })()}
+              >
                 {requestApprovalMutation.isPending ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4 mr-2" />
                 )}
                 Submit Request
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Reject Time Entry Dialog */}
+        <Dialog open={showRejectEntryDialog} onOpenChange={setShowRejectEntryDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reject Time Entry</DialogTitle>
+              <DialogDescription>
+                Provide a brief reason for rejecting this time entry.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>Reason *</Label>
+                <Textarea
+                  value={rejectEntryReason}
+                  onChange={(e) => setRejectEntryReason(e.target.value)}
+                  placeholder="Add a short reason for the rejection."
+                  rows={4}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowRejectEntryDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (!rejectEntryId) return;
+                  rejectEntryMutation.mutate({
+                    entryId: rejectEntryId,
+                    reason: rejectEntryReason || 'Rejected by manager',
+                  });
+                  setShowRejectEntryDialog(false);
+                }}
+                disabled={rejectEntryMutation.isPending}
+              >
+                {rejectEntryMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <XCircle className="h-4 w-4 mr-2" />
+                )}
+                Reject Entry
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Reject Additional Hours Request Dialog */}
+        <Dialog open={showRejectRequestDialog} onOpenChange={setShowRejectRequestDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reject Additional Hours</DialogTitle>
+              <DialogDescription>
+                Provide a brief note for the rejection (optional).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>Note</Label>
+                <Textarea
+                  value={rejectRequestReason}
+                  onChange={(e) => setRejectRequestReason(e.target.value)}
+                  placeholder="Optional note for the team member."
+                  rows={4}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowRejectRequestDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (!rejectRequestId) return;
+                  rejectRequestMutation.mutate({
+                    requestId: rejectRequestId,
+                    note: rejectRequestReason || undefined,
+                  });
+                  setShowRejectRequestDialog(false);
+                }}
+                disabled={rejectRequestMutation.isPending}
+              >
+                {rejectRequestMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <XCircle className="h-4 w-4 mr-2" />
+                )}
+                Reject Request
               </Button>
             </DialogFooter>
           </DialogContent>

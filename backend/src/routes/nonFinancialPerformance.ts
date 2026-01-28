@@ -6,6 +6,91 @@ import { Decimal } from '@prisma/client/runtime/library';
 
 const router = Router();
 
+const normalizeWeightValue = (value: number | undefined, fallback: number) => {
+  if (typeof value !== "number" || Number.isNaN(value)) return fallback;
+  if (value > 1) return value / 100;
+  return value;
+};
+
+const buildWeightConfig = (scoringConfig: Record<string, any>) => ({
+  learningGrowthWeight: normalizeWeightValue(
+    scoringConfig?.nonFinancialBreakdown?.learningGrowth,
+    0.35
+  ),
+  customerWeight: normalizeWeightValue(
+    scoringConfig?.nonFinancialBreakdown?.customer,
+    0.35
+  ),
+  internalWeight: normalizeWeightValue(
+    scoringConfig?.nonFinancialBreakdown?.internal,
+    0.3
+  ),
+  evaluationWeight: normalizeWeightValue(
+    scoringConfig?.learningGrowthBreakdown?.evaluation,
+    0.5
+  ),
+  okrWeight: normalizeWeightValue(
+    scoringConfig?.learningGrowthBreakdown?.okr,
+    0.3
+  ),
+  feedbackWeight: normalizeWeightValue(
+    scoringConfig?.learningGrowthBreakdown?.feedback,
+    0.2
+  ),
+});
+
+const getScoringConfigForEmployee = async (
+  employeeId: number,
+  evaluationCycleId?: number
+) => {
+  const profile = await prisma.profile.findUnique({
+    where: { id: employeeId },
+    select: { departmentId: true },
+  });
+
+  const departmentId = profile?.departmentId ?? null;
+
+  if (evaluationCycleId) {
+    const deptDefinition = await prisma.evaluationDefinition.findFirst({
+      where: {
+        status: "published",
+        cycleId: evaluationCycleId,
+        departmentId,
+      },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, scoringConfig: true },
+    });
+
+    if (deptDefinition) return deptDefinition;
+
+    return prisma.evaluationDefinition.findFirst({
+      where: {
+        status: "published",
+        cycleId: evaluationCycleId,
+        departmentId: null,
+      },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, scoringConfig: true },
+    });
+  }
+
+  if (departmentId) {
+    const deptDefinition = await prisma.evaluationDefinition.findFirst({
+      where: { status: "published", departmentId },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, scoringConfig: true },
+    });
+
+    if (deptDefinition) return deptDefinition;
+  }
+
+  return prisma.evaluationDefinition.findFirst({
+    where: { status: "published", departmentId: null },
+    orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+    select: { id: true, scoringConfig: true },
+  });
+};
+
 /**
  * Non-Financial Performance Routes
  * Handles training records, quality reviews, knowledge sessions, improvement ideas, and BSC score calculations
@@ -361,14 +446,33 @@ router.get('/non-financial-scores/:employeeId', authMiddleware, async (req: Requ
     const startDate = periodStart ? new Date(periodStart as string) : new Date(new Date().getFullYear(), 0, 1);
     const endDate = periodEnd ? new Date(periodEnd as string) : new Date();
 
+    const definition = await getScoringConfigForEmployee(
+      parseInt(employeeId),
+      evaluationCycleId ? parseInt(evaluationCycleId as string) : undefined
+    );
+    const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
+    const weightConfig = buildWeightConfig(scoringConfig);
+
     const scores = await nonFinancialPerformanceService.calculateNonFinancialScores(
       parseInt(employeeId),
       evaluationCycleId ? parseInt(evaluationCycleId as string) : undefined,
       startDate,
-      endDate
+      endDate,
+      weightConfig
     );
 
-    res.json(scores);
+    res.json({
+      ...scores,
+      evaluationDefinitionId: definition?.id ?? null,
+      weights: {
+        learningGrowthWeight: weightConfig.learningGrowthWeight,
+        customerWeight: weightConfig.customerWeight,
+        internalWeight: weightConfig.internalWeight,
+        evaluationWeight: weightConfig.evaluationWeight,
+        okrWeight: weightConfig.okrWeight,
+        feedbackWeight: weightConfig.feedbackWeight,
+      },
+    });
   } catch (error) {
     console.error('Error calculating non-financial scores:', error);
     res.status(500).json({ error: 'Failed to calculate non-financial scores' });
@@ -386,13 +490,29 @@ router.get('/non-financial-breakdown/:employeeId', authMiddleware, async (req: R
     const startDate = periodStart ? new Date(periodStart as string) : new Date(new Date().getFullYear(), 0, 1);
     const endDate = periodEnd ? new Date(periodEnd as string) : new Date();
 
+    const definition = await getScoringConfigForEmployee(parseInt(employeeId));
+    const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
+    const weightConfig = buildWeightConfig(scoringConfig);
+
     const breakdown = await nonFinancialPerformanceService.getBSCBreakdown(
       parseInt(employeeId),
       startDate,
-      endDate
+      endDate,
+      weightConfig
     );
 
-    res.json(breakdown);
+    res.json({
+      ...breakdown,
+      evaluationDefinitionId: definition?.id ?? null,
+      weights: {
+        learningGrowthWeight: weightConfig.learningGrowthWeight,
+        customerWeight: weightConfig.customerWeight,
+        internalWeight: weightConfig.internalWeight,
+        evaluationWeight: weightConfig.evaluationWeight,
+        okrWeight: weightConfig.okrWeight,
+        feedbackWeight: weightConfig.feedbackWeight,
+      },
+    });
   } catch (error) {
     console.error('Error fetching BSC breakdown:', error);
     res.status(500).json({ error: 'Failed to fetch BSC breakdown' });
@@ -426,7 +546,15 @@ router.post('/non-financial-scores/:evaluationId/update', authMiddleware, async 
       evaluation.employee_id,
       evaluation.evaluation_cycle_id || undefined,
       startDate,
-      endDate
+      endDate,
+      buildWeightConfig(
+        ((
+          await getScoringConfigForEmployee(
+            evaluation.employee_id,
+            evaluation.evaluation_cycle_id || undefined
+          )
+        )?.scoringConfig ?? {}) as Record<string, any>
+      )
     );
 
     // Update the evaluation with calculated scores
@@ -495,15 +623,28 @@ router.get('/team-non-financial-scores/:managerId', authMiddleware, async (req: 
     // Calculate scores for each team member
     const teamScores = await Promise.all(
       subordinates.map(async (sub) => {
+        const definition = await getScoringConfigForEmployee(sub.id);
+        const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
+        const weightConfig = buildWeightConfig(scoringConfig);
         const scores = await nonFinancialPerformanceService.calculateNonFinancialScores(
           sub.id,
           undefined,
           startDate,
-          endDate
+          endDate,
+          weightConfig
         );
         return {
           employeeId: sub.id,
-          ...scores
+          ...scores,
+          evaluationDefinitionId: definition?.id ?? null,
+          weights: {
+            learningGrowthWeight: weightConfig.learningGrowthWeight,
+            customerWeight: weightConfig.customerWeight,
+            internalWeight: weightConfig.internalWeight,
+            evaluationWeight: weightConfig.evaluationWeight,
+            okrWeight: weightConfig.okrWeight,
+            feedbackWeight: weightConfig.feedbackWeight,
+          },
         };
       })
     );

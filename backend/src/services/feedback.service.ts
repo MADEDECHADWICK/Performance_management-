@@ -20,10 +20,12 @@ interface ListOptions {
 }
 
 interface CreateFeedbackInput {
-  recipient_profile_id: number;
+  recipientProfileId?: number;
+  recipient_profile_id?: number;
   title: string;
   content: string;
   type?: string;
+  isAnonymous?: boolean;
   is_anonymous?: boolean;
 }
 
@@ -39,14 +41,14 @@ export class FeedbackService {
 
     if (type) where.type = type;
     if (status) where.status = status;
-    if (recipientId) where.recipient_profile_id = recipientId;
+    if (recipientId) where.recipientProfileId = recipientId;
 
     // ✅ ACCESS CONTROL
     if (!['admin', 'manager'].includes(auth.roleName || '')) {
       // Non-admins see only feedback for themselves or public feedback
       where.OR = [
-        { recipient_profile_id: auth.profileId },
-        { giver_profile_id: auth.profileId },
+        { recipientProfileId: auth.profileId },
+        { giverProfileId: auth.profileId },
       ];
     }
 
@@ -55,15 +57,15 @@ export class FeedbackService {
         where,
         include: {
           giver: {
-            select: { id: true, first_name: true, last_name: true },
+            select: { id: true, firstName: true, lastName: true },
           },
           recipient: {
-            select: { id: true, first_name: true, last_name: true },
+            select: { id: true, firstName: true, lastName: true },
           },
         },
         skip,
         take: pageSize,
-        orderBy: { created_at: 'desc' },
+        orderBy: { createdAt: 'desc' },
       }),
       prisma.feedback.count({ where }),
     ]);
@@ -71,7 +73,7 @@ export class FeedbackService {
     // ✅ HANDLE ANONYMOUS FEEDBACK
     const sanitized = feedback.map(f => ({
       ...f,
-      giver: f.is_anonymous ? { id: 0, first_name: 'Anonymous', last_name: '' } : f.giver,
+      giver: f.isAnonymous ? { id: 0, firstName: 'Anonymous', lastName: '' } : f.giver,
     }));
 
     return { feedback: sanitized, total };
@@ -81,11 +83,20 @@ export class FeedbackService {
    * Create feedback
    */
   static async createFeedback(input: CreateFeedbackInput, auth: AuthContext) {
-    const { recipient_profile_id, title, content, type, is_anonymous } = input;
+    const recipientProfileId = input.recipientProfileId ?? input.recipient_profile_id;
+    const { title, content, type } = input;
+    const isAnonymous = input.isAnonymous ?? input.is_anonymous;
 
     // ✅ VERIFY RECIPIENT EXISTS
+    if (!recipientProfileId) {
+      throw {
+        statusCode: 400,
+        message: 'Recipient is required',
+      };
+    }
+
     const recipient = await prisma.profile.findUnique({
-      where: { id: recipient_profile_id },
+      where: { id: recipientProfileId },
     });
 
     if (!recipient) {
@@ -96,7 +107,7 @@ export class FeedbackService {
     }
 
     // ✅ PREVENT SELF-FEEDBACK
-    if (recipient_profile_id === auth.profileId && !is_anonymous) {
+    if (recipientProfileId === auth.profileId && !isAnonymous) {
       throw {
         statusCode: 400,
         message: 'You cannot give feedback to yourself',
@@ -105,29 +116,29 @@ export class FeedbackService {
 
     const feedback = await prisma.feedback.create({
       data: {
-        giver_profile_id: auth.profileId,
-        recipient_profile_id,
+        giverProfileId: auth.profileId,
+        recipientProfileId,
         title,
         content,
         type: type || 'general',
-        is_anonymous: is_anonymous || false,
+        isAnonymous: isAnonymous || false,
         status: 'pending',
-        created_at: new Date(),
+        createdAt: new Date(),
       },
       include: {
         giver: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
         recipient: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
 
     return {
       ...feedback,
-      giver: feedback.is_anonymous
-        ? { id: 0, first_name: 'Anonymous', last_name: '' }
+      giver: feedback.isAnonymous
+        ? { id: 0, firstName: 'Anonymous', lastName: '' }
         : feedback.giver,
     };
   }
@@ -140,10 +151,10 @@ export class FeedbackService {
       where: { id: feedbackId },
       include: {
         giver: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
         recipient: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -158,8 +169,8 @@ export class FeedbackService {
     // ✅ VERIFY ACCESS
     const canView =
       auth.roleName === 'admin' ||
-      feedback.recipient_profile_id === auth.profileId ||
-      feedback.giver_profile_id === auth.profileId;
+      feedback.recipientProfileId === auth.profileId ||
+      feedback.giverProfileId === auth.profileId;
 
     if (!canView) {
       throw {
@@ -170,8 +181,8 @@ export class FeedbackService {
 
     return {
       ...feedback,
-      giver: feedback.is_anonymous
-        ? { id: 0, first_name: 'Anonymous', last_name: '' }
+      giver: feedback.isAnonymous
+        ? { id: 0, firstName: 'Anonymous', lastName: '' }
         : feedback.giver,
     };
   }

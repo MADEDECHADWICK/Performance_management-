@@ -50,10 +50,12 @@ export async function seedDatabase() {
 
   const positionRoles = await Promise.all(
     [
-      { name: 'Partner', billingRate: 20000, costRate: 15000 },
+      { name: 'Partner', billingRate: 10000, costRate: 7500 },
       { name: 'Manager', billingRate: 6000, costRate: 4500 },
       { name: 'Senior', billingRate: 4000, costRate: 3000 },
+      { name: 'Semi-Senior', billingRate: 3000, costRate: 2250 },
       { name: 'Associate', billingRate: 2000, costRate: 1500 },
+      { name: 'Trainee', billingRate: 2000, costRate: 1500 },
     ].map((role) =>
       prisma.positionRole.upsert({
         where: { name: role.name },
@@ -339,6 +341,84 @@ export async function seedDatabase() {
           status: 'approved',
         },
       });
+
+  const ensureTemplate = async (template: {
+    name: string;
+    description: string;
+    templateType: string;
+    bscCategory?: string;
+    competencies?: unknown;
+    questions?: unknown;
+  }) => {
+    const existing = await prisma.evaluationTemplate.findFirst({
+      where: { name: template.name, templateType: template.templateType },
+    });
+
+    if (existing) {
+      return prisma.evaluationTemplate.update({
+        where: { id: existing.id },
+        data: {
+          description: template.description,
+          bscCategory: template.bscCategory,
+          competencies: template.competencies ?? undefined,
+          questions: template.questions ?? undefined,
+          isActive: true,
+        },
+      });
+    }
+
+    return prisma.evaluationTemplate.create({
+      data: {
+        name: template.name,
+        description: template.description,
+        templateType: template.templateType,
+        bscCategory: template.bscCategory,
+        competencies: template.competencies ?? undefined,
+        questions: template.questions ?? undefined,
+        isActive: true,
+        createdBy: hrProfile.id,
+      },
+    });
+  };
+
+  await Promise.all([
+    ensureTemplate({
+      name: 'Competency Review',
+      description: 'Role competency and behavioral review.',
+      templateType: 'competency',
+      bscCategory: 'learning_growth',
+      competencies: [
+        { title: 'Technical Quality', maxScore: 5 },
+        { title: 'Client Communication', maxScore: 5 },
+        { title: 'Team Collaboration', maxScore: 5 },
+      ],
+      questions: [
+        { id: 'comp-1', label: 'Strengths observed', type: 'text' },
+        { id: 'comp-2', label: 'Development areas', type: 'text' },
+      ],
+    }),
+    ensureTemplate({
+      name: 'KPI Scorecard',
+      description: 'KPI-weighted scorecard aligned to goals.',
+      templateType: 'kpi',
+      bscCategory: 'financial',
+      questions: [
+        { id: 'kpi-1', label: 'KPI performance notes', type: 'text' },
+        { id: 'kpi-2', label: 'Evidence / links', type: 'text' },
+      ],
+    }),
+    ensureTemplate({
+      name: 'Project Performance',
+      description: 'Job-based performance and delivery assessment.',
+      templateType: 'project',
+      bscCategory: 'internal_process',
+      questions: [
+        { id: 'proj-1', label: 'Delivery quality', type: 'rating', max: 5 },
+        { id: 'proj-2', label: 'Budget adherence', type: 'rating', max: 5 },
+        { id: 'proj-3', label: 'Client satisfaction notes', type: 'text' },
+      ],
+    }),
+  ]);
 
   return {
     departmentId: department.id,

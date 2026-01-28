@@ -20,6 +20,8 @@ export { default as kpisAPI } from './kpis';
 export { default as dashboardsAPI } from './dashboards';
 export { default as documentsAPI } from './documents';
 export { default as surveysAPI } from './surveys';
+export { default as proposalsAPI } from './proposals';
+export { default as engagementLettersAPI } from './engagementLetters';
 export { default as rolesAPI } from './roles';
 
 // Convenience grouped import
@@ -34,6 +36,8 @@ import kpisAPI from './kpis';
 import dashboardsAPI from './dashboards';
 import documentsAPI from './documents';
 import surveysAPI from './surveys';
+import proposalsAPI from './proposals';
+import engagementLettersAPI from './engagementLetters';
 import rolesAPI from './roles';
 
 const API = {
@@ -48,6 +52,8 @@ const API = {
   dashboards: dashboardsAPI,
   documents: documentsAPI,
   surveys: surveysAPI,
+  proposals: proposalsAPI,
+  engagementLetters: engagementLettersAPI,
   roles: rolesAPI,
 };
 

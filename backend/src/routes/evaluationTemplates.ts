@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
     const { is_active } = req.query;
     
     const templates = await prisma.evaluationTemplate.findMany({
-      where: is_active === 'true' ? { is_active: true } : undefined,
+      where: is_active === 'true' ? { isActive: true } : undefined,
       orderBy: { createdAt: 'desc' },
     });
     
@@ -42,21 +42,36 @@ router.get('/:id', async (req, res) => {
 // POST /evaluation_templates
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { template_name, description, template_type, questions } = req.body;
+    const {
+      name,
+      template_name,
+      description,
+      templateType,
+      template_type,
+      bscCategory,
+      bsc_category,
+      competencies,
+      questions,
+    } = req.body;
     const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const templateName = name ?? template_name;
+    const resolvedType = templateType ?? template_type;
+    const resolvedCategory = bscCategory ?? bsc_category;
     
-    if (!template_name) {
+    if (!templateName) {
       return res.status(400).json({ error: 'Template name is required' });
     }
     
     const template = await prisma.evaluationTemplate.create({
       data: {
-        template_name,
+        name: templateName,
         description,
-        template_type,
+        templateType: resolvedType,
+        bscCategory: resolvedCategory,
+        competencies: competencies ?? undefined,
         questions,
-        created_by: userId,
-        is_active: true,
+        createdBy: userId,
+        isActive: true,
       },
     });
     
@@ -77,17 +92,35 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { template_name, description, template_type, questions, is_active } = req.body;
+    const {
+      name,
+      template_name,
+      description,
+      templateType,
+      template_type,
+      bscCategory,
+      bsc_category,
+      competencies,
+      questions,
+      is_active,
+      isActive,
+    } = req.body;
     const userId = req.user?.sub ? Number(req.user.sub) : undefined;
     
     const template = await prisma.evaluationTemplate.update({
       where: { id: parseInt(id) },
       data: {
-        ...(template_name && { template_name }),
+        ...(name && { name }),
+        ...(template_name && { name: template_name }),
         ...(description !== undefined && { description }),
-        ...(template_type && { template_type }),
+        ...(templateType && { templateType }),
+        ...(template_type && { templateType: template_type }),
+        ...(bscCategory !== undefined && { bscCategory }),
+        ...(bsc_category !== undefined && { bscCategory: bsc_category }),
+        ...(competencies !== undefined && { competencies }),
         ...(questions !== undefined && { questions }),
-        ...(is_active !== undefined && { is_active }),
+        ...(is_active !== undefined && { isActive: is_active }),
+        ...(isActive !== undefined && { isActive }),
       },
     });
     

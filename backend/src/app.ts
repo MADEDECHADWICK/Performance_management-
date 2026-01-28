@@ -9,6 +9,7 @@
  */
 
 import express from 'express';
+import path from 'path';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { errorHandler } from './middleware/error';
@@ -32,6 +33,9 @@ app.use(cors({
 
 // JSON body parser
 app.use(express.json());
+
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 /**
  * ==========================================

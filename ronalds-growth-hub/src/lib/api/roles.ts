@@ -8,6 +8,7 @@ export interface Role {
   id: number;
   name: string;
   billingRate: number;
+  costRate: number;
   description?: string;
   permissions: string[];
   isActive: boolean;
@@ -18,6 +19,7 @@ export interface Role {
 export interface CreateRoleData {
   name: string;
   billingRate: number;
+  costRate?: number;
   description?: string;
   permissions?: string[];
   isActive?: boolean;
@@ -26,6 +28,7 @@ export interface CreateRoleData {
 export interface UpdateRoleData {
   name?: string;
   billingRate?: number;
+  costRate?: number;
   description?: string;
   permissions?: string[];
   isActive?: boolean;

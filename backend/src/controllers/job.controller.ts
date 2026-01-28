@@ -6,6 +6,7 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import jobService from "../services/jobs.service";
+import { notifyJobCreation, notifyJobCompletion } from "../services/notificationRecipients";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class JobController {
@@ -78,11 +79,7 @@ export class JobController {
         profileId: req.user!.profileId!,
         roles: (req as any).userRoles || req.user?.authRoles || [],
       };
-
-      const requesterRoles = auth.roles || [];
-      const isManager = requesterRoles.includes("manager");
-
-      const managerProfileId = req.body.managerProfileId ?? (isManager ? auth.profileId : undefined);
+      const managerProfileId = req.body.managerProfileId;
 
       if (!managerProfileId) {
         res.status(400).json(errorResponse("managerProfileId is required", 400));
@@ -91,10 +88,51 @@ export class JobController {
 
       const input = {
         ...req.body,
-        managerProfileId,
+        managerProfileId: Number(managerProfileId),
       };
 
       const newJob = await jobService.createJob(input, auth);
+      await notifyJobCreation(newJob, req);
+
+      res.status(201).json(successResponse(newJob, "Job created successfully", 201));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * POST /jobs/from-onboarding/:clientOnboardingId
+   * Create new job from approved client onboarding (HR queue)
+   */
+  static async createJobFromOnboarding(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const clientOnboardingId = Number(req.params.clientOnboardingId);
+
+      if (!clientOnboardingId) {
+        res.status(400).json(errorResponse("clientOnboardingId is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: (req as any).userRoles || req.user?.authRoles || [],
+      };
+
+      const managerProfileId = req.body.managerProfileId;
+      if (!managerProfileId) {
+        res.status(400).json(errorResponse("managerProfileId is required", 400));
+        return;
+      }
+
+      const input = {
+        ...req.body,
+        managerProfileId: Number(managerProfileId),
+      };
+
+      const newJob = await jobService.createJobFromOnboarding(clientOnboardingId, input, auth);
+      await notifyJobCreation(newJob, req);
 
       res.status(201).json(successResponse(newJob, "Job created successfully", 201));
     } catch (error: any) {
@@ -142,6 +180,9 @@ export class JobController {
       };
 
       const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth);
+      if (status === "completed") {
+        await notifyJobCompletion(updatedJob, req);
+      }
 
       res.json(successResponse(updatedJob, "Job status updated"));
     } catch (error: any) {

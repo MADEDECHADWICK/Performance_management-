@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useToast } from "@/hooks/use-toast";
 import { apiFetch, authAPI } from "@/integrations/apiClient";
 import { DollarSign, TrendingUp, Users, Loader2, AlertCircle, Building2 } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -16,13 +15,40 @@ interface AnalyticsData {
   financial: any;
 }
 
+interface EmployeeJobRow {
+  jobId: number;
+  jobName: string;
+  status: string;
+  lastWorkedAt: string | null;
+  totalHours: number;
+  billableHours: number;
+  nonBillableHours: number;
+  billableAmount: number;
+  nonBillableAmount: number;
+  profitLoss: number;
+}
+
 const COLORS = ['hsl(var(--primary))', 'hsl(var(--secondary))', 'hsl(var(--accent))', 'hsl(var(--muted))', 'hsl(var(--destructive))'];
 
 export default function FinancialSummary() {
   const navigate = useNavigate();
-  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [employeeJobs, setEmployeeJobs] = useState<EmployeeJobRow[]>([]);
+  const [employeeTotals, setEmployeeTotals] = useState({
+    totalHours: 0,
+    billableHours: 0,
+    nonBillableHours: 0,
+    billableAmount: 0,
+    nonBillableAmount: 0,
+    profitLoss: 0,
+    profitAmount: 0,
+    lossAmount: 0,
+    overtimeHours: 0,
+  });
+  const [employeeDateFrom, setEmployeeDateFrom] = useState("");
+  const [employeeDateTo, setEmployeeDateTo] = useState("");
 
   useEffect(() => {
     loadAnalytics();
@@ -31,6 +57,7 @@ export default function FinancialSummary() {
   const loadAnalytics = async () => {
     try {
       setLoading(true);
+      setErrorMessage(null);
       const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
@@ -40,16 +67,154 @@ export default function FinancialSummary() {
       // Use the new role-aware analytics endpoint
       const data = await apiFetch("GET", "/analytics/financial");
       setAnalyticsData(data);
+
+      if (data?.isEmployee) {
+        await loadEmployeeBreakdown();
+      }
     } catch (error: unknown) {
       const err = error as Record<string, string>;
       console.error("Error loading analytics:", error);
-      toast({
-        title: "Error",
-        description: err.error || "Failed to load financial analytics",
-        variant: "destructive",
+      setErrorMessage(err.error || "Failed to load financial analytics");
+      // Provide safe fallback so the dashboard still renders
+      const fallbackUser = await authAPI.me().catch(() => null);
+      setAnalyticsData({
+        userRole: fallbackUser?.role ?? "employee",
+        isAdmin: !!fallbackUser?.is_admin || !!fallbackUser?.isAdmin,
+        isPartner: !!fallbackUser?.is_partner || !!fallbackUser?.isPartner,
+        isEmployee: !(fallbackUser?.is_admin || fallbackUser?.isAdmin || fallbackUser?.is_partner || fallbackUser?.isPartner),
+        financial: {},
       });
+      await loadEmployeeBreakdown();
     } finally {
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (analyticsData?.isEmployee) {
+      loadEmployeeBreakdown();
+    }
+  }, [analyticsData?.isEmployee, employeeDateFrom, employeeDateTo]);
+
+  const loadEmployeeBreakdown = async () => {
+    try {
+      const [entriesResponse, approvalsResponse] = await Promise.all([
+        apiFetch("GET", "/time-entries?status=approved&page=1&pageSize=500"),
+        apiFetch("GET", "/time-entries/approval-requests?status=approved"),
+      ]);
+
+      const entriesPayload = entriesResponse?.data ?? entriesResponse ?? {};
+      const entries = Array.isArray(entriesPayload.items)
+        ? entriesPayload.items
+        : entriesPayload.items?.items ?? [];
+
+      const approvalsPayload = approvalsResponse?.data ?? approvalsResponse ?? {};
+      const approvals = Array.isArray(approvalsPayload.data)
+        ? approvalsPayload.data
+        : approvalsPayload.items ?? approvalsPayload ?? [];
+
+      const totals = {
+        totalHours: 0,
+        billableHours: 0,
+        nonBillableHours: 0,
+        billableAmount: 0,
+        nonBillableAmount: 0,
+        profitLoss: 0,
+        profitAmount: 0,
+        lossAmount: 0,
+        overtimeHours: 0,
+      };
+
+      const byJob = new Map<number, EmployeeJobRow>();
+
+      const filteredEntries = entries.filter((entry: any) => {
+        const rawDate = entry.workDate ?? entry.date ?? entry.createdAt;
+        if (!rawDate) {
+          return true;
+        }
+        const entryDate = new Date(rawDate);
+        if (employeeDateFrom) {
+          const fromDate = new Date(employeeDateFrom);
+          if (entryDate < fromDate) return false;
+        }
+        if (employeeDateTo) {
+          const toDate = new Date(employeeDateTo);
+          toDate.setHours(23, 59, 59, 999);
+          if (entryDate > toDate) return false;
+        }
+        return true;
+      });
+
+      filteredEntries.forEach((entry: any) => {
+        const jobId = entry.job?.id ?? entry.jobId;
+        const jobName = entry.job?.jobName ?? `Job #${jobId}`;
+        const status = entry.job?.status ?? entry.jobStatus ?? "in_progress";
+        const workDate = entry.workDate ?? entry.date ?? entry.createdAt ?? null;
+        const hours = Number(entry.hours || 0);
+        const billable = Boolean(entry.billable);
+        const billableAmount = Number(entry.billableAmount || 0);
+        const costAmount = Number(entry.costAmount || 0);
+        const profitLoss = Number(entry.profitLoss || 0);
+
+        totals.totalHours += hours;
+        totals.profitLoss += profitLoss;
+        if (profitLoss >= 0) {
+          totals.profitAmount += profitLoss;
+        } else {
+          totals.lossAmount += Math.abs(profitLoss);
+        }
+        if (billable) {
+          totals.billableHours += hours;
+          totals.billableAmount += billableAmount;
+        } else {
+          totals.nonBillableHours += hours;
+          totals.nonBillableAmount += costAmount;
+        }
+
+        if (!byJob.has(jobId)) {
+          byJob.set(jobId, {
+            jobId,
+            jobName,
+            status,
+            lastWorkedAt: workDate,
+            totalHours: 0,
+            billableHours: 0,
+            nonBillableHours: 0,
+            billableAmount: 0,
+            nonBillableAmount: 0,
+            profitLoss: 0,
+          });
+        }
+
+        const row = byJob.get(jobId)!;
+        row.totalHours += hours;
+        row.profitLoss += profitLoss;
+        if (!row.lastWorkedAt || (workDate && new Date(workDate) > new Date(row.lastWorkedAt))) {
+          row.lastWorkedAt = workDate;
+        }
+        if (billable) {
+          row.billableHours += hours;
+          row.billableAmount += billableAmount;
+        } else {
+          row.nonBillableHours += hours;
+          row.nonBillableAmount += costAmount;
+        }
+      });
+
+      approvals.forEach((request: any) => {
+        totals.overtimeHours += Number(request.additionalHoursRequested || 0);
+      });
+
+      const jobRows = Array.from(byJob.values()).sort((a, b) => {
+        const aTime = a.lastWorkedAt ? new Date(a.lastWorkedAt).getTime() : 0;
+        const bTime = b.lastWorkedAt ? new Date(b.lastWorkedAt).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      setEmployeeTotals(totals);
+      setEmployeeJobs(jobRows);
+    } catch (error) {
+      console.error("Failed to load employee financial breakdown", error);
     }
   };
 
@@ -64,33 +229,13 @@ export default function FinancialSummary() {
     );
   }
 
-  if (!analyticsData) {
-    return (
-      <DashboardLayout>
-        <Card className="border-destructive/50 bg-destructive/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertCircle className="h-5 w-5" />
-              No Financial Data Available
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Financial data is not yet available. Please complete work logs and evaluations to see metrics.
-            </p>
-          </CardContent>
-        </Card>
-      </DashboardLayout>
-    );
-  }
-
-  const roleLabel = analyticsData.isAdmin 
+  const roleLabel = analyticsData?.isAdmin 
     ? "Company-Wide" 
-    : analyticsData.isPartner 
+    : analyticsData?.isPartner 
     ? "Partner Portfolio" 
     : "Personal";
 
-  const f = analyticsData.financial;
+  const f = analyticsData?.financial || {};
 
   return (
     <DashboardLayout>
@@ -102,25 +247,105 @@ export default function FinancialSummary() {
           <p className="text-muted-foreground">
             Your financial metrics {analyticsData.isAdmin && "(Company-wide aggregates)"}
             {analyticsData.isPartner && "(Portfolio metrics)"}
-            {analyticsData.isEmployee && "(Personal contribution - monetary values restricted)"}
+            {analyticsData.isEmployee && "(Personal contribution)"}
           </p>
         </div>
 
-        {/* Role-based visibility notice */}
-        {analyticsData.isEmployee && (
-          <Card className="border-blue-200 bg-blue-50">
+        {(errorMessage || !analyticsData) && !analyticsData?.isEmployee && (
+          <Card className="border-destructive/30 bg-destructive/5">
             <CardHeader>
-              <CardTitle className="text-sm text-blue-900">Personal Hours Only</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-destructive">
+                <AlertCircle className="h-5 w-5" />
+                Limited financial data
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-blue-800">
-                As an employee, you see only your hours worked. Financial data (revenue, profit, company-wide metrics) is restricted to authorized personnel.
+              <p className="text-sm text-muted-foreground">
+                {errorMessage || "Financial data is not yet available. Showing placeholders for now."}
               </p>
             </CardContent>
           </Card>
         )}
 
-        {analyticsData.financial && (
+        {analyticsData?.isEmployee && errorMessage && (
+          <Card className="border-muted/40 bg-muted/30">
+            <CardHeader>
+              <CardTitle className="text-sm">Showing your approved job time</CardTitle>
+              <CardDescription>
+                System analytics are limited right now, but your job totals below are accurate based on approved time.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
+
+        {/* Role-based visibility notice */}
+        {analyticsData?.isEmployee && (
+          <Card className="border-primary/30 bg-primary/5">
+            <CardHeader>
+              <CardTitle className="text-sm">Personal Job Financials</CardTitle>
+              <CardDescription>Billable vs non-billable, profit/loss, and overtime.</CardDescription>
+            </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Billable Amount</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  KES {employeeTotals.billableAmount.toLocaleString()}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{employeeTotals.billableHours.toFixed(1)} billable hours</p>
+                </CardContent>
+              </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Non-billable Amount</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  KES {employeeTotals.nonBillableAmount.toLocaleString()}
+                </div>
+                <p className="text-xs text-muted-foreground">{employeeTotals.nonBillableHours.toFixed(1)} non-billable hours</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Profit</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  KES {employeeTotals.profitAmount.toLocaleString()}
+                </div>
+                <p className="text-xs text-muted-foreground">Positive variance</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Loss</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  KES {employeeTotals.lossAmount.toLocaleString()}
+                </div>
+                <p className="text-xs text-muted-foreground">Negative variance</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Approved Overtime</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                    {employeeTotals.overtimeHours.toFixed(1)} hrs
+                  </div>
+                  <p className="text-xs text-muted-foreground">Additional approved hours</p>
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {analyticsData && (
           <>
             {/* Key Metrics Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -220,6 +445,21 @@ export default function FinancialSummary() {
                       {(f.billableHours || 0).toFixed(1)}
                     </div>
                     <p className="text-xs text-muted-foreground">Hours on billable projects</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {analyticsData.isEmployee && (
+                <Card className="hover:shadow-lg transition-shadow">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Jobs Completed</CardTitle>
+                    <Users className="h-4 w-4 text-accent" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-primary">
+                      {employeeJobs.length}
+                    </div>
+                    <p className="text-xs text-muted-foreground">With approved time</p>
                   </CardContent>
                 </Card>
               )}
@@ -347,40 +587,95 @@ export default function FinancialSummary() {
               </Card>
             )}
 
-            {/* Employee: Job Hours Breakdown */}
-            {analyticsData.isEmployee && f.jobHours && f.jobHours.length > 0 && (
+            {/* Employee: Job Financial Breakdown */}
+            {analyticsData.isEmployee && employeeJobs.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Your Hours by Job</CardTitle>
-                  <CardDescription>Breakdown of hours worked on each project</CardDescription>
+                  <CardTitle>Your Jobs & Earnings</CardTitle>
+                  <CardDescription>Billable vs non-billable, profit/loss, and hours by job</CardDescription>
                 </CardHeader>
                 <CardContent>
+                  <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-end md:justify-between">
+                    <div className="flex flex-1 flex-wrap gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">From</span>
+                        <input
+                          type="date"
+                          value={employeeDateFrom}
+                          onChange={(event) => setEmployeeDateFrom(event.target.value)}
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">To</span>
+                        <input
+                          type="date"
+                          value={employeeDateTo}
+                          onChange={(event) => setEmployeeDateTo(event.target.value)}
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmployeeDateFrom("");
+                          setEmployeeDateTo("");
+                        }}
+                        className="h-9 rounded-md border border-input px-3 text-sm text-muted-foreground hover:text-foreground"
+                      >
+                        Clear dates
+                      </button>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Showing {employeeJobs.length} job{employeeJobs.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>Job</TableHead>
-                          <TableHead>Client</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Last Worked</TableHead>
                           <TableHead className="text-right">Total Hours</TableHead>
-                          <TableHead className="text-right">Billable Hours</TableHead>
-                          <TableHead className="text-right">Billable %</TableHead>
+                          <TableHead className="text-right">Billable</TableHead>
+                          <TableHead className="text-right">Non-billable</TableHead>
+                          <TableHead className="text-right">Billable Amount</TableHead>
+                          <TableHead className="text-right">Profit / Loss</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {f.jobHours.map((job: any) => (
+                        {employeeJobs.map((job) => (
                           <TableRow key={job.jobId}>
-                            <TableCell className="font-medium">{job.jobCode}</TableCell>
-                            <TableCell>{job.clientName}</TableCell>
-                            <TableCell className="text-right">{(job.totalHours || 0).toFixed(1)}</TableCell>
-                            <TableCell className="text-right">{(job.billableHours || 0).toFixed(1)}</TableCell>
+                            <TableCell className="font-medium">{job.jobName}</TableCell>
+                            <TableCell className="capitalize">{job.status.replace(/_/g, " ")}</TableCell>
+                            <TableCell>
+                              {job.lastWorkedAt ? new Date(job.lastWorkedAt).toLocaleDateString() : "—"}
+                            </TableCell>
+                            <TableCell className="text-right">{job.totalHours.toFixed(1)}</TableCell>
+                            <TableCell className="text-right">{job.billableHours.toFixed(1)}</TableCell>
+                            <TableCell className="text-right">{job.nonBillableHours.toFixed(1)}</TableCell>
+                            <TableCell className="text-right">KES {job.billableAmount.toLocaleString()}</TableCell>
                             <TableCell className="text-right">
-                              {job.totalHours > 0 ? ((job.billableHours / job.totalHours) * 100).toFixed(1) : 0}%
+                              KES {job.profitLoss.toLocaleString()}
                             </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
                   </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {analyticsData.isEmployee && employeeJobs.length === 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Your Jobs & Earnings</CardTitle>
+                  <CardDescription>Once time entries are approved, your job financials will appear here.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">No approved job time found yet.</p>
                 </CardContent>
               </Card>
             )}

@@ -14,7 +14,21 @@ const router = Router();
 
 // ✅ VALIDATORS
 const createNotificationValidators = [
+  body().custom((_, { req }) => {
+    const hasRecipient =
+      Number.isFinite(Number(req.body?.recipientProfileId)) ||
+      Number.isFinite(Number(req.body?.recipient_profile_id));
+    if (!hasRecipient) {
+      throw new Error('recipientProfileId is required');
+    }
+    return true;
+  }),
+  body('recipientProfileId')
+    .optional()
+    .isInt()
+    .withMessage('recipientProfileId must be an integer'),
   body('recipient_profile_id')
+    .optional()
     .isInt()
     .withMessage('recipient_profile_id must be an integer'),
   body('type')
@@ -32,17 +46,28 @@ const createNotificationValidators = [
     .trim()
     .isLength({ min: 1, max: 500 })
     .withMessage('message must be 1-500 characters'),
-  body('related_entity_type')
-    .optional()
-    .isString()
-    .isLength({ max: 50 }),
-  body('related_entity_id')
-    .optional()
-    .isInt(),
+  body('jobId').optional().isInt(),
+  body('clientId').optional().isInt(),
+  body('evaluationDefinitionId').optional().isInt(),
+  body('timeEntryId').optional().isInt(),
+  body('workflowAssignmentId').optional().isInt(),
+  body('link').optional().isString().isLength({ max: 200 }),
 ];
 
 const batchNotificationValidators = [
+  body().custom((_, { req }) => {
+    const ids = req.body?.recipientProfileIds ?? req.body?.recipient_profile_ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      throw new Error('recipientProfileIds must be a non-empty array');
+    }
+    return true;
+  }),
+  body('recipientProfileIds')
+    .optional()
+    .isArray({ min: 1 })
+    .withMessage('recipientProfileIds must be a non-empty array'),
   body('recipient_profile_ids')
+    .optional()
     .isArray({ min: 1 })
     .withMessage('recipient_profile_ids must be a non-empty array'),
   body('type')
@@ -78,6 +103,10 @@ const listNotificationValidators = [
     .optional()
     .isIn(['read', 'unread'])
     .withMessage('status must be read or unread'),
+  query('scope')
+    .optional()
+    .isIn(['mine', 'all'])
+    .withMessage('scope must be mine or all'),
 ];
 
 // ✅ ROUTES
@@ -97,7 +126,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'manager'),
+  requireRole('admin', 'manager', 'hr', 'hr_manager', 'super_admin'),
   ...createNotificationValidators,
   handleValidationErrors,
   NotificationController.createNotification
@@ -152,7 +181,7 @@ router.post(
   '/batch',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'manager'),
+  requireRole('admin', 'manager', 'hr', 'hr_manager', 'super_admin'),
   ...batchNotificationValidators,
   handleValidationErrors,
   NotificationController.sendBatchNotifications

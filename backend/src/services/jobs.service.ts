@@ -12,6 +12,7 @@
  */
 
 import prisma from '../prisma';
+import NotificationService from './notifications.service';
 
 export interface JobCreateInput {
   jobName: string;
@@ -24,6 +25,18 @@ export interface JobCreateInput {
   fixedFeeAmount?: number;
   budgetHours?: number;
   engagementLetterId?: number;
+  startDate?: Date;
+  dueDate?: Date;
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+}
+
+export interface JobCreateFromOnboardingInput {
+  jobName?: string;
+  description?: string;
+  departmentId?: number;
+  partnerProfileId?: number;
+  managerProfileId: number;
+  budgetHours?: number;
   startDate?: Date;
   dueDate?: Date;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
@@ -43,7 +56,7 @@ export interface JobUpdateInput {
 export interface JobStaffAssignmentInput {
   employeeProfileId: number;
   assignedRoleId: number;
-  assignedHourlyRate: number;
+  assignedHourlyRate?: number;
   roleOnJob?: string;
 }
 
@@ -94,49 +107,69 @@ class JobService {
    */
   async createJob(input: JobCreateInput, authContext: AuthContext) {
     // Authorization: manager creating their own job, or admin
-    const isAdmin = authContext.roles?.includes('admin');
+    const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
     const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
-    const isCreatingOwnJob = input.managerProfileId === authContext.profileId;
 
-    if (!isAdmin && !isHr && !isCreatingOwnJob) {
-      throw new Error('Not authorized to create job for another manager');
+    if (!isAdmin && !isHr) {
+      throw new Error('Not authorized to create jobs');
+    }
+
+    if (!input.engagementLetterId) {
+      throw new Error('Engagement letter is required for job creation');
     }
 
     let resolvedClientId = input.clientId;
 
-    if (input.engagementLetterId) {
-      const engagementLetter = await prisma.engagementLetter.findUnique({
-        where: { id: input.engagementLetterId },
-        select: { id: true, status: true, clientId: true },
-      });
+    const engagementLetter = await prisma.engagementLetter.findUnique({
+      where: { id: input.engagementLetterId },
+      select: {
+        id: true,
+        status: true,
+        clientId: true,
+        feeAmount: true,
+        currency: true,
+        jobTitle: true,
+        engagementType: true,
+      },
+    });
 
-      if (!engagementLetter) {
-        throw new Error('Engagement letter not found');
-      }
-
-      if (engagementLetter.status !== 'approved') {
-        throw new Error('Engagement letter must be approved before job creation');
-      }
-
-      if (resolvedClientId && resolvedClientId !== engagementLetter.clientId) {
-        throw new Error('Engagement letter does not match clientId');
-      }
-
-      const onboarding = await prisma.clientOnboarding.findFirst({
-        where: { engagementLetterId: engagementLetter.id },
-        select: { id: true, status: true },
-      });
-
-      if (onboarding && !['approved', 'client_created'].includes(onboarding.status)) {
-        throw new Error('Client onboarding must be approved before job creation');
-      }
-
-      resolvedClientId = engagementLetter.clientId;
+    if (!engagementLetter) {
+      throw new Error('Engagement letter not found');
     }
 
-    if (!resolvedClientId) {
-      throw new Error('clientId is required for job creation');
+    if (engagementLetter.status !== 'approved') {
+      throw new Error('Engagement letter must be approved before job creation');
     }
+
+    if (resolvedClientId && resolvedClientId !== engagementLetter.clientId) {
+      throw new Error('Engagement letter does not match clientId');
+    }
+
+    if (!engagementLetter.feeAmount) {
+      throw new Error('Engagement letter must include a fee amount');
+    }
+
+    const onboarding = await prisma.clientOnboarding.findFirst({
+      where: { engagementLetterId: engagementLetter.id },
+      select: { id: true, status: true, jobId: true },
+    });
+
+    if (!onboarding) {
+      throw new Error('Client onboarding is required before job creation');
+    }
+
+    if (!['approved', 'client_created'].includes(onboarding.status)) {
+      throw new Error('Client onboarding must be approved before job creation');
+    }
+
+    if (onboarding.jobId) {
+      throw new Error('Job already created for this engagement letter');
+    }
+
+    resolvedClientId = engagementLetter.clientId;
+
+    const billingType = 'fixed_fee';
+    const fixedFeeAmount = Number(engagementLetter.feeAmount);
 
     const job = await prisma.job.create({
       data: {
@@ -146,8 +179,8 @@ class JobService {
         departmentId: input.departmentId,
         partnerProfileId: input.partnerProfileId,
         managerProfileId: input.managerProfileId,
-        billingType: input.billingType,
-        fixedFeeAmount: input.fixedFeeAmount || 0,
+        billingType,
+        fixedFeeAmount,
         budgetHours: input.budgetHours || 0,
         engagementLetterId: input.engagementLetterId,
         startDate: input.startDate,
@@ -172,6 +205,114 @@ class JobService {
         },
       });
     }
+
+    return job;
+  }
+
+  /**
+   * Create a new job from a client onboarding record (HR queue)
+   */
+  async createJobFromOnboarding(
+    clientOnboardingId: number,
+    input: JobCreateFromOnboardingInput,
+    authContext: AuthContext
+  ) {
+    const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
+    const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
+
+    if (!isAdmin && !isHr) {
+      throw new Error('Not authorized to create jobs from onboarding');
+    }
+
+    const onboarding = await prisma.clientOnboarding.findUnique({
+      where: { id: clientOnboardingId },
+      include: {
+        engagementLetter: {
+          select: {
+            id: true,
+            status: true,
+            clientId: true,
+            feeAmount: true,
+            currency: true,
+            jobTitle: true,
+            startDate: true,
+            endDate: true,
+          },
+        },
+        client: { select: { id: true, clientName: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!onboarding) {
+      throw new Error('Client onboarding not found');
+    }
+
+    if (onboarding.jobId) {
+      throw new Error('Job already created for this onboarding');
+    }
+
+    if (!['approved', 'client_created'].includes(onboarding.status)) {
+      throw new Error('Client onboarding must be approved before job creation');
+    }
+
+    const engagementLetter = onboarding.engagementLetter;
+    if (!engagementLetter) {
+      throw new Error('Engagement letter is required for job creation');
+    }
+
+    if (engagementLetter.status !== 'approved') {
+      throw new Error('Engagement letter must be approved before job creation');
+    }
+
+    if (!engagementLetter.feeAmount) {
+      throw new Error('Engagement letter must include a fee amount');
+    }
+
+    const jobName = input.jobName?.trim() || engagementLetter.jobTitle?.trim();
+    if (!jobName) {
+      throw new Error('Job name is required');
+    }
+
+    const billingType = 'fixed_fee';
+    const fixedFeeAmount = Number(engagementLetter.feeAmount);
+
+    const job = await prisma.$transaction(async (tx) => {
+      const created = await tx.job.create({
+        data: {
+          jobName,
+          description: input.description,
+          clientId: onboarding.clientId ?? engagementLetter.clientId,
+          departmentId: input.departmentId ?? onboarding.departmentId,
+          partnerProfileId: input.partnerProfileId,
+          managerProfileId: input.managerProfileId,
+          billingType,
+          fixedFeeAmount,
+          budgetHours: input.budgetHours || 0,
+          engagementLetterId: engagementLetter.id,
+          startDate: input.startDate ?? engagementLetter.startDate ?? undefined,
+          dueDate: input.dueDate ?? engagementLetter.endDate ?? undefined,
+          priority: input.priority || 'medium',
+          status: 'planned',
+        },
+        include: {
+          client: { select: { id: true, clientName: true } },
+          manager: { select: { id: true, firstName: true, lastName: true } },
+          partner: { select: { id: true, firstName: true, lastName: true } },
+          department: { select: { id: true, name: true } },
+        },
+      });
+
+      await tx.clientOnboarding.update({
+        where: { id: onboarding.id },
+        data: {
+          jobId: created.id,
+          status: 'job_created',
+        },
+      });
+
+      return created;
+    });
 
     return job;
   }
@@ -258,7 +399,12 @@ class JobService {
           manager: { select: { id: true, firstName: true, lastName: true } },
           partner: { select: { id: true, firstName: true, lastName: true } },
           department: { select: { id: true, name: true } },
-          staffing: { select: { id: true, employeeProfileId: true } },
+          staffing: {
+            include: {
+              employee: { select: { id: true, firstName: true, lastName: true } },
+              role: { select: { id: true, name: true } },
+            },
+          },
           jobCosting: {
             select: {
               id: true,
@@ -410,6 +556,46 @@ class JobService {
       },
     });
 
+    if (
+      job.status === 'planned' &&
+      status === 'in_progress' &&
+      (!job.teamAssigned || !job.costingCompleted)
+    ) {
+      const gmpProfiles = await prisma.profile.findMany({
+        where: {
+          user: {
+            roles: {
+              some: {
+                role: { name: { in: ['gmp', 'group_managing_partner'] } },
+              },
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      await Promise.all(
+        gmpProfiles.map((profile) =>
+          NotificationService.createNotification(
+            {
+              recipientProfileId: profile.id,
+              type: 'alert',
+              title: 'Procurement gap on job start',
+              message: `Job "${job.jobName}" moved to in-progress without full staffing/costing.`,
+              actionRequired: true,
+              jobId: job.id,
+              link: `/jobs/${job.id}`,
+            },
+            {
+              userId: authContext?.userId ?? 0,
+              profileId: authContext?.profileId ?? 0,
+              roleName: authContext?.roleName ?? 'system',
+            }
+          )
+        )
+      );
+    }
+
     return updated;
   }
 
@@ -467,12 +653,39 @@ class JobService {
       throw new Error('Employee already assigned to this job');
     }
 
+    const role = await prisma.positionRole.findUnique({
+      where: { id: input.assignedRoleId },
+      select: { id: true, name: true, billingRate: true },
+    });
+
+    if (!role) {
+      throw new Error('Assigned role not found');
+    }
+
+    let assignedHourlyRate = Number(input.assignedHourlyRate ?? 0);
+
+    if (!assignedHourlyRate || assignedHourlyRate <= 0) {
+      assignedHourlyRate = Number(role.billingRate || 0);
+    }
+
+    if (!assignedHourlyRate || assignedHourlyRate <= 0) {
+      throw new Error('Assigned hourly rate is required and must be > 0');
+    }
+
+    const roleSnapshot = {
+      id: role.id,
+      name: role.name,
+      billingRate: Number(role.billingRate || 0),
+      assignedHourlyRate,
+    };
+
     const assignment = await prisma.jobStaffAssignment.create({
       data: {
         jobId,
         employeeProfileId: input.employeeProfileId,
         assignedRoleId: input.assignedRoleId,
-        assignedHourlyRate: input.assignedHourlyRate,
+        assignedHourlyRate,
+        roleSnapshot,
         roleOnJob: input.roleOnJob,
         assignedByProfileId: authContext.profileId,
         assignedAt: new Date(),
@@ -552,7 +765,45 @@ class JobService {
       0
     );
 
-    const jobFee = Number(input.jobFee);
+    const baseJobFee =
+      job.billingType === 'fixed_fee' ? Number(job.fixedFeeAmount || 0) : Number(input.jobFee);
+
+    if (!baseJobFee || baseJobFee <= 0) {
+      throw new Error('Job fee is required before saving costing');
+    }
+
+    const allowOverage = input.allowOverage ?? false;
+    const maxOveragePercentRaw = input.maxOveragePercent ?? 0.2;
+    const maxOveragePercent = Number(maxOveragePercentRaw);
+    const maxAllowedCost = allowOverage
+      ? baseJobFee * (1 + Math.max(0, maxOveragePercent))
+      : baseJobFee;
+
+    if (totalEstimatedCost > maxAllowedCost) {
+      if (job.managerProfileId) {
+        await NotificationService.createNotification(
+          {
+            recipientProfileId: job.managerProfileId,
+            type: 'alert',
+            title: 'Job costing exceeds fee cap',
+            message: `Allocated cost (${totalEstimatedCost.toFixed(2)}) exceeds allowed budget (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
+            actionRequired: true,
+            jobId: job.id,
+            link: `/workload-management?jobId=${job.id}`,
+          },
+          {
+            userId: authContext.userId,
+            profileId: authContext.profileId,
+            roleName: authContext.roleName,
+          }
+        );
+      }
+      throw new Error(
+        `Allocated cost exceeds job fee. Allowed: ${maxAllowedCost.toFixed(2)}, allocated: ${totalEstimatedCost.toFixed(2)}`
+      );
+    }
+
+    const jobFee = baseJobFee;
     const remainingBudget = jobFee - totalEstimatedCost;
 
     const result = await prisma.$transaction(async (tx) => {
@@ -594,20 +845,20 @@ class JobService {
           jobCostingId: costing.id,
           totalAllocatedHours: totalEstimatedHours,
           capEnforced: input.capEnforced ?? true,
-          allowOverage: input.allowOverage ?? false,
-          maxOveragePercent: input.maxOveragePercent ?? 0.2,
+          allowOverage,
+          maxOveragePercent,
         },
         update: {
           totalAllocatedHours: totalEstimatedHours,
           capEnforced: input.capEnforced ?? true,
-          allowOverage: input.allowOverage ?? false,
-          maxOveragePercent: input.maxOveragePercent ?? 0.2,
+          allowOverage,
+          maxOveragePercent,
         },
       });
 
       await tx.job.update({
         where: { id: jobId },
-        data: { costingCompleted: true },
+        data: { costingCompleted: true, budgetHours: totalEstimatedHours },
       });
 
       return tx.jobCosting.findUnique({

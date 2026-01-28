@@ -33,33 +33,64 @@ import { Loader2, Search, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 interface User {
   id: number;
+  profileId?: number;
   email: string;
   name: string;
   roles: string[];
   status: string;
   department: string;
   position?: string;
+  positionRoleId?: number;
+  positionRoleName?: string;
+  billingRate?: number | null;
   createdAt: string;
 }
 
-const VALID_ROLES = ["admin", "partner", "manager", "associate", "intern"];
+interface PositionRole {
+  id: number;
+  name: string;
+  billingRate: number;
+  costRate: number;
+  isActive: boolean;
+}
+
+const VALID_ROLES = [
+  "hr",
+  "hr_manager",
+  "admin",
+  "gmp",
+  "partner",
+  "manager",
+  "marketing",
+  "finance",
+  "employee",
+];
 
 // Role hierarchy for escalation warnings
 const ROLE_HIERARCHY: Record<string, number> = {
-  intern: 1,
-  associate: 2,
+  employee: 1,
+  marketing: 2,
+  finance: 2,
   manager: 3,
   partner: 4,
-  admin: 5,
+  gmp: 5,
+  hr: 6,
+  hr_manager: 6,
+  admin: 7,
+  super_admin: 8,
 };
 
 // Role color mapping
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-red-100 text-red-800",
+  hr: "bg-amber-100 text-amber-800",
+  hr_manager: "bg-amber-100 text-amber-800",
+  gmp: "bg-violet-100 text-violet-800",
   partner: "bg-purple-100 text-purple-800",
   manager: "bg-blue-100 text-blue-800",
-  associate: "bg-green-100 text-green-800",
-  intern: "bg-gray-100 text-gray-800",
+  marketing: "bg-emerald-100 text-emerald-800",
+  finance: "bg-cyan-100 text-cyan-800",
+  employee: "bg-gray-100 text-gray-800",
 };
 
 interface RoleChangeRequest {
@@ -79,6 +110,7 @@ const UserRoleManagement = () => {
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [departments, setDepartments] = useState<Set<string>>(new Set());
+  const [positionRoles, setPositionRoles] = useState<PositionRole[]>([]);
 
   // Role change confirmation state
   const [roleChangeRequest, setRoleChangeRequest] = useState<RoleChangeRequest | null>(null);
@@ -89,8 +121,12 @@ const UserRoleManagement = () => {
   const loadUsers = useCallback(async () => {
     try {
       setIsLoading(true);
-      const data = await apiFetch("GET", "/user-roles/list/all");
+      const [data, roles] = await Promise.all([
+        apiFetch("GET", "/user-roles/list/all"),
+        apiFetch("GET", "/roles"),
+      ]);
       setUsers(data || []);
+      setPositionRoles(roles || []);
 
       // Extract unique departments
       const deptSet = new Set<string>();
@@ -209,6 +245,37 @@ const UserRoleManagement = () => {
     }
   };
 
+  const handlePositionChange = async (user: User, roleId: number) => {
+    if (!user.profileId) {
+      toast({
+        title: "Error",
+        description: "Missing profile for this user",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await apiFetch("PUT", `/employee-roles/${user.profileId}/role`, {
+        roleId,
+      });
+
+      toast({
+        title: "Billing Position Updated",
+        description: `${user.email} billing position updated successfully`,
+      });
+
+      await loadUsers();
+    } catch (error: unknown) {
+      const err = error as Record<string, string>;
+      console.error("Error updating position:", error);
+      toast({
+        title: "Error",
+        description: err.error || "Failed to update billing position",
+        variant: "destructive",
+      });
+    }
+  };
+
   const getRoleColor = (role: string): string => {
     return ROLE_COLORS[role] || "bg-gray-100 text-gray-800";
   };
@@ -322,7 +389,9 @@ const UserRoleManagement = () => {
                     <TableHead>Email</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Current Role</TableHead>
+                    <TableHead>Billing Position</TableHead>
                     <TableHead>Department</TableHead>
+                    <TableHead>Rate</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Action</TableHead>
                   </TableRow>
@@ -345,7 +414,32 @@ const UserRoleManagement = () => {
                           )}
                         </div>
                       </TableCell>
+                      <TableCell>
+                        <Select
+                          value={user.positionRoleId ? String(user.positionRoleId) : ""}
+                          onValueChange={(value) => handlePositionChange(user, Number(value))}
+                        >
+                          <SelectTrigger className="w-44">
+                            <SelectValue placeholder="Assign position..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {positionRoles.map((role) => (
+                              <SelectItem key={role.id} value={String(role.id)}>
+                                {role.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {user.positionRoleName || user.position || "No billing position"}
+                        </div>
+                      </TableCell>
                       <TableCell>{user.department || "-"}</TableCell>
+                      <TableCell>
+                        {typeof user.billingRate === "number"
+                          ? `KES ${user.billingRate.toLocaleString()}`
+                          : "-"}
+                      </TableCell>
                       <TableCell>
                         <Badge
                           variant={user.status === "active" ? "default" : "secondary"}

@@ -130,28 +130,3 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 export default router;
-
-// POST /employee_goals
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const { employee_id, cycle_id, kpi_id, goal_title, goal_description, target_value } = req.body;
-    if (!employee_id || !goal_title) return res.status(400).json({ error: 'Missing required fields' });
-    
-    const created = await prisma.employeeGoal.create({
-      data: {
-        employee_id,
-        kpi_id: kpi_id || null,
-        goal_title,
-        description: goal_description || null,
-        status: 'in_progress',
-      }
-    });
-    
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
-    await createAudit({ action: `create_goal:${goal_title}`, entity_type: 'employee_goal', user_id: performedBy, ip_address: req.ip });
-    return res.status(201).json(created);
-  } catch (err: any) {
-    console.error('Error creating employee goal:', err);
-    return res.status(500).json({ error: err.message });
-  }
-});

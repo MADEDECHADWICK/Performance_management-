@@ -1,45 +1,46 @@
 import { Router } from 'express';
+import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { createAudit } from '../utils/audit';
-import prisma from '../prisma';
 
 const router = Router();
 
 // Middleware: Check if user is HR/Admin/SuperAdmin
 const requireHROrAdmin = (req: AuthRequest, res: any, next: any) => {
-  const userRoles = req.user?.roles || [];
-  const isHROrAdmin = 
-    userRoles.includes('super_admin') || 
-    userRoles.includes('hr_manager') || 
+  const userRoles = req.user?.authRoles || (req.user as any)?.roles || [];
+  const isHROrAdmin =
+    userRoles.includes('super_admin') ||
+    userRoles.includes('admin') ||
+    userRoles.includes('hr_manager') ||
     userRoles.includes('hr');
-  
+
   if (!isHROrAdmin) {
-    return res.status(403).json({ 
-      error: 'Access denied. Only HR, HR Manager, and Super Admin can manage position rates' 
+    return res.status(403).json({
+      error: 'Access denied. Only HR/Admin can manage position rates',
     });
   }
   next();
 };
 
-/**
- * Position Rates Management Routes
- * 
- * This implements position-based costing system where:
- * - Each position level has billing_rate (what we charge clients)
- * - Each position level has cost_rate (internal cost per hour)
- * - Rates are used to automatically calculate job profitability
- * - Only HR/Admin can modify rates
- */
+const mapRate = (role: any) => ({
+  id: role.id,
+  position_level: role.name,
+  billing_rate: Number(role.billingRate ?? 0),
+  cost_rate: Number(role.costRate ?? 0),
+  is_active: role.isActive,
+  effective_from: role.createdAt,
+  created_at: role.createdAt,
+  updated_at: role.updatedAt,
+});
 
 // GET /position-rates - List all position rates
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/', authMiddleware, async (_req: AuthRequest, res) => {
   try {
-    const rates = await prisma.positionRate.findMany({
-      where: { is_active: true },
-      orderBy: { billing_rate: 'desc' },
+    const roles = await prisma.positionRole.findMany({
+      where: { isActive: true },
+      orderBy: { billingRate: 'desc' },
     });
-    
-    res.json(rates);
+    res.json(roles.map(mapRate));
   } catch (error: any) {
     console.error('Error fetching position rates:', error);
     res.status(500).json({ error: 'Failed to fetch position rates' });
@@ -49,16 +50,19 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 // GET /position-rates/:id - Get single position rate
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
-    const rate = await prisma.positionRate.findUnique({
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const role = await prisma.positionRole.findUnique({
       where: { id },
     });
-    
-    if (!rate) {
+
+    if (!role) {
       return res.status(404).json({ error: 'Position rate not found' });
     }
-    
-    res.json(rate);
+
+    res.json(mapRate(role));
   } catch (error: any) {
     console.error('Error fetching position rate:', error);
     res.status(500).json({ error: 'Failed to fetch position rate' });
@@ -68,58 +72,45 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 // POST /position-rates - Create new position rate
 router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
   try {
-    const { position_level, billing_rate, cost_rate, effective_from } = req.body;
-    
-    // Validation
-    if (!position_level || typeof position_level !== 'string') {
-      return res.status(400).json({ error: 'Position level is required' });
+    const positionLevel = req.body.position_level ?? req.body.name;
+    const billingRate = req.body.billing_rate ?? req.body.billingRate;
+    const costRate = req.body.cost_rate ?? req.body.costRate ?? 0;
+
+    if (!positionLevel || typeof positionLevel !== 'string') {
+      return res.status(400).json({ error: 'position_level is required' });
     }
-    
-    const validLevels = ['group_managing_partner', 'partner', 'manager', 'senior', 'semi_senior', 'associate', 'intern'];
-    if (!validLevels.includes(position_level)) {
-      return res.status(400).json({ 
-        error: `Invalid position level. Must be one of: ${validLevels.join(', ')}` 
-      });
-    }
-    
-    if (typeof billing_rate !== 'number' || billing_rate < 0) {
+
+    if (typeof billingRate !== 'number' || Number.isNaN(billingRate) || billingRate < 0) {
       return res.status(400).json({ error: 'Billing rate must be a positive number' });
     }
-    
-    if (typeof cost_rate !== 'number' || cost_rate < 0) {
+
+    if (typeof costRate !== 'number' || Number.isNaN(costRate) || costRate < 0) {
       return res.status(400).json({ error: 'Cost rate must be a positive number' });
     }
-    
-    // Check if position level already exists and is active
-    const existing = await prisma.positionRate.findFirst({ 
-      where: { 
-        position_level, 
-        is_active: true 
-      } 
+
+    const existing = await prisma.positionRole.findUnique({
+      where: { name: positionLevel },
     });
-    
     if (existing) {
-      return res.status(409).json({ error: 'Position level already has an active rate' });
+      return res.status(409).json({ error: 'Position level already exists' });
     }
-    
-    const rate = await prisma.positionRate.create({
+
+    const role = await prisma.positionRole.create({
       data: {
-        position_level,
-        billing_rate,
-        cost_rate,
-        effective_from: effective_from ? new Date(effective_from) : new Date(),
-        is_active: true,
+        name: positionLevel,
+        billingRate,
+        costRate,
+        isActive: true,
       },
     });
-    
-    // Audit log
+
     await createAudit({
-      user_id: req.user?.sub,
-      action: `POSITION_RATE_CREATED:${position_level}`,
-      entity_type: 'PositionRate',
+      user_id: req.user?.userId,
+      action: `POSITION_RATE_CREATED:${positionLevel}`,
+      entity_type: 'PositionRole',
     });
-    
-    res.status(201).json(rate);
+
+    res.status(201).json(mapRate(role));
   } catch (error: any) {
     console.error('Error creating position rate:', error);
     res.status(500).json({ error: 'Failed to create position rate' });
@@ -129,45 +120,34 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
 // PATCH /position-rates/:id - Update position rate
 router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
-    const { billing_rate, cost_rate, effective_from, is_active } = req.body;
-    
-    const existing = await prisma.positionRate.findUnique({
-      where: { id },
-    });
-    
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+
+    const billingRate = req.body.billing_rate ?? req.body.billingRate;
+    const costRate = req.body.cost_rate ?? req.body.costRate;
+    const isActive = req.body.is_active ?? req.body.isActive;
+
+    const existing = await prisma.positionRole.findUnique({ where: { id } });
     if (!existing) {
       return res.status(404).json({ error: 'Position rate not found' });
     }
-    
-    // Validate rates if provided
-    if (billing_rate !== undefined && (typeof billing_rate !== 'number' || billing_rate < 0)) {
-      return res.status(400).json({ error: 'Billing rate must be a positive number' });
-    }
-    
-    if (cost_rate !== undefined && (typeof cost_rate !== 'number' || cost_rate < 0)) {
-      return res.status(400).json({ error: 'Cost rate must be a positive number' });
-    }
-    
-    const updateData: any = {};
-    if (billing_rate !== undefined) updateData.billing_rate = billing_rate;
-    if (cost_rate !== undefined) updateData.cost_rate = cost_rate;
-    if (effective_from !== undefined) updateData.effective_from = new Date(effective_from);
-    if (is_active !== undefined) updateData.is_active = is_active;
-    
-    const updatedRate = await prisma.positionRate.update({
-      where: { id },
-      data: updateData,
-    });
-    
-    // Audit log
+
+    const data: any = {};
+    if (typeof billingRate === 'number') data.billingRate = billingRate;
+    if (typeof costRate === 'number') data.costRate = costRate;
+    if (typeof isActive === 'boolean') data.isActive = isActive;
+
+    const updated = await prisma.positionRole.update({ where: { id }, data });
+
     await createAudit({
-      user_id: req.user?.sub,
-      action: `POSITION_RATE_UPDATED:${existing.position_level}`,
-      entity_type: 'PositionRate',
+      user_id: req.user?.userId,
+      action: `POSITION_RATE_UPDATED:${existing.name}`,
+      entity_type: 'PositionRole',
     });
-    
-    res.json(updatedRate);
+
+    res.json(mapRate(updated));
   } catch (error: any) {
     console.error('Error updating position rate:', error);
     res.status(500).json({ error: 'Failed to update position rate' });
@@ -177,30 +157,28 @@ router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, 
 // DELETE /position-rates/:id - Deactivate position rate (soft delete)
 router.delete('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
-    
-    const existing = await prisma.positionRate.findUnique({
-      where: { id },
-    });
-    
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+
+    const existing = await prisma.positionRole.findUnique({ where: { id } });
     if (!existing) {
       return res.status(404).json({ error: 'Position rate not found' });
     }
-    
-    // Soft delete by setting is_active to false
-    const deactivatedRate = await prisma.positionRate.update({
+
+    const updated = await prisma.positionRole.update({
       where: { id },
-      data: { is_active: false },
+      data: { isActive: false },
     });
-    
-    // Audit log
+
     await createAudit({
-      user_id: req.user?.sub,
-      action: `POSITION_RATE_DELETED:${existing.position_level}`,
-      entity_type: 'PositionRate',
+      user_id: req.user?.userId,
+      action: `POSITION_RATE_DELETED:${existing.name}`,
+      entity_type: 'PositionRole',
     });
-    
-    res.json({ message: 'Position rate deactivated successfully', rate: deactivatedRate });
+
+    res.json({ message: 'Position rate deactivated successfully', rate: mapRate(updated) });
   } catch (error: any) {
     console.error('Error deactivating position rate:', error);
     res.status(500).json({ error: 'Failed to deactivate position rate' });
@@ -210,23 +188,19 @@ router.delete('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest,
 // GET /position-rates/by-level/:level - Get rate by position level
 router.get('/by-level/:level', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { level } = req.params;
-    
-    const rate = await prisma.positionRate.findFirst({
-      where: { 
-        position_level: level,
-        is_active: true 
-      },
+    const level = req.params.level;
+    const role = await prisma.positionRole.findUnique({
+      where: { name: level },
     });
-    
-    if (!rate) {
+
+    if (!role || !role.isActive) {
       return res.status(404).json({ error: 'Position rate not found for this level' });
     }
-    
-    res.json(rate);
+
+    res.json(mapRate(role));
   } catch (error: any) {
     console.error('Error fetching position rate by level:', error);
-    res.status(500).json({ error: 'Failed to fetch position rate' });
+    res.status(500).json({ error: 'Failed to fetch position rate by level' });
   }
 });
 

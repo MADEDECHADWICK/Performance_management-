@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { clientsAPI, employeesAPI, jobsAPI, clientOnboardingsAPI } from '@/lib/api';
 import type { Client, Profile, ClientOnboarding } from '@/lib/api/types';
@@ -20,6 +21,7 @@ import {
   Inbox,
   Search,
   ArrowRight,
+  CheckCircle2,
 } from 'lucide-react';
 
 type BillingType = 'hourly' | 'fixed_fee';
@@ -81,6 +83,8 @@ export default function AdminJobCreation() {
   const [selectedQueueId, setSelectedQueueId] = useState<number | null>(null);
   const [queueSearch, setQueueSearch] = useState('');
   const [queueStatus, setQueueStatus] = useState<QueueStatus>('all');
+  const [selectionNotice, setSelectionNotice] = useState<{ title: string; description?: string } | null>(null);
+  const assignmentsRef = useRef<HTMLDivElement | null>(null);
 
   const selectedClientId = Number(formData.clientId || 0);
 
@@ -96,6 +100,14 @@ export default function AdminJobCreation() {
           employee.positionTitle?.toLowerCase().includes('manager') && !employee.isPartner
       ),
     [employees]
+  );
+
+  const approvedEngagementLetters = useMemo(
+    () =>
+      engagementLetters.filter(
+        (letter) => letter.status === 'approved' && Number(letter.feeAmount || 0) > 0
+      ),
+    [engagementLetters]
   );
 
   const filteredQueue = queueItems.filter((item) => {
@@ -126,6 +138,18 @@ export default function AdminJobCreation() {
     loadInitialData();
     loadQueue();
   }, []);
+
+  useEffect(() => {
+    const onboardingIdParam = searchParams.get('onboardingId');
+    if (!onboardingIdParam) return;
+    const onboardingId = Number(onboardingIdParam);
+    if (!Number.isFinite(onboardingId) || selectedQueueId) return;
+
+    const match = queueItems.find((item) => item.id === onboardingId);
+    if (match) {
+      handleSelectQueueItem(match);
+    }
+  }, [queueItems, searchParams, selectedQueueId]);
 
   useEffect(() => {
     if (!selectedClientId) {
@@ -195,7 +219,7 @@ export default function AdminJobCreation() {
     }
   };
 
-  const handleSelectQueueItem = (item: ClientOnboarding) => {
+  const handleSelectQueueItem = useCallback((item: ClientOnboarding) => {
     const clientId = item.client?.id ?? item.clientId;
     const engagementId = item.engagementLetter?.id ?? item.engagementLetterId;
     const startDate = item.engagementLetter?.startDate?.slice(0, 10);
@@ -215,10 +239,37 @@ export default function AdminJobCreation() {
       billingType: feeAmount ? 'fixed_fee' : prev.billingType,
       fixedFeeAmount: feeAmount ? String(feeAmount) : prev.fixedFeeAmount,
     }));
-  };
+
+    setSelectionNotice({
+      title: 'Onboarding selected',
+      description: 'Scroll down to assign staff and finalize job details.',
+    });
+
+    setTimeout(() => {
+      assignmentsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+  }, []);
 
   const handleInputChange = (field: keyof JobFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleEngagementSelection = (value: string) => {
+    const selectedLetter = engagementLetters.find((letter) => String(letter.id) === value);
+    const jobTitle = selectedLetter?.jobTitle;
+    const startDate = selectedLetter?.startDate?.slice(0, 10);
+    const endDate = selectedLetter?.endDate?.slice(0, 10);
+    const feeAmount = selectedLetter?.feeAmount;
+
+    setFormData((prev) => ({
+      ...prev,
+      engagementLetterId: value,
+      jobName: jobTitle || prev.jobName,
+      startDate: startDate || prev.startDate,
+      dueDate: endDate || prev.dueDate,
+      billingType: feeAmount ? 'fixed_fee' : prev.billingType,
+      fixedFeeAmount: feeAmount ? String(feeAmount) : prev.fixedFeeAmount,
+    }));
   };
 
   const toggleAssignment = (employee: Profile, isChecked: boolean) => {
@@ -261,16 +312,16 @@ export default function AdminJobCreation() {
   };
 
   const validateForm = () => {
+    if (!selectedQueueId) {
+      toast({
+        title: 'Select from HR queue',
+        description: 'Choose an onboarding item from the queue to create a job.',
+        variant: 'destructive',
+      });
+      return false;
+    }
     if (!formData.jobName.trim()) {
       toast({ title: 'Validation Error', description: 'Job name is required', variant: 'destructive' });
-      return false;
-    }
-    if (!formData.clientId) {
-      toast({ title: 'Validation Error', description: 'Client selection is required', variant: 'destructive' });
-      return false;
-    }
-    if (!formData.engagementLetterId) {
-      toast({ title: 'Validation Error', description: 'Engagement letter is required', variant: 'destructive' });
       return false;
     }
     if (!formData.partnerProfileId) {
@@ -289,14 +340,6 @@ export default function AdminJobCreation() {
       toast({ title: 'Validation Error', description: 'Due date is required', variant: 'destructive' });
       return false;
     }
-    if (formData.billingType === 'fixed_fee' && !formData.fixedFeeAmount) {
-      toast({ title: 'Validation Error', description: 'Fixed fee amount is required', variant: 'destructive' });
-      return false;
-    }
-    if (formData.billingType === 'hourly' && !formData.budgetHours) {
-      toast({ title: 'Validation Error', description: 'Budget hours are required', variant: 'destructive' });
-      return false;
-    }
     return true;
   };
 
@@ -306,31 +349,22 @@ export default function AdminJobCreation() {
 
     try {
       setIsSubmitting(true);
+      if (!selectedQueueId) {
+        throw new Error('Select an onboarding item to create a job.');
+      }
 
       const jobPayload = {
         jobName: formData.jobName.trim(),
         description: formData.description || undefined,
-        clientId: Number(formData.clientId),
-        engagementLetterId: formData.engagementLetterId
-          ? Number(formData.engagementLetterId)
-          : undefined,
         partnerProfileId: Number(formData.partnerProfileId),
         managerProfileId: Number(formData.managerProfileId),
         startDate: formData.startDate,
         dueDate: formData.dueDate,
         priority: formData.priority,
-        billingType: formData.billingType,
-        fixedFeeAmount:
-          formData.billingType === 'fixed_fee'
-            ? Number(formData.fixedFeeAmount)
-            : undefined,
-        budgetHours:
-          formData.billingType === 'hourly'
-            ? Number(formData.budgetHours)
-            : undefined,
+        budgetHours: formData.budgetHours ? Number(formData.budgetHours) : undefined,
       };
 
-      const job = await jobsAPI.create(jobPayload);
+      const job = await jobsAPI.createFromOnboarding(selectedQueueId, jobPayload);
 
       for (const assignment of assignments) {
         await jobsAPI.assignStaff(job.id, assignment);
@@ -345,7 +379,7 @@ export default function AdminJobCreation() {
       setFormData(initialFormData);
       setAssignments([]);
       setSelectedQueueId(null);
-      navigate(`/jobs?highlight=${job.id}`);
+      navigate(`/client-onboarding-queue?jobCreated=1&onboardingId=${selectedQueueId}`);
     } catch (error) {
       console.error('Job creation failed:', error);
       toast({
@@ -367,6 +401,18 @@ export default function AdminJobCreation() {
             Review marketing submissions, create jobs, and assign staff before managers allocate time.
           </p>
         </div>
+
+        {selectionNotice && (
+          <Alert className="border-emerald-200 bg-emerald-50">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <AlertTitle className="text-emerald-800">{selectionNotice.title}</AlertTitle>
+            {selectionNotice.description && (
+              <AlertDescription className="text-emerald-700">
+                {selectionNotice.description}
+              </AlertDescription>
+            )}
+          </Alert>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-6">
           <Card className="h-fit">
@@ -497,7 +543,7 @@ export default function AdminJobCreation() {
                   <Select
                     value={formData.clientId}
                     onValueChange={(value) => handleInputChange('clientId', value)}
-                    disabled={isLoading}
+                    disabled={isLoading || Boolean(selectedQueueId)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select client" />
@@ -516,20 +562,31 @@ export default function AdminJobCreation() {
                   <Label htmlFor="engagementLetterId">Engagement Letter *</Label>
                   <Select
                     value={formData.engagementLetterId}
-                    onValueChange={(value) => handleInputChange('engagementLetterId', value)}
-                    disabled={!selectedClientId}
+                    onValueChange={handleEngagementSelection}
+                    disabled={!selectedClientId || Boolean(selectedQueueId)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select engagement letter" />
                     </SelectTrigger>
                     <SelectContent>
-                      {engagementLetters.map((letter) => (
-                        <SelectItem key={letter.id} value={String(letter.id)}>
-                          {letter.jobTitle || letter.engagementType || `Letter ${letter.id}`}
-                        </SelectItem>
-                      ))}
+                      {approvedEngagementLetters.length === 0 ? (
+                        <div className="px-3 py-2 text-xs text-muted-foreground">
+                          No approved engagement letters with a fee yet.
+                        </div>
+                      ) : (
+                        approvedEngagementLetters.map((letter) => (
+                          <SelectItem key={letter.id} value={String(letter.id)}>
+                            {letter.jobTitle || letter.engagementType || `Letter ${letter.id}`}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
+                  {selectedClientId && approvedEngagementLetters.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Upload and approve an engagement letter with a fee before creating a job.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
@@ -544,7 +601,7 @@ export default function AdminJobCreation() {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card ref={assignmentsRef}>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Users className="h-5 w-5" />
@@ -643,6 +700,7 @@ export default function AdminJobCreation() {
                   <Select
                     value={formData.billingType}
                     onValueChange={(value) => handleInputChange('billingType', value)}
+                    disabled={Boolean(formData.engagementLetterId)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select billing type" />
@@ -652,6 +710,11 @@ export default function AdminJobCreation() {
                       <SelectItem value="hourly">Hourly</SelectItem>
                     </SelectContent>
                   </Select>
+                  {formData.engagementLetterId && (
+                    <p className="text-xs text-muted-foreground">
+                      Billing type is locked to the engagement letter.
+                    </p>
+                  )}
                 </div>
 
                 {formData.billingType === 'fixed_fee' ? (
@@ -662,7 +725,13 @@ export default function AdminJobCreation() {
                       type="number"
                       value={formData.fixedFeeAmount}
                       onChange={(e) => handleInputChange('fixedFeeAmount', e.target.value)}
+                      disabled={Boolean(formData.engagementLetterId)}
                     />
+                    {formData.engagementLetterId && (
+                      <p className="text-xs text-muted-foreground">
+                        Fee is pulled from the approved engagement letter.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-2">

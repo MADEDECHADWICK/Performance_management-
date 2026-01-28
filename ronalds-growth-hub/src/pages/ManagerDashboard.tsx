@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, timeEntriesAPI } from '@/lib/api';
 import { 
   Users, 
   DollarSign, 
@@ -19,7 +20,8 @@ import {
   AlertCircle,
   User,
   BarChart3,
-  PieChart
+  PieChart,
+  Award
 } from 'lucide-react';
 
 interface TeamMember {
@@ -72,6 +74,13 @@ interface Job {
   completionPercentage: number;
 }
 
+interface AllocationSummary {
+  jobId: number;
+  remainingJobHours: number;
+  allowedJobHours: number;
+  loggedJobHours: number;
+}
+
 interface OverviewMetrics {
   teamSize: number;
   activeJobs: number;
@@ -81,13 +90,32 @@ interface OverviewMetrics {
   pendingReviews: number;
 }
 
+interface PersonalPerformance {
+  overallScore: number;
+  revenue: number;
+  netProfit: number;
+  utilizationRate: number;
+  okrScore: number;
+  projectEvaluationScore: number;
+}
+
+interface NotificationItem {
+  id: number;
+  title: string;
+  message: string;
+  link?: string | null;
+  createdAt?: string;
+}
+
 const ManagerDashboard = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   
   // Data state
   const [overview, setOverview] = useState<OverviewMetrics | null>(null);
+  const [personalPerformance, setPersonalPerformance] = useState<PersonalPerformance | null>(null);
   const [teamData, setTeamData] = useState<{
     teamMembers: TeamMember[];
     financials: TeamFinancials;
@@ -97,6 +125,9 @@ const ManagerDashboard = () => {
     portfolio: Job[];
     teamJobs: any[];
   } | null>(null);
+  const [allocationSummaries, setAllocationSummaries] = useState<Record<number, AllocationSummary>>({});
+  const [alerts, setAlerts] = useState<NotificationItem[]>([]);
+  const [pendingAlertsCount, setPendingAlertsCount] = useState(0);
   const [financialData, setFinancialData] = useState<any>(null);
   const [evaluationData, setEvaluationData] = useState<any>(null);
 
@@ -111,6 +142,8 @@ const ManagerDashboard = () => {
       // Load overview data first
       const overviewResponse = await apiFetch('GET', '/manager-dashboard/overview');
       setOverview(overviewResponse);
+      await loadAlerts();
+      await loadPersonalPerformance();
 
       // Load other data based on active tab
       if (activeTab === 'team') {
@@ -140,11 +173,19 @@ const ManagerDashboard = () => {
             const response = await apiFetch('GET', '/manager-dashboard/team');
             setTeamData(response);
           }
+          if (!jobData) {
+            const response = await apiFetch('GET', '/manager-dashboard/jobs');
+            setJobData(response);
+            await loadAllocationSummaries(response?.portfolio || []);
+          } else if (jobData?.portfolio?.length && Object.keys(allocationSummaries).length === 0) {
+            await loadAllocationSummaries(jobData.portfolio);
+          }
           break;
         case 'jobs':
           if (!jobData) {
             const response = await apiFetch('GET', '/manager-dashboard/jobs');
             setJobData(response);
+            await loadAllocationSummaries(response?.portfolio || []);
           }
           break;
         case 'financials':
@@ -172,6 +213,63 @@ const ManagerDashboard = () => {
     }
   };
 
+  const loadAlerts = async () => {
+    try {
+      const response = await apiFetch('GET', '/notifications?status=unread&type=action&pageSize=20');
+      const payload = response?.data ?? response ?? {};
+      const list = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      setAlerts(list.slice(0, 4));
+      setPendingAlertsCount(list.length);
+    } catch (error) {
+      console.error('Failed to load manager alerts', error);
+    }
+  };
+
+  const loadPersonalPerformance = async () => {
+    try {
+      const performanceResponse = await apiFetch('GET', '/performance-scores/me');
+      const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
+
+      if (performancePayload?.financial && performancePayload?.overall) {
+        const financial = performancePayload.financial;
+        const nonFinancial = performancePayload.nonFinancial || {};
+        const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
+
+        setPersonalPerformance({
+          overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
+          revenue: Number(financial.revenue || 0),
+          netProfit: Number(financial.netProfit || 0),
+          utilizationRate: utilizationPercent,
+          okrScore: Math.round(nonFinancial.okrScore || 0),
+          projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+        });
+      }
+    } catch (error) {
+      console.error('Error loading personal performance:', error);
+    }
+  };
+
+  const loadAllocationSummaries = async (jobs: Job[]) => {
+    if (!jobs.length) return;
+    try {
+      const summaries = await Promise.all(
+        jobs.map((job) => timeEntriesAPI.getJobAllocationSummary(job.jobId))
+      );
+      const mapped = summaries.reduce((acc, summary) => {
+        acc[summary.jobId] = {
+          jobId: summary.jobId,
+          remainingJobHours: summary.remainingJobHours,
+          allowedJobHours: summary.allowedJobHours,
+          loggedJobHours: summary.loggedJobHours,
+        };
+        return acc;
+      }, {} as Record<number, AllocationSummary>);
+      setAllocationSummaries(mapped);
+    } catch (error) {
+      console.error('Error loading allocation summaries:', error);
+    }
+  };
+
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
     loadTabData(tab);
@@ -183,6 +281,34 @@ const ManagerDashboard = () => {
       currency: 'KES',
       minimumFractionDigits: 0,
     }).format(amount);
+  };
+
+  const getAllocationMetrics = () => {
+    if (!jobData?.portfolio?.length) {
+      return {
+        totalJobs: 0,
+        overAllocatedJobs: 0,
+        totalRemainingHours: 0,
+      };
+    }
+
+    const metrics = jobData.portfolio.reduce(
+      (acc, job) => {
+        const summary = allocationSummaries[job.jobId];
+        const fallbackRemaining = Math.max(
+          0,
+          Number(job.budgetHours) - Number(job.actualHours)
+        );
+        const remaining = summary ? Number(summary.remainingJobHours) : fallbackRemaining;
+        acc.totalJobs += 1;
+        acc.totalRemainingHours += remaining;
+        if (remaining <= 0) acc.overAllocatedJobs += 1;
+        return acc;
+      },
+      { totalJobs: 0, overAllocatedJobs: 0, totalRemainingHours: 0 }
+    );
+
+    return metrics;
   };
 
   const getStatusBadge = (status: string) => {
@@ -220,9 +346,87 @@ const ManagerDashboard = () => {
           </p>
         </div>
 
+        {personalPerformance && (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{personalPerformance.overallScore}</div>
+                <p className="text-xs text-muted-foreground">Financial + non-financial</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Revenue</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  KES {personalPerformance.revenue.toFixed(0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">My Net Profit</CardTitle>
+                <CheckCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  KES {personalPerformance.netProfit.toFixed(0)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Utilization</CardTitle>
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {personalPerformance.utilizationRate}%
+                </div>
+                <p className="text-xs text-muted-foreground">Billable vs allocated</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">OKR Progress</CardTitle>
+                <Target className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {personalPerformance.okrScore}%
+                </div>
+                <p className="text-xs text-muted-foreground">Objectives on track</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Project Eval Score</CardTitle>
+                <Award className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {personalPerformance.projectEvaluationScore}%
+                </div>
+                <p className="text-xs text-muted-foreground">Job-based reviews</p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* Overview Cards */}
         {overview && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4 mb-6">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Team Size</CardTitle>
@@ -288,6 +492,17 @@ const ManagerDashboard = () => {
                 <p className="text-xs text-muted-foreground">Need attention</p>
               </CardContent>
             </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
+                <AlertCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{pendingAlertsCount}</div>
+                <p className="text-xs text-muted-foreground">Action required</p>
+              </CardContent>
+            </Card>
           </div>
         )}
 
@@ -302,6 +517,37 @@ const ManagerDashboard = () => {
 
           <TabsContent value="overview" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {alerts.length > 0 && (
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <div>
+                      <CardTitle>Pending Alerts</CardTitle>
+                      <CardDescription>Approvals and actions waiting on you.</CardDescription>
+                    </div>
+                    <Button variant="outline" onClick={() => navigate('/notifications')}>
+                      View all
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {alerts.map((alert) => (
+                      <div key={alert.id} className="rounded-md border p-3">
+                        <p className="font-medium">{alert.title}</p>
+                        <p className="text-sm text-muted-foreground">{alert.message}</p>
+                        {alert.link && (
+                          <Button
+                            className="mt-2"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => navigate(alert.link!)}
+                          >
+                            Review
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
               <Card>
                 <CardHeader>
                   <CardTitle>Quick Actions</CardTitle>
@@ -400,6 +646,39 @@ const ManagerDashboard = () => {
                   </Card>
                 </div>
 
+                {/* Allocation Health */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Allocation Health</CardTitle>
+                    <CardDescription>Allocation usage across team jobs</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {(() => {
+                      const metrics = getAllocationMetrics();
+                      return (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Team Jobs Tracked</p>
+                            <p className="text-xl font-semibold">{metrics.totalJobs}</p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Over-allocated Jobs</p>
+                            <p className={`text-xl font-semibold ${metrics.overAllocatedJobs > 0 ? 'text-red-600' : ''}`}>
+                              {metrics.overAllocatedJobs}
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Remaining Hours (Total)</p>
+                            <p className="text-xl font-semibold">
+                              {metrics.totalRemainingHours.toFixed(1)}h
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+
                 {/* Team Members Table */}
                 <Card>
                   <CardHeader>
@@ -492,6 +771,7 @@ const ManagerDashboard = () => {
                         <TableHead>Status</TableHead>
                         <TableHead>Budget</TableHead>
                         <TableHead>Actual</TableHead>
+                        <TableHead>Remaining (Job)</TableHead>
                         <TableHead>Revenue</TableHead>
                         <TableHead>Progress</TableHead>
                       </TableRow>
@@ -509,6 +789,23 @@ const ManagerDashboard = () => {
                           <TableCell>{getStatusBadge(job.status)}</TableCell>
                           <TableCell>{Number(job.budgetHours).toFixed(1)}h</TableCell>
                           <TableCell>{Number(job.actualHours).toFixed(1)}h</TableCell>
+                          <TableCell>
+                            {(() => {
+                              const allocationSummary = allocationSummaries[job.jobId];
+                              const fallbackRemaining = Math.max(
+                                0,
+                                Number(job.budgetHours) - Number(job.actualHours)
+                              );
+                              const remaining = allocationSummary
+                                ? Number(allocationSummary.remainingJobHours)
+                                : fallbackRemaining;
+                              return (
+                                <span className={remaining <= 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                                  {remaining.toFixed(1)}h
+                                </span>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell>{formatCurrency(job.revenue)}</TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">

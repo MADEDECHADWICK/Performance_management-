@@ -64,23 +64,43 @@ export const authAPI = {
 };
 
 // Roles API
+const normalizeRole = (role: any) => {
+  if (!role) return role;
+  const billingRate = role.billing_rate ?? role.billingRate ?? 0;
+  const costRate = role.cost_rate ?? role.costRate ?? undefined;
+  const isActive = role.is_active ?? role.isActive ?? true;
+  return {
+    ...role,
+    billing_rate: billingRate,
+    billingRate,
+    cost_rate: costRate,
+    costRate,
+    is_active: isActive,
+    isActive,
+    permissions: role.permissions ?? [],
+  };
+};
+
 export const rolesAPI = {
-  getAll: () => apiFetch('GET', '/roles'),
-  getById: (id: number) => apiFetch(`GET`, `/roles/${id}`),
-  create: (data: { name: string; billing_rate: number; permissions?: string[]; description?: string; is_active?: boolean }) =>
-    apiFetch('POST', '/roles', data),
-  update: (id: number, data: Partial<{ name: string; billing_rate: number; permissions: string[]; description: string; is_active: boolean }>) =>
-    apiFetch('PUT', `/roles/${id}`, data),
+  getAll: async () => {
+    const data = await apiFetch('GET', '/roles');
+    return Array.isArray(data) ? data.map(normalizeRole) : data;
+  },
+  getById: async (id: number) => normalizeRole(await apiFetch(`GET`, `/roles/${id}`)),
+  create: async (data: { name: string; billing_rate: number; permissions?: string[]; description?: string; is_active?: boolean }) =>
+    normalizeRole(await apiFetch('POST', '/roles', data)),
+  update: async (id: number, data: Partial<{ name: string; billing_rate: number; permissions: string[]; description: string; is_active: boolean }>) =>
+    normalizeRole(await apiFetch('PUT', `/roles/${id}`, data)),
   delete: (id: number) => apiFetch('DELETE', `/roles/${id}`),
 };
 
 // Employee Roles API
 export const employeeRolesAPI = {
-  getAll: () => apiFetch('GET', '/employee_roles'),
-  getById: (employeeId: number) => apiFetch('GET', `/employee_roles/${employeeId}`),
+  getAll: () => apiFetch('GET', '/employee-roles'),
+  getById: (employeeId: number) => apiFetch('GET', `/employee-roles/${employeeId}`),
   assignRole: (employeeId: number, data: { role_id: number; notes?: string }) =>
-    apiFetch('PUT', `/employee_roles/${employeeId}/role`, data),
-  getRoleHistory: (employeeId: number) => apiFetch('GET', `/employee_roles/${employeeId}/role-history`),
+    apiFetch('PUT', `/employee-roles/${employeeId}/role`, data),
+  getRoleHistory: (employeeId: number) => apiFetch('GET', `/employee-roles/${employeeId}/role-history`),
 };
 
 // Job Staff Assignment API

@@ -1,4 +1,5 @@
 import prisma from "../prisma";
+import { NotificationService } from "./notifications.service";
 import { ChecklistStatus, OnboardingStatus } from "@prisma/client";
 
 export interface AuthContext {
@@ -86,10 +87,28 @@ class InductionChecklistServiceClass {
     });
 
     // Return full checklist with items
-    return prisma.inductionChecklist.findUnique({
+    const fullChecklist = await prisma.inductionChecklist.findUnique({
       where: { id: checklist.id },
       include: { items: { orderBy: { orderIndex: "asc" } } },
     });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: checklist.employeeProfileId,
+        type: "action",
+        title: "Onboarding checklist assigned",
+        message: `A new induction checklist "${checklist.checklistName}" has been assigned to you.`,
+        actionRequired: true,
+        link: `/onboarding`,
+      },
+      {
+        userId: auth.userId,
+        profileId: auth.profileId,
+        roleName: auth.roles?.[0],
+      }
+    );
+
+    return fullChecklist;
   }
 
   async getChecklistById(checklistId: number) {
@@ -197,6 +216,22 @@ class InductionChecklistServiceClass {
           data: { status: OnboardingStatus.completed },
         });
       }
+
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: checklist.employeeProfileId,
+          type: "info",
+          title: "Onboarding checklist completed",
+          message: "Your induction checklist is marked as completed.",
+          actionRequired: false,
+          link: "/profile",
+        },
+        {
+          userId: auth.userId,
+          profileId: auth.profileId,
+          roleName: auth.roles?.[0],
+        }
+      );
     }
 
     return this.getChecklistById(checklistId);

@@ -167,10 +167,13 @@ const documentsAPI = {
    */
   uploadFile: async (
     file: File,
-    metadata: Omit<UploadDocumentData, 'fileName' | 'filePath' | 'fileSize' | 'mimeType'>
+    metadata: Omit<UploadDocumentData, 'filePath' | 'fileSize' | 'mimeType'> & {
+      fileName?: string;
+    }
   ): Promise<Document> => {
     const formData = new FormData();
     formData.append('file', file);
+    if (metadata.fileName) formData.append('fileName', metadata.fileName);
     formData.append('documentType', metadata.documentType);
     formData.append('entityType', metadata.entityType);
     if (metadata.entityId) formData.append('entityId', metadata.entityId.toString());
@@ -179,7 +182,7 @@ const documentsAPI = {
     if (metadata.description) formData.append('description', metadata.description);
 
     const token = localStorage.getItem('rg_token');
-    const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/documents/upload`, {
+    const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/documents/upload`, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData,

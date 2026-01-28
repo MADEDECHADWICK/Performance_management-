@@ -42,6 +42,7 @@ import {
   CheckSquare,
   Briefcase,
   Crown,
+  Bell,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -192,7 +193,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         navigate('/manager-dashboard', { replace: true });
       } else if (isMarketing) {
         console.log('Redirecting to Marketing intake');
-        navigate('/clients', { replace: true });
+        navigate('/marketing-dashboard', { replace: true });
       } else if (isFinance) {
         console.log('Redirecting to Finance dashboard');
         navigate('/finance-dashboard', { replace: true });
@@ -372,7 +373,7 @@ function AppSidebar({
               ) : isManager ? (
                 <NavItem path="/manager-dashboard" icon={BarChart3} label="Manager Dashboard" />
               ) : isMarketing ? (
-                <NavItem path="/clients" icon={BarChart3} label="Marketing Overview" />
+                <NavItem path="/marketing-dashboard" icon={BarChart3} label="Marketing Overview" />
               ) : isFinance ? (
                 <NavItem path="/finance-dashboard" icon={BarChart3} label="Finance Overview" />
               ) : (
@@ -380,6 +381,7 @@ function AppSidebar({
               )}
               <NavItem path="/non-financial-analytics" icon={TrendingUp} label="Analytics" />
               <NavItem path="/reports" icon={FileText} label="Reports" />
+              <NavItem path="/notifications" icon={Bell} label="Notifications" />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -425,6 +427,9 @@ function AppSidebar({
                   {(isManager || isHROrAdmin) && (
                     <NavItem path="/manager-evaluation" icon={UserCheck} label="Team Evaluations" />
                   )}
+                  {(isManager || isPartner || isHROrAdmin) && (
+                    <NavItem path="/project-evaluations" icon={ClipboardCheck} label="Project Evaluations" />
+                  )}
                 </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
@@ -432,18 +437,16 @@ function AppSidebar({
         </Collapsible>
 
         {/* Financials */}
-        <SidebarGroup>
-          <SidebarGroupLabel>Financials</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <NavItem
-                path={isFinance ? "/finance-dashboard" : "/financial-summary"}
-                icon={DollarSign}
-                label={isFinance ? "Finance Dashboard" : "Financial Summary"}
-              />
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {!isFinance && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Financials</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavItem path="/financial-summary" icon={DollarSign} label="Financial Summary" />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         {/* Marketing */}
         {isMarketing && (
@@ -460,6 +463,10 @@ function AppSidebar({
                   <SidebarMenu>
                     <NavItem path="/clients" icon={Users} label="Client Intake" />
                     <NavItem path="/clients/new" icon={Plus} label="New Client" />
+                    <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" />
+                    <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" />
                     <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" />
                   </SidebarMenu>
                 </SidebarGroupContent>
@@ -481,7 +488,11 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/finance-dashboard" icon={DollarSign} label="Finance Dashboard" />
+                    <NavItem path="/finance-collections" icon={DollarSign} label="Collections" />
+                    <NavItem path="/finance-projections" icon={TrendingUp} label="Projections" />
+                    <NavItem path="/finance-balances" icon={BarChart3} label="Balances" />
+                    <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" />
+                    <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" />
                     <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
@@ -509,6 +520,8 @@ function AppSidebar({
                     <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" />
                     <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" />
                     <NavItem path="/kpi-management" icon={Settings} label="KPIs" />
+                    <NavItem path="/calibration" icon={Settings} label="Calibration" />
+                    <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" />
                   </SidebarMenu>
                 </SidebarGroupContent>

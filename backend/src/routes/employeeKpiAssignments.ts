@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
 import { createAudit } from '../utils/audit';
+import { NotificationService } from '../services/notifications.service';
 
 const router = Router();
 
@@ -46,18 +47,38 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 // POST /employee_kpi_assignments
 router.post('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const { employee_id, kpi_id, target_value, weight_percentage, due_date } = req.body;
+    const {
+      employeeProfileId,
+      employee_id,
+      kpiId,
+      kpi_id,
+      targetValue,
+      target_value,
+      weight,
+      weight_percentage,
+      periodStart,
+      period_start,
+      periodEnd,
+      period_end,
+      status,
+    } = req.body;
 
-    if (!employee_id || !kpi_id) {
-      return res.status(400).json({ error: 'employee_id and kpi_id required' });
+    const resolvedEmployeeId = employeeProfileId ?? employee_id;
+    const resolvedKpiId = kpiId ?? kpi_id;
+
+    if (!resolvedEmployeeId || !resolvedKpiId) {
+      return res.status(400).json({ error: 'employeeProfileId and kpiId required' });
     }
 
     const assignment = await prisma.employeeKpiAssignment.create({
       data: {
-        employee_id: parseInt(employee_id),
-        kpi_id: kpi_id ? parseInt(kpi_id) : undefined,
-        target_value: target_value ? parseFloat(target_value) : undefined,
-        weight: weight_percentage ? parseFloat(weight_percentage) : undefined,
+        employeeProfileId: Number(resolvedEmployeeId),
+        kpiId: Number(resolvedKpiId),
+        targetValue: targetValue ?? target_value ? Number(targetValue ?? target_value) : undefined,
+        weight: weight ?? weight_percentage ? Number(weight ?? weight_percentage) : undefined,
+        periodStart: periodStart ?? period_start ? new Date(periodStart ?? period_start) : undefined,
+        periodEnd: periodEnd ?? period_end ? new Date(periodEnd ?? period_end) : undefined,
+        status,
       },
       include: {
         employee: true,
@@ -73,6 +94,22 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       ip_address: req.ip,
     });
 
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: assignment.employeeProfileId,
+        type: 'info',
+        title: 'New KPI assigned',
+        message: `A KPI "${assignment.kpi?.title ?? 'KPI'}" has been assigned to you.`,
+        actionRequired: false,
+        link: '/kpi-management',
+      },
+      {
+        userId: req.user?.userId ?? req.user?.id ?? 0,
+        profileId: req.profile?.id ?? 0,
+        roleName: req.profile?.role?.name,
+      }
+    );
+
     return res.status(201).json(assignment);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -83,13 +120,25 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { target_value, weight_percentage, due_date, status } = req.body;
+    const {
+      targetValue,
+      target_value,
+      weight,
+      weight_percentage,
+      periodStart,
+      period_start,
+      periodEnd,
+      period_end,
+      status,
+    } = req.body;
 
     const assignment = await prisma.employeeKpiAssignment.update({
       where: { id: parseInt(id) },
       data: {
-        target_value: target_value ? parseFloat(target_value) : undefined,
-        weight: weight_percentage ? parseFloat(weight_percentage) : undefined,
+        targetValue: targetValue ?? target_value ? Number(targetValue ?? target_value) : undefined,
+        weight: weight ?? weight_percentage ? Number(weight ?? weight_percentage) : undefined,
+        periodStart: periodStart ?? period_start ? new Date(periodStart ?? period_start) : undefined,
+        periodEnd: periodEnd ?? period_end ? new Date(periodEnd ?? period_end) : undefined,
         status,
       },
       include: {
@@ -105,6 +154,22 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       user_id: performedBy,
       ip_address: req.ip,
     });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: assignment.employeeProfileId,
+        type: 'info',
+        title: 'KPI updated',
+        message: `Your KPI "${assignment.kpi?.title ?? 'KPI'}" was updated.`,
+        actionRequired: false,
+        link: '/kpi-management',
+      },
+      {
+        userId: req.user?.userId ?? req.user?.id ?? 0,
+        profileId: req.profile?.id ?? 0,
+        roleName: req.profile?.role?.name,
+      }
+    );
 
     return res.json(assignment);
   } catch (err: any) {
