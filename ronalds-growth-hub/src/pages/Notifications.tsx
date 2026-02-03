@@ -12,10 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Bell, CheckCircle2, ExternalLink, Filter, Loader2, Trash2 } from "lucide-react";
+import { Bell, CheckCircle2, ExternalLink, Filter, Loader2, Trash2, Shield } from "lucide-react";
 import apiFetch from "@/integrations/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import notificationTemplatesAPI, { NotificationTemplate } from "@/lib/api/notificationTemplates";
 
 type NotificationItem = {
   id: number;
@@ -44,6 +45,19 @@ const Notifications = () => {
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isTemplatesLoading, setIsTemplatesLoading] = useState(false);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [broadcastRole, setBroadcastRole] = useState("manager");
+  const [broadcastForm, setBroadcastForm] = useState({
+    title: "",
+    message: "",
+    type: "info",
+    actionRequired: false,
+    link: "",
+  });
+  const [users, setUsers] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [createForm, setCreateForm] = useState({
     recipientProfileId: "",
     type: "info",
@@ -52,33 +66,59 @@ const Notifications = () => {
     link: "",
     actionRequired: false,
   });
+  const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
+  const [templateForm, setTemplateForm] = useState({
+    id: null as number | null,
+    label: "",
+    title: "",
+    message: "",
+    type: "info",
+    actionRequired: false,
+    isActive: true,
+  });
 
-  const hrTemplates = [
-    {
-      id: "onboarding-approval",
-      label: "Onboarding approval reminder",
-      title: "Onboarding approval pending",
-      message: "A client onboarding is pending HR review. Please approve or reject.",
-      actionRequired: true,
-      type: "action",
-    },
-    {
-      id: "overdue-job",
-      label: "Overdue job reminder",
-      title: "Overdue job requires attention",
-      message: "A job is past its due date. Please follow up with the manager.",
-      actionRequired: true,
-      type: "warning",
-    },
-    {
-      id: "document-review",
-      label: "Document review request",
-      title: "Document review needed",
-      message: "An employee document requires HR review and verification.",
-      actionRequired: true,
-      type: "action",
-    },
-  ];
+  const loadTemplates = async () => {
+    if (!(isHR || isAdmin)) return;
+    setIsTemplatesLoading(true);
+    try {
+      const response = await notificationTemplatesAPI.list();
+      const list = Array.isArray(response) ? response : response?.data ?? [];
+      setTemplates(list);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to load templates",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTemplatesLoading(false);
+    }
+  };
+
+  const loadUsers = async () => {
+    if (!(isHR || isAdmin)) return;
+    try {
+      const response = await apiFetch("GET", "/user-roles/list/all");
+      const list = Array.isArray(response) ? response : response?.data ?? response?.users ?? [];
+      setUsers(list);
+    } catch (error) {
+      setUsers([]);
+    }
+  };
+
+  const loadAuditLogs = async () => {
+    if (!(isHR || isAdmin)) return;
+    setIsAuditLoading(true);
+    try {
+      const response = await apiFetch("GET", "/audit-logs?limit=5");
+      const list = Array.isArray(response) ? response : response?.data ?? [];
+      setAuditLogs(list);
+    } catch (error) {
+      setAuditLogs([]);
+    } finally {
+      setIsAuditLoading(false);
+    }
+  };
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -122,6 +162,12 @@ const Notifications = () => {
     loadNotifications();
   }, [page, statusFilter, typeFilter, scope]);
 
+  useEffect(() => {
+    loadTemplates();
+    loadUsers();
+    loadAuditLogs();
+  }, []);
+
   const sendNotification = async () => {
     if (!createForm.recipientProfileId || !createForm.title || !createForm.message) {
       toast({
@@ -161,6 +207,126 @@ const Notifications = () => {
       });
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const resetTemplateForm = () => {
+    setTemplateForm({
+      id: null,
+      label: "",
+      title: "",
+      message: "",
+      type: "info",
+      actionRequired: false,
+      isActive: true,
+    });
+  };
+
+  const saveTemplate = async () => {
+    if (!templateForm.label || !templateForm.title || !templateForm.message) {
+      toast({
+        title: "Missing fields",
+        description: "Label, title, and message are required.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      if (templateForm.id) {
+        await notificationTemplatesAPI.update(templateForm.id, templateForm);
+        toast({ title: "Template updated" });
+      } else {
+        await notificationTemplatesAPI.create(templateForm);
+        toast({ title: "Template created" });
+      }
+      resetTemplateForm();
+      loadTemplates();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to save template",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const sendBroadcast = async () => {
+    if (!broadcastForm.title || !broadcastForm.message) {
+      toast({
+        title: "Missing fields",
+        description: "Title and message are required.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const recipients = users
+      .filter((user) => Array.isArray(user.roles) && user.roles.includes(broadcastRole))
+      .map((user) => user.profileId)
+      .filter(Boolean);
+
+    if (recipients.length === 0) {
+      toast({
+        title: "No recipients",
+        description: "No active users found for the selected role.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsBroadcasting(true);
+    try {
+      await apiFetch("POST", "/notifications/batch", {
+        recipientProfileIds: recipients,
+        type: broadcastForm.type,
+        title: broadcastForm.title,
+        message: broadcastForm.message,
+        actionRequired: broadcastForm.actionRequired,
+        link: broadcastForm.link || undefined,
+      });
+      toast({ title: `Sent to ${recipients.length} users` });
+      setBroadcastForm({
+        title: "",
+        message: "",
+        type: "info",
+        actionRequired: false,
+        link: "",
+      });
+      loadNotifications();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to send broadcast",
+        variant: "destructive",
+      });
+    } finally {
+      setIsBroadcasting(false);
+    }
+  };
+
+  const editTemplate = (template: NotificationTemplate) => {
+    setTemplateForm({
+      id: template.id,
+      label: template.label,
+      title: template.title,
+      message: template.message,
+      type: template.type,
+      actionRequired: template.actionRequired,
+      isActive: template.isActive,
+    });
+  };
+
+  const deleteTemplate = async (templateId: number) => {
+    try {
+      await notificationTemplatesAPI.remove(templateId);
+      toast({ title: "Template deleted" });
+      loadTemplates();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to delete template",
+        variant: "destructive",
+      });
     }
   };
 
@@ -285,12 +451,13 @@ const Notifications = () => {
         </Card>
 
         {(isHR || isAdmin) && (
-          <Card>
-            <CardHeader>
-              <CardTitle>HR Notifications</CardTitle>
-              <CardDescription>Create a targeted notification for a specific profile.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>HR Notifications</CardTitle>
+                <CardDescription>Create a targeted notification for a specific profile.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-2">
               <Input
                 placeholder="Recipient profile ID"
                 value={createForm.recipientProfileId}
@@ -300,7 +467,7 @@ const Notifications = () => {
               />
               <Select
                 onValueChange={(value) => {
-                  const template = hrTemplates.find((item) => item.id === value);
+                  const template = templates.find((item) => String(item.id) === value);
                   if (!template) return;
                   setCreateForm((prev) => ({
                     ...prev,
@@ -315,8 +482,8 @@ const Notifications = () => {
                   <SelectValue placeholder="Apply template (optional)" />
                 </SelectTrigger>
                 <SelectContent>
-                  {hrTemplates.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
+                  {templates.map((template) => (
+                    <SelectItem key={template.id} value={String(template.id)}>
                       {template.label}
                     </SelectItem>
                   ))}
@@ -369,8 +536,261 @@ const Notifications = () => {
                   Send
                 </Button>
               </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Notification Templates</CardTitle>
+                <CardDescription>Create reusable HR templates for consistent messaging.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  placeholder="Template label"
+                  value={templateForm.label}
+                  onChange={(event) =>
+                    setTemplateForm((prev) => ({ ...prev, label: event.target.value }))
+                  }
+                />
+                <Select
+                  value={templateForm.type}
+                  onValueChange={(value) => setTemplateForm((prev) => ({ ...prev, type: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="info">Info</SelectItem>
+                    <SelectItem value="action">Action</SelectItem>
+                    <SelectItem value="warning">Warning</SelectItem>
+                    <SelectItem value="escalation">Escalation</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  placeholder="Title"
+                  value={templateForm.title}
+                  onChange={(event) =>
+                    setTemplateForm((prev) => ({ ...prev, title: event.target.value }))
+                  }
+                />
+                <Input
+                  placeholder="Message"
+                  value={templateForm.message}
+                  onChange={(event) =>
+                    setTemplateForm((prev) => ({ ...prev, message: event.target.value }))
+                  }
+                />
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="mr-2"
+                      checked={templateForm.actionRequired}
+                      onChange={(event) =>
+                        setTemplateForm((prev) => ({
+                          ...prev,
+                          actionRequired: event.target.checked,
+                        }))
+                      }
+                    />
+                    Action required
+                  </label>
+                  <label className="text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="mr-2"
+                      checked={templateForm.isActive}
+                      onChange={(event) =>
+                        setTemplateForm((prev) => ({ ...prev, isActive: event.target.checked }))
+                      }
+                    />
+                    Active
+                  </label>
+                </div>
+                <div className="md:col-span-2 flex items-center justify-end gap-2">
+                  {templateForm.id && (
+                    <Button variant="outline" onClick={resetTemplateForm}>
+                      Cancel
+                    </Button>
+                  )}
+                  <Button onClick={saveTemplate}>Save template</Button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {isTemplatesLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  </div>
+                ) : templates.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    No templates yet. Create one to speed up HR notifications.
+                  </div>
+                ) : (
+                  templates.map((template) => (
+                    <div
+                      key={template.id}
+                      className="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-4"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-semibold">{template.label}</h4>
+                          <Badge variant={template.isActive ? "secondary" : "outline"}>
+                            {template.isActive ? "Active" : "Inactive"}
+                          </Badge>
+                          <Badge variant="outline" className="capitalize">
+                            {template.type}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{template.title}</p>
+                        <p className="text-xs text-muted-foreground">{template.message}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => editTemplate(template)}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteTemplate(template.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>System-wide broadcast</CardTitle>
+                <CardDescription>
+                  Send a notification to everyone in a specific access role.
+                </CardDescription>
+              </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2">
+              <Select value={broadcastRole} onValueChange={setBroadcastRole}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hr">HR</SelectItem>
+                  <SelectItem value="hr_manager">HR Manager</SelectItem>
+                  <SelectItem value="manager">Manager</SelectItem>
+                  <SelectItem value="partner">Partner</SelectItem>
+                  <SelectItem value="finance">Finance</SelectItem>
+                  <SelectItem value="marketing">Marketing</SelectItem>
+                  <SelectItem value="gmp">GMP</SelectItem>
+                  <SelectItem value="employee">Employee</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                value={broadcastForm.type}
+                onValueChange={(value) => setBroadcastForm((prev) => ({ ...prev, type: value }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="info">Info</SelectItem>
+                  <SelectItem value="action">Action</SelectItem>
+                  <SelectItem value="warning">Warning</SelectItem>
+                  <SelectItem value="escalation">Escalation</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                placeholder="Title"
+                value={broadcastForm.title}
+                onChange={(event) =>
+                  setBroadcastForm((prev) => ({ ...prev, title: event.target.value }))
+                }
+              />
+              <Input
+                placeholder="Link (optional)"
+                value={broadcastForm.link}
+                onChange={(event) =>
+                  setBroadcastForm((prev) => ({ ...prev, link: event.target.value }))
+                }
+              />
+              <Input
+                className="md:col-span-2"
+                placeholder="Message"
+                value={broadcastForm.message}
+                onChange={(event) =>
+                  setBroadcastForm((prev) => ({ ...prev, message: event.target.value }))
+                }
+              />
+              <div className="md:col-span-2 flex items-center justify-between">
+                <label className="text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="mr-2"
+                    checked={broadcastForm.actionRequired}
+                    onChange={(event) =>
+                      setBroadcastForm((prev) => ({
+                        ...prev,
+                        actionRequired: event.target.checked,
+                      }))
+                    }
+                  />
+                  Action required
+                </label>
+                <Button onClick={sendBroadcast} disabled={isBroadcasting}>
+                  {isBroadcasting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Send broadcast
+                </Button>
+              </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-4 w-4" />
+                  Recent audit trail
+                </CardTitle>
+              <CardDescription>Latest activity across the system.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isAuditLoading ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                </div>
+              ) : auditLogs.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No audit logs yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {auditLogs.map((log) => (
+                    <div key={log.id} className="rounded-lg border p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">
+                          {log.action ?? log.event ?? "Activity"}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {log.createdAt || log.created_at || "Just now"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {log.entityType ?? log.entity_type ?? "System"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={() => navigate("/audit-logs")}>
+                  View full audit log
+                </Button>
+              </div>
             </CardContent>
-          </Card>
+            </Card>
+          </div>
         )}
 
         <Card>

@@ -19,15 +19,15 @@ const router = Router();
 router.get('/employee/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    const userRoles = req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: employees can only see their own data
     if (!userRoles.includes('super_admin') && 
         !userRoles.includes('hr_manager') && 
         !userRoles.includes('partner') && 
         !userRoles.includes('group_managing_partner') &&
-        userId !== parseInt(id)) {
+        profileId !== parseInt(id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -52,15 +52,15 @@ router.get('/employee/:id', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/manager/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    const userRoles = req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: managers can only see their own department data
     if (!userRoles.includes('super_admin') && 
         !userRoles.includes('hr_manager') && 
         !userRoles.includes('partner') && 
         !userRoles.includes('group_managing_partner') &&
-        userId !== parseInt(id)) {
+        profileId !== parseInt(id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -85,14 +85,14 @@ router.get('/manager/:id', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/partner/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    const userRoles = req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: partners can only see their own portfolio
     if (!userRoles.includes('super_admin') && 
         !userRoles.includes('hr_manager') && 
         !userRoles.includes('group_managing_partner') &&
-        userId !== parseInt(id)) {
+        profileId !== parseInt(id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -116,7 +116,7 @@ router.get('/partner/:id', authMiddleware, async (req: AuthRequest, res) => {
 // GET /financial-summary/company - Company-wide financial summary (GMP/HR only)
 router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userRoles = req.user?.roles || [];
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: only GMP, HR, and Super Admin
     if (!userRoles.includes('super_admin') && 
@@ -149,7 +149,7 @@ router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
 // GET /financial-summary/partners - All partners' financial contributions (GMP/HR only)
 router.get('/partners', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userRoles = req.user?.roles || [];
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: only GMP, HR, and Super Admin
     if (!userRoles.includes('super_admin') && 
@@ -174,7 +174,7 @@ router.get('/partners', authMiddleware, async (req: AuthRequest, res) => {
 // GET /financial-summary/departments - All departments' financial data (HR only)
 router.get('/departments', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userRoles = req.user?.roles || [];
+    const userRoles = req.user?.authRoles || [];
     
     // Access control: only HR and Super Admin
     if (!userRoles.includes('super_admin') && 
@@ -209,17 +209,17 @@ router.get('/departments', authMiddleware, async (req: AuthRequest, res) => {
 // GET /financial-summary/my-data - Get current user's financial data
 router.get('/my-data', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    const userRoles = req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
 
-    if (!userId) {
+    if (!profileId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
     // Get user profile to determine position level
     const profile = await prisma.profile.findUnique({
-      where: { id: userId },
-      select: { position_level: true, departmentId: true }
+      where: { id: profileId },
+      select: { positionTitle: true, departmentId: true }
     });
 
     if (!profile) {
@@ -229,11 +229,13 @@ router.get('/my-data', authMiddleware, async (req: AuthRequest, res) => {
     let financialData: any = {};
 
     // Route to appropriate financial view based on position level
-    if (profile.position_level === 'group_managing_partner' || 
-        userRoles.includes('group_managing_partner')) {
+    const positionTitle = profile.positionTitle?.toLowerCase() || '';
+
+    if (positionTitle.includes('group managing partner') || 
+        userRoles.includes('group_managing_partner') || userRoles.includes('gmp')) {
       // GMP gets both personal portfolio and company summary
       const [personalData, companyData] = await Promise.all([
-        prisma.$queryRaw`SELECT * FROM partner_financial_contribution WHERE partner_id = ${userId}`,
+        prisma.$queryRaw`SELECT * FROM partner_financial_contribution WHERE partner_id = ${profileId}`,
         prisma.$queryRaw`SELECT * FROM company_financial_summary`
       ]);
 
@@ -242,19 +244,19 @@ router.get('/my-data', authMiddleware, async (req: AuthRequest, res) => {
         personal_portfolio: (personalData as any[])[0] || null,
         company_summary: (companyData as any[])[0] || null
       };
-    } else if (profile.position_level === 'partner' || userRoles.includes('partner')) {
+    } else if (positionTitle.includes('partner') || userRoles.includes('partner')) {
       // Partner gets their portfolio
       const data = await prisma.$queryRaw`
-        SELECT * FROM partner_financial_contribution WHERE partner_id = ${userId}
+        SELECT * FROM partner_financial_contribution WHERE partner_id = ${profileId}
       `;
       financialData = {
         user_type: 'partner',
         portfolio: (data as any[])[0] || null
       };
-    } else if (profile.position_level === 'manager' || userRoles.includes('manager')) {
+    } else if (positionTitle.includes('manager') || userRoles.includes('manager')) {
       // Manager gets department data
       const data = await prisma.$queryRaw`
-        SELECT * FROM manager_financial_contribution WHERE manager_id = ${userId}
+        SELECT * FROM manager_financial_contribution WHERE manager_id = ${profileId}
       `;
       financialData = {
         user_type: 'manager',
@@ -263,7 +265,7 @@ router.get('/my-data', authMiddleware, async (req: AuthRequest, res) => {
     } else {
       // Employee gets personal contribution
       const data = await prisma.$queryRaw`
-        SELECT * FROM employee_financial_contribution WHERE employee_id = ${userId}
+        SELECT * FROM employee_financial_contribution WHERE employee_id = ${profileId}
       `;
       financialData = {
         user_type: 'employee',

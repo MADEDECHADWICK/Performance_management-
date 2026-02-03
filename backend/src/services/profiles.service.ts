@@ -274,17 +274,17 @@ export class ProfileService {
       timeEntriesSubmitted,
       jobsAssigned,
     ] = await Promise.all([
-      prisma.evaluation.count({
-        where: { evaluator_profile_id: profileId },
+      prisma.evaluationAssignment.count({
+        where: { evaluatorProfileId: profileId },
       }),
-      prisma.evaluation.count({
-        where: { evaluatee_profile_id: profileId },
+      prisma.evaluationAssignment.count({
+        where: { evaluateeProfileId: profileId },
       }),
       prisma.timeEntry.count({
-        where: { employee_profile_id: profileId },
+        where: { employeeProfileId: profileId },
       }),
-      prisma.jobStaffing.count({
-        where: { employee_profile_id: profileId },
+      prisma.jobStaffAssignment.count({
+        where: { employeeProfileId: profileId },
       }),
     ]);
 
@@ -294,7 +294,7 @@ export class ProfileService {
       evaluationsReceived,
       timeEntriesSubmitted,
       jobsAssigned,
-      memberSince: profile.created_at,
+      memberSince: profile.createdAt,
     };
   }
 
@@ -315,7 +315,7 @@ export class ProfileService {
       include: {
         department: {
           include: {
-            members: {
+            profiles: {
               include: {
                 role: { select: { id: true, name: true } },
               },
@@ -332,7 +332,7 @@ export class ProfileService {
       };
     }
 
-    return manager.department.members.map(m => ({
+    return manager.department.profiles.map((m) => ({
       ...m,
       password: undefined,
     }));

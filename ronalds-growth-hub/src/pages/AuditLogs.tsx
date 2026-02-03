@@ -21,10 +21,29 @@ const AuditLogs = () => {
 
   const loadLogs = async () => {
     try {
-      const data = await apiFetch('GET', '/audit_logs?limit=100');
-      setLogs(data || []);
+      const data = await apiFetch("GET", "/audit-logs?limit=100");
+      setLogs(
+        (data || []).map((log: any) => ({
+          id: log.id,
+          action: log.action ?? log.event ?? "unknown",
+          entityType: log.entityType ?? log.entity_type ?? "system",
+          userId: log.userId ?? log.user_id ?? null,
+          ipAddress: log.ipAddress ?? log.ip_address ?? null,
+          createdAt: log.createdAt ?? log.created_at ?? log.timestamp ?? null,
+          employeeName: log.employeeName ?? log.employee_name ?? null,
+          metadata: log.metadata ?? null,
+        }))
+      );
     } catch (error: any) {
       console.error("Error loading audit logs:", error);
+      if (error?.status === 401) {
+        window.location.href = "/auth";
+        return;
+      }
+      if (error?.status === 404) {
+        setLogs([]);
+        return;
+      }
       toast({
         title: "Error",
         description: "Failed to load audit logs.",
@@ -48,9 +67,9 @@ const AuditLogs = () => {
     return <Badge variant="outline">{action.toUpperCase()}</Badge>;
   };
 
-  const filteredLogs = logs.filter(log =>
+  const filteredLogs = logs.filter((log) =>
     log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    log.entity_type.toLowerCase().includes(searchTerm.toLowerCase())
+    log.entityType.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -99,27 +118,37 @@ const AuditLogs = () => {
                       <TableHead>Timestamp</TableHead>
                       <TableHead>Action</TableHead>
                       <TableHead>Entity Type</TableHead>
+                      <TableHead>Employee</TableHead>
                       <TableHead>User ID</TableHead>
                       <TableHead>IP Address</TableHead>
+                      <TableHead>Note</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredLogs.map((log) => (
                       <TableRow key={log.id}>
                         <TableCell className="font-mono text-xs">
-                          {format(new Date(log.created_at), "MMM d, yyyy HH:mm:ss")}
+                          {log.createdAt
+                            ? format(new Date(log.createdAt), "MMM d, yyyy HH:mm:ss")
+                            : "N/A"}
                         </TableCell>
                         <TableCell>
                           {getActionBadge(log.action)}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {log.entity_type}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {log.user_id ? log.user_id.substring(0, 8) + "..." : "System"}
+                          {log.entityType}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {log.ip_address || "N/A"}
+                          {log.employeeName || "--"}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {log.userId ? log.userId.toString().substring(0, 8) + "..." : "System"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {log.ipAddress || "N/A"}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {log.metadata?.note || log.metadata?.reason || "--"}
                         </TableCell>
                       </TableRow>
                     ))}

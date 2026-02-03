@@ -12,9 +12,9 @@ export const HR_ROLE_NAMES = [
 ];
 
 const buildAuthContext = (req: AuthRequest) => ({
-  userId: req.user?.id ?? 0,
-  profileId: req.user?.profileId ?? 0,
-  roleName: req.user?.role?.name,
+  userId: req.user?.userId ?? 0,
+  profileId: req.user?.profileId ?? req.profile?.id ?? 0,
+  roleName: req.profile?.role?.name,
 });
 
 export const notifyHrGroup = async (

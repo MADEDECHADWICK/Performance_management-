@@ -104,6 +104,15 @@ const KPIManagement = () => {
       setDepartments(deptsData || []);
       setEmployees(employeesData || []);
     } catch (error: any) {
+      if (error?.status === 401) {
+        return;
+      }
+      if (error?.status === 403) {
+        setKpis([]);
+        setDepartments([]);
+        setEmployees([]);
+        return;
+      }
       toast({
         title: "Error loading data",
         description: error.message,

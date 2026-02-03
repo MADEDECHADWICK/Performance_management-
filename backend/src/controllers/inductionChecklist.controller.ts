@@ -55,4 +55,39 @@ export class InductionChecklistController {
       res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to complete item", e.statusCode ?? 400));
     }
   }
+
+  static async remind(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const result = await InductionChecklistService.sendReminder(checklistId, authFromReq(req));
+      res.json(successResponse(result, "Reminder sent"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.remind error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to send reminder", e.statusCode ?? 400));
+    }
+  }
+
+  static async attachDocument(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const itemId = Number(req.params.itemId);
+      const documentId = Number(req.body.documentId);
+
+      if (!Number.isFinite(documentId)) {
+        return res.status(400).json(errorResponse("documentId is required", 400));
+      }
+
+      const updated = await InductionChecklistService.attachItemDocument(
+        checklistId,
+        itemId,
+        documentId,
+        authFromReq(req)
+      );
+
+      res.json(successResponse(updated, "Checklist document attached"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.attachDocument error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to attach document", e.statusCode ?? 400));
+    }
+  }
 }

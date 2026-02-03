@@ -24,6 +24,7 @@ import {
   Activity
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { apiFetch } from "@/integrations/apiClient";
 
 interface WorkloadData {
   employee_id: number;
@@ -85,6 +86,7 @@ const WorkloadManagement = () => {
   const [metrics, setMetrics] = useState<WorkloadMetrics | null>(null);
   const [recommendations, setRecommendations] = useState<CapacityRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState('current_week');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('utilization_rate');
@@ -96,44 +98,42 @@ const WorkloadManagement = () => {
   const fetchWorkloadData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      setErrorMessage(null);
       
       const [workloadRes, assignmentsRes, metricsRes, recommendationsRes] = await Promise.all([
-        fetch(`http://localhost:4000/api/manager/workload-analysis?period=${selectedPeriod}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`http://localhost:4000/api/manager/project-assignments`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`http://localhost:4000/api/manager/workload-metrics`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`http://localhost:4000/api/manager/capacity-recommendations`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
+        apiFetch("GET", `/team-management/workload-analysis?period=${selectedPeriod}`),
+        apiFetch("GET", "/team-management/project-assignments"),
+        apiFetch("GET", "/team-management/workload-metrics"),
+        apiFetch("GET", "/team-management/capacity-recommendations"),
       ]);
 
-      if (workloadRes.ok) {
-        const data = await workloadRes.json();
-        setWorkloadData(data);
+      setWorkloadData(Array.isArray(workloadRes) ? workloadRes : []);
+      setProjectAssignments(Array.isArray(assignmentsRes) ? assignmentsRes : []);
+      setMetrics(metricsRes && typeof metricsRes === "object" ? metricsRes : null);
+      setRecommendations(Array.isArray(recommendationsRes) ? recommendationsRes : []);
+    } catch (error: any) {
+      if (error?.status === 401) {
+        window.location.href = "/auth";
+        return;
       }
-      
-      if (assignmentsRes.ok) {
-        const data = await assignmentsRes.json();
-        setProjectAssignments(data);
+      if (error?.status === 403) {
+        setWorkloadData([]);
+        setProjectAssignments([]);
+        setMetrics(null);
+        setRecommendations([]);
+        setErrorMessage("You don't have permission to view workload analytics.");
+        return;
       }
-      
-      if (metricsRes.ok) {
-        const data = await metricsRes.json();
-        setMetrics(data);
+      if (error?.status === 404) {
+        setWorkloadData([]);
+        setProjectAssignments([]);
+        setMetrics(null);
+        setRecommendations([]);
+        setErrorMessage(null);
+        return;
       }
-      
-      if (recommendationsRes.ok) {
-        const data = await recommendationsRes.json();
-        setRecommendations(data);
-      }
-    } catch (error) {
       console.error('Error fetching workload data:', error);
+      setErrorMessage(error?.message || 'Failed to load workload data.');
     } finally {
       setLoading(false);
     }
@@ -191,18 +191,10 @@ const WorkloadManagement = () => {
 
   const redistributeWorkload = async (fromEmployee: number, toEmployee: number, projectId: number) => {
     try {
-      const token = localStorage.getItem('token');
-      await fetch('http://localhost:4000/api/manager/redistribute-workload', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          from_employee_id: fromEmployee,
-          to_employee_id: toEmployee,
-          project_id: projectId
-        })
+      await apiFetch("POST", "/team-management/redistribute-workload", {
+        from_employee_id: fromEmployee,
+        to_employee_id: toEmployee,
+        project_id: projectId,
       });
       
       fetchWorkloadData(); // Refresh data
@@ -284,6 +276,17 @@ const WorkloadManagement = () => {
             </SelectContent>
           </Select>
         </div>
+
+        {(errorMessage || (workloadData.length === 0 && projectAssignments.length === 0 && !metrics)) && (
+          <Alert>
+            <AlertTitle>{errorMessage ? "Access limited" : "No workload data yet"}</AlertTitle>
+            <AlertDescription>
+              {errorMessage
+                ? errorMessage
+                : "Workload analytics will appear once jobs, assignments, and time entries are available."}
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Key Metrics */}
         {metrics && (

@@ -8,6 +8,7 @@
 
 import { prisma } from '../prisma';
 import { NotificationService } from './notifications.service';
+import { createAudit } from '../utils/audit';
 
 interface AuthContext {
   userId: number;
@@ -803,6 +804,19 @@ export class TimeEntryService {
         },
       });
 
+      await createAudit({
+        action: `time_entry_approved:job_${timeEntry.jobId}`,
+        entity_type: 'time_entry',
+        entity_id: updated.id,
+        user_id: auth.userId,
+        metadata: {
+          jobId: timeEntry.jobId,
+          employeeProfileId: timeEntry.employeeProfileId,
+          hours: Number(timeEntry.hours || 0),
+          billable: Boolean(timeEntry.billable),
+        },
+      });
+
       await NotificationService.createNotification(
         {
           recipientProfileId: timeEntry.employeeProfileId,
@@ -891,6 +905,18 @@ export class TimeEntryService {
         approver: {
           select: { id: true, firstName: true, lastName: true },
         },
+        },
+      });
+
+      await createAudit({
+        action: `time_entry_rejected:job_${timeEntry.jobId}`,
+        entity_type: 'time_entry',
+        entity_id: updated.id,
+        user_id: auth.userId,
+        metadata: {
+          jobId: timeEntry.jobId,
+          employeeProfileId: timeEntry.employeeProfileId,
+          rejectionReason: rejectionReason || null,
         },
       });
 
@@ -1007,7 +1033,7 @@ export class TimeEntryService {
     // ✅ CALCULATE ELAPSED TIME
     const elapsedMs = new Date().getTime() - new Date(timeEntry.startedAt).getTime();
     const elapsedHours = elapsedMs / (1000 * 60 * 60);
-    const totalHours = Number((timeEntry.hours + elapsedHours).toFixed(2));
+    const totalHours = Number((Number(timeEntry.hours) + elapsedHours).toFixed(2));
 
     // ✅ VERIFY BUDGET AFTER ADDING TIME
     const job = await prisma.job.findUnique({
@@ -1026,7 +1052,8 @@ export class TimeEntryService {
         _sum: { hours: true },
       });
 
-      if (totalHours + (existingHours._sum.hours || 0) > budgetHours) {
+      const existingLoggedHours = Number(existingHours._sum.hours || 0);
+      if (totalHours + existingLoggedHours > budgetHours) {
         throw {
           statusCode: 400,
           message: `Adding timer duration would exceed job budget`,
@@ -1226,25 +1253,33 @@ export class TimeEntryService {
 
     const currentLoggedHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
 
-    if (currentLoggedHours < currentAllocatedHours) {
-      throw {
-        statusCode: 400,
-        message: 'You still have remaining allocated hours',
-      };
-    }
+    // Allow requests even if some allocated hours remain (manager can still approve/deny).
 
-    const request = await prisma.timeEntryApprovalRequest.create({
-      data: {
-        jobId: input.jobId,
-        employeeProfileId: auth.profileId,
-        currentAllocatedHours,
-        currentLoggedHours,
-        additionalHoursRequested: input.additionalHours,
-        justification: input.justification,
-        requestType: input.requestType || 'additional_hours',
-        status: 'pending',
-      },
-    });
+      const request = await prisma.timeEntryApprovalRequest.create({
+        data: {
+          jobId: input.jobId,
+          employeeProfileId: auth.profileId,
+          currentAllocatedHours,
+          currentLoggedHours,
+          additionalHoursRequested: input.additionalHours,
+          justification: input.justification,
+          requestType: input.requestType || 'additional_hours',
+          status: 'pending',
+        },
+      });
+
+      await createAudit({
+        action: `approval_request_created:job_${input.jobId}`,
+        entity_type: 'time_entry_approval_request',
+        entity_id: request.id,
+        user_id: auth.userId,
+        metadata: {
+          jobId: input.jobId,
+          employeeProfileId: auth.profileId,
+          additionalHours: input.additionalHours,
+          requestType: input.requestType || 'additional_hours',
+        },
+      });
 
     const wouldExceedJobAllocation =
       allocationSummary?.requiresAllocation &&
@@ -1270,7 +1305,7 @@ export class TimeEntryService {
           NotificationService.createNotification(
             {
               recipientProfileId: profile.id,
-              type: 'alert',
+              type: 'warning',
               title: `Over-budget hours requested for ${job.jobName}`,
               message: `An additional hours request would exceed allocated hours on "${job.jobName}".`,
               actionRequired: true,
@@ -1396,12 +1431,25 @@ export class TimeEntryService {
         },
       });
 
-      await NotificationService.createNotification(
-        {
-          recipientProfileId: request.employeeProfileId,
-          type: 'info',
-          title: 'Additional hours approved',
-          message: `Your additional hours request for "${request.job.jobName}" was approved.`,
+        await createAudit({
+          action: `approval_request_approved:job_${request.jobId}`,
+          entity_type: 'time_entry_approval_request',
+          entity_id: request.id,
+          user_id: auth.userId,
+          metadata: {
+            jobId: request.jobId,
+            employeeProfileId: request.employeeProfileId,
+            approvedByProfileId: auth.profileId,
+            approvalNotes: approvalNotes || null,
+          },
+        });
+
+        await NotificationService.createNotification(
+          {
+            recipientProfileId: request.employeeProfileId,
+            type: 'info',
+            title: 'Additional hours approved',
+            message: `Your additional hours request for "${request.job.jobName}" was approved.`,
           actionRequired: false,
           jobId: request.jobId,
           link: `/timesheets`,
@@ -1451,12 +1499,25 @@ export class TimeEntryService {
         },
       });
 
-      await NotificationService.createNotification(
-        {
-          recipientProfileId: request.employeeProfileId,
-          type: 'action',
-          title: 'Additional hours rejected',
-          message: `Your additional hours request for "${request.job.jobName}" was rejected.`,
+        await createAudit({
+          action: `approval_request_rejected:job_${request.jobId}`,
+          entity_type: 'time_entry_approval_request',
+          entity_id: request.id,
+          user_id: auth.userId,
+          metadata: {
+            jobId: request.jobId,
+            employeeProfileId: request.employeeProfileId,
+            approvedByProfileId: auth.profileId,
+            approvalNotes: approvalNotes || null,
+          },
+        });
+
+        await NotificationService.createNotification(
+          {
+            recipientProfileId: request.employeeProfileId,
+            type: 'action',
+            title: 'Additional hours rejected',
+            message: `Your additional hours request for "${request.job.jobName}" was rejected.`,
           actionRequired: true,
           jobId: request.jobId,
           link: `/timesheets`,
@@ -1513,9 +1574,9 @@ export class TimeEntryService {
       submittedHours: 0,
       pendingHours: 0,
       rejectedHours: 0,
-      budgetCap: job.budgetHours,
+      budgetCap: Number(job.budgetHours || 0),
       budgetUsed: 0,
-      budgetRemaining: job.budgetHours,
+      budgetRemaining: Number(job.budgetHours || 0),
       percentageUsed: 0,
       entriesByStatus: {
         pending: 0,
@@ -1528,17 +1589,18 @@ export class TimeEntryService {
     };
 
     for (const entry of timeEntries) {
-      summary.totalHours += entry.hours;
+      const entryHours = Number(entry.hours);
+      summary.totalHours += entryHours;
       summary.entriesByStatus[entry.status as keyof typeof summary.entriesByStatus]++;
 
       if (entry.status === 'approved') {
-        summary.approvedHours += entry.hours;
+        summary.approvedHours += entryHours;
       } else if (entry.status === 'submitted') {
-        summary.submittedHours += entry.hours;
+        summary.submittedHours += entryHours;
       } else if (entry.status === 'pending') {
-        summary.pendingHours += entry.hours;
+        summary.pendingHours += entryHours;
       } else if (entry.status === 'rejected') {
-        summary.rejectedHours += entry.hours;
+        summary.rejectedHours += entryHours;
       }
 
       // Group by employee
@@ -1550,9 +1612,9 @@ export class TimeEntryService {
           approvedHours: 0,
         };
       }
-      summary.entriesByEmployee[empId].totalHours += entry.hours;
+      summary.entriesByEmployee[empId].totalHours += entryHours;
       if (entry.status === 'approved') {
-        summary.entriesByEmployee[empId].approvedHours += entry.hours;
+        summary.entriesByEmployee[empId].approvedHours += entryHours;
       }
     }
 

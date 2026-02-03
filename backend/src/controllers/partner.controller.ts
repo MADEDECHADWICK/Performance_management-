@@ -179,4 +179,37 @@ export class PartnerController {
       );
     }
   }
+
+  /**
+   * GET /partners/allocations
+   * Partner allocation audit (collections vs allocations)
+   */
+  static async getPartnerAllocations(
+    req: AuthRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const partnerId =
+        auth.roleName === 'partner' ? auth.profileId : Number(req.query.partnerId) || auth.profileId;
+
+      if (!partnerId) {
+        res.status(400).json(errorResponse('Partner id is required', 400));
+        return;
+      }
+
+      const allocations = await PartnerService.getPartnerAllocationAudit(partnerId, auth);
+
+      res.json(successResponse(allocations, 'Partner allocations retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
 }

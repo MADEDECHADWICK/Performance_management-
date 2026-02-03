@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
 
 
@@ -27,10 +29,12 @@ type JobBalance = {
 };
 
 export default function FinanceBalances() {
-  const { toast } = useToast();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [clientBalances, setClientBalances] = useState<ClientBalance[]>([]);
   const [jobBalances, setJobBalances] = useState<JobBalance[]>([]);
+  const [clientSearch, setClientSearch] = useState("");
+  const [jobSearch, setJobSearch] = useState("");
 
   const loadBalances = async () => {
     try {
@@ -45,11 +49,20 @@ export default function FinanceBalances() {
       if (jobsResult.status === "fulfilled") setJobBalances(jobsResult.value);
     } catch (error: any) {
       console.error("Balances error:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to load balances",
-        variant: "destructive",
-      });
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setClientBalances([]);
+        setJobBalances([]);
+        return;
+      }
+      if (error?.status === 404) {
+        setClientBalances([]);
+        setJobBalances([]);
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -59,15 +72,36 @@ export default function FinanceBalances() {
     loadBalances();
   }, []);
 
+  const filteredClientBalances = useMemo(() => {
+    if (!clientSearch.trim()) return clientBalances;
+    const query = clientSearch.toLowerCase();
+    return clientBalances.filter((client) => client.clientName.toLowerCase().includes(query));
+  }, [clientBalances, clientSearch]);
+
+  const filteredJobBalances = useMemo(() => {
+    if (!jobSearch.trim()) return jobBalances;
+    const query = jobSearch.toLowerCase();
+    return jobBalances.filter((job) => {
+      const haystack = [job.jobCode, job.jobName, job.clientName].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [jobBalances, jobSearch]);
+
   const totalOutstanding = useMemo(
-    () => clientBalances.reduce((sum, client) => sum + (client.balance || 0), 0),
-    [clientBalances]
+    () => filteredClientBalances.reduce((sum, client) => sum + (client.balance || 0), 0),
+    [filteredClientBalances]
   );
 
   const totalJobBalance = useMemo(
-    () => jobBalances.reduce((sum, job) => sum + (job.balance || 0), 0),
-    [jobBalances]
+    () => filteredJobBalances.reduce((sum, job) => sum + (job.balance || 0), 0),
+    [filteredJobBalances]
   );
+
+  const topClientBalances = useMemo(() => {
+    return [...filteredClientBalances]
+      .sort((a, b) => (b.balance || 0) - (a.balance || 0))
+      .slice(0, 5);
+  }, [filteredClientBalances]);
 
   if (loading) {
     return (
@@ -114,7 +148,17 @@ export default function FinanceBalances() {
               <CardTitle>Client Balances</CardTitle>
               <CardDescription>Outstanding balances by client.</CardDescription>
             </CardHeader>
-            <CardContent className="max-h-[520px] overflow-auto">
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="clientBalanceSearch">Search clients</Label>
+                <Input
+                  id="clientBalanceSearch"
+                  placeholder="Search by client name"
+                  value={clientSearch}
+                  onChange={(event) => setClientSearch(event.target.value)}
+                />
+              </div>
+              <div className="max-h-[520px] overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -126,14 +170,14 @@ export default function FinanceBalances() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {clientBalances.length === 0 && (
+                  {filteredClientBalances.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center text-muted-foreground">
-                        No balances available.
+                        No balances match the current filter.
                       </TableCell>
                     </TableRow>
                   )}
-                  {clientBalances.map((client) => (
+                  {filteredClientBalances.map((client) => (
                     <TableRow key={client.clientId}>
                       <TableCell>{client.clientName}</TableCell>
                       <TableCell className="text-right">KES {client.totalFee.toLocaleString()}</TableCell>
@@ -144,6 +188,7 @@ export default function FinanceBalances() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
 
@@ -152,7 +197,17 @@ export default function FinanceBalances() {
               <CardTitle>Job Balances</CardTitle>
               <CardDescription>Fee vs collected per job.</CardDescription>
             </CardHeader>
-            <CardContent className="max-h-[520px] overflow-auto">
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="jobBalanceSearch">Search jobs</Label>
+                <Input
+                  id="jobBalanceSearch"
+                  placeholder="Job, client, or code"
+                  value={jobSearch}
+                  onChange={(event) => setJobSearch(event.target.value)}
+                />
+              </div>
+              <div className="max-h-[520px] overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -165,14 +220,14 @@ export default function FinanceBalances() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {jobBalances.length === 0 && (
+                  {filteredJobBalances.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground">
-                        No job balances available.
+                        No job balances match the current filter.
                       </TableCell>
                     </TableRow>
                   )}
-                  {jobBalances.map((job) => (
+                  {filteredJobBalances.map((job) => (
                     <TableRow key={job.jobId}>
                       <TableCell>{job.jobCode || job.jobName}</TableCell>
                       <TableCell>{job.clientName}</TableCell>
@@ -184,9 +239,39 @@ export default function FinanceBalances() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Top Outstanding Clients</CardTitle>
+            <CardDescription>Largest balances that need follow-up.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {topClientBalances.length === 0 ? (
+              <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                No outstanding client balances yet.
+              </div>
+            ) : (
+              topClientBalances.map((client) => (
+                <div key={client.clientId} className="flex items-center justify-between text-sm">
+                  <div>
+                    <p className="font-medium">{client.clientName}</p>
+                    <p className="text-xs text-muted-foreground">{client.jobsCount} jobs</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">KES {client.balance.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Collected KES {client.totalCollected.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   );

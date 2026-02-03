@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { requireRole } from "../middleware/reqiureRole";
 import prisma from "../prisma";
 import { nonFinancialPerformanceService } from "../services/nonFinancialPerformance.service";
 import { errorResponse, successResponse } from "../utils/response";
@@ -77,6 +78,266 @@ const gradeFromScore = (score: number) => {
   return "E";
 };
 
+type ScorePeriod = { startDate: Date; endDate: Date };
+
+const resolvePeriod = async (
+  evaluationCycleId: number | undefined,
+  defaultStart: Date,
+  defaultEnd: Date
+): Promise<ScorePeriod> => {
+  if (!evaluationCycleId) {
+    return { startDate: defaultStart, endDate: defaultEnd };
+  }
+
+  const cycle = await prisma.evaluationCycle.findUnique({
+    where: { id: evaluationCycleId },
+    select: { startDate: true, endDate: true },
+  });
+
+  return {
+    startDate: cycle?.startDate ?? defaultStart,
+    endDate: cycle?.endDate ?? defaultEnd,
+  };
+};
+
+const calculateAndStoreScore = async (
+  profileId: number,
+  evaluationCycleId: number | undefined,
+  period: ScorePeriod
+) => {
+  const profile = await prisma.profile.findUnique({
+    where: { id: profileId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      positionTitle: true,
+      financialTarget: true,
+      utilizationTarget: true,
+      departmentId: true,
+    },
+  });
+
+  if (!profile) {
+    throw new Error("Profile not found");
+  }
+
+  const allocations = await prisma.revenueAllocation.findMany({
+    where: {
+      employeeProfileId: profileId,
+      allocationMonth: { gte: period.startDate, lte: period.endDate },
+    },
+    select: {
+      allocatedAmount: true,
+      employeeProfit: true,
+      employeeLoss: true,
+    },
+  });
+
+  const revenue = allocations.reduce(
+    (sum, item) => sum + Number(item.allocatedAmount || 0),
+    0
+  );
+  const profit = allocations.reduce(
+    (sum, item) => sum + Number(item.employeeProfit || 0),
+    0
+  );
+  const loss = allocations.reduce(
+    (sum, item) => sum + Number(item.employeeLoss || 0),
+    0
+  );
+  const netProfit = profit - loss;
+
+  const billableHoursAgg = await prisma.timeEntry.aggregate({
+    where: {
+      employeeProfileId: profileId,
+      billable: true,
+      dateWorked: { gte: period.startDate, lte: period.endDate },
+    },
+    _sum: { hours: true },
+  });
+
+  const allocatedHoursAgg = await prisma.jobTimeAllocation.aggregate({
+    where: { employeeProfileId: profileId },
+    _sum: { allocatedHours: true },
+  });
+
+  const billableHours = Number(billableHoursAgg._sum.hours || 0);
+  const allocatedHours = Number(allocatedHoursAgg._sum.allocatedHours || 0);
+  const utilizationRate = allocatedHours > 0 ? billableHours / allocatedHours : 0;
+
+  const utilizationTargetRaw = Number(profile.utilizationTarget || 0.75);
+  const utilizationTarget =
+    utilizationTargetRaw > 1 ? utilizationTargetRaw / 100 : utilizationTargetRaw;
+
+  const revenueTarget = Number(profile.financialTarget || 0);
+
+  const revenueScore = revenueTarget > 0 ? clamp((revenue / revenueTarget) * 100) : 0;
+  const profitMargin = revenue > 0 ? netProfit / revenue : 0;
+  const profitScore = clamp(profitMargin * 100);
+  const utilizationScore =
+    utilizationTarget > 0 ? clamp((utilizationRate / utilizationTarget) * 100) : 0;
+
+  let financialWeighted = clamp(
+    revenueScore * 0.5 + profitScore * 0.3 + utilizationScore * 0.2
+  );
+
+  const definition = await getScoringConfig(profile.departmentId, evaluationCycleId);
+  const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
+  const nonFinancialWeight = normalizeWeightValue(
+    scoringConfig.nonFinancialWeight,
+    0.3
+  );
+  const financialWeight = normalizeWeightValue(scoringConfig.financialWeight, 0.7);
+
+  const weightConfig = {
+    learningGrowthWeight: normalizeWeightValue(
+      scoringConfig?.nonFinancialBreakdown?.learningGrowth,
+      0.35
+    ),
+    customerWeight: normalizeWeightValue(
+      scoringConfig?.nonFinancialBreakdown?.customer,
+      0.35
+    ),
+    internalWeight: normalizeWeightValue(
+      scoringConfig?.nonFinancialBreakdown?.internal,
+      0.3
+    ),
+    evaluationWeight: normalizeWeightValue(
+      scoringConfig?.learningGrowthBreakdown?.evaluation,
+      0.5
+    ),
+    okrWeight: normalizeWeightValue(
+      scoringConfig?.learningGrowthBreakdown?.okr,
+      0.3
+    ),
+    feedbackWeight: normalizeWeightValue(
+      scoringConfig?.learningGrowthBreakdown?.feedback,
+      0.2
+    ),
+  };
+
+  const nonFinancialScores = await nonFinancialPerformanceService.calculateNonFinancialScores(
+    profileId,
+    undefined,
+    period.startDate,
+    period.endDate,
+    weightConfig
+  );
+
+  const nonFinancialWeighted = clamp(nonFinancialScores.overallNonFinancialScore);
+  const lossPenaltyPercent = normalizeWeightValue(
+    scoringConfig?.lossPenaltyPercent,
+    0
+  );
+  const profitabilityPenaltyApplied = netProfit < 0 ? lossPenaltyPercent : 0;
+  if (profitabilityPenaltyApplied > 0) {
+    financialWeighted = clamp(financialWeighted * (1 - profitabilityPenaltyApplied));
+  }
+  const totalScore = clamp(
+    financialWeighted * financialWeight + nonFinancialWeighted * nonFinancialWeight
+  );
+  const grade = gradeFromScore(totalScore);
+
+  const periodStart = new Date(period.startDate.getFullYear(), period.startDate.getMonth(), 1);
+  const existing = await prisma.performanceScore.findFirst({
+    where: {
+      employeeProfileId: profileId,
+      evaluationCycleId: evaluationCycleId ?? null,
+      period: periodStart,
+    },
+    orderBy: { calculatedAt: "desc" },
+  });
+
+  const scorePayload = {
+    revenueScore,
+    profitScore,
+    utilizationScore,
+    financialWeighted,
+    evaluationScore: 0,
+    kpiScore: 0,
+    clientRatingScore: nonFinancialScores.customerSatisfactionScore,
+    nonFinancialWeighted,
+    totalScore,
+    grade,
+    scoreBreakdown: {
+      revenue,
+      profit,
+      loss,
+      netProfit,
+      profitMargin,
+      profitabilityPenaltyApplied,
+      lossAlert: netProfit < 0,
+      billableHours,
+      allocatedHours,
+      utilizationRate,
+      revenueTarget,
+      utilizationTarget,
+      okrScore: nonFinancialScores.okrScore,
+      evaluationDefinitionId: definition?.id ?? null,
+      scoringConfig,
+      financialWeight,
+      nonFinancialWeight,
+      periodStart: period.startDate.toISOString(),
+      periodEnd: period.endDate.toISOString(),
+    },
+  };
+
+  if (existing) {
+    await prisma.performanceScore.update({
+      where: { id: existing.id },
+      data: scorePayload,
+    });
+  } else {
+    await prisma.performanceScore.create({
+      data: {
+        employeeProfileId: profileId,
+        evaluationCycleId: evaluationCycleId ?? null,
+        period: periodStart,
+        ...scorePayload,
+      },
+    });
+  }
+
+  return {
+    profile,
+    period,
+    financial: {
+      revenue,
+      profit,
+      loss,
+      netProfit,
+      billableHours,
+      allocatedHours,
+      utilizationRate,
+      revenueScore,
+      profitScore,
+      utilizationScore,
+      financialWeighted,
+    },
+    nonFinancial: {
+      learningGrowthScore: nonFinancialScores.learningGrowthScore,
+      customerSatisfactionScore: nonFinancialScores.customerSatisfactionScore,
+      internalProcessesScore: nonFinancialScores.internalProcessesScore,
+      okrScore: nonFinancialScores.okrScore,
+      feedbackScore: nonFinancialScores.feedbackScore,
+      overallNonFinancialScore: nonFinancialScores.overallNonFinancialScore,
+      weights: {
+        learningGrowthWeight: weightConfig.learningGrowthWeight,
+        customerWeight: weightConfig.customerWeight,
+        internalWeight: weightConfig.internalWeight,
+        evaluationWeight: weightConfig.evaluationWeight,
+        okrWeight: weightConfig.okrWeight,
+        feedbackWeight: weightConfig.feedbackWeight,
+      },
+    },
+    overall: {
+      totalScore,
+      grade,
+    },
+  };
+};
+
 router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const profileId = req.user?.profileId;
@@ -87,264 +348,78 @@ router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
     const evaluationCycleId = req.query.evaluationCycleId
       ? Number(req.query.evaluationCycleId)
       : undefined;
-    let startDate =
+    const defaultStart =
       parseDate(req.query.startDate) || new Date(new Date().getFullYear(), 0, 1);
-    let endDate = parseDate(req.query.endDate) || new Date();
+    const defaultEnd = parseDate(req.query.endDate) || new Date();
 
-    const profile = await prisma.profile.findUnique({
-      where: { id: profileId },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        positionTitle: true,
-        financialTarget: true,
-        utilizationTarget: true,
-        departmentId: true,
-      },
-    });
+    const period = await resolvePeriod(evaluationCycleId, defaultStart, defaultEnd);
+    const result = await calculateAndStoreScore(profileId, evaluationCycleId, period);
 
-    if (!profile) {
-      return res.status(404).json(errorResponse("Profile not found", 404));
-    }
-
-    if (evaluationCycleId) {
-      const cycle = await prisma.evaluationCycle.findUnique({
-        where: { id: evaluationCycleId },
-        select: { startDate: true, endDate: true },
-      });
-      if (cycle?.startDate) {
-        startDate = cycle.startDate;
-      }
-      if (cycle?.endDate) {
-        endDate = cycle.endDate;
-      }
-    }
-
-    const allocations = await prisma.revenueAllocation.findMany({
-      where: {
-        employeeProfileId: profileId,
-        allocationMonth: { gte: startDate, lte: endDate },
-      },
-      select: {
-        allocatedAmount: true,
-        employeeProfit: true,
-        employeeLoss: true,
-      },
-    });
-
-    const revenue = allocations.reduce(
-      (sum, item) => sum + Number(item.allocatedAmount || 0),
-      0
-    );
-    const profit = allocations.reduce(
-      (sum, item) => sum + Number(item.employeeProfit || 0),
-      0
-    );
-    const loss = allocations.reduce(
-      (sum, item) => sum + Number(item.employeeLoss || 0),
-      0
-    );
-    const netProfit = profit - loss;
-
-    const billableHoursAgg = await prisma.timeEntry.aggregate({
-      where: {
-        employeeProfileId: profileId,
-        billable: true,
-        dateWorked: { gte: startDate, lte: endDate },
-      },
-      _sum: { hours: true },
-    });
-
-    const allocatedHoursAgg = await prisma.jobTimeAllocation.aggregate({
-      where: { employeeProfileId: profileId },
-      _sum: { allocatedHours: true },
-    });
-
-    const billableHours = Number(billableHoursAgg._sum.hours || 0);
-    const allocatedHours = Number(allocatedHoursAgg._sum.allocatedHours || 0);
-    const utilizationRate = allocatedHours > 0 ? billableHours / allocatedHours : 0;
-
-    const utilizationTargetRaw = Number(profile.utilizationTarget || 0.75);
-    const utilizationTarget =
-      utilizationTargetRaw > 1 ? utilizationTargetRaw / 100 : utilizationTargetRaw;
-
-    const revenueTarget = Number(profile.financialTarget || 0);
-
-    const revenueScore =
-      revenueTarget > 0 ? clamp((revenue / revenueTarget) * 100) : 0;
-    const profitMargin = revenue > 0 ? netProfit / revenue : 0;
-    const profitScore = clamp(profitMargin * 100);
-    const utilizationScore =
-      utilizationTarget > 0 ? clamp((utilizationRate / utilizationTarget) * 100) : 0;
-
-    let financialWeighted = clamp(
-      revenueScore * 0.5 + profitScore * 0.3 + utilizationScore * 0.2
-    );
-
-    const definition = await getScoringConfig(profile.departmentId, evaluationCycleId);
-    const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
-    const nonFinancialWeight = normalizeWeightValue(
-      scoringConfig.nonFinancialWeight,
-      0.3
-    );
-    const financialWeight = normalizeWeightValue(scoringConfig.financialWeight, 0.7);
-
-    const weightConfig = {
-      learningGrowthWeight: normalizeWeightValue(
-        scoringConfig?.nonFinancialBreakdown?.learningGrowth,
-        0.35
-      ),
-      customerWeight: normalizeWeightValue(
-        scoringConfig?.nonFinancialBreakdown?.customer,
-        0.35
-      ),
-      internalWeight: normalizeWeightValue(
-        scoringConfig?.nonFinancialBreakdown?.internal,
-        0.3
-      ),
-      evaluationWeight: normalizeWeightValue(
-        scoringConfig?.learningGrowthBreakdown?.evaluation,
-        0.5
-      ),
-      okrWeight: normalizeWeightValue(
-        scoringConfig?.learningGrowthBreakdown?.okr,
-        0.3
-      ),
-      feedbackWeight: normalizeWeightValue(
-        scoringConfig?.learningGrowthBreakdown?.feedback,
-        0.2
-      ),
-    };
-
-    const nonFinancialScores = await nonFinancialPerformanceService.calculateNonFinancialScores(
-      profileId,
-      undefined,
-      startDate,
-      endDate,
-      weightConfig
-    );
-
-      const nonFinancialWeighted = clamp(nonFinancialScores.overallNonFinancialScore);
-    const lossPenaltyPercent = normalizeWeightValue(
-      scoringConfig?.lossPenaltyPercent,
-      0
-    );
-    const profitabilityPenaltyApplied = netProfit < 0 ? lossPenaltyPercent : 0;
-    if (profitabilityPenaltyApplied > 0) {
-      financialWeighted = clamp(financialWeighted * (1 - profitabilityPenaltyApplied));
-    }
-    const totalScore = clamp(
-      financialWeighted * financialWeight + nonFinancialWeighted * nonFinancialWeight
-    );
-    const grade = gradeFromScore(totalScore);
-
-    const period = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-    const existing = await prisma.performanceScore.findFirst({
-      where: {
-        employeeProfileId: profileId,
-        evaluationCycleId: evaluationCycleId ?? null,
-        period,
-      },
-      orderBy: { calculatedAt: "desc" },
-    });
-
-    const scorePayload = {
-      revenueScore,
-      profitScore,
-      utilizationScore,
-      financialWeighted,
-      evaluationScore: 0,
-      kpiScore: 0,
-      clientRatingScore: nonFinancialScores.customerSatisfactionScore,
-      nonFinancialWeighted,
-      totalScore,
-      grade,
-      scoreBreakdown: {
-        revenue,
-        profit,
-        loss,
-        netProfit,
-        profitMargin,
-        profitabilityPenaltyApplied,
-        lossAlert: netProfit < 0,
-        billableHours,
-        allocatedHours,
-        utilizationRate,
-        revenueTarget,
-        utilizationTarget,
-        okrScore: nonFinancialScores.okrScore,
-        evaluationDefinitionId: definition?.id ?? null,
-        scoringConfig,
-        financialWeight,
-        nonFinancialWeight,
-        periodStart: startDate.toISOString(),
-        periodEnd: endDate.toISOString(),
-      },
-    };
-
-    if (existing) {
-      await prisma.performanceScore.update({
-        where: { id: existing.id },
-        data: scorePayload,
-      });
-    } else {
-      await prisma.performanceScore.create({
-        data: {
-          employeeProfileId: profileId,
-          evaluationCycleId: evaluationCycleId ?? null,
-          period,
-          ...scorePayload,
-        },
-      });
-    }
-
-    return res.json(
-      successResponse(
-        {
-          profile,
-          period: { startDate, endDate },
-          financial: {
-            revenue,
-            profit,
-            loss,
-            netProfit,
-            billableHours,
-            allocatedHours,
-            utilizationRate,
-            revenueScore,
-            profitScore,
-            utilizationScore,
-            financialWeighted,
-          },
-          nonFinancial: {
-            learningGrowthScore: nonFinancialScores.learningGrowthScore,
-            customerSatisfactionScore: nonFinancialScores.customerSatisfactionScore,
-            internalProcessesScore: nonFinancialScores.internalProcessesScore,
-            okrScore: nonFinancialScores.okrScore,
-            feedbackScore: nonFinancialScores.feedbackScore,
-            overallNonFinancialScore: nonFinancialScores.overallNonFinancialScore,
-            weights: {
-              learningGrowthWeight: weightConfig.learningGrowthWeight,
-              customerWeight: weightConfig.customerWeight,
-              internalWeight: weightConfig.internalWeight,
-              evaluationWeight: weightConfig.evaluationWeight,
-              okrWeight: weightConfig.okrWeight,
-              feedbackWeight: weightConfig.feedbackWeight,
-            },
-          },
-          overall: {
-            totalScore,
-            grade,
-          },
-        },
-        "Performance score calculated"
-      )
-    );
+    return res.json(successResponse(result, "Performance score calculated"));
   } catch (error: any) {
     console.error("Error calculating performance score:", error);
     return res.status(500).json(errorResponse("Failed to calculate performance score", 500));
   }
 });
+
+router.post(
+  "/recalculate",
+  authMiddleware,
+  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  async (req: AuthRequest, res) => {
+    try {
+      const evaluationCycleId = req.body?.evaluationCycleId
+        ? Number(req.body.evaluationCycleId)
+        : undefined;
+      const defaultStart =
+        parseDate(req.body?.startDate) || new Date(new Date().getFullYear(), 0, 1);
+      const defaultEnd = parseDate(req.body?.endDate) || new Date();
+      const period = await resolvePeriod(evaluationCycleId, defaultStart, defaultEnd);
+
+      const profileIds = Array.isArray(req.body?.profileIds)
+        ? req.body.profileIds.map((id: any) => Number(id)).filter((id: number) => id > 0)
+        : [];
+
+      const targets =
+        profileIds.length > 0
+          ? profileIds
+          : (
+              await prisma.profile.findMany({
+                where: { status: "active" },
+                select: { id: true },
+              })
+            ).map((profile) => profile.id);
+
+      const results = [];
+      for (const id of targets) {
+        try {
+          const data = await calculateAndStoreScore(id, evaluationCycleId, period);
+          results.push({
+            profileId: id,
+            success: true,
+            totalScore: data.overall.totalScore,
+            grade: data.overall.grade,
+          });
+        } catch (err: any) {
+          results.push({
+            profileId: id,
+            success: false,
+            error: err?.message || "Failed to recalculate",
+          });
+        }
+      }
+
+      return res.json(
+        successResponse(
+          { count: results.length, results, period },
+          "Performance scores recalculated"
+        )
+      );
+    } catch (error: any) {
+      console.error("Error recalculating performance scores:", error);
+      return res.status(500).json(errorResponse("Failed to recalculate scores", 500));
+    }
+  }
+);
 
 export default router;

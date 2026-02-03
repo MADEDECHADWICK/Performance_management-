@@ -7,6 +7,7 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import jobService from "../services/jobs.service";
 import { notifyJobCreation, notifyJobCompletion } from "../services/notificationRecipients";
+import { createClientSurveyForJobCompletion } from "../services/surveyRouting.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class JobController {
@@ -182,6 +183,7 @@ export class JobController {
       const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth);
       if (status === "completed") {
         await notifyJobCompletion(updatedJob, req);
+        await createClientSurveyForJobCompletion(jobId, req);
       }
 
       res.json(successResponse(updatedJob, "Job status updated"));

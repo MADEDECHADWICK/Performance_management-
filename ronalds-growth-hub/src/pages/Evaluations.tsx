@@ -36,14 +36,18 @@ interface EvaluationSummary {
 
 interface Assignment {
   id: string;
-  evaluation_type: string;
+  evaluatorType?: string;
+  evaluation_type?: string;
   status: string;
-  submitted_at: string | null;
-  due_date: string | null;
-  ad_hoc_evaluation?: {
+  submittedAt?: string | null;
+  submitted_at?: string | null;
+  dueDate?: string | null;
+  due_date?: string | null;
+  definition?: {
     id: string;
     name: string;
-    due_date: string | null;
+    dueDate?: string | null;
+    due_date?: string | null;
   };
   evaluatee?: {
     first_name: string;
@@ -181,13 +185,9 @@ export default function Evaluations() {
       );
 
       // Load ad-hoc assignments (if your backend doesn't support this yet, it may 404 — that's OK for now)
-      const adHocAssignments = await apiFetch<any[]>(
-        'GET', `/evaluation_assignments?evaluator_id=${user.id}&evaluation_type=adhoc&include=ad_hoc_evaluations`
-      );
-
       // Load assignments with full details (may require backend work)
       const assignmentsData = await apiFetch<any[]>(
-        'GET', `/evaluation_assignments?evaluator_id=${user.id}&include=ad_hoc_evaluations,evaluatee_profile&order=created_at.desc`
+        'GET', `/evaluation_assignments?evaluatorProfileId=${user.id}&include=definition,evaluatee`
       );
 
       setAssignments(assignmentsData || []);
@@ -211,9 +211,9 @@ export default function Evaluations() {
           score: selfEval ? calculateManagerScore(selfEval) : undefined,
         },
         adHoc: {
-          completed: (adHocAssignments || []).every((a: any) => a.status === "completed"),
-          count: adHocAssignments?.length || 0,
-          pending: (adHocAssignments || []).filter((a: any) => a.status !== "completed").length,
+          completed: (assignmentsData || []).every((a: any) => a.status === "completed"),
+          count: assignmentsData?.length || 0,
+          pending: (assignmentsData || []).filter((a: any) => a.status !== "completed").length,
         },
       };
 
@@ -229,7 +229,7 @@ export default function Evaluations() {
         selfEval,
         peerEvals,
         upwardEval,
-        adHocAssignments,
+        adHocAssignments: assignmentsData,
         cycle,
       });
     } catch (error: any) {
@@ -681,13 +681,14 @@ export default function Evaluations() {
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {pendingAssignments.map((assignment) => {
-                    const overdue = assignment.due_date && isOverdue(assignment.due_date);
+                    const dueDate = assignment.dueDate ?? assignment.due_date ?? assignment.definition?.dueDate ?? assignment.definition?.due_date ?? null;
+                    const overdue = dueDate && isOverdue(dueDate);
 
                     return (
                       <Card key={assignment.id} className={overdue ? "border-destructive" : ""}>
                         <CardHeader>
                           <CardTitle className="text-lg flex items-center justify-between">
-                            <span className="truncate">{assignment.ad_hoc_evaluation?.name || "Evaluation"}</span>
+                            <span className="truncate">{assignment.definition?.name || "Evaluation"}</span>
                             {getStatusBadge(assignment.status)}
                           </CardTitle>
                         </CardHeader>
@@ -695,7 +696,7 @@ export default function Evaluations() {
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2">
                               <span className="text-muted-foreground">Type:</span>
-                              <Badge variant="outline">{getTypeLabel(assignment.evaluation_type)}</Badge>
+                              <Badge variant="outline">{getTypeLabel(assignment.evaluatorType || assignment.evaluation_type || "")}</Badge>
                             </div>
                             <div className="flex items-center gap-2">
                               <Users className="h-4 w-4 text-muted-foreground" />
@@ -704,11 +705,11 @@ export default function Evaluations() {
                                 {assignment.evaluatee?.first_name} {assignment.evaluatee?.last_name}
                               </span>
                             </div>
-                            {assignment.due_date && (
+                            {dueDate && (
                               <div className={`flex items-center gap-2 ${overdue ? "text-destructive font-semibold" : ""}`}>
                                 <Calendar className="h-4 w-4" />
                                 <span className="text-muted-foreground">Due:</span>
-                                <span>{format(new Date(assignment.due_date), "MMM dd, yyyy")}</span>
+                                <span>{format(new Date(dueDate), "MMM dd, yyyy")}</span>
                                 {overdue && <AlertCircle className="h-4 w-4 ml-1" />}
                               </div>
                             )}
@@ -754,7 +755,7 @@ export default function Evaluations() {
                       <Card key={assignment.id} className="opacity-75">
                         <CardHeader>
                           <CardTitle className="text-lg flex items-center justify-between">
-                            <span className="truncate">{assignment.ad_hoc_evaluation?.name || "Evaluation"}</span>
+                            <span className="truncate">{assignment.definition?.name || "Evaluation"}</span>
                             {getStatusBadge(assignment.status)}
                           </CardTitle>
                         </CardHeader>
@@ -762,7 +763,7 @@ export default function Evaluations() {
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center gap-2">
                               <span className="text-muted-foreground">Type:</span>
-                              <Badge variant="outline">{getTypeLabel(assignment.evaluation_type)}</Badge>
+                              <Badge variant="outline">{getTypeLabel(assignment.evaluatorType || assignment.evaluation_type || "")}</Badge>
                             </div>
                             <div className="flex items-center gap-2">
                               <Users className="h-4 w-4 text-muted-foreground" />
@@ -771,10 +772,12 @@ export default function Evaluations() {
                                 {assignment.evaluatee?.first_name} {assignment.evaluatee?.last_name}
                               </span>
                             </div>
-                            {assignment.submitted_at && (
+                            {(assignment.submittedAt || assignment.submitted_at) && (
                               <div className="flex items-center gap-2 text-green-600">
                                 <CheckCircle2 className="h-4 w-4" />
-                                <span>Completed {format(new Date(assignment.submitted_at), "MMM dd, yyyy")}</span>
+                                <span>
+                                  Completed {format(new Date(assignment.submittedAt || assignment.submitted_at || ""), "MMM dd, yyyy")}
+                                </span>
                               </div>
                             )}
                           </div>

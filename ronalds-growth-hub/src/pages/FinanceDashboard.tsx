@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
 import { BarChart3, DollarSign, TrendingUp, AlertCircle, FileSpreadsheet, ArrowUpRight } from "lucide-react";
 import {
@@ -95,7 +94,7 @@ type RevenueAllocation = {
 };
 
 export default function FinanceDashboard() {
-  const { toast } = useToast();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<FinanceOverview | null>(null);
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -129,7 +128,15 @@ export default function FinanceDashboard() {
       if (allocationsResult.status === "fulfilled") setAllocations(allocationsResult.value);
     } catch (error: any) {
       console.error("Finance dashboard error:", error);
-      setOverviewError(error.message || "Finance data unavailable");
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 404) {
+        setOverviewError(null);
+      } else {
+        setOverviewError(error.message || "Finance data unavailable");
+      }
       setOverview((prev) =>
         prev ?? {
           month: new Date().toISOString(),
@@ -142,11 +149,11 @@ export default function FinanceDashboard() {
           collectionRate: 0,
         }
       );
-      toast({
-        title: "Error",
-        description: error.message || "Failed to load finance dashboard",
-        variant: "destructive",
-      });
+      setCollections([]);
+      setProjections([]);
+      setClientBalances([]);
+      setJobProfitability([]);
+      setAllocations([]);
     } finally {
       setLoading(false);
     }
@@ -217,11 +224,11 @@ export default function FinanceDashboard() {
         </div>
 
         {overviewError && (
-          <Card className="border-destructive/50 bg-destructive/5">
+          <Card className="border-dashed bg-muted/30">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-destructive">
+              <CardTitle className="flex items-center gap-2">
                 <AlertCircle className="h-5 w-5" />
-                Finance data unavailable
+                Finance data not available yet
               </CardTitle>
             </CardHeader>
             <CardContent>

@@ -58,6 +58,12 @@ enum OnboardingStatus {
   completed
 }
 
+enum OffboardingStatus {
+  initiated
+  in_progress
+  completed
+}
+
 enum RecruitmentStage {
   applied
   shortlisted
@@ -531,6 +537,8 @@ model Profile {
 
   notifications Notification[]
 
+  notificationTemplatesCreated NotificationTemplate[] @relation("NotificationTemplateCreatedBy")
+
   tasksAssigned Task[] @relation("TaskAssignee")
 
   feedbackGiven    Feedback[] @relation("FeedbackGiver")
@@ -539,6 +547,10 @@ model Profile {
   recruitmentCandidatesCreated RecruitmentCandidate[]   @relation("CandidateCreatedBy")
   onboardingCasesAsEmployee    EmployeeOnboardingCase[] @relation("OnboardingEmployee")
   onboardingCasesAsHROwner     EmployeeOnboardingCase[] @relation("OnboardingHROwner")
+
+  offboardingCasesAsEmployee    EmployeeOffboardingCase[] @relation("OffboardingEmployee")
+  offboardingCasesAsHROwner     EmployeeOffboardingCase[] @relation("OffboardingHROwner")
+  offboardingItemsCompleted     OffboardingChecklistItem[] @relation("OffboardingItemCompletedBy")
 
   inductionChecklistsAsEmployee InductionChecklist[] @relation("InductionChecklistEmployee")
   inductionChecklistsAsAssigner InductionChecklist[] @relation("InductionChecklistAssigner")
@@ -644,6 +656,48 @@ model EmployeeOnboardingCase {
   inductionChecklist InductionChecklist?
 
   @@map("employee_onboarding_cases")
+}
+
+model EmployeeOffboardingCase {
+  id        Int              @id @default(autoincrement())
+  profileId Int?             @unique @map("profile_id")
+  hrOwnerProfileId Int?      @map("hr_owner_profile_id")
+  status    OffboardingStatus @default(initiated)
+  reason    String?          @map("reason")
+  initiatedAt DateTime       @default(now()) @map("initiated_at")
+  completedAt DateTime?      @map("completed_at")
+  notes     String?
+
+  employee  Profile? @relation("OffboardingEmployee", fields: [profileId], references: [id], onDelete: SetNull)
+  hrOwner   Profile? @relation("OffboardingHROwner", fields: [hrOwnerProfileId], references: [id], onDelete: SetNull)
+  items     OffboardingChecklistItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("employee_offboarding_cases")
+}
+
+model OffboardingChecklistItem {
+  id               Int      @id @default(autoincrement())
+  offboardingCaseId Int     @map("offboarding_case_id")
+  itemName         String   @map("item_name")
+  description      String?
+  orderIndex       Int      @default(0) @map("order_index")
+  requiresDocument Boolean  @default(false) @map("requires_document")
+  documentId       Int?     @map("document_id")
+  isCompleted      Boolean  @default(false) @map("is_completed")
+  completedByProfileId Int? @map("completed_by_profile_id")
+  completedAt      DateTime? @map("completed_at")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  offboardingCase EmployeeOffboardingCase @relation(fields: [offboardingCaseId], references: [id], onDelete: Cascade)
+  completedBy     Profile? @relation("OffboardingItemCompletedBy", fields: [completedByProfileId], references: [id], onDelete: SetNull)
+  document        Document? @relation("OffboardingItemDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([offboardingCaseId])
+  @@map("offboarding_checklist_items")
 }
 
 model InductionChecklist {
@@ -775,6 +829,7 @@ model Document {
 
   candidateOfferLetters RecruitmentCandidate[]   @relation("CandidateOfferLetter")
   checklistItemDocs     InductionChecklistItem[] @relation("ChecklistItemDocument")
+  offboardingItemDocs   OffboardingChecklistItem[] @relation("OffboardingItemDocument")
 
   @@index([entityType, entityId])
   @@index([documentType])
@@ -1844,6 +1899,26 @@ model Notification {
   @@index([profileId, isRead])
   @@index([createdAt])
   @@map("notifications")
+}
+
+model NotificationTemplate {
+  id        Int @id @default(autoincrement())
+  label     String
+  title     String
+  message   String
+  type      NotificationType @default(info)
+
+  actionRequired Boolean @default(false) @map("action_required")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdByProfileId Int? @map("created_by_profile_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  createdBy Profile? @relation("NotificationTemplateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+  @@map("notification_templates")
 }
 
 model StatusTransition {

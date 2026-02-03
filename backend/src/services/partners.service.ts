@@ -302,6 +302,11 @@ export class PartnerService {
       select: { jobId: true, paymentAmount: true },
     });
 
+    const surveys = await prisma.clientSatisfactionSurvey.findMany({
+      where: { jobId: { in: jobIds } },
+      select: { overallSatisfaction: true, completedAt: true },
+    });
+
     const allocationByJob = new Map<number, { revenue: number; profit: number }>();
     allocations.forEach((allocation) => {
       const current = allocationByJob.get(allocation.jobId) || { revenue: 0, profit: 0 };
@@ -324,6 +329,8 @@ export class PartnerService {
     const uniqueTeamMembers = new Set<number>();
     let totalRevenueCollected = 0;
     let totalProfit = 0;
+    let totalCost = 0;
+    let totalFee = 0;
     let efficiencySum = 0;
     let efficiencyCount = 0;
     let marginSum = 0;
@@ -339,10 +346,13 @@ export class PartnerService {
         .reduce((sum, entry) => sum + Number(entry.hours), 0);
       const allocationTotals = allocationByJob.get(job.id);
       const paymentTotal = paymentsByJob.get(job.id) || 0;
-      const amountCollected = allocationTotals ? allocationTotals.revenue : paymentTotal;
-      const profit = allocationTotals
-        ? allocationTotals.profit
-        : job.timeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0);
+      const feeAmount = Number(job.fixedFeeAmount || 0);
+      const amountCollected = paymentTotal;
+      const costAmount = job.timeEntries.reduce(
+        (sum, entry) => sum + Number(entry.costAmount || 0),
+        0
+      );
+      const profit = amountCollected - costAmount;
 
       const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
       const margin = amountCollected > 0 ? (profit / amountCollected) * 100 : 0;
@@ -358,6 +368,8 @@ export class PartnerService {
 
       totalRevenueCollected += amountCollected;
       totalProfit += profit;
+      totalCost += costAmount;
+      totalFee += feeAmount;
 
       return {
         jobId: job.id,
@@ -365,10 +377,12 @@ export class PartnerService {
         jobName: job.jobName,
         title: job.jobName,
         status: job.status,
+        feeAmount,
         estimatedHours,
         actualHours,
         billableHours,
         amountCollected,
+        costAmount,
         profit,
         efficiencyRatio: efficiency,
         marginPercentage: margin,
@@ -378,6 +392,15 @@ export class PartnerService {
     const activeJobs = jobs.filter((job) => ['planned', 'in_progress', 'on_hold'].includes(job.status)).length;
     const completedJobs = jobs.filter((job) => job.status === 'completed').length;
 
+    const completedSurveys = surveys.filter((survey) => survey.completedAt).length;
+    const totalSurveys = surveys.length;
+    const avgOverallSatisfaction =
+      surveys.length > 0
+        ? surveys.reduce((sum, survey) => sum + Number(survey.overallSatisfaction || 0), 0) /
+          surveys.length
+        : 0;
+    const responseRate = totalSurveys > 0 ? (completedSurveys / totalSurveys) * 100 : 0;
+
     return {
       portfolio: {
         totalJobs: jobs.length,
@@ -385,12 +408,157 @@ export class PartnerService {
         completedJobs,
         totalRevenueCollected,
         totalProfit,
+        totalCost,
+        totalFee,
         averageEfficiency: efficiencyCount > 0 ? efficiencySum / efficiencyCount : 0,
         averageMargin: marginCount > 0 ? marginSum / marginCount : 0,
         totalTeamSize: uniqueTeamMembers.size,
       },
+      clientFeedback: {
+        totalSurveys,
+        completedSurveys,
+        responseRate,
+        avgOverallSatisfaction,
+      },
       topJobs: topJobs.slice(0, 5),
       pendingTimeEntriesCount,
+    };
+  }
+
+  /**
+   * Allocation audit for partner portfolio (collections vs allocations)
+   */
+  static async getPartnerAllocationAudit(partnerId: number, auth: AuthContext) {
+    const partner = await prisma.profile.findUnique({
+      where: { id: partnerId },
+      select: { id: true },
+    });
+
+    if (!partner) {
+      throw {
+        statusCode: 404,
+        message: 'Partner not found',
+      };
+    }
+
+    const canView =
+      auth.roleName === 'admin' ||
+      auth.roleName === 'manager' ||
+      auth.roleName === 'hr' ||
+      auth.roleName === 'hr_manager' ||
+      auth.profileId === partnerId;
+
+    if (!canView) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to view this partner allocations',
+      };
+    }
+
+    const jobs = await prisma.job.findMany({
+      where: { partnerProfileId: partnerId },
+      select: {
+        id: true,
+        jobName: true,
+        jobCode: true,
+        client: { select: { clientName: true } },
+      },
+    });
+
+    const jobIds = jobs.map((job) => job.id);
+    if (jobIds.length === 0) {
+      return {
+        totals: {
+          collectedAmount: 0,
+          allocatedAmount: 0,
+          totalProfit: 0,
+          totalLoss: 0,
+        },
+        allocations: [],
+        jobBalances: [],
+      };
+    }
+
+    const [allocations, payments] = await Promise.all([
+      prisma.revenueAllocation.findMany({
+        where: { jobId: { in: jobIds } },
+        include: {
+          job: { select: { jobName: true, jobCode: true } },
+          employee: { select: { firstName: true, lastName: true } },
+          clientPayment: {
+            include: { client: { select: { clientName: true } } },
+          },
+        },
+        orderBy: { calculatedAt: 'desc' },
+        take: 100,
+      }),
+      prisma.clientPayment.findMany({
+        where: { jobId: { in: jobIds } },
+        select: { jobId: true, paymentAmount: true },
+      }),
+    ]);
+
+    const paymentsByJob = new Map<number, number>();
+    payments.forEach((payment) => {
+      if (!payment.jobId) return;
+      const current = paymentsByJob.get(payment.jobId) || 0;
+      paymentsByJob.set(payment.jobId, current + Number(payment.paymentAmount));
+    });
+
+    const allocationsByJob = new Map<number, { allocated: number; profit: number; loss: number }>();
+    allocations.forEach((allocation) => {
+      const current = allocationsByJob.get(allocation.jobId) || { allocated: 0, profit: 0, loss: 0 };
+      current.allocated += Number(allocation.allocatedAmount || 0);
+      current.profit += Number(allocation.employeeProfit || 0);
+      current.loss += Number(allocation.employeeLoss || 0);
+      allocationsByJob.set(allocation.jobId, current);
+    });
+
+    const jobBalances = jobs.map((job) => {
+      const collectedAmount = paymentsByJob.get(job.id) || 0;
+      const allocationTotals = allocationsByJob.get(job.id) || { allocated: 0, profit: 0, loss: 0 };
+      const unallocatedAmount = Math.max(0, collectedAmount - allocationTotals.allocated);
+
+      return {
+        jobId: job.id,
+        jobName: job.jobName,
+        jobCode: job.jobCode,
+        clientName: job.client?.clientName ?? '',
+        collectedAmount,
+        allocatedAmount: allocationTotals.allocated,
+        unallocatedAmount,
+        totalProfit: allocationTotals.profit,
+        totalLoss: allocationTotals.loss,
+      };
+    });
+
+    const totals = jobBalances.reduce(
+      (acc, job) => ({
+        collectedAmount: acc.collectedAmount + job.collectedAmount,
+        allocatedAmount: acc.allocatedAmount + job.allocatedAmount,
+        totalProfit: acc.totalProfit + job.totalProfit,
+        totalLoss: acc.totalLoss + job.totalLoss,
+      }),
+      { collectedAmount: 0, allocatedAmount: 0, totalProfit: 0, totalLoss: 0 }
+    );
+
+    return {
+      totals,
+      allocations: allocations.map((allocation) => ({
+        id: allocation.id,
+        jobId: allocation.jobId,
+        jobName: allocation.job.jobName,
+        jobCode: allocation.job.jobCode,
+        clientName: allocation.clientPayment.client.clientName,
+        employeeName: `${allocation.employee.firstName} ${allocation.employee.lastName}`.trim(),
+        allocatedAmount: Number(allocation.allocatedAmount || 0),
+        allocationPercentage: Number(allocation.allocationPercentage || 0),
+        allocationMonth: allocation.allocationMonth,
+        employeeProfit: Number(allocation.employeeProfit || 0),
+        employeeLoss: Number(allocation.employeeLoss || 0),
+        calculatedAt: allocation.calculatedAt,
+      })),
+      jobBalances,
     };
   }
 }

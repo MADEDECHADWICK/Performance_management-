@@ -44,6 +44,7 @@ interface PerformanceData {
   };
   nonFinancial: {
     learningGrowthScore: number;
+    okrScore?: number;
     customerSatisfactionScore: number;
     internalProcessesScore: number;
     feedbackScore?: number;
@@ -80,8 +81,28 @@ const Scorecard = () => {
       );
       setIsAdmin(isAdminRole);
 
-      const performanceResponse = await apiFetch('GET', '/performance-scores/me');
+      const [performanceResponse, analyticsResponse] = await Promise.all([
+        apiFetch('GET', '/performance-scores/me'),
+        apiFetch('GET', '/analytics/financial').catch(() => null),
+      ]);
+
       const payload = performanceResponse?.data ?? performanceResponse;
+      const analyticsPayload = analyticsResponse?.data ?? analyticsResponse ?? {};
+
+      if (payload?.financial && analyticsPayload?.allocatedRevenueTotal !== undefined) {
+        const allocatedRevenueTotal = Number(analyticsPayload.allocatedRevenueTotal || 0);
+        const profitTotal = Number(analyticsPayload.profitTotal || 0);
+        const lossTotal = Number(analyticsPayload.lossTotal || 0);
+
+        payload.financial = {
+          ...payload.financial,
+          revenue: allocatedRevenueTotal,
+          profit: profitTotal,
+          loss: lossTotal,
+          netProfit: profitTotal - lossTotal,
+        };
+      }
+
       setPerformanceData(payload);
       setUserProfile(payload?.profile || user.profile || null);
 
@@ -136,6 +157,7 @@ const Scorecard = () => {
     },
     nonFinancial: {
       learningGrowthScore: 0,
+      okrScore: 0,
       customerSatisfactionScore: 0,
       internalProcessesScore: 0,
       feedbackScore: 0,
@@ -316,6 +338,10 @@ const Scorecard = () => {
                   <span className="font-medium">{data.nonFinancial.learningGrowthScore}%</span>
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-muted-foreground">OKR Progress:</span>
+                  <span className="font-medium">{data.nonFinancial.okrScore ?? 0}%</span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-muted-foreground">Project Evaluations:</span>
                   <span className="font-medium">{data.nonFinancial.projectEvaluationScore ?? 0}%</span>
                 </div>
@@ -355,6 +381,9 @@ const Scorecard = () => {
                   </div>
                   <div className="text-right">
                     <div className="text-2xl font-bold text-primary">{data.nonFinancial.learningGrowthScore}%</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      OKR Progress: {data.nonFinancial.okrScore ?? 0}%
+                    </div>
                   </div>
                 </div>
                 <Progress value={data.nonFinancial.learningGrowthScore} className="h-2" />

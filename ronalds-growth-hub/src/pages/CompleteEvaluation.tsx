@@ -49,15 +49,30 @@ export default function CompleteEvaluation() {
       if (assignmentData.responses && typeof assignmentData.responses === 'object') {
         setResponses(assignmentData.responses as Record<string, { score: number; comment: string }>);
       }
-      if (assignmentData.evidence_urls && Array.isArray(assignmentData.evidence_urls)) {
-        setUploadedEvidence(assignmentData.evidence_urls as string[]);
+      const existingEvidence =
+        assignmentData.evidenceUrls ??
+        assignmentData.evidence_urls ??
+        [];
+      if (Array.isArray(existingEvidence)) {
+        setUploadedEvidence(existingEvidence as string[]);
       }
-      if (assignmentData.evaluator_comments && typeof assignmentData.evaluator_comments === 'string') {
-        setGeneralComments(assignmentData.evaluator_comments);
+      const existingComments =
+        assignmentData.evaluatorComments ??
+        assignmentData.evaluator_comments ??
+        "";
+      if (typeof existingComments === "string") {
+        setGeneralComments(existingComments);
       }
 
       // Load KPIs
-      const kpiData = await apiFetch("GET", `/evaluation_result_areas?ad_hoc_evaluation_id=${assignmentData.ad_hoc_evaluation?.id}`);
+      const definitionId = assignmentData.definition?.id ?? null;
+      let kpiData: any[] = [];
+      if (definitionId) {
+        kpiData = await apiFetch(
+          "GET",
+          `/evaluation_result_areas?ad_hoc_evaluation_id=${definitionId}`
+        );
+      }
       setKpis(kpiData || []);
 
       // Initialize responses for all KPIs
@@ -162,7 +177,9 @@ export default function CompleteEvaluation() {
   const handleSubmit = async () => {
     // Validate all KPIs have scores
     const allScored = kpis.every(kpi => responses[kpi.kpi.id]?.score > 0);
-    if (!allScored && assignment.ad_hoc_evaluation.require_all_kpis) {
+      const requireAll =
+      assignment?.definition?.scoringConfig?.requireAllKpis ?? false;
+    if (!allScored && requireAll) {
       toast({ title: "Please rate all competencies", variant: "destructive" });
       return;
     }
@@ -242,7 +259,7 @@ export default function CompleteEvaluation() {
     <DashboardLayout>
       <div className="space-y-6 max-w-4xl mx-auto">
         <div>
-          <h1 className="text-3xl font-bold">{assignment.ad_hoc_evaluation.name}</h1>
+          <h1 className="text-3xl font-bold">{assignment.definition?.name || "Evaluation"}</h1>
           <p className="text-muted-foreground">
             Evaluating: {assignment.evaluatee?.first_name || "Unknown"} {assignment.evaluatee?.last_name || "Employee"} - {assignment.evaluatee?.position || "N/A"}
           </p>

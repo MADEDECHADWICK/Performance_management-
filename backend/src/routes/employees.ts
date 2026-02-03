@@ -2,6 +2,7 @@ import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware } from "../middleware/auth";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
+import { hrOrAdmin } from "../utils/middleware";
 
 const router = Router();
 
@@ -105,6 +106,37 @@ router.get("/managers/list", authMiddleware, async (_req, res) => {
   } catch (error: any) {
     console.error("Error fetching managers:", error);
     res.status(500).json(errorResponse("Failed to fetch managers", 500));
+  }
+});
+
+// GET /employees/missing-induction - HR/Admin missing induction checklist list
+router.get("/missing-induction", ...hrOrAdmin(), async (_req, res) => {
+  try {
+    const employees = await prisma.profile.findMany({
+      where: {
+        status: "active",
+        OR: [
+          { onboardingChecklistCompleted: false },
+          { inductionCompleted: false },
+        ],
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        onboardingChecklistCompleted: true,
+        inductionCompleted: true,
+        onboardingStatus: true,
+        department: { select: { id: true, name: true } },
+        user: { select: { email: true } },
+      },
+      orderBy: { lastName: "asc" },
+    });
+
+    res.json(successResponse(employees, "Employees missing induction checklist"));
+  } catch (error: any) {
+    console.error("Error fetching missing induction checklists:", error);
+    res.status(500).json(errorResponse("Failed to fetch missing induction checklists", 500));
   }
 });
 

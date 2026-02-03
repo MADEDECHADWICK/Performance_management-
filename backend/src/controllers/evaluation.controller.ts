@@ -3,8 +3,9 @@
  */
 
 import { Response } from "express";
+import { EvaluationAssignmentStatus } from "@prisma/client";
 import { AuthRequest } from "../middleware/auth";
-import { EvaluationService } from "../services/evaluation.service";
+import { EvaluationService } from "../services/evaluations.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class EvaluationController {
@@ -16,7 +17,9 @@ export class EvaluationController {
     try {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
-      const status = (req.query.status as string) || undefined;
+      const status = req.query.status
+        ? (req.query.status as EvaluationAssignmentStatus)
+        : undefined;
       const type = (req.query.type as string) || undefined;
       const cycleId = req.query.cycleId ? Number(req.query.cycleId) : undefined;
 

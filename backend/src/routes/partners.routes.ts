@@ -6,6 +6,7 @@ import {
   createPartnerValidators,
   getPartnerJobsValidators,
   getPartnerRevenueValidators,
+  getPartnerAllocationsValidators,
 } from "../validators/partner.validators";
 
 const router = Router();
@@ -24,6 +25,18 @@ router.get(
   "/dashboard-summary",
   withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
   PartnerController.getPartnerDashboardSummary
+);
+
+/**
+ * GET /partners/allocations
+ * Partner allocations audit (collections vs allocations)
+ */
+router.get(
+  "/allocations",
+  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  validateRequest(getPartnerAllocationsValidators),
+  handleValidationErrors,
+  PartnerController.getPartnerAllocations
 );
 
 /**

@@ -34,8 +34,10 @@ export const uploadDocumentValidators = [
 
   body("entityType")
     .isString()
-    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate"])
-    .withMessage("EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate"),
+    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate", "Proposal"])
+    .withMessage(
+      "EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate, Proposal"
+    ),
 
   body("entityId")
     .isInt({ min: 1 })
@@ -69,8 +71,10 @@ export const uploadDocumentFileValidators = [
 
   body("entityType")
     .isString()
-    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate"])
-    .withMessage("EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate"),
+    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate", "Proposal"])
+    .withMessage(
+      "EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate, Proposal"
+    ),
 
   body("entityId")
     .isInt({ min: 1 })

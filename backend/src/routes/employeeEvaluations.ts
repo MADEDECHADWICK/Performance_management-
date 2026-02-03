@@ -15,11 +15,16 @@ router.get('/', async (req, res) => {
       ids = (employee_ids as string).split(',').map(id => parseInt(id.trim()));
     }
 
-    const evaluations = await prisma.employeeEvaluation.findMany({
-      where: ids.length > 0 ? { employee_id: { in: ids } } : undefined,
+    const evaluations = await prisma.evaluationAssignment.findMany({
+      where: ids.length > 0 ? { evaluateeProfileId: { in: ids } } : undefined,
       include: {
-        employee: true,
-        evaluationCycle: true,
+        evaluatee: true,
+        evaluator: true,
+        definition: {
+          include: {
+            cycle: true,
+          },
+        },
       },
     });
     return res.json(evaluations);
@@ -33,11 +38,16 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const evaluation = await prisma.employeeEvaluation.findUnique({
+    const evaluation = await prisma.evaluationAssignment.findUnique({
       where: { id: parseInt(id) },
       include: {
-        employee: true,
-        evaluationCycle: true,
+        evaluatee: true,
+        evaluator: true,
+        definition: {
+          include: {
+            cycle: true,
+          },
+        },
       },
     });
     if (!evaluation) {

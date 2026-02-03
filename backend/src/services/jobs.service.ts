@@ -12,7 +12,9 @@
  */
 
 import prisma from '../prisma';
-import NotificationService from './notifications.service';
+import { NotificationService } from './notifications.service';
+import { createAudit } from '../utils/audit';
+import { JobStatus } from '@prisma/client';
 
 export interface JobCreateInput {
   jobName: string;
@@ -45,7 +47,7 @@ export interface JobCreateFromOnboardingInput {
 export interface JobUpdateInput {
   jobName?: string;
   description?: string;
-  status?: string;
+  status?: JobStatus;
   dueDate?: Date;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
   billingType?: 'hourly' | 'fixed_fee';
@@ -206,6 +208,65 @@ class JobService {
       });
     }
 
+    const notificationPayload = {
+      title: `Job created: ${job.jobName}`,
+      message: `A new job has been created for ${job.client?.clientName || 'a client'}.`,
+      actionRequired: true,
+      jobId: job.id,
+      link: `/jobs/${job.id}`,
+    };
+
+    const recipients: number[] = [];
+
+    if (job.managerProfileId) recipients.push(job.managerProfileId);
+    if (job.partnerProfileId) recipients.push(job.partnerProfileId);
+
+    const financeProfiles = await prisma.profile.findMany({
+      where: {
+        user: {
+          roles: {
+            some: {
+              role: { name: { in: ['finance', 'finance_manager'] } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    const gmpProfiles = await prisma.profile.findMany({
+      where: {
+        user: {
+          roles: {
+            some: {
+              role: { name: { in: ['gmp', 'group_managing_partner'] } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    financeProfiles.forEach((profile) => recipients.push(profile.id));
+    gmpProfiles.forEach((profile) => recipients.push(profile.id));
+
+    await Promise.all(
+      Array.from(new Set(recipients)).map((recipientProfileId) =>
+        NotificationService.createNotification(
+          {
+            recipientProfileId,
+            type: 'info',
+            ...notificationPayload,
+          },
+          {
+            userId: authContext.userId,
+            profileId: authContext.profileId,
+            roleName: authContext.roles?.[0],
+          }
+        )
+      )
+    );
+
     return job;
   }
 
@@ -313,6 +374,65 @@ class JobService {
 
       return created;
     });
+
+    const notificationPayload = {
+      title: `Job created: ${job.jobName}`,
+      message: `A new job has been created for ${job.client?.clientName || 'a client'}.`,
+      actionRequired: true,
+      jobId: job.id,
+      link: `/jobs/${job.id}`,
+    };
+
+    const recipients: number[] = [];
+
+    if (job.managerProfileId) recipients.push(job.managerProfileId);
+    if (job.partnerProfileId) recipients.push(job.partnerProfileId);
+
+    const financeProfiles = await prisma.profile.findMany({
+      where: {
+        user: {
+          roles: {
+            some: {
+              role: { name: { in: ['finance', 'finance_manager'] } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    const gmpProfiles = await prisma.profile.findMany({
+      where: {
+        user: {
+          roles: {
+            some: {
+              role: { name: { in: ['gmp', 'group_managing_partner'] } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    financeProfiles.forEach((profile) => recipients.push(profile.id));
+    gmpProfiles.forEach((profile) => recipients.push(profile.id));
+
+    await Promise.all(
+      Array.from(new Set(recipients)).map((recipientProfileId) =>
+        NotificationService.createNotification(
+          {
+            recipientProfileId,
+            type: 'info',
+            ...notificationPayload,
+          },
+          {
+            userId: authContext.userId,
+            profileId: authContext.profileId,
+            roleName: authContext.roles?.[0],
+          }
+        )
+      )
+    );
 
     return job;
   }
@@ -430,12 +550,12 @@ class JobService {
       where: { id: jobId },
       include: {
         client: { select: { id: true, clientName: true } },
-        manager: { select: { id: true, firstName: true, lastName: true, email: true } },
-        partner: { select: { id: true, firstName: true, lastName: true, email: true } },
+        manager: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
+        partner: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
         department: { select: { id: true, name: true } },
         staffing: include?.includes('staffing') ? {
           include: {
-            employee: { select: { id: true, firstName: true, lastName: true, email: true } },
+            employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
             role: { select: { id: true, name: true } },
           },
         } : false,
@@ -507,14 +627,14 @@ class JobService {
    */
   async updateJobStatus(
     jobId: number,
-    status: string,
+    status: JobStatus,
     reason?: string,
     authContext?: AuthContext
   ) {
     const job = await this.getJobById(jobId);
 
     // Validate status transition
-    const validTransitions: Record<string, string[]> = {
+    const validTransitions: Record<JobStatus, JobStatus[]> = {
       planned: ['in_progress', 'cancelled'],
       in_progress: ['on_hold', 'completed', 'cancelled'],
       on_hold: ['in_progress', 'cancelled'],
@@ -522,7 +642,7 @@ class JobService {
       cancelled: [],
     };
 
-    if (!validTransitions[job.status as string]?.includes(status)) {
+    if (!validTransitions[job.status]?.includes(status)) {
       throw new Error(`Cannot transition from ${job.status} to ${status}`);
     }
 
@@ -538,12 +658,13 @@ class JobService {
     // Record status transition
     await prisma.statusTransition.create({
       data: {
+        entityType: 'Job',
+        entityId: jobId,
         jobId,
         fromStatus: job.status,
         toStatus: status,
         reason: reason || null,
         changedByProfileId: authContext?.profileId!,
-        changedAt: new Date(),
       },
     });
 
@@ -579,7 +700,7 @@ class JobService {
           NotificationService.createNotification(
             {
               recipientProfileId: profile.id,
-              type: 'alert',
+              type: 'warning',
               title: 'Procurement gap on job start',
               message: `Job "${job.jobName}" moved to in-progress without full staffing/costing.`,
               actionRequired: true,
@@ -589,7 +710,7 @@ class JobService {
             {
               userId: authContext?.userId ?? 0,
               profileId: authContext?.profileId ?? 0,
-              roleName: authContext?.roleName ?? 'system',
+              roleName: authContext?.roles?.[0] ?? 'system',
             }
           )
         )
@@ -705,6 +826,23 @@ class JobService {
       });
     }
 
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: assignment.employeeProfileId,
+        type: 'action',
+        title: `Assigned to job: ${job.jobName}`,
+        message: 'You have been added to a new job. Review the details and start tracking time when ready.',
+        actionRequired: true,
+        jobId: job.id,
+        link: `/jobs/${job.id}`,
+      },
+      {
+        userId: authContext.userId,
+        profileId: authContext.profileId,
+        roleName: authContext.roles?.[0],
+      }
+    );
+
     return assignment;
   }
 
@@ -784,7 +922,7 @@ class JobService {
         await NotificationService.createNotification(
           {
             recipientProfileId: job.managerProfileId,
-            type: 'alert',
+            type: 'warning',
             title: 'Job costing exceeds fee cap',
             message: `Allocated cost (${totalEstimatedCost.toFixed(2)}) exceeds allowed budget (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
             actionRequired: true,
@@ -794,7 +932,25 @@ class JobService {
           {
             userId: authContext.userId,
             profileId: authContext.profileId,
-            roleName: authContext.roleName,
+            roleName: authContext.roles?.[0],
+          }
+        );
+      }
+      if (job.partnerProfileId) {
+        await NotificationService.createNotification(
+          {
+            recipientProfileId: job.partnerProfileId,
+            type: 'warning',
+            title: 'Job costing exceeds fee cap',
+            message: `Allocated cost (${totalEstimatedCost.toFixed(2)}) exceeds allowed budget (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
+            actionRequired: true,
+            jobId: job.id,
+            link: `/workload-management?jobId=${job.id}`,
+          },
+          {
+            userId: authContext.userId,
+            profileId: authContext.profileId,
+            roleName: authContext.roles?.[0],
           }
         );
       }
@@ -867,8 +1023,23 @@ class JobService {
       });
     });
 
-    return result;
-  }
+      await createAudit({
+        action: `job_costing_updated:job_${jobId}`,
+        entity_type: 'job',
+        entity_id: jobId,
+        user_id: authContext.userId,
+        metadata: {
+          jobId,
+          totalEstimatedHours,
+          totalEstimatedCost,
+          jobFee,
+          allowOverage,
+          maxOveragePercent,
+        },
+      });
+
+      return result;
+    }
 
   /**
    * Get job staff assignments
@@ -882,7 +1053,7 @@ class JobService {
             id: true,
             firstName: true,
             lastName: true,
-            email: true,
+            user: { select: { email: true } },
             isPartner: true,
           },
         },
@@ -976,7 +1147,9 @@ class JobService {
     const totalCost = timeEntryResult._sum.costAmount || 0;
     const totalProfitLoss = timeEntryResult._sum.profitLoss || 0;
 
-    const marginPercent = totalRevenue > 0 ? (totalProfitLoss / totalRevenue) * 100 : 0;
+    const revenueNumber = Number(totalRevenue);
+    const profitNumber = Number(totalProfitLoss);
+    const marginPercent = revenueNumber > 0 ? (profitNumber / revenueNumber) * 100 : 0;
 
     return {
       jobId,
@@ -1061,7 +1234,7 @@ class JobService {
     const allocations = await prisma.revenueAllocation.findMany({
       where: { jobId },
       include: {
-        employee: { select: { id: true, firstName: true, lastName: true, email: true } },
+        employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
       },
     });
 

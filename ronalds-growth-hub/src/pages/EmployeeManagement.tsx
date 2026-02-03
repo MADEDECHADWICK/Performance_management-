@@ -13,9 +13,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield } from "lucide-react";
+import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { rolesAPI, employeeRolesAPI } from "@/integrations/apiClient";
+import documentsAPI from "@/lib/api/documents";
 
 interface Employee {
   id: string;
@@ -58,6 +59,99 @@ interface Role {
   createdAt: string;
 }
 
+interface OnboardingCase {
+  id: number;
+  profileId?: number;
+  candidateId?: number;
+  status: string;
+  startDate?: string;
+  dueDate?: string;
+  employee?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+    user?: { email: string };
+  };
+  candidate?: {
+    id: number;
+    fullName: string;
+    stage: string;
+  };
+  inductionChecklist?: {
+    id: number;
+    status: string;
+    completionPercent: number;
+  };
+}
+
+interface ChecklistDocument {
+  id: number;
+  fileName?: string | null;
+  filePath?: string | null;
+}
+
+interface InductionChecklistItem {
+  id: number;
+  itemName: string;
+  description?: string | null;
+  isCompleted: boolean;
+  requiresDocument: boolean;
+  documentId?: number | null;
+  document?: ChecklistDocument | null;
+}
+
+interface InductionChecklistDetail {
+  id: number;
+  checklistName?: string | null;
+  status?: string | null;
+  completionPercent?: number | null;
+  dueDate?: string | null;
+  items?: InductionChecklistItem[];
+}
+
+interface OffboardingCase {
+  id: number;
+  profileId?: number;
+  status: "initiated" | "in_progress" | "completed";
+  reason?: string;
+  employee?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+    user?: { email: string };
+  };
+  candidate?: {
+    id: number;
+    fullName: string;
+  };
+  initiatedAt?: string;
+  completedAt?: string;
+  _count?: {
+    items?: number;
+  };
+}
+
+const formatShortDate = (value?: string) => {
+  if (!value) return "--";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "--";
+  return parsed.toLocaleDateString();
+};
+
+const statusBadgeVariant = (status?: string) => {
+  if (!status) return "secondary";
+  if (status === "completed") return "default";
+  if (status === "in_progress") return "outline";
+  return "secondary";
+};
+
+const isChecklistOverdue = (caseItem: OnboardingCase) => {
+  if (!caseItem.dueDate || caseItem.status === "completed") return false;
+  const due = new Date(caseItem.dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  return due.getTime() < Date.now();
+};
+
 const EmployeeManagement = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -98,6 +192,40 @@ const EmployeeManagement = () => {
     permissions: [] as string[],
     is_active: true,
   });
+
+  const [onboardingCases, setOnboardingCases] = useState<OnboardingCase[]>([]);
+  const [offboardingCases, setOffboardingCases] = useState<OffboardingCase[]>([]);
+  const [lifecycleLoading, setLifecycleLoading] = useState(false);
+  const [onboardingFilter, setOnboardingFilter] = useState<"all" | "pending" | "missing">("all");
+  const [checklistDialogOpen, setChecklistDialogOpen] = useState(false);
+  const [checklistEmployeeId, setChecklistEmployeeId] = useState<string>("");
+  const [checklistItemsText, setChecklistItemsText] = useState(
+    "Provide ID documents\nComplete induction briefing\nAccept company policies"
+  );
+  const [checklistDueDate, setChecklistDueDate] = useState("");
+  const [bulkChecklistDialogOpen, setBulkChecklistDialogOpen] = useState(false);
+  const [bulkChecklistDueDate, setBulkChecklistDueDate] = useState("");
+  const [checklistViewOpen, setChecklistViewOpen] = useState(false);
+  const [activeChecklist, setActiveChecklist] = useState<InductionChecklistDetail | null>(null);
+  const [checklistViewLoading, setChecklistViewLoading] = useState(false);
+  const [checklistUploadBusy, setChecklistUploadBusy] = useState<number | null>(null);
+  const [offboardingDialogOpen, setOffboardingDialogOpen] = useState(false);
+  const [remindingChecklistId, setRemindingChecklistId] = useState<number | null>(null);
+  const [offboardingEmployeeId, setOffboardingEmployeeId] = useState<string>("");
+  const [offboardingReason, setOffboardingReason] = useState("");
+  const [offboardingTasksDialogOpen, setOffboardingTasksDialogOpen] = useState(false);
+  const [activeOffboardingCaseId, setActiveOffboardingCaseId] = useState<number | null>(null);
+  const [offboardingTasks, setOffboardingTasks] = useState<any[]>([]);
+  const [newOffboardingTaskName, setNewOffboardingTaskName] = useState("");
+  const [newOffboardingTaskDescription, setNewOffboardingTaskDescription] = useState("");
+  const [newOffboardingTaskRequiresDoc, setNewOffboardingTaskRequiresDoc] = useState(false);
+  const [attachDocDialogOpen, setAttachDocDialogOpen] = useState(false);
+  const [attachTaskId, setAttachTaskId] = useState<number | null>(null);
+  const [attachFileName, setAttachFileName] = useState("");
+  const [attachFile, setAttachFile] = useState<File | null>(null);
+
+  const [dueDateEdits, setDueDateEdits] = useState<Record<number, string>>({});
+  const [savingDueDateId, setSavingDueDateId] = useState<number | null>(null);
   
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -140,7 +268,18 @@ const EmployeeManagement = () => {
       } catch (roleError) {
         console.warn("Failed to load roles:", roleError);
       }
+
+      await loadLifecycleData();
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setEmployees([]);
+        setDepartments([]);
+        return;
+      }
       toast({
         title: "Error loading data",
         description: error.message,
@@ -148,6 +287,185 @@ const EmployeeManagement = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadLifecycleData = async () => {
+    try {
+      setLifecycleLoading(true);
+      const [onboardingData, offboardingData] = await Promise.all([
+        apiFetch("GET", "/onboarding"),
+        apiFetch("GET", "/offboarding"),
+      ]);
+      setOnboardingCases(onboardingData?.data || onboardingData || []);
+      setOffboardingCases(offboardingData?.data || offboardingData || []);
+    } catch (error: any) {
+      console.warn("Failed to load lifecycle data:", error);
+    } finally {
+      setLifecycleLoading(false);
+    }
+  };
+
+  const filteredOnboardingCases = onboardingCases.filter((caseItem) => {
+    if (onboardingFilter === "pending") {
+      return caseItem.status === "pending" || caseItem.status === "in_progress";
+    }
+    if (onboardingFilter === "missing") {
+      return !caseItem.inductionChecklist;
+    }
+    return true;
+  });
+
+  const handleUpdateDueDate = async (caseId: number) => {
+    const dueDate = dueDateEdits[caseId];
+    if (!dueDate) {
+      toast({
+        title: "Due date required",
+        description: "Pick a due date before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setSavingDueDateId(caseId);
+      await apiFetch("PATCH", `/onboarding/${caseId}`, { dueDate });
+      toast({ title: "Due date updated" });
+      await loadLifecycleData();
+    } catch (error: any) {
+      toast({
+        title: "Failed to update due date",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingDueDateId(null);
+    }
+  };
+
+  const handleSendChecklistReminder = async (checklistId: number) => {
+    try {
+      setRemindingChecklistId(checklistId);
+      await apiFetch("POST", `/induction-checklist/${checklistId}/remind`);
+      toast({
+        title: "Reminder sent",
+        description: "The employee has been notified to complete the checklist.",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Failed to send reminder",
+        description: error.message || "Unable to send reminder.",
+      });
+    } finally {
+      setRemindingChecklistId(null);
+    }
+  };
+
+  const openChecklistDetails = async (checklistId: number) => {
+    try {
+      setChecklistViewLoading(true);
+      setChecklistViewOpen(true);
+      const response = await apiFetch("GET", `/induction-checklist/${checklistId}`);
+      const data = (response as any)?.data ?? response;
+      setActiveChecklist(data);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Unable to load checklist",
+        description: error.message || "Please try again.",
+      });
+      setChecklistViewOpen(false);
+    } finally {
+      setChecklistViewLoading(false);
+    }
+  };
+
+  const attachChecklistDocument = async (checklistId: number, itemId: number, file: File) => {
+    try {
+      setChecklistUploadBusy(itemId);
+      const upload = await documentsAPI.uploadFile(file, {
+        documentType: "onboarding_checklist",
+        entityType: "InductionChecklist",
+        entityId: checklistId,
+        accessLevel: "hr",
+        isRequired: true,
+        description: "Onboarding checklist evidence",
+      });
+
+      const documentId = (upload as any)?.data?.id ?? (upload as any)?.id;
+      if (!documentId) {
+        throw new Error("Upload succeeded but document id was missing.");
+      }
+
+      await apiFetch("PATCH", `/induction-checklist/${checklistId}/items/${itemId}/document`, {
+        documentId,
+      });
+
+      const refreshed = await apiFetch("GET", `/induction-checklist/${checklistId}`);
+      setActiveChecklist((refreshed as any)?.data ?? refreshed);
+      toast({ title: "Document attached" });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Attach failed",
+        description: error.message || "Unable to attach document.",
+      });
+    } finally {
+      setChecklistUploadBusy(null);
+    }
+  };
+
+  const handleBulkAssignChecklist = async () => {
+    const items = checklistItemsText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (items.length === 0) {
+      toast({
+        title: "Checklist items required",
+        description: "Add at least one checklist item.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const targetProfiles = filteredOnboardingCases
+      .filter((caseItem) => !caseItem.inductionChecklist && caseItem.profileId)
+      .map((caseItem) => caseItem.profileId as number);
+
+    if (targetProfiles.length === 0) {
+      toast({
+        title: "No eligible employees",
+        description: "There are no onboarding cases ready for checklist assignment.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await Promise.all(
+        targetProfiles.map((profileId) =>
+          apiFetch("POST", "/induction-checklist", {
+            employeeProfileId: profileId,
+            dueDate: bulkChecklistDueDate || undefined,
+            items: items.map((itemName) => ({ itemName })),
+          })
+        )
+      );
+      toast({
+        title: "Checklist assigned",
+        description: `Assigned to ${targetProfiles.length} employees.`,
+      });
+      setBulkChecklistDialogOpen(false);
+      await loadLifecycleData();
+    } catch (error: any) {
+      toast({
+        title: "Bulk assignment failed",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -317,6 +635,227 @@ const EmployeeManagement = () => {
     setEmployeeDialogOpen(true);
   };
 
+  const handleOpenChecklistDialog = (employeeId?: string) => {
+    setChecklistEmployeeId(employeeId || "");
+    setChecklistDialogOpen(true);
+  };
+
+  const handleAssignChecklist = async () => {
+    if (!checklistEmployeeId) {
+      toast({
+        title: "Select employee",
+        description: "Choose an employee for the checklist.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const items = checklistItemsText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((itemName) => ({ itemName }));
+    if (items.length === 0) {
+      toast({
+        title: "Checklist items required",
+        description: "Add at least one checklist item.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await apiFetch("POST", "/induction-checklist", {
+        employeeProfileId: Number(checklistEmployeeId),
+        dueDate: checklistDueDate || undefined,
+        items,
+      });
+      toast({
+        title: "Checklist assigned",
+        description: "Onboarding checklist created successfully.",
+      });
+      setChecklistDialogOpen(false);
+      setChecklistDueDate("");
+      await loadLifecycleData();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to assign checklist",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleOpenOffboardingDialog = (employeeId?: string) => {
+    setOffboardingEmployeeId(employeeId || "");
+    setOffboardingReason("");
+    setOffboardingDialogOpen(true);
+  };
+
+  const handleCreateOffboarding = async () => {
+    if (!offboardingEmployeeId) {
+      toast({
+        title: "Select employee",
+        description: "Choose an employee to offboard.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await apiFetch("POST", "/offboarding", {
+        profileId: Number(offboardingEmployeeId),
+        reason: offboardingReason || undefined,
+      });
+      toast({
+        title: "Offboarding initiated",
+        description: "Offboarding case created.",
+      });
+      setOffboardingDialogOpen(false);
+      await loadLifecycleData();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to initiate offboarding",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleUpdateOffboardingStatus = async (
+    caseId: number,
+    status: OffboardingCase["status"]
+  ) => {
+    try {
+      await apiFetch("PATCH", `/offboarding/${caseId}`, { status });
+      toast({
+        title: "Offboarding updated",
+        description: `Status set to ${status.replace("_", " ")}`,
+      });
+      await loadLifecycleData();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update offboarding",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openOffboardingTasks = async (caseId: number) => {
+    try {
+      setActiveOffboardingCaseId(caseId);
+      setOffboardingTasksDialogOpen(true);
+      const response = await apiFetch("GET", `/offboarding/${caseId}/items`);
+      const items = response?.data ?? response ?? [];
+      setOffboardingTasks(Array.isArray(items) ? items : []);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to load offboarding tasks",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleAddOffboardingTask = async () => {
+    if (!activeOffboardingCaseId || !newOffboardingTaskName.trim()) {
+      toast({
+        title: "Task name required",
+        description: "Enter a task name to add.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const payload = {
+        items: [
+          {
+            itemName: newOffboardingTaskName.trim(),
+            description: newOffboardingTaskDescription.trim() || undefined,
+            requiresDocument: newOffboardingTaskRequiresDoc,
+          },
+        ],
+      };
+      const response = await apiFetch("POST", `/offboarding/${activeOffboardingCaseId}/items`, payload);
+      const items = response?.data ?? response ?? [];
+      setOffboardingTasks(Array.isArray(items) ? items : []);
+      setNewOffboardingTaskName("");
+      setNewOffboardingTaskDescription("");
+      setNewOffboardingTaskRequiresDoc(false);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to add task",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCompleteOffboardingTask = async (taskId: number) => {
+    if (!activeOffboardingCaseId) return;
+    try {
+      const response = await apiFetch(
+        "PATCH",
+        `/offboarding/${activeOffboardingCaseId}/items/${taskId}/complete`
+      );
+      const items = response?.data ?? response ?? [];
+      setOffboardingTasks(Array.isArray(items) ? items : []);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to complete task",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const openAttachDocument = (taskId: number) => {
+    setAttachTaskId(taskId);
+    setAttachFileName("");
+    setAttachFile(null);
+    setAttachDocDialogOpen(true);
+  };
+
+  const handleAttachDocument = async () => {
+    if (!activeOffboardingCaseId || !attachTaskId) return;
+    if (!attachFile) {
+      toast({
+        title: "Document details required",
+        description: "Select a file to attach.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const upload = await documentsAPI.uploadFile(attachFile, {
+        fileName: attachFileName.trim() || attachFile.name,
+        documentType: "offboarding_task",
+        entityType: "OffboardingChecklistItem",
+        entityId: attachTaskId,
+        accessLevel: "hr",
+        isRequired: true,
+        description: "Offboarding task document",
+      });
+      const documentId = (upload as any)?.id ?? (upload as any)?.data?.id;
+      if (!documentId) {
+        throw new Error("Upload succeeded but document id was missing.");
+      }
+
+      const response = await apiFetch("POST", `/offboarding/${activeOffboardingCaseId}/items/${attachTaskId}/document`, {
+        documentId,
+      });
+      const items = response?.data ?? response ?? [];
+      setOffboardingTasks(Array.isArray(items) ? items : []);
+      setAttachDocDialogOpen(false);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to attach document",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleSaveEmployee = async () => {
     if (!employeeForm.email || !employeeForm.first_name || !employeeForm.last_name) {
       toast({
@@ -469,6 +1008,10 @@ const EmployeeManagement = () => {
             <TabsTrigger value="roles" className="flex items-center gap-2">
               <Shield className="h-4 w-4" />
               Roles
+            </TabsTrigger>
+            <TabsTrigger value="lifecycle" className="flex items-center gap-2">
+              <ClipboardCheck className="h-4 w-4" />
+              Lifecycle
             </TabsTrigger>
           </TabsList>
 
@@ -769,6 +1312,298 @@ const EmployeeManagement = () => {
                 {roles.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No roles found. Create one to get started.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="lifecycle" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle>Onboarding Checklists</CardTitle>
+                    <CardDescription>Assign induction checklists per employee</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" onClick={() => setBulkChecklistDialogOpen(true)}>
+                      <ClipboardCheck className="h-4 w-4 mr-2" />
+                      Bulk Assign
+                    </Button>
+                    <Button onClick={() => handleOpenChecklistDialog()}>
+                      <ClipboardCheck className="h-4 w-4 mr-2" />
+                      Assign Checklist
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {lifecycleLoading ? (
+                  <div className="text-center py-6 text-muted-foreground">Loading onboarding cases...</div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>
+                        Pending: {onboardingCases.filter((c) => c.status === "pending").length}
+                      </span>
+                      <span>
+                        In Progress: {onboardingCases.filter((c) => c.status === "in_progress").length}
+                      </span>
+                      <span>
+                        Completed: {onboardingCases.filter((c) => c.status === "completed").length}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <Button
+                        type="button"
+                        variant={onboardingFilter === "all" ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setOnboardingFilter("all")}
+                      >
+                        All
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={onboardingFilter === "pending" ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setOnboardingFilter("pending")}
+                      >
+                        Pending only
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={onboardingFilter === "missing" ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setOnboardingFilter("missing")}
+                      >
+                        Missing checklist only
+                      </Button>
+                    </div>
+                    <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Employee/Candidate</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Checklist</TableHead>
+                          <TableHead>Due</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredOnboardingCases.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
+                              No onboarding cases yet.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredOnboardingCases.map((oc) => (
+                            <TableRow key={oc.id}>
+                              <TableCell>
+                                {oc.employee
+                                  ? `${oc.employee.firstName} ${oc.employee.lastName}`
+                                  : oc.candidate
+                                    ? `${oc.candidate.fullName} (Candidate)`
+                                    : "Unassigned"}
+                                {oc.candidate?.stage && (
+                                  <div className="text-xs text-muted-foreground">
+                                    Stage: {oc.candidate.stage.replace("_", " ")}
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={statusBadgeVariant(oc.status)}>
+                                  {oc.status.replace("_", " ")}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {oc.inductionChecklist ? (
+                                  <span className="text-sm text-muted-foreground">
+                                    {oc.inductionChecklist.status} ({Math.round(oc.inductionChecklist.completionPercent || 0)}%)
+                                  </span>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                                    <span>Not assigned</span>
+                                    {isChecklistOverdue(oc) && (
+                                      <Badge variant="destructive">Overdue</Badge>
+                                    )}
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="date"
+                                    value={dueDateEdits[oc.id] ?? (oc.dueDate ? oc.dueDate.split("T")[0] : "")}
+                                    onChange={(e) =>
+                                      setDueDateEdits((prev) => ({ ...prev, [oc.id]: e.target.value }))
+                                    }
+                                    className="h-8 w-40"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleUpdateDueDate(oc.id)}
+                                    disabled={savingDueDateId === oc.id}
+                                  >
+                                    {savingDueDateId === oc.id ? "Saving..." : "Save"}
+                                  </Button>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  {oc.inductionChecklist && oc.inductionChecklist.status !== "completed" && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      disabled={remindingChecklistId === oc.inductionChecklist.id}
+                                      onClick={() => handleSendChecklistReminder(oc.inductionChecklist.id)}
+                                    >
+                                      {remindingChecklistId === oc.inductionChecklist.id ? "Sending..." : "Send reminder"}
+                                    </Button>
+                                  )}
+                                  {oc.inductionChecklist && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => openChecklistDetails(oc.inductionChecklist!.id)}
+                                    >
+                                      View checklist
+                                    </Button>
+                                  )}
+                                  {!oc.inductionChecklist && oc.profileId && (
+                                    <Button variant="outline" size="sm" onClick={() => handleOpenChecklistDialog(String(oc.profileId))}>
+                                      Assign Checklist
+                                    </Button>
+                                  )}
+                                  {!oc.inductionChecklist && !oc.profileId && (
+                                    <Button variant="outline" size="sm" disabled>
+                                      Await profile
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Offboarding Workflow</CardTitle>
+                    <CardDescription>Track offboarding status (initiated to in progress to completed)</CardDescription>
+                  </div>
+                  <Button variant="outline" onClick={() => handleOpenOffboardingDialog()}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Initiate Offboarding
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {lifecycleLoading ? (
+                  <div className="text-center py-6 text-muted-foreground">Loading offboarding cases...</div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>
+                        Initiated: {offboardingCases.filter((c) => c.status === "initiated").length}
+                      </span>
+                      <span>
+                        In Progress: {offboardingCases.filter((c) => c.status === "in_progress").length}
+                      </span>
+                      <span>
+                        Completed: {offboardingCases.filter((c) => c.status === "completed").length}
+                      </span>
+                    </div>
+                    <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Reason</TableHead>
+                          <TableHead>Initiated</TableHead>
+                          <TableHead>Completed</TableHead>
+                          <TableHead>Tasks</TableHead>
+                          <TableHead className="text-right">Update</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {offboardingCases.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
+                              No offboarding cases yet.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          offboardingCases.map((oc) => (
+                            <TableRow key={oc.id}>
+                              <TableCell>
+                                {oc.employee
+                                  ? `${oc.employee.firstName} ${oc.employee.lastName}`
+                                  : oc.candidate
+                                    ? `${oc.candidate.fullName} (Candidate)`
+                                    : "Unassigned"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={statusBadgeVariant(oc.status)}>
+                                  {oc.status.replace("_", " ")}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {oc.reason || "--"}
+                              </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatShortDate(oc.initiatedAt)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {formatShortDate(oc.completedAt)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{oc._count?.items ?? 0}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openOffboardingTasks(oc.id)}
+                                  >
+                                    Tasks
+                                  </Button>
+                                  <Select
+                                    value={oc.status}
+                                    onValueChange={(value) =>
+                                      handleUpdateOffboardingStatus(oc.id, value as OffboardingCase["status"])
+                                    }
+                                  >
+                                    <SelectTrigger className="w-[160px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="initiated">Initiated</SelectItem>
+                                      <SelectItem value="in_progress">In Progress</SelectItem>
+                                      <SelectItem value="completed">Completed</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -1168,6 +2003,365 @@ const EmployeeManagement = () => {
                     ? "Update Role"
                     : "Create Role"}
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Assign Checklist Dialog */}
+        <Dialog open={bulkChecklistDialogOpen} onOpenChange={setBulkChecklistDialogOpen}>
+          <DialogContent className="sm:max-w-[600px]">
+            <DialogHeader>
+              <DialogTitle>Bulk Assign Onboarding Checklist</DialogTitle>
+              <DialogDescription>
+                Applies to onboarding cases in the current filter that are missing a checklist.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label>Checklist Items</Label>
+                <Textarea
+                  rows={6}
+                  value={checklistItemsText}
+                  onChange={(e) => setChecklistItemsText(e.target.value)}
+                  placeholder="Enter one checklist item per line"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Due date (optional)</Label>
+                <Input
+                  type="date"
+                  value={bulkChecklistDueDate}
+                  onChange={(e) => setBulkChecklistDueDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setBulkChecklistDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleBulkAssignChecklist}>Assign to Filtered</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Assign Checklist Dialog */}
+        <Dialog open={checklistDialogOpen} onOpenChange={setChecklistDialogOpen}>
+          <DialogContent className="sm:max-w-[600px]">
+            <DialogHeader>
+              <DialogTitle>Assign Onboarding Checklist</DialogTitle>
+              <DialogDescription>
+                Choose an employee and define checklist items (one per line).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label>Employee</Label>
+                <Select value={checklistEmployeeId} onValueChange={setChecklistEmployeeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((emp) => (
+                      <SelectItem key={emp.id} value={String(emp.id)}>
+                        {emp.first_name} {emp.last_name} ({emp.email})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Checklist Items</Label>
+                <Textarea
+                  rows={6}
+                  value={checklistItemsText}
+                  onChange={(e) => setChecklistItemsText(e.target.value)}
+                  placeholder="Enter one checklist item per line"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Due date (optional)</Label>
+                <Input
+                  type="date"
+                  value={checklistDueDate}
+                  onChange={(e) => setChecklistDueDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setChecklistDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleAssignChecklist}>Assign Checklist</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Checklist Details Dialog */}
+        <Dialog open={checklistViewOpen} onOpenChange={setChecklistViewOpen}>
+          <DialogContent className="sm:max-w-[700px]">
+            <DialogHeader>
+              <DialogTitle>Checklist Details</DialogTitle>
+              <DialogDescription>
+                Review checklist items, document evidence, and completion status.
+              </DialogDescription>
+            </DialogHeader>
+            {checklistViewLoading ? (
+              <div className="py-6 text-sm text-muted-foreground">Loading checklist...</div>
+            ) : !activeChecklist ? (
+              <div className="py-6 text-sm text-muted-foreground">Checklist not available.</div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">
+                    {activeChecklist.checklistName || "Induction Checklist"}
+                  </div>
+                  <Badge variant="secondary">
+                    {activeChecklist.status?.replace("_", " ") || "pending"}
+                  </Badge>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Completion: {Math.round(activeChecklist.completionPercent || 0)}%
+                  {activeChecklist.dueDate && (
+                    <> · Due {new Date(activeChecklist.dueDate).toLocaleDateString()}</>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  {(activeChecklist.items || []).map((item) => {
+                    const filePath = item.document?.filePath;
+                    const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+                    return (
+                      <div key={item.id} className="rounded-lg border border-border p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{item.itemName}</span>
+                              {item.requiresDocument && (
+                                <Badge variant="outline" className="text-xs">
+                                  Document required
+                                </Badge>
+                              )}
+                              {item.isCompleted && (
+                                <Badge variant="secondary" className="text-xs">
+                                  Completed
+                                </Badge>
+                              )}
+                            </div>
+                            {item.description && (
+                              <p className="text-xs text-muted-foreground">{item.description}</p>
+                            )}
+                            {filePath && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <FileText className="h-4 w-4 text-emerald-500" />
+                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                  <a href={`${baseUrl}${filePath}`} target="_blank" rel="noreferrer">
+                                    Preview
+                                  </a>
+                                </Button>
+                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                  <a href={`${baseUrl}${filePath}`} download>
+                                    Download
+                                  </a>
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {!item.documentId && item.requiresDocument && (
+                              <label className="inline-flex items-center">
+                                <input
+                                  type="file"
+                                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    if (file) {
+                                      attachChecklistDocument(activeChecklist.id, item.id, file);
+                                    }
+                                    event.currentTarget.value = "";
+                                  }}
+                                />
+                                <Button size="sm" variant="outline" asChild disabled={checklistUploadBusy === item.id}>
+                                  <span>
+                                    <Upload className="mr-2 h-4 w-4" />
+                                    {checklistUploadBusy === item.id ? "Uploading..." : "Attach"}
+                                  </span>
+                                </Button>
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Initiate Offboarding Dialog */}
+        <Dialog open={offboardingDialogOpen} onOpenChange={setOffboardingDialogOpen}>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Initiate Offboarding</DialogTitle>
+              <DialogDescription>
+                Select the employee and provide a reason for offboarding.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label>Employee</Label>
+                <Select value={offboardingEmployeeId} onValueChange={setOffboardingEmployeeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((emp) => (
+                      <SelectItem key={emp.id} value={String(emp.id)}>
+                        {emp.first_name} {emp.last_name} ({emp.email})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Reason (optional)</Label>
+                <Textarea
+                  rows={3}
+                  value={offboardingReason}
+                  onChange={(e) => setOffboardingReason(e.target.value)}
+                  placeholder="Reason for offboarding"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOffboardingDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreateOffboarding}>Initiate</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Offboarding Tasks Dialog */}
+        <Dialog open={offboardingTasksDialogOpen} onOpenChange={setOffboardingTasksDialogOpen}>
+          <DialogContent className="sm:max-w-[650px]">
+            <DialogHeader>
+              <DialogTitle>Offboarding Tasks</DialogTitle>
+              <DialogDescription>
+                Track handover, document collection, and other offboarding items.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid gap-2">
+                <Label>New Task</Label>
+                <Input
+                  value={newOffboardingTaskName}
+                  onChange={(e) => setNewOffboardingTaskName(e.target.value)}
+                  placeholder="e.g., Return laptop and access card"
+                />
+                <Textarea
+                  rows={2}
+                  value={newOffboardingTaskDescription}
+                  onChange={(e) => setNewOffboardingTaskDescription(e.target.value)}
+                  placeholder="Optional notes or handover details"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="offboarding-requires-doc"
+                    type="checkbox"
+                    checked={newOffboardingTaskRequiresDoc}
+                    onChange={(e) => setNewOffboardingTaskRequiresDoc(e.target.checked)}
+                  />
+                  <Label htmlFor="offboarding-requires-doc" className="font-normal">
+                    Requires document
+                  </Label>
+                </div>
+                <Button onClick={handleAddOffboardingTask} className="w-fit">
+                  Add Task
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                {offboardingTasks.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No offboarding tasks yet.</div>
+                ) : (
+                  offboardingTasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className="flex items-center justify-between rounded-lg border border-border p-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="font-medium">{task.itemName}</div>
+                        {task.description && (
+                          <div className="text-xs text-muted-foreground">{task.description}</div>
+                        )}
+                        {task.requiresDocument && (
+                          <Badge variant="outline" className="text-xs">
+                            Document required
+                          </Badge>
+                        )}
+                        {task.documentId && (
+                          <div className="text-xs text-muted-foreground">
+                            Document attached (ID {task.documentId})
+                          </div>
+                        )}
+                      </div>
+                      {task.isCompleted ? (
+                        <Badge variant="secondary">Completed</Badge>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" onClick={() => openAttachDocument(task.id)}>
+                            Attach document
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => handleCompleteOffboardingTask(task.id)}>
+                            Mark complete
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOffboardingTasksDialogOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Attach Document Dialog */}
+        <Dialog open={attachDocDialogOpen} onOpenChange={setAttachDocDialogOpen}>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Attach Document</DialogTitle>
+              <DialogDescription>Link a document to this offboarding task.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label>File Name (optional)</Label>
+                <Input
+                  value={attachFileName}
+                  onChange={(e) => setAttachFileName(e.target.value)}
+                  placeholder="e.g., handover-form.pdf"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Upload File</Label>
+                <Input
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xlsx,.png,.jpg"
+                  onChange={(e) => setAttachFile(e.target.files?.[0] ?? null)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAttachDocDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleAttachDocument}>Attach</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

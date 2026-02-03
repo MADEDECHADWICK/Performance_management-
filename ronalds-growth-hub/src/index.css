@@ -147,3 +147,15 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  /* Prevent large currency values inside cards from overflowing */
+  .bg-card .text-2xl,
+  .bg-card .text-3xl,
+  .bg-card .text-4xl {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

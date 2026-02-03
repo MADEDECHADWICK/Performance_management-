@@ -31,16 +31,11 @@ router.post('/gmp-login', async (req, res) => {
         profile: {
           include: {
             department: true,
-            role: true
-          }
+            role: true,
+          },
         },
-        roles: true,
-        partner: {
-          include: {
-            company: true
-          }
-        }
-      }
+        roles: { include: { role: true } },
+      },
     });
 
     if (!user) {
@@ -52,6 +47,13 @@ router.post('/gmp-login', async (req, res) => {
     }
 
     // Verify password with bcrypt
+    if (!user.password) {
+      return res.status(401).json({
+        message: 'Invalid credentials',
+        success: false,
+      });
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -63,9 +65,10 @@ router.post('/gmp-login', async (req, res) => {
     }
 
     // Check if user has GMP or admin privileges
-    const hasGMPPrivileges = user.roles.some(role => 
-      ['super_admin', 'group_managing_partner', 'admin'].includes(role.role)
-    ) || user.profile?.position === 'group_managing_partner';
+    const hasGMPPrivileges =
+      user.roles.some((role) =>
+        ['super_admin', 'group_managing_partner', 'admin', 'gmp'].includes(role.role.name)
+      ) || user.profile?.positionTitle?.toLowerCase().includes('group managing partner');
 
     if (!hasGMPPrivileges) {
       console.log('❌ Insufficient privileges for:', email);
@@ -80,11 +83,11 @@ router.post('/gmp-login', async (req, res) => {
       {
         userId: user.id,
         email: user.email,
-        name: user.name,
-        position: user.profile?.position || 'group_managing_partner',
-        roles: user.roles.map(r => r.role),
+        name: `${user.profile?.firstName ?? ''} ${user.profile?.lastName ?? ''}`.trim(),
+        position: user.profile?.positionTitle || 'group_managing_partner',
+        roles: user.roles.map(r => r.role.name),
         departmentId: user.profile?.departmentId,
-        isPartner: user.profile?.is_partner || true,
+        isPartner: user.profile?.isPartner || true,
         gmpAccess: true
       },
       JWT_SECRET,
@@ -94,9 +97,9 @@ router.post('/gmp-login', async (req, res) => {
     // Log successful login
     console.log('✅ GMP Login successful:', {
       email: user.email,
-      name: user.name,
-      position: user.profile?.position,
-      roles: user.roles.map(r => r.role)
+      name: `${user.profile?.firstName ?? ''} ${user.profile?.lastName ?? ''}`.trim(),
+      position: user.profile?.positionTitle,
+      roles: user.roles.map(r => r.role.name)
     });
 
     // Record login activity (audit log)
@@ -104,9 +107,9 @@ router.post('/gmp-login', async (req, res) => {
       data: {
         userId: user.id,
         action: 'GMP_LOGIN',
-        entity_type: 'USER',
-        entity_id: user.id.toString(),
-        details: {
+        entityType: 'USER',
+        entityId: user.id,
+        metadata: {
           email: user.email,
           timestamp: new Date(),
           userAgent: req.headers['user-agent'],
@@ -123,22 +126,17 @@ router.post('/gmp-login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        name: user.name,
+        name: `${user.profile?.firstName ?? ''} ${user.profile?.lastName ?? ''}`.trim(),
         profile: {
-          firstName: user.profile?.first_name,
-          lastName: user.profile?.last_name,
-          position: user.profile?.position,
-          employeeId: user.profile?.employee_id,
-          phone: user.profile?.phone,
+          firstName: user.profile?.firstName,
+          lastName: user.profile?.lastName,
+          position: user.profile?.positionTitle,
+          employeeId: user.profile?.employeeId,
+          phone: user.profile?.phoneNumber,
           department: user.profile?.department?.name,
-          isPartner: user.profile?.is_partner
+          isPartner: user.profile?.isPartner
         },
-        roles: user.roles.map(r => r.role),
-        partner: user.partner ? {
-          companyName: user.partner.company?.company_name,
-          commissionRate: user.partner.commission_rate,
-          groupName: user.partner.group_name
-        } : null,
+        roles: user.roles.map(r => r.role.name),
         permissions: {
           gmpAccess: true,
           adminAccess: true,
@@ -184,7 +182,7 @@ router.post('/gmp-reset-password', async (req, res) => {
     // Find user
     const user = await prisma.user.findUnique({
       where: { email },
-      include: { roles: true }
+      include: { roles: { include: { role: true } } }
     });
 
     if (!user) {
@@ -195,6 +193,13 @@ router.post('/gmp-reset-password', async (req, res) => {
     }
 
     // Verify current password
+    if (!user.password) {
+      return res.status(401).json({
+        message: 'Current password is incorrect',
+        success: false,
+      });
+    }
+
     const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
 
     if (!isCurrentPasswordValid) {
@@ -218,9 +223,9 @@ router.post('/gmp-reset-password', async (req, res) => {
       data: {
         userId: user.id,
         action: 'PASSWORD_CHANGE',
-        entity_type: 'USER',
-        entity_id: user.id.toString(),
-        details: {
+        entityType: 'USER',
+        entityId: user.id,
+        metadata: {
           email: user.email,
           timestamp: new Date(),
           userAgent: req.headers['user-agent'],
@@ -273,7 +278,7 @@ export const validateGMPToken = async (req: any, res: any, next: any) => {
     // Verify user still exists and has proper privileges
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      include: { roles: true, profile: true }
+      include: { roles: { include: { role: true } }, profile: true }
     });
 
     if (!user) {
@@ -284,9 +289,10 @@ export const validateGMPToken = async (req: any, res: any, next: any) => {
     }
 
     // Check if user still has GMP privileges
-    const hasGMPPrivileges = user.roles.some(role => 
-      ['super_admin', 'group_managing_partner', 'admin'].includes(role.role)
-    ) || user.profile?.position === 'group_managing_partner';
+    const hasGMPPrivileges =
+      user.roles.some((role) =>
+        ['super_admin', 'group_managing_partner', 'admin', 'gmp'].includes(role.role.name)
+      ) || user.profile?.positionTitle?.toLowerCase().includes('group managing partner');
 
     if (!hasGMPPrivileges) {
       return res.status(403).json({ 
@@ -329,18 +335,18 @@ router.get('/gmp-dashboard-data', validateGMPToken, async (req, res) => {
       prisma.client.count(),
       prisma.auditLog.findMany({
         take: 10,
-        orderBy: { timestamp: 'desc' },
-        include: { user: { select: { name: true, email: true } } }
+        orderBy: { createdAt: 'desc' },
+        include: { user: { select: { email: true } } }
       }),
       prisma.department.findMany({
         include: {
           _count: { select: { profiles: true } }
         }
       }),
-      prisma.clientEngagement.groupBy({
+      prisma.proposal.groupBy({
         by: ['status'],
-        _sum: { engagement_value: true },
-        _count: { id: true }
+        _sum: { proposedFee: true },
+        _count: { _all: true }
       })
     ]);
 
@@ -351,21 +357,21 @@ router.get('/gmp-dashboard-data', validateGMPToken, async (req, res) => {
         totalClients,
         activeEngagements: revenueData.length
       },
-      departments: departmentStats.map(dept => ({
+      departments: departmentStats.map((dept: any) => ({
         name: dept.name,
         employeeCount: dept._count.profiles,
         description: dept.description
       })),
-      recentActivities: recentActivities.map(activity => ({
+      recentActivities: recentActivities.map((activity: any) => ({
         action: activity.action,
-        user: activity.user?.name || 'System',
-        timestamp: activity.timestamp,
-        details: activity.details
+        user: activity.user?.email || 'System',
+        timestamp: activity.createdAt,
+        details: activity.metadata
       })),
-      revenue: revenueData.map(data => ({
+      revenue: revenueData.map((data: any) => ({
         status: data.status,
-        totalValue: data._sum.engagement_value || 0,
-        count: data._count.id
+        totalValue: data._sum.proposedFee || 0,
+        count: data._count._all
       }))
     };
 

@@ -204,6 +204,15 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
       include: {
         client: { select: { clientName: true } },
         department: { select: { name: true } },
+        jobCosting: {
+          select: {
+            id: true,
+            jobFee: true,
+            totalEstimatedCost: true,
+            totalEstimatedHours: true,
+            costingStatus: true,
+          },
+        },
         timeEntries: {
           where: { status: 'approved' },
           select: { hours: true, billableAmount: true, costAmount: true },
@@ -249,6 +258,10 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
         revenue,
         cost,
         budgetUtilization,
+        costingStatus: job.jobCosting?.costingStatus ?? 'missing',
+        costingFee: Number(job.jobCosting?.jobFee || 0),
+        costingEstimatedCost: Number(job.jobCosting?.totalEstimatedCost || 0),
+        costingEstimatedHours: Number(job.jobCosting?.totalEstimatedHours || 0),
         clientName: job.client?.clientName ?? 'Unassigned',
         departmentName: job.department?.name ?? null,
         startDate: job.startDate,
@@ -466,7 +479,7 @@ router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
           select: { id: true, firstName: true, lastName: true, positionTitle: true },
         },
         definition: {
-          select: { title: true },
+          select: { name: true },
         },
       },
       orderBy: { createdAt: 'asc' },

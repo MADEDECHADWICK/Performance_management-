@@ -82,8 +82,8 @@ router.post('/login', async (req, res) => {
     const jobRole = user.profile?.role ? {
       id: user.profile.role.id,
       name: user.profile.role.name,
-      billing_rate: user.profile.role.billing_rate,
-      permissions: user.profile.role.permissions,
+      billingRate: user.profile.role.billingRate,
+      defaultAccess: user.profile.role.defaultAccess,
     } : null;
     
     const secret = process.env.JWT_SECRET || 'change-me';
@@ -101,7 +101,7 @@ router.post('/login', async (req, res) => {
       user: { 
         id: user.id, 
         email: user.email, 
-        name: user.name,
+        name: user.profile ? `${user.profile.firstName} ${user.profile.lastName}`.trim() : undefined,
         roles: authRoles,
         authRoles,
         jobRole,
@@ -136,7 +136,7 @@ router.get('/debug-me', authMiddleware, async (req: AuthRequest, res) => {
       database_user: {
         id: user.id,
         email: user.email,
-        name: user.name,
+        name: user.profile ? `${user.profile.firstName} ${user.profile.lastName}`.trim() : undefined,
         roles_in_db: user.roles.map(r => r.role.name)
       }
     });
@@ -173,7 +173,7 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
     res.json({ 
       id: user.id, 
       email: user.email, 
-      name: user.name,
+      name: user.profile ? `${user.profile.firstName} ${user.profile.lastName}`.trim() : undefined,
       profileId: user.profile?.id,
       profile_id: user.profile?.id,
       profile: user.profile ?? null,
@@ -186,10 +186,10 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
         profile_id: partner.profileId,
         companyName: partner.company?.companyName,
         company_name: partner.company?.companyName,
-        groupName: partner.groupName,
-        group_name: partner.groupName,
         commissionRate: partner.commissionRate,
-        commission_rate: partner.commissionRate
+        commission_rate: partner.commissionRate,
+        performanceThreshold: partner.performanceThreshold,
+        performance_threshold: partner.performanceThreshold
       } : null
     });
   } catch (err: any) {

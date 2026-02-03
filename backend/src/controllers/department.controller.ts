@@ -4,7 +4,7 @@
 
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
-import { DepartmentService } from "../services/departments.service";
+import { departmentService } from "../services/departments.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class DepartmentController {
@@ -17,16 +17,7 @@ export class DepartmentController {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const result = await DepartmentService.listDepartments(
-        { page, pageSize },
-        auth
-      );
+      const result = await departmentService.listDepartments({ page, pageSize });
 
       res.json(paginatedResponse(result.departments, result.total, page, pageSize));
     } catch (error: any) {
@@ -45,10 +36,10 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      const department = await DepartmentService.createDepartment(req.body, auth);
+      const department = await departmentService.createDepartment(req.body, auth);
 
       res.status(201).json(
         successResponse(department, 'Department created successfully', 201)
@@ -68,13 +59,7 @@ export class DepartmentController {
     try {
       const departmentId = Number(req.params.departmentId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const department = await DepartmentService.getDepartment(departmentId, auth);
+      const department = await departmentService.getDepartment(departmentId);
 
       res.json(successResponse(department, 'Department retrieved'));
     } catch (error: any) {
@@ -95,10 +80,10 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      const department = await DepartmentService.updateDepartment(
+      const department = await departmentService.updateDepartment(
         departmentId,
         req.body,
         auth
@@ -123,10 +108,10 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      await DepartmentService.deleteDepartment(departmentId, auth);
+      await departmentService.deleteDepartment(departmentId, auth);
 
       res.json(successResponse(null, 'Department deleted successfully'));
     } catch (error: any) {
@@ -147,10 +132,10 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      const employees = await DepartmentService.getDepartmentEmployees(
+      const employees = await departmentService.getDepartmentEmployees(
         departmentId,
         auth
       );
@@ -174,15 +159,36 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      const manager = await DepartmentService.getDepartmentManager(
+      const manager = await departmentService.getDepartmentManager(
         departmentId,
         auth
       );
 
       res.json(successResponse(manager, 'Department manager retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * GET /departments/:departmentId/team-kpis
+   * Get team KPI breakdown for department
+   */
+  static async getDepartmentTeamKpis(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const departmentId = Number(req.params.departmentId);
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+
+      const data = await departmentService.getDepartmentTeamKpis(departmentId, {
+        status: status as any,
+      });
+
+      res.json(successResponse(data, "Department team KPIs retrieved"));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
         errorResponse(error.message, error.statusCode || 500)

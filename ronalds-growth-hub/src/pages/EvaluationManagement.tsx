@@ -68,6 +68,7 @@ const EvaluationManagement = () => {
   const [enablePeer, setEnablePeer] = useState(false);
   const [enableUpward, setEnableUpward] = useState(false);
   const [enableDownward, setEnableDownward] = useState(true);
+  const [enableClientEvaluation, setEnableClientEvaluation] = useState(false);
   const [cancelIfNotProcessed, setCancelIfNotProcessed] = useState(false);
   const [processAnonymously, setProcessAnonymously] = useState(false);
   const [hideFromDashboard, setHideFromDashboard] = useState(false);
@@ -83,6 +84,14 @@ const EvaluationManagement = () => {
   const [selectedEvaluatees, setSelectedEvaluatees] = useState<string[]>([]);
   const [selectedKpis, setSelectedKpis] = useState<Array<{ kpi_id: string; weight: number; evaluator_type: string }>>([]);
   const [adHocLoading, setAdHocLoading] = useState(false);
+  const [okrWeight, setOkrWeight] = useState(30);
+  const [evaluationWeight, setEvaluationWeight] = useState(50);
+  const [feedbackWeight, setFeedbackWeight] = useState(20);
+  const [peerAssignmentMode, setPeerAssignmentMode] = useState<"manager" | "department" | "any">("department");
+  const [peersPerPerson, setPeersPerPerson] = useState(2);
+
+  const learningWeightTotal = evaluationWeight + okrWeight + feedbackWeight;
+  const learningWeightsValid = learningWeightTotal === 100;
 
   useEffect(() => {
     loadCycles();
@@ -118,6 +127,14 @@ const EvaluationManagement = () => {
       const data = await apiFetch('GET', "/profiles?status=active");
       setEmployees(data || []);
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setEmployees([]);
+        return;
+      }
       toast({ title: "Error loading employees", variant: "destructive" });
     }
   };
@@ -127,6 +144,14 @@ const EvaluationManagement = () => {
       const data = await apiFetch('GET', "/kpis?is_active=true");
       setKpis(data || []);
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setKpis([]);
+        return;
+      }
       toast({ title: "Error loading KPIs", variant: "destructive" });
     }
   };
@@ -136,6 +161,14 @@ const EvaluationManagement = () => {
       const data = await apiFetch('GET', "/departments");
       setDepartments(data || []);
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setDepartments([]);
+        return;
+      }
       toast({ title: "Error loading departments", variant: "destructive" });
     }
   };
@@ -146,6 +179,15 @@ const EvaluationManagement = () => {
       setDepartmentEmployees(data || []);
       setIncludedEmployees((data || []).map((e: any) => e.id));
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        setDepartmentEmployees([]);
+        setIncludedEmployees([]);
+        return;
+      }
       toast({ title: "Error loading department employees", variant: "destructive" });
     }
   };
@@ -309,34 +351,61 @@ const EvaluationManagement = () => {
       return;
     }
 
+    if (!learningWeightsValid) {
+      toast({
+        title: "Adjust learning weights",
+        description: "Evaluation + OKR + Feedback must total 100%.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setAdHocLoading(true);
     try {
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + dueDateDays);
 
-      const evaluation = await apiFetch("POST", "/ad_hoc_evaluations", {
+      const evaluationResponse = await apiFetch("POST", "/evaluation-definitions", {
         name: evaluationName,
-        evaluation_target: evaluationTarget,
-        department_id: evaluationTarget === "department" ? selectedDepartmentId : null,
-        enable_self_evaluation: enableSelf,
-        enable_peer_evaluation: enablePeer,
-        enable_upward_evaluation: enableUpward,
-        enable_downward_evaluation: enableDownward,
-        due_date: dueDate.toISOString(),
-        cancel_if_not_processed: cancelIfNotProcessed,
-        process_anonymously: processAnonymously,
-        hide_from_dashboard: hideFromDashboard,
-        require_all_kpis: requireAllKpis,
-        exclude_from_score: excludeFromScore,
-        require_evaluator_signature: requireEvaluatorSignature,
-        send_signature_to_evaluatee: sendSignatureToEvaluatee,
-        send_signature_to_managers: sendSignatureToManagers,
-        send_signature_to_downward_evaluators: sendSignatureToDownward,
+        description: evaluationTarget === "department" ? "Department evaluation" : "Individual evaluation",
+        cycleId: selectedCycleId ? Number(selectedCycleId) : null,
+        departmentId: evaluationTarget === "department" ? Number(selectedDepartmentId) : null,
+        enableSelfEvaluation: enableSelf,
+        enablePeerEvaluation: enablePeer,
+        enableUpwardEvaluation: enableUpward,
+        enableDownwardEvaluation: enableDownward,
+        enableClientEvaluation: enableClientEvaluation,
+        dueDate: dueDate.toISOString(),
+        processAnonymously: processAnonymously,
+        hideFromDashboard: hideFromDashboard,
+        excludeFromScore: excludeFromScore,
+        requireEvaluatorSignature: requireEvaluatorSignature,
+        requireEvaluateeSignature: requireEvaluateeSignature,
         status: "published",
-        published_at: new Date().toISOString(),
+        scoringConfig: {
+          evaluationTarget,
+          requireAllKpis,
+          cancelIfNotProcessed,
+          sendSignatureToEvaluatee,
+          sendSignatureToManagers,
+          sendSignatureToDownward,
+          peerAssignmentMode,
+          peersPerPerson,
+          learningGrowthBreakdown: {
+            evaluation: evaluationWeight,
+            okr: okrWeight,
+            feedback: feedbackWeight,
+          },
+        },
       });
+      const evaluation = (evaluationResponse as any)?.data ?? evaluationResponse;
 
-      const assignments = [];
+      const assignments: Array<{
+        evaluationDefinitionId: number;
+        evaluatorProfileId: number;
+        evaluateeProfileId: number;
+        evaluatorType: string;
+      }> = [];
       const finalEvaluators = evaluationTarget === "department" ? includedEmployees : selectedEvaluators;
       const finalEvaluatees = evaluationTarget === "department" ? includedEmployees : selectedEvaluatees;
 
@@ -344,37 +413,44 @@ const EvaluationManagement = () => {
         for (const evaluateeId of finalEvaluatees) {
           if (enableDownward) {
             assignments.push({
-              ad_hoc_evaluation_id: evaluation.id,
-              evaluator_id: evaluatorId,
-              evaluatee_id: evaluateeId,
-              evaluation_type: "downward",
+              evaluationDefinitionId: evaluation.id,
+              evaluatorProfileId: Number(evaluatorId),
+              evaluateeProfileId: Number(evaluateeId),
+              evaluatorType: "manager",
+            });
+          }
+          if (enablePeer && evaluatorId !== evaluateeId) {
+            assignments.push({
+              evaluationDefinitionId: evaluation.id,
+              evaluatorProfileId: Number(evaluatorId),
+              evaluateeProfileId: Number(evaluateeId),
+              evaluatorType: "peer",
+            });
+          }
+          if (enableUpward && evaluatorId !== evaluateeId) {
+            assignments.push({
+              evaluationDefinitionId: evaluation.id,
+              evaluatorProfileId: Number(evaluatorId),
+              evaluateeProfileId: Number(evaluateeId),
+              evaluatorType: "direct_report",
             });
           }
           if (enableSelf && evaluatorId === evaluateeId) {
             assignments.push({
-              ad_hoc_evaluation_id: evaluation.id,
-              evaluator_id: evaluatorId,
-              evaluatee_id: evaluateeId,
-              evaluation_type: "self",
+              evaluationDefinitionId: evaluation.id,
+              evaluatorProfileId: Number(evaluatorId),
+              evaluateeProfileId: Number(evaluateeId),
+              evaluatorType: "self",
             });
           }
         }
       }
 
       if (assignments.length > 0) {
-        await apiFetch("POST", "/evaluation_assignments", { assignments });
+        await apiFetch("POST", "/evaluation_assignments", assignments);
       }
 
-      if (selectedKpis.length > 0) {
-        await apiFetch("POST", "/evaluation_result_areas", {
-          kpis: selectedKpis.map(k => ({
-            ad_hoc_evaluation_id: evaluation.id,
-            kpi_id: k.kpi_id,
-            evaluator_type: k.evaluator_type,
-            weight: k.weight,
-          }))
-        });
-      }
+      // KPI weighting integration will be wired to evaluation definitions in Phase B2.
 
       toast({ title: "Evaluation published successfully" });
       
@@ -815,10 +891,10 @@ const EvaluationManagement = () => {
             {evaluationTarget === "individual" && (
               <div className="grid gap-6 md:grid-cols-2">
                 <Card>
-                  <CardHeader>
-                    <CardTitle>Evaluators</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
+                <CardHeader>
+                  <CardTitle>Evaluators</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <Label>Downward evaluators - Managers or supervisors</Label>
@@ -835,6 +911,13 @@ const EvaluationManagement = () => {
                     <div className="flex items-center justify-between">
                       <Label>Self evaluation</Label>
                       <Switch checked={enableSelf} onCheckedChange={setEnableSelf} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label>Client evaluation (survey-based)</Label>
+                      <Switch
+                        checked={enableClientEvaluation}
+                        onCheckedChange={setEnableClientEvaluation}
+                      />
                     </div>
                   </div>
 
@@ -915,6 +998,43 @@ const EvaluationManagement = () => {
 
             <Card>
               <CardHeader>
+                <CardTitle>360 Assignment Rules</CardTitle>
+                <CardDescription>Controls how peers are selected during auto assignment</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Peer assignment mode</Label>
+                  <Select
+                    value={peerAssignmentMode}
+                    onValueChange={(value) =>
+                      setPeerAssignmentMode(value as "manager" | "department" | "any")
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manager">Same manager</SelectItem>
+                      <SelectItem value="department">Same department</SelectItem>
+                      <SelectItem value="any">Any peer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Peers per person</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={peersPerPerson}
+                    onChange={(e) => setPeersPerPerson(Number(e.target.value) || 1)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle>Due Date & Processing Options</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -951,6 +1071,58 @@ const EvaluationManagement = () => {
                     <Label>Exclude evaluations from score computation</Label>
                     <Switch checked={excludeFromScore} onCheckedChange={setExcludeFromScore} />
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Learning &amp; Growth Weights</CardTitle>
+                <CardDescription>Set OKR vs evaluation vs feedback weighting</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-3">
+                <div className="space-y-2">
+                  <Label>Evaluation Weight (%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={evaluationWeight}
+                    onChange={(e) => setEvaluationWeight(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>OKR Weight (%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={okrWeight}
+                    onChange={(e) => setOkrWeight(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Feedback Weight (%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={feedbackWeight}
+                    onChange={(e) => setFeedbackWeight(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Total</span>
+                    <span className={learningWeightsValid ? "text-success" : "text-destructive"}>
+                      {learningWeightTotal}%
+                    </span>
+                  </div>
+                  {!learningWeightsValid && (
+                    <p className="text-xs text-destructive">
+                      Weights must sum to 100% for scoring to be valid.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>

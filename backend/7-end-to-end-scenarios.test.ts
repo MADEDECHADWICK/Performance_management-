@@ -2,12 +2,59 @@ import prisma from './src/prisma';
 import jobService from './src/services/jobs.service';
 import { TimeEntryService } from './src/services/time-entry.service';
 import { seedDatabase } from './prisma/seed';
+import { InductionChecklistService } from './src/services/inductionChecklist.service';
+import { EmployeeOffboardingCaseService } from './src/services/employeeOffboardingCase.service';
+import app from './src/app';
+import jwt from 'jsonwebtoken';
+import request from 'supertest';
 
 describe('End-to-end workflow smoke test', () => {
   let seed: Awaited<ReturnType<typeof seedDatabase>>;
+  let jobName: string;
+  let engagementLetterId: number;
 
   beforeAll(async () => {
     seed = await seedDatabase();
+
+    const hrUser = seed.users.find((user) => user.email === 'hr@ronalds.local');
+    const hrProfile = seed.profiles.find((profile) => profile.userId === hrUser?.id);
+
+    if (!hrUser || !hrProfile) {
+      throw new Error('Missing HR profile for test setup');
+    }
+
+    const suffix = Date.now();
+    jobName = `Greenwells Audit FY2025 ${suffix}`;
+
+    const engagementLetter = await prisma.engagementLetter.create({
+      data: {
+        clientId: seed.client.id,
+        engagementType: seed.engagementLetter.engagementType,
+        feeAmount: seed.engagementLetter.feeAmount ?? 500000,
+        currency: seed.engagementLetter.currency ?? 'KES',
+        jobTitle: jobName,
+        status: 'approved',
+        approvedByProfileId: hrProfile.id,
+        approvedAt: new Date(),
+        uploadedByProfileId: hrProfile.id,
+      },
+    });
+
+    engagementLetterId = engagementLetter.id;
+
+    await prisma.clientOnboarding.create({
+      data: {
+        clientName: seed.client.clientName,
+        industry: seed.client.industry ?? 'Professional Services',
+        contactPerson: seed.client.contactPerson ?? 'Alice K.',
+        contactEmail: seed.client.contactEmail ?? 'alice@greenwells.co.ke',
+        contactPhone: seed.client.contactPhone ?? '+254700000000',
+        location: seed.client.location ?? 'Nairobi, Kenya',
+        uploadedByProfileId: hrProfile.id,
+        engagementLetterId: engagementLetter.id,
+        status: 'approved',
+      },
+    });
   });
 
   afterAll(async () => {
@@ -25,10 +72,10 @@ describe('End-to-end workflow smoke test', () => {
 
     const job = await jobService.createJob(
       {
-        jobName: 'Greenwells Audit FY2025',
+        jobName,
         description: 'Seeded audit engagement',
         clientId: seed.client.id,
-        engagementLetterId: seed.engagementLetter.id,
+        engagementLetterId,
         partnerProfileId: seed.client.partnerProfileId || undefined,
         managerProfileId: managerProfile.id,
         billingType: 'fixed_fee',
@@ -46,7 +93,7 @@ describe('End-to-end workflow smoke test', () => {
     expect(job.id).toBeDefined();
 
     const onboarding = await prisma.clientOnboarding.findFirst({
-      where: { engagementLetterId: seed.engagementLetter.id },
+      where: { engagementLetterId },
     });
 
     expect(onboarding?.jobId).toBe(job.id);
@@ -64,13 +111,20 @@ describe('End-to-end workflow smoke test', () => {
     }
 
     const job = await prisma.job.findFirst({
-      where: { jobName: 'Greenwells Audit FY2025' },
+      where: { jobName },
       orderBy: { createdAt: 'desc' },
     });
 
     if (!job) {
       throw new Error('Seed job not found');
     }
+
+    await prisma.jobStaffAssignment.deleteMany({
+      where: {
+        jobId: job.id,
+        employeeProfileId: employeeProfile.id,
+      },
+    });
 
     await jobService.assignJobTeam(
       job.id,
@@ -136,7 +190,7 @@ describe('End-to-end workflow smoke test', () => {
     const employeeUser = seed.users.find((user) => user.email === 'employee@ronalds.local');
     const employeeProfile = seed.profiles.find((profile) => profile.userId === employeeUser?.id);
     const job = await prisma.job.findFirst({
-      where: { jobName: 'Greenwells Audit FY2025' },
+      where: { jobName },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -160,5 +214,129 @@ describe('End-to-end workflow smoke test', () => {
 
     expect(request.jobId).toBe(job.id);
     expect(request.status).toBe('pending');
+  });
+
+  it('creates an onboarding checklist and notifies the employee', async () => {
+    const hrUser = seed.users.find((user) => user.email === 'hr@ronalds.local');
+    const hrProfile = seed.profiles.find((profile) => profile.userId === hrUser?.id);
+    const employeeUser = seed.users.find((user) => user.email === 'employee@ronalds.local');
+    const employeeProfile = seed.profiles.find((profile) => profile.userId === employeeUser?.id);
+
+    if (!hrUser || !hrProfile || !employeeUser || !employeeProfile) {
+      throw new Error('Missing seed users for onboarding checklist');
+    }
+
+    const checklist = await InductionChecklistService.createChecklist(
+      {
+        employeeProfileId: employeeProfile.id,
+        checklistName: 'Seeded induction checklist',
+        items: [
+          { itemName: 'Upload ID document', requiresDocument: true },
+          { itemName: 'Sign HR policy acknowledgement' },
+        ],
+      },
+      {
+        userId: hrUser.id,
+        profileId: hrProfile.id,
+        roles: ['hr'],
+      }
+    );
+
+    expect(checklist?.status).toBe('pending');
+
+    const notification = await prisma.notification.findFirst({
+      where: {
+        profileId: employeeProfile.id,
+        title: 'Onboarding checklist assigned',
+      },
+    });
+
+    expect(notification).toBeTruthy();
+  });
+
+  it('initiates an offboarding case with status initiated', async () => {
+    const hrUser = seed.users.find((user) => user.email === 'hr@ronalds.local');
+    const hrProfile = seed.profiles.find((profile) => profile.userId === hrUser?.id);
+    const targetEmployee = seed.profiles.find(
+      (profile) => profile.positionTitle === 'Associate' || profile.positionTitle === 'Trainee'
+    );
+
+    if (!hrUser || !hrProfile || !targetEmployee) {
+      throw new Error('Missing seed users for offboarding');
+    }
+
+    await prisma.employeeOffboardingCase.deleteMany({
+      where: { profileId: targetEmployee.id },
+    });
+
+    const offboarding = await EmployeeOffboardingCaseService.create(
+      { profileId: targetEmployee.id, reason: 'Seeded offboarding test' },
+      { userId: hrUser.id, profileId: hrProfile.id, roles: ['hr'] }
+    );
+
+    expect(offboarding.status).toBe('initiated');
+  });
+
+  it('creates job notifications for partner/manager/finance/gmp', async () => {
+    const job = await prisma.job.findFirst({
+      where: { jobName },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!job) {
+      throw new Error('Seed job not found for notifications');
+    }
+
+    const partnerUser = seed.users.find((user) => user.email === 'partner@ronalds.local');
+    const partnerProfile = seed.profiles.find((profile) => profile.userId === partnerUser?.id);
+    const managerUser = seed.users.find((user) => user.email === 'manager@ronalds.local');
+    const managerProfile = seed.profiles.find((profile) => profile.userId === managerUser?.id);
+    const gmpUser = seed.users.find((user) => user.email === 'gmp@ronalds.local');
+    const gmpProfile = seed.profiles.find((profile) => profile.userId === gmpUser?.id);
+    const financeUser = seed.users.find((user) => user.email === 'finance@ronalds.local');
+    const financeProfile = seed.profiles.find((profile) => profile.userId === financeUser?.id);
+
+    if (!partnerProfile || !managerProfile || !gmpProfile || !financeProfile) {
+      throw new Error('Missing seed profiles for notification checks');
+    }
+
+    const notifications = await prisma.notification.findMany({
+      where: {
+        jobId: job.id,
+      },
+      select: { profileId: true, title: true },
+    });
+
+    const recipientIds = new Set(notifications.map((n) => n.profileId));
+    expect(recipientIds.has(managerProfile.id)).toBe(true);
+    expect(recipientIds.has(partnerProfile.id)).toBe(true);
+    expect(recipientIds.has(gmpProfile.id)).toBe(true);
+    expect(recipientIds.has(financeProfile.id)).toBe(true);
+  });
+
+  it('recomputes performance scores via the admin endpoint', async () => {
+    const hrUser = seed.users.find((user) => user.email === 'hr@ronalds.local');
+    const hrProfile = seed.profiles.find((profile) => profile.userId === hrUser?.id);
+    const employeeUser = seed.users.find((user) => user.email === 'employee@ronalds.local');
+    const employeeProfile = seed.profiles.find((profile) => profile.userId === employeeUser?.id);
+
+    if (!hrUser || !hrProfile || !employeeUser || !employeeProfile) {
+      throw new Error('Missing seed users for recompute test');
+    }
+
+    const token = jwt.sign(
+      { userId: hrUser.id, email: hrUser.email, authRoles: ['hr'] },
+      process.env.JWT_SECRET || 'secret',
+      { expiresIn: '1h' }
+    );
+
+    const response = await request(app)
+      .post('/api/performance-scores/recalculate')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ profileIds: [employeeProfile.id] });
+
+    expect(response.status).toBe(200);
+    expect(response.body?.success).toBe(true);
+    expect(response.body?.data?.results?.length).toBeGreaterThan(0);
   });
 });

@@ -32,8 +32,8 @@ async function calculateJobProfitability(jobId: number) {
 
   // Get all time entries for this job
   const timeEntries = await prisma.timeEntry.findMany({
-    where: { 
-      job_id: jobId,
+    where: {
+      jobId,
       status: 'approved', // Only count approved time entries
     },
   });
@@ -42,19 +42,19 @@ async function calculateJobProfitability(jobId: number) {
   let total_revenue = 0;
   let total_cost = 0;
 
-  if (job.billing_type === 'fixed_fee') {
+  if (job.billingType === 'fixed_fee') {
     // For fixed fee jobs, revenue is the fixed fee amount
-    total_revenue = Number(job.fixed_fee_amount || 0);
+    total_revenue = Number(job.fixedFeeAmount || 0);
   } else {
     // For hourly and retainer, aggregate billable amounts from time entries
     total_revenue = timeEntries.reduce((sum, entry) => {
-      return sum + Number(entry.billable_amount || 0);
+      return sum + Number(entry.billableAmount || 0);
     }, 0);
   }
 
   // Cost is always the sum of actual costs
   total_cost = timeEntries.reduce((sum, entry) => {
-    return sum + Number(entry.cost || 0);
+    return sum + Number(entry.costAmount || 0);
   }, 0);
 
   const profit = total_revenue - total_cost;
@@ -77,9 +77,8 @@ async function calculateJobProfitability(jobId: number) {
 // - Employees: Not allowed (403)
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    // Handle both old format (roles) and new format (authRoles)
-    const userRoles = req.user?.authRoles || req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
 
     // DEBUG: Log what we received
     console.log('[jobProfitability GET /] User roles:', userRoles, 'req.user:', req.user);
@@ -98,7 +97,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     } else if (isPartner) {
       // Partners see only their own jobs
       jobs = await prisma.job.findMany({
-        where: { partner_id: userId },
+        where: { partnerProfileId: profileId ?? undefined },
         include: { partner: true, client: true },
       });
     } else {
@@ -136,9 +135,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { jobId } = req.params;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
-    // Handle both old format (roles) and new format (authRoles)
-    const userRoles = req.user?.authRoles || req.user?.roles || [];
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const userRoles = req.user?.authRoles || [];
 
     const job = await prisma.job.findUnique({
       where: { id: parseInt(jobId) },
@@ -155,21 +153,17 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
 
     if (!isAdmin) {
       // Non-admin users must be partners and can only see their own jobs
-      if (!isPartner || job.partner_id !== userId) {
+      if (!isPartner || job.partnerProfileId !== profileId) {
         return res.status(403).json({ error: 'Access denied. You can only view your own jobs.' });
       }
     }
 
     // Calculate profitability
     const profitability = await calculateJobProfitability(parseInt(jobId));
-    const profitabilityRecord = await prisma.jobProfitability.findFirst({
-      where: { job_id: parseInt(jobId) },
-    });
-
     res.json({
       ...profitability,
       job,
-      last_calculated: profitabilityRecord?.calculated_at,
+      last_calculated: new Date(),
     });
   } catch (error: any) {
     console.error('Error fetching job profitability:', error);
@@ -182,7 +176,7 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { jobId } = req.params;
-    const userRoles = req.user?.roles || [];
+    const userRoles = req.user?.authRoles || [];
 
     if (!userRoles.includes('super_admin') && !userRoles.includes('hr') && !userRoles.includes('hr_manager') && !userRoles.includes('admin')) {
       return res.status(403).json({ error: 'Only HR, HR Manager, Super Admin, and Admin can recalculate profitability' });
@@ -201,43 +195,19 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
       },
     });
 
-    // Update the JobProfitability record
-    const existing = await prisma.jobProfitability.findFirst({
-      where: { job_id: jobIdNumber },
-    });
-
-    let record;
-    if (existing) {
-      record = await prisma.jobProfitability.update({
-        where: { id: existing.id },
-        data: {
-          total_revenue: profitability.total_revenue,
-          total_cost: profitability.total_cost,
-          profit: profitability.profit,
-          profit_margin: profitability.profit_margin,
-          calculated_at: new Date(),
-        },
-      });
-    } else {
-      record = await prisma.jobProfitability.create({
-        data: {
-          job_id: jobIdNumber,
-          total_revenue: profitability.total_revenue,
-          total_cost: profitability.total_cost,
-          profit: profitability.profit,
-          profit_margin: profitability.profit_margin,
-          calculated_at: new Date(),
-        },
-      });
-    }
-
     if (job) {
-      await notifyJobLossAlert(job, profitability.profit, profitability.profit_margin, req);
+      const notifyJob = {
+        id: job.id,
+        jobName: job.jobName,
+        managerProfileId: job.managerProfileId ?? undefined,
+        partnerProfileId: job.partnerProfileId ?? undefined,
+      };
+      await notifyJobLossAlert(notifyJob, profitability.profit, profitability.profit_margin, req);
     }
 
     res.json({
       ...profitability,
-      record,
+      recalculatedAt: new Date(),
     });
   } catch (error: any) {
     console.error('Error recalculating profitability:', error);

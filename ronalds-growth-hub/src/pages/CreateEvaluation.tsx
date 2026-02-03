@@ -53,6 +53,7 @@ export default function CreateEvaluation() {
   const [enablePeer, setEnablePeer] = useState(false);
   const [enableUpward, setEnableUpward] = useState(false);
   const [enableDownward, setEnableDownward] = useState(true);
+  const [enableClientEvaluation, setEnableClientEvaluation] = useState(false);
   
   // Processing options
   const [processAnonymously, setProcessAnonymously] = useState(false);
@@ -60,7 +61,13 @@ export default function CreateEvaluation() {
   const [requireAllKPIs, setRequireAllKPIs] = useState(false);
   const [excludeFromScore, setExcludeFromScore] = useState(false);
   const [cancelIfNotProcessed, setCancelIfNotProcessed] = useState(false);
-  
+
+  const [okrWeight, setOkrWeight] = useState(30);
+  const [evaluationWeight, setEvaluationWeight] = useState(50);
+  const [feedbackWeight, setFeedbackWeight] = useState(20);
+  const learningWeightTotal = evaluationWeight + okrWeight + feedbackWeight;
+  const learningWeightsValid = learningWeightTotal === 100;
+
   // Signature options
   const [requireEvaluatorSignature, setRequireEvaluatorSignature] = useState(false);
   const [requireEvaluateeSignature, setRequireEvaluateeSignature] = useState(false);
@@ -77,6 +84,8 @@ export default function CreateEvaluation() {
   const [autoAssignManager, setAutoAssignManager] = useState(true);
   const [autoAssignPeers, setAutoAssignPeers] = useState(true);
   const [autoAssignDirectReports, setAutoAssignDirectReports] = useState(true);
+  const [peerAssignmentMode, setPeerAssignmentMode] = useState<"manager" | "department" | "any">("department");
+  const [peersPerPerson, setPeersPerPerson] = useState(2);
   
   // Result areas (KPIs)
   const [selectedKpis, setSelectedKpis] = useState<Array<{ kpi_id: string; weight: number }>>([]);
@@ -98,13 +107,37 @@ export default function CreateEvaluation() {
   };
 
   const loadEmployees = async () => {
-    const data = await apiFetch('GET', '/profiles?status=active');
-    setEmployees(data || []);
+    try {
+      const data = await apiFetch('GET', '/profiles?status=active');
+      setEmployees(data || []);
+    } catch (error: any) {
+      if (error?.status === 401) {
+        navigate('/auth');
+        return;
+      }
+      if (error?.status === 403) {
+        setEmployees([]);
+        return;
+      }
+      console.error('Failed to load employees:', error);
+    }
   };
 
   const loadKPIs = async () => {
-    const data = await apiFetch('GET', '/kpis?is_active=true');
-    setKPIs(data || []);
+    try {
+      const data = await apiFetch('GET', '/kpis?is_active=true');
+      setKPIs(data || []);
+    } catch (error: any) {
+      if (error?.status === 401) {
+        navigate('/auth');
+        return;
+      }
+      if (error?.status === 403) {
+        setKPIs([]);
+        return;
+      }
+      console.error('Failed to load KPIs:', error);
+    }
   };
 
   const handleAddKPI = (kpiId: string) => {
@@ -134,42 +167,61 @@ export default function CreateEvaluation() {
       return;
     }
 
+    if (!learningWeightsValid) {
+      toast({
+        title: "Adjust learning weights",
+        description: "Evaluation + OKR + Feedback must total 100%.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
       const user = await authAPI.me();
       
       // Create evaluation
-      const evaluation = await apiFetch('POST', '/ad_hoc_evaluations', {
+      const evaluationResponse = await apiFetch('POST', '/evaluation-definitions', {
         name: evaluationName,
-        evaluation_target: "individual", // Default to individual for this interface
-        department_id: null, // This interface focuses on individual evaluations
-        created_by: user?.id,
-        enable_self_evaluation: enableSelf,
-        enable_peer_evaluation: enablePeer,
-        enable_upward_evaluation: enableUpward,
-        enable_downward_evaluation: enableDownward,
-        due_date: dueDate,
-        cancel_if_not_processed: cancelIfNotProcessed,
-        process_anonymously: processAnonymously,
-        hide_from_dashboard: hideFromDashboard,
-        require_all_kpis: requireAllKPIs,
-        exclude_from_score: excludeFromScore,
-        require_evaluator_signature: requireEvaluatorSignature,
-        require_evaluatee_signature: requireEvaluateeSignature,
-        send_signature_to_evaluatee: sendToEvaluatee,
-        send_signature_to_managers: sendToManagers,
-        send_signature_to_downward_evaluators: sendToDownward,
+        description: "Ad-hoc evaluation",
+        cycleId: null,
+        departmentId: null,
+        enableSelfEvaluation: enableSelf,
+        enablePeerEvaluation: enablePeer,
+        enableUpwardEvaluation: enableUpward,
+        enableDownwardEvaluation: enableDownward,
+        enableClientEvaluation: enableClientEvaluation,
+        dueDate: dueDate || null,
+        processAnonymously: processAnonymously,
+        hideFromDashboard: hideFromDashboard,
+        excludeFromScore: excludeFromScore,
+        requireEvaluatorSignature: requireEvaluatorSignature,
+        requireEvaluateeSignature: requireEvaluateeSignature,
         status: "published",
-        published_at: new Date().toISOString()
+        scoringConfig: {
+          requireAllKpis,
+          cancelIfNotProcessed,
+          sendToEvaluatee,
+          sendToManagers,
+          sendToDownward,
+          peerAssignmentMode,
+          peersPerPerson,
+          learningGrowthBreakdown: {
+            evaluation: evaluationWeight,
+            okr: okrWeight,
+            feedback: feedbackWeight,
+          },
+        },
       });
+      const evaluation = (evaluationResponse as any)?.data ?? evaluationResponse;
 
       // Create assignments
       const assignments: Array<{
-        ad_hoc_evaluation_id: number;
-        evaluator_id: number;
-        evaluatee_id: number;
-        evaluation_type: string;
+        evaluationDefinitionId: number;
+        evaluatorProfileId: number;
+        evaluateeProfileId: number;
+        evaluatorType: string;
       }> = [];
 
       const profileById = new Map(employees.map((emp) => [emp.id, emp]));
@@ -177,10 +229,10 @@ export default function CreateEvaluation() {
       const addAssignment = (evaluatorId: string, evaluateeId: string, type: string) => {
         if (!evaluatorId || evaluatorId === evaluateeId) return;
         assignments.push({
-          ad_hoc_evaluation_id: parseInt(evaluation.id),
-          evaluator_id: parseInt(evaluatorId),
-          evaluatee_id: parseInt(evaluateeId),
-          evaluation_type: type,
+          evaluationDefinitionId: Number(evaluation.id),
+          evaluatorProfileId: parseInt(evaluatorId),
+          evaluateeProfileId: parseInt(evaluateeId),
+          evaluatorType: type,
         });
       };
 
@@ -193,10 +245,10 @@ export default function CreateEvaluation() {
 
         if (enableDownward) {
           if (autoAssignManager && managerId) {
-            addAssignment(String(managerId), evaluateeId, "downward");
+            addAssignment(String(managerId), evaluateeId, "manager");
           } else {
             selectedDownwardEvaluators.forEach((evaluatorId) =>
-              addAssignment(evaluatorId, evaluateeId, "downward")
+              addAssignment(evaluatorId, evaluateeId, "manager")
             );
           }
         }
@@ -207,20 +259,30 @@ export default function CreateEvaluation() {
               addAssignment(evaluatorId, evaluateeId, "peer")
             );
           } else {
-            const peerCandidates = employees.filter(
-              (emp) =>
-                (emp.department_id ?? (emp as any).departmentId) &&
-                (emp.department_id ?? (emp as any).departmentId) === departmentId &&
-                emp.id !== evaluateeId
-            );
-            peerCandidates.forEach((peer) => addAssignment(peer.id, evaluateeId, "peer"));
+            let peerCandidates = employees.filter((emp) => emp.id !== evaluateeId);
+            if (peerAssignmentMode === "manager" && managerId) {
+              peerCandidates = peerCandidates.filter(
+                (emp) =>
+                  (emp.manager_id ?? (emp as any).managerId) &&
+                  String(emp.manager_id ?? (emp as any).managerId) === String(managerId)
+              );
+            } else if (peerAssignmentMode === "department" && departmentId) {
+              peerCandidates = peerCandidates.filter(
+                (emp) =>
+                  (emp.department_id ?? (emp as any).departmentId) &&
+                  (emp.department_id ?? (emp as any).departmentId) === departmentId
+              );
+            }
+            peerCandidates
+              .slice(0, Math.max(1, peersPerPerson))
+              .forEach((peer) => addAssignment(peer.id, evaluateeId, "peer"));
           }
         }
 
         if (enableUpward) {
           if (!autoAssignDirectReports && selectedUpwardEvaluators.length > 0) {
             selectedUpwardEvaluators.forEach((evaluatorId) =>
-              addAssignment(evaluatorId, evaluateeId, "upward")
+              addAssignment(evaluatorId, evaluateeId, "direct_report")
             );
           } else {
             const directReports = employees.filter(
@@ -228,7 +290,7 @@ export default function CreateEvaluation() {
                 (emp.manager_id ?? (emp as any).managerId) &&
                 String(emp.manager_id ?? (emp as any).managerId) === evaluateeId
             );
-            directReports.forEach((report) => addAssignment(report.id, evaluateeId, "upward"));
+            directReports.forEach((report) => addAssignment(report.id, evaluateeId, "direct_report"));
           }
         }
       }
@@ -236,7 +298,7 @@ export default function CreateEvaluation() {
       const dedupedAssignments = Array.from(
         new Map(
           assignments.map((item) => [
-            `${item.ad_hoc_evaluation_id}-${item.evaluator_id}-${item.evaluatee_id}-${item.evaluation_type}`,
+            `${item.evaluationDefinitionId}-${item.evaluatorProfileId}-${item.evaluateeProfileId}-${item.evaluatorType}`,
             item,
           ])
         ).values()
@@ -245,10 +307,10 @@ export default function CreateEvaluation() {
       if (enableSelf) {
         for (const evaluateeId of selectedEvaluatees) {
           dedupedAssignments.push({
-            ad_hoc_evaluation_id: parseInt(evaluation.id),
-            evaluator_id: parseInt(evaluateeId),
-            evaluatee_id: parseInt(evaluateeId),
-            evaluation_type: "self"
+            evaluationDefinitionId: Number(evaluation.id),
+            evaluatorProfileId: parseInt(evaluateeId),
+            evaluateeProfileId: parseInt(evaluateeId),
+            evaluatorType: "self"
           });
         }
       }
@@ -257,16 +319,7 @@ export default function CreateEvaluation() {
         await apiFetch('POST', '/evaluation_assignments', dedupedAssignments);
       }
 
-      // Add KPIs
-      if (selectedKpis.length > 0) {
-        const resultAreas = selectedKpis.map(kpi => ({
-          ad_hoc_evaluation_id: parseInt(evaluation.id),
-          kpi_id: parseInt(kpi.kpi_id),
-          weight: kpi.weight
-        }));
-
-        await apiFetch('POST', '/evaluation_result_areas', { kpis: resultAreas });
-      }
+      // KPI weighting is handled in Phase B2 via evaluation definitions.
 
       toast({ title: "Evaluation published successfully!" });
       navigate("/evaluations");
@@ -348,6 +401,10 @@ export default function CreateEvaluation() {
               <Label>Self-Evaluation</Label>
               <Switch checked={enableSelf} onCheckedChange={setEnableSelf} />
             </div>
+            <div className="flex items-center justify-between">
+              <Label>Client Evaluation (Survey-based)</Label>
+              <Switch checked={enableClientEvaluation} onCheckedChange={setEnableClientEvaluation} />
+            </div>
           </CardContent>
         </Card>
 
@@ -392,6 +449,36 @@ export default function CreateEvaluation() {
             <div className="flex items-center justify-between">
               <Label>Auto-assign peers from same department</Label>
               <Switch checked={autoAssignPeers} onCheckedChange={setAutoAssignPeers} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Peer assignment mode</Label>
+                <Select
+                  value={peerAssignmentMode}
+                  onValueChange={(value) =>
+                    setPeerAssignmentMode(value as "manager" | "department" | "any")
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manager">Same manager</SelectItem>
+                    <SelectItem value="department">Same department</SelectItem>
+                    <SelectItem value="any">Any peer</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Peers per person</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={peersPerPerson}
+                  onChange={(e) => setPeersPerPerson(Number(e.target.value) || 1)}
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -555,6 +642,58 @@ export default function CreateEvaluation() {
             <div className="flex items-center justify-between">
               <Label>Exclude from Score</Label>
               <Switch checked={excludeFromScore} onCheckedChange={setExcludeFromScore} />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Learning &amp; Growth Weights</CardTitle>
+            <CardDescription>Set OKR vs evaluation vs feedback weighting</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Evaluation Weight (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={evaluationWeight}
+                onChange={(e) => setEvaluationWeight(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>OKR Weight (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={okrWeight}
+                onChange={(e) => setOkrWeight(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Feedback Weight (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={feedbackWeight}
+                onChange={(e) => setFeedbackWeight(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Total</span>
+                <span className={learningWeightsValid ? "text-success" : "text-destructive"}>
+                  {learningWeightTotal}%
+                </span>
+              </div>
+              {!learningWeightsValid && (
+                <p className="text-xs text-destructive">
+                  Weights must sum to 100% for scoring to be valid.
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

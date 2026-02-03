@@ -14,6 +14,7 @@
  * - kpis
  */
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 
 export interface DepartmentCreateInput {
@@ -68,6 +69,10 @@ export interface UtilizationOptions {
   expectedWeeklyHours?: number;
   // optionally tune lookback window
   weeks?: number;
+}
+
+export interface TeamKpiOptions {
+  status?: "active" | "inactive" | "all";
 }
 
 export interface AuthContext {
@@ -200,6 +205,39 @@ export class DepartmentService {
     ]);
 
     return { departments, total };
+  }
+
+  /**
+   * Back-compat helper: get department (with auth optional)
+   */
+  async getDepartment(departmentId: number) {
+    return this.getDepartmentById(departmentId);
+  }
+
+  /**
+   * Back-compat helper: delete department
+   */
+  async deleteDepartment(departmentId: number, auth: AuthContext) {
+    this.requireAdminOrHr(auth);
+    await this.getDepartmentById(departmentId);
+    await prisma.department.delete({ where: { id: departmentId } });
+  }
+
+  /**
+   * Back-compat helper: list department employees
+   */
+  async getDepartmentEmployees(departmentId: number, auth: AuthContext) {
+    this.requireAdminOrHr(auth);
+    return this.listDepartmentEmployees(departmentId);
+  }
+
+  /**
+   * Back-compat helper: get department manager (head)
+   */
+  async getDepartmentManager(departmentId: number, auth: AuthContext) {
+    this.requireAdminOrHr(auth);
+    const dept = await this.getDepartmentById(departmentId);
+    return dept.departmentHead ?? null;
   }
 
   /**
@@ -656,4 +694,155 @@ export class DepartmentService {
       groupBy: q.groupBy,
     };
   }
+
+  /**
+   * Team KPI breakdown by evaluation team
+   * Uses latest performance score per employee (if available).
+   */
+  async getDepartmentTeamKpis(departmentId: number, opts: TeamKpiOptions = {}) {
+    await this.getDepartmentById(departmentId);
+
+    const statusFilter = opts.status && opts.status !== "all" ? opts.status : undefined;
+
+    const teams = await prisma.$queryRaw<
+      { id: number; team_name: string; description: string | null }[]
+    >`SELECT id, team_name, description FROM evaluation_teams WHERE department_id = ${departmentId}`;
+
+    if (!teams.length) return [];
+
+    const teamIds = teams.map((team) => team.id);
+    const members = await prisma.$queryRaw<
+      { team_id: number; employee_id: number }[]
+    >`SELECT team_id, employee_id FROM evaluation_team_members WHERE team_id IN (${Prisma.join(
+      teamIds
+    )})`;
+
+    const membersByTeam = members.reduce((map, row) => {
+      const key = row.team_id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row.employee_id);
+      return map;
+    }, new Map<number, number[]>());
+
+    const results = [];
+
+    for (const team of teams) {
+      const memberIds = membersByTeam.get(team.id) ?? [];
+      if (memberIds.length === 0) {
+        results.push({
+          teamId: team.id,
+          teamName: team.team_name,
+          description: team.description,
+          memberCount: 0,
+          activeCount: 0,
+          inactiveCount: 0,
+          financialScore: 0,
+          nonFinancialScore: 0,
+          overallScore: 0,
+        });
+        continue;
+      }
+
+      const profiles = await prisma.profile.findMany({
+        where: {
+          id: { in: memberIds },
+          ...(statusFilter ? { status: statusFilter } : {}),
+        },
+        select: { id: true, status: true },
+      });
+
+      const filteredIds = profiles.map((profile) => profile.id);
+      const activeCount = profiles.filter((profile) => profile.status === "active").length;
+      const inactiveCount = profiles.filter((profile) => profile.status === "inactive").length;
+
+      if (filteredIds.length === 0) {
+        results.push({
+          teamId: team.id,
+          teamName: team.team_name,
+          description: team.description,
+          memberCount: profiles.length,
+          activeCount,
+          inactiveCount,
+          financialScore: 0,
+          nonFinancialScore: 0,
+          overallScore: 0,
+        });
+        continue;
+      }
+
+      const scores = await prisma.performanceScore.findMany({
+        where: { employeeProfileId: { in: filteredIds } },
+        orderBy: { period: "desc" },
+        select: {
+          employeeProfileId: true,
+          financialWeighted: true,
+          nonFinancialWeighted: true,
+          totalScore: true,
+          period: true,
+        },
+      });
+
+      const latestByEmployee = new Map<number, typeof scores[number]>();
+      for (const score of scores) {
+        if (!latestByEmployee.has(score.employeeProfileId)) {
+          latestByEmployee.set(score.employeeProfileId, score);
+        }
+      }
+
+      const latestScores = Array.from(latestByEmployee.values());
+      const count = latestScores.length || 1;
+      const financialScore =
+        latestScores.reduce((sum, item) => sum + Number(item.financialWeighted || 0), 0) / count;
+      const nonFinancialScore =
+        latestScores.reduce((sum, item) => sum + Number(item.nonFinancialWeighted || 0), 0) /
+        count;
+      const overallScore =
+        latestScores.reduce((sum, item) => sum + Number(item.totalScore || 0), 0) / count;
+
+      const uniquePeriods = Array.from(
+        new Set(scores.map((score) => score.period.toISOString()))
+      )
+        .map((period) => new Date(period))
+        .sort((a, b) => b.getTime() - a.getTime());
+
+      const latestPeriod = uniquePeriods[0];
+      const previousPeriod = uniquePeriods[1];
+
+      const avgForPeriod = (period?: Date) => {
+        if (!period) return 0;
+        const periodScores = scores.filter(
+          (score) => score.period.toISOString() === period.toISOString()
+        );
+        if (periodScores.length === 0) return 0;
+        return (
+          periodScores.reduce((sum, item) => sum + Number(item.totalScore || 0), 0) /
+          periodScores.length
+        );
+      };
+
+      const previousOverall = avgForPeriod(previousPeriod);
+      const deltaOverall = Number((overallScore - previousOverall).toFixed(1));
+      const trendDirection =
+        deltaOverall > 0.1 ? "up" : deltaOverall < -0.1 ? "down" : "flat";
+
+      results.push({
+        teamId: team.id,
+        teamName: team.team_name,
+        description: team.description,
+        memberCount: profiles.length,
+        activeCount,
+        inactiveCount,
+        financialScore: Number(financialScore.toFixed(1)),
+        nonFinancialScore: Number(nonFinancialScore.toFixed(1)),
+        overallScore: Number(overallScore.toFixed(1)),
+        previousOverallScore: Number(previousOverall.toFixed(1)),
+        deltaOverall,
+        trendDirection,
+      });
+    }
+
+    return results;
+  }
 }
+
+export const departmentService = new DepartmentService();

@@ -7,11 +7,13 @@ import type {
   Profile, 
   Document,
   EmployeeOnboardingCase,
+  EmployeeOffboardingCase,
   InductionChecklist,
   InductionChecklistItem,
   PaginatedResponse,
   EmployeeStatus,
   OnboardingStatus,
+  OffboardingStatus,
   BackgroundCheckStatus
 } from './types';
 
@@ -231,6 +233,44 @@ export const employeesAPI = {
    */
   updateOnboardingStatus: async (caseId: number, status: OnboardingStatus): Promise<EmployeeOnboardingCase> => {
     return api.patch(`/onboarding/${caseId}`, { status });
+  },
+
+  // ==================
+  // OFFBOARDING
+  // ==================
+
+  /**
+   * Get offboarding cases
+   */
+  getOffboardingCases: async (filters?: {
+    status?: OffboardingStatus;
+  }): Promise<EmployeeOffboardingCase[]> => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    const query = params.toString();
+    return api.get(`/offboarding${query ? `?${query}` : ''}`);
+  },
+
+  /**
+   * Create offboarding case for employee
+   */
+  createOffboardingCase: async (employeeId: number, data?: {
+    hrOwnerProfileId?: number;
+    reason?: string;
+  }): Promise<EmployeeOffboardingCase> => {
+    return api.post('/offboarding', { profileId: employeeId, ...data });
+  },
+
+  /**
+   * Update offboarding case status
+   */
+  updateOffboardingStatus: async (caseId: number, data: {
+    status?: OffboardingStatus;
+    reason?: string;
+    notes?: string;
+    separationDate?: string;
+  }): Promise<EmployeeOffboardingCase> => {
+    return api.patch(`/offboarding/${caseId}`, data);
   },
 
   // ==================

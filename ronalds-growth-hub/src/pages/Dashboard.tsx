@@ -12,6 +12,7 @@ import { Bell } from "lucide-react";
 interface PerformanceData {
   overallScore: number;
   revenueContribution: number;
+  allocatedRevenue: number;
   billableHours: number;
   utilizationRate: number;
   clientRating: number;
@@ -22,6 +23,7 @@ interface PerformanceData {
   learningGrowthScore: number;
   okrScore: number;
   projectEvaluationScore: number;
+  lossAlert?: boolean;
 }
 
 const Dashboard = () => {
@@ -164,6 +166,8 @@ const Dashboard = () => {
       // Prefer new performance score endpoint (financials tied to collections)
       const performanceResponse = await apiFetch("GET", "/performance-scores/me");
       const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
+      const analyticsResponse = await apiFetch("GET", "/analytics/financial").catch(() => null);
+      const analyticsPayload = (analyticsResponse as any)?.data ?? analyticsResponse ?? {};
 
       if (performancePayload?.financial && performancePayload?.overall) {
         const financial = performancePayload.financial;
@@ -173,10 +177,13 @@ const Dashboard = () => {
           typeof nonFinancial.customerSatisfactionScore === "number"
             ? Math.round((nonFinancial.customerSatisfactionScore / 20) * 10) / 10
             : 0;
+        const lossAlert = Boolean(performancePayload?.scoreBreakdown?.lossAlert);
+        const allocatedRevenueTotal = Number(analyticsPayload?.allocatedRevenueTotal || financial.revenue || 0);
 
         setPerformance({
           overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
           revenueContribution: financial.revenue || 0,
+          allocatedRevenue: allocatedRevenueTotal,
           billableHours: financial.billableHours || 0,
           utilizationRate: utilizationPercent,
           clientRating: customerRating,
@@ -187,6 +194,7 @@ const Dashboard = () => {
           learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
           okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+          lossAlert: lossAlert || Number(analyticsPayload?.lossTotal || 0) > 0,
         });
         return;
       }
@@ -238,6 +246,7 @@ const Dashboard = () => {
       setPerformance({
         overallScore: Math.round(overallScore * 10) / 10,
         revenueContribution: totalRevenue,
+        allocatedRevenue: totalRevenue,
         billableHours: totalBillableHours,
         utilizationRate: Math.round(utilizationRate),
         clientRating: Math.round(avgClientRating * 10) / 10,
@@ -463,7 +472,12 @@ const Dashboard = () => {
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Overall Score</CardTitle>
-              <Star className="h-4 w-4 text-accent" />
+              <div className="flex items-center gap-2">
+                {performance?.lossAlert && (
+                  <Badge variant="destructive">Loss alert</Badge>
+                )}
+                <Star className="h-4 w-4 text-accent" />
+              </div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-primary">
@@ -475,14 +489,22 @@ const Dashboard = () => {
 
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Revenue Contribution</CardTitle>
-              <DollarSign className="h-4 w-4 text-success" />
+              <CardTitle className="text-sm font-medium">Allocated Revenue</CardTitle>
+              <div className="flex items-center gap-2">
+                {performance?.lossAlert && (
+                  <Badge variant="destructive">Loss alert</Badge>
+                )}
+                <DollarSign className="h-4 w-4 text-success" />
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                KES {((performance?.revenueContribution || 0) / 1000000).toFixed(1)}M
+              <div
+                className="text-2xl font-bold text-foreground leading-tight break-words"
+                title={`KES ${((performance?.allocatedRevenue || 0) / 1000000).toFixed(1)}M`}
+              >
+                KES {((performance?.allocatedRevenue || 0) / 1000000).toFixed(1)}M
               </div>
-              <p className="text-xs text-muted-foreground">Current fiscal year</p>
+              <p className="text-xs text-muted-foreground">Cash collected and allocated</p>
             </CardContent>
           </Card>
 
@@ -596,20 +618,6 @@ const Dashboard = () => {
                     <div
                       className="bg-gradient-to-r from-primary to-success h-2 rounded-full"
                       style={{ width: `${performance?.okrScore || 0}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Project Evaluations</span>
-                    <span className="text-warning font-semibold">
-                      {performance?.projectEvaluationScore || 0}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
-                      style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
                     />
                   </div>
                 </div>

@@ -8,9 +8,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { User, Briefcase, Award, Calendar, Phone, Mail } from "lucide-react";
+import { User, Briefcase, Award, Calendar, Phone, Mail, ClipboardCheck, CheckCircle2, Upload, FileText } from "lucide-react";
+import documentsAPI from "@/lib/api/documents";
 
 export default function EmployeeProfile() {
   const navigate = useNavigate();
@@ -23,6 +25,8 @@ export default function EmployeeProfile() {
   const [managers, setManagers] = useState<any[]>([]);
   const [isHRAdmin, setIsHRAdmin] = useState(false);
   const [isViewingOther, setIsViewingOther] = useState(false);
+  const [checklist, setChecklist] = useState<any>(null);
+  const [checklistLoading, setChecklistLoading] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -53,6 +57,9 @@ export default function EmployeeProfile() {
         ? await apiFetch('GET', `/profiles/${viewingProfileId}`)
         : await apiFetch('GET', `/profiles/email/${encodeURIComponent(user.email)}`);
       setProfile(data);
+      if (data?.id) {
+        await loadChecklist(data.id);
+      }
 
       // Load departments and managers if HR/Admin viewing another employee
       if (hasHRAdminRole && viewingUserId) {
@@ -71,6 +78,84 @@ export default function EmployeeProfile() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadChecklist = async (profileId: number) => {
+    try {
+      setChecklistLoading(true);
+      const list = await apiFetch("GET", `/onboarding?profileId=${profileId}&page=1&pageSize=1`);
+      const records = list?.data || list?.records || list || [];
+      const onboarding = Array.isArray(records) ? records[0] : records?.[0];
+      const checklistId = onboarding?.inductionChecklist?.id;
+      if (!checklistId) {
+        setChecklist(null);
+        return;
+      }
+      const fullChecklist = await apiFetch("GET", `/induction-checklist/${checklistId}`);
+      setChecklist(fullChecklist?.data ?? fullChecklist);
+    } catch (error) {
+      console.error("Error loading checklist", error);
+      setChecklist(null);
+    } finally {
+      setChecklistLoading(false);
+    }
+  };
+
+  const handleCompleteChecklistItem = async (checklistId: number, itemId: number) => {
+    try {
+      await apiFetch("PATCH", `/induction-checklist/${checklistId}/items/${itemId}/complete`);
+      await loadChecklist(profile.id);
+      toast({
+        title: "Checklist updated",
+        description: "Item marked as complete.",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Unable to complete item",
+        description: error.message || "Please try again.",
+      });
+    }
+  };
+
+  const handleAttachChecklistDocument = async (
+    checklistId: number,
+    itemId: number,
+    file: File
+  ) => {
+    try {
+      const upload = await documentsAPI.uploadFile(file, {
+        documentType: "onboarding_checklist",
+        entityType: "InductionChecklist",
+        entityId: checklistId,
+        accessLevel: "employee",
+        isRequired: true,
+        description: `Checklist item document`,
+      });
+
+      const documentId = (upload as any)?.data?.id ?? (upload as any)?.id;
+      if (!documentId) {
+        throw new Error("Upload succeeded but document id was missing.");
+      }
+
+      await apiFetch(
+        "PATCH",
+        `/induction-checklist/${checklistId}/items/${itemId}/document`,
+        { documentId }
+      );
+
+      await loadChecklist(profile.id);
+      toast({
+        title: "Document attached",
+        description: "Checklist document uploaded successfully.",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Document upload failed",
+        description: error.message || "Please try again.",
+      });
     }
   };
 
@@ -143,10 +228,11 @@ export default function EmployeeProfile() {
         </div>
 
         <Tabs defaultValue="personal" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="personal">Personal Info</TabsTrigger>
             <TabsTrigger value="career">Career Details</TabsTrigger>
             <TabsTrigger value="performance">Performance History</TabsTrigger>
+            <TabsTrigger value="onboarding">Onboarding</TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal" className="space-y-4">
@@ -342,6 +428,123 @@ export default function EmployeeProfile() {
                 <p className="text-sm text-muted-foreground">
                   Your performance history and evaluation records will appear here.
                 </p>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="onboarding" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ClipboardCheck className="h-5 w-5" />
+                  Onboarding Checklist
+                </CardTitle>
+                <CardDescription>Your current induction checklist items</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {checklistLoading ? (
+                  <div className="text-sm text-muted-foreground">Loading checklist...</div>
+                ) : !checklist ? (
+                  <div className="text-sm text-muted-foreground">
+                    No onboarding checklist has been assigned yet.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium">{checklist.checklistName || "Induction Checklist"}</div>
+                        <Badge variant="secondary">{checklist.status?.replace("_", " ") || "pending"}</Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        Completion: {Math.round(checklist.completionPercent || 0)}%
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {(checklist.items || []).map((item: any) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between rounded-lg border border-border p-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{item.itemName}</span>
+                              {item.requiresDocument && (
+                                <Badge variant="outline" className="text-xs">
+                                  Document required
+                                </Badge>
+                              )}
+                            </div>
+                            {item.description && (
+                              <p className="text-xs text-muted-foreground">{item.description}</p>
+                            )}
+                            {item.documentId && item.document?.filePath && (
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <FileText className="h-4 w-4 text-emerald-500" />
+                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                  <a
+                                    href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Preview
+                                  </a>
+                                </Button>
+                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                  <a
+                                    href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
+                                    download
+                                  >
+                                    Download
+                                  </a>
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {!item.isCompleted && item.requiresDocument && !item.documentId && (
+                              <label className="inline-flex items-center">
+                                <input
+                                  type="file"
+                                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    if (file) {
+                                      handleAttachChecklistDocument(checklist.id, item.id, file);
+                                    }
+                                    event.currentTarget.value = "";
+                                  }}
+                                />
+                                <Button size="sm" variant="outline" asChild>
+                                  <span>
+                                    <Upload className="mr-2 h-4 w-4" />
+                                    Upload
+                                  </span>
+                                </Button>
+                              </label>
+                            )}
+                            {item.isCompleted ? (
+                              <div className="flex items-center gap-2 text-success">
+                                <CheckCircle2 className="h-4 w-4" />
+                                <span className="text-xs">Completed</span>
+                              </div>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCompleteChecklistItem(checklist.id, item.id)}
+                                disabled={item.requiresDocument && !item.documentId}
+                              >
+                                Mark complete
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

@@ -94,3 +94,10 @@ export const getPartnerRevenueValidators = [
     .isIn(["daily", "weekly", "monthly", "quarterly", "annual"])
     .withMessage("Invalid period"),
 ];
+
+export const getPartnerAllocationsValidators = [
+  query("partnerId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid partnerId required if provided"),
+];

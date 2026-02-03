@@ -115,11 +115,19 @@ export default function ClientSurveys() {
   const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
     queryKey: ['survey-analytics'],
     queryFn: () => surveysAPI.getAnalytics(),
+    retry: false,
+    onError: () => {
+      // swallow analytics errors; page will show empty-state values
+    },
   });
 
   const { data: byClientData } = useQuery({
     queryKey: ['surveys-by-client'],
     queryFn: () => surveysAPI.getByClient(),
+    retry: false,
+    onError: () => {
+      // keep UI stable if analytics endpoint is empty
+    },
   });
 
   const { data: clientsData } = useQuery({
@@ -171,8 +179,21 @@ export default function ClientSurveys() {
 
   // Data
   const surveys = surveysData?.surveys || [];
-  const analytics = analyticsData;
-  const byClient = byClientData || [];
+  const analytics = analyticsData || {
+    totalSurveys: 0,
+    responseRate: 0,
+    averageRatings: {
+      overall: 0,
+      quality: 0,
+      communication: 0,
+      timeliness: 0,
+      professionalism: 0,
+      valueForMoney: 0,
+    },
+    recommendationRate: 0,
+    trends: [],
+  };
+  const byClient = Array.isArray(byClientData) ? byClientData : [];
   const clients = clientsData?.data || [];
   const jobs = jobsData?.data || [];
 

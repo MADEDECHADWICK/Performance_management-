@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 import {
   BarChart,
   Bar,
@@ -37,9 +38,12 @@ type ClientOption = { id: number; clientName: string };
 
 export default function FinanceProjections() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [projections, setProjections] = useState<Projection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const [search, setSearch] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("");
 
   const [projectionForm, setProjectionForm] = useState({
     clientId: "",
@@ -69,11 +73,22 @@ export default function FinanceProjections() {
       }
     } catch (error: any) {
       console.error("Projections error:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to load projections",
-        variant: "destructive",
-      });
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        toast({
+          title: "Access restricted",
+          description: "You don't have permission to view projections.",
+          variant: "destructive",
+        });
+      }
+      if (error?.status === 404) {
+        setProjections([]);
+        setClients([]);
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -99,21 +114,64 @@ export default function FinanceProjections() {
     return Array.from(map.values()).slice(0, 6).reverse();
   }, [projections]);
 
-  const projectionRows = useMemo(() => {
-    return projections
-      .slice()
-      .sort((a, b) => (a.monthYear < b.monthYear ? 1 : -1));
+  const monthOptions = useMemo(() => {
+    const monthMap = new Map<string, string>();
+    projections.forEach((projection) => {
+      const key = new Date(projection.monthYear).toISOString().slice(0, 7);
+      const label = new Date(projection.monthYear).toLocaleString("en-KE", {
+        month: "short",
+        year: "numeric",
+      });
+      monthMap.set(key, label);
+    });
+    return Array.from(monthMap.entries())
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([value, label]) => ({ value, label }));
   }, [projections]);
 
+  const filteredProjections = useMemo(() => {
+    return projections.filter((projection) => {
+      if (selectedMonth) {
+        const projectionMonth = new Date(projection.monthYear).toISOString().slice(0, 7);
+        if (projectionMonth !== selectedMonth) return false;
+      }
+      if (search.trim()) {
+        const query = search.toLowerCase();
+        const haystack = [
+          projection.clientName,
+          projection.departmentName,
+          projection.status,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [projections, search, selectedMonth]);
+
+  const projectionRows = useMemo(() => {
+    return filteredProjections
+      .slice()
+      .sort((a, b) => (a.monthYear < b.monthYear ? 1 : -1));
+  }, [filteredProjections]);
+
   const totalProjected = useMemo(
-    () => projections.reduce((sum, projection) => sum + (projection.projectedAmount || 0), 0),
-    [projections]
+    () => filteredProjections.reduce((sum, projection) => sum + (projection.projectedAmount || 0), 0),
+    [filteredProjections]
   );
 
   const totalCollected = useMemo(
-    () => projections.reduce((sum, projection) => sum + (projection.actualCollected || 0), 0),
-    [projections]
+    () => filteredProjections.reduce((sum, projection) => sum + (projection.actualCollected || 0), 0),
+    [filteredProjections]
   );
+
+  const topVariance = useMemo(() => {
+    return [...filteredProjections]
+      .sort((a, b) => (a.variance || 0) - (b.variance || 0))
+      .slice(0, 5);
+  }, [filteredProjections]);
 
   const handleProjectionSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -238,6 +296,8 @@ export default function FinanceProjections() {
                     <Input
                       id="projectedAmount"
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={projectionForm.projectedAmount}
                       onChange={(event) =>
                         setProjectionForm((prev) => ({ ...prev, projectedAmount: event.target.value }))
@@ -280,20 +340,97 @@ export default function FinanceProjections() {
               <CardDescription>Last six months overview.</CardDescription>
             </CardHeader>
             <CardContent className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthChart}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => `KES ${Number(value).toLocaleString()}`} />
-                  <Legend />
-                  <Bar dataKey="projected" fill="hsl(var(--primary))" />
-                  <Bar dataKey="collected" fill="hsl(var(--secondary))" />
-                </BarChart>
-              </ResponsiveContainer>
+              {monthChart.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No projection data to chart yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={monthChart}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => `KES ${Number(value).toLocaleString()}`} />
+                    <Legend />
+                    <Bar dataKey="projected" fill="hsl(var(--primary))" />
+                    <Bar dataKey="collected" fill="hsl(var(--secondary))" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Largest Variances</CardTitle>
+            <CardDescription>Where collections are furthest from plan.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {topVariance.length === 0 ? (
+              <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                No variance data yet.
+              </div>
+            ) : (
+              topVariance.map((projection) => (
+                <div key={projection.id} className="flex items-center justify-between text-sm">
+                  <div>
+                    <p className="font-medium">{projection.clientName || "All clients"}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {projection.departmentName || "Firm-wide"} ·{" "}
+                      {new Date(projection.monthYear).toLocaleString("en-KE", {
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className={projection.variance < 0 ? "text-rose-600 font-semibold" : "font-semibold"}>
+                      {(projection.currency || "KES")} {projection.variance.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {projection.variancePercent?.toFixed?.(1) ?? 0}% variance
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Filters</CardTitle>
+            <CardDescription>Refine projections by month or search.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-[200px_1fr]">
+            <div className="space-y-2">
+              <Label htmlFor="projectionMonthFilter">Month</Label>
+              <select
+                id="projectionMonthFilter"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={selectedMonth}
+                onChange={(event) => setSelectedMonth(event.target.value)}
+              >
+                <option value="">All months</option>
+                {monthOptions.map((month) => (
+                  <option key={month.value} value={month.value}>
+                    {month.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="projectionSearch">Search</Label>
+              <Input
+                id="projectionSearch"
+                placeholder="Client, department, or status"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -316,7 +453,7 @@ export default function FinanceProjections() {
                 {projectionRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      No projections yet.
+                      No projections match the current filters.
                     </TableCell>
                   </TableRow>
                 )}

@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { jobsAPI, timeEntriesAPI } from '@/lib/api';
 import type { Job, JobStaffAssignment } from '@/lib/api/types';
 import { Briefcase, Calendar, RefreshCw, Users, Loader2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const statusColors: Record<string, string> = {
   planned: 'bg-gray-100 text-gray-800',
@@ -50,6 +51,7 @@ interface AllocationSummary {
 
 export default function JobWorkflowDashboard() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [staff, setStaff] = useState<JobStaffAssignment[]>([]);
@@ -424,6 +426,24 @@ export default function JobWorkflowDashboard() {
                           </div>
                         ))
                       )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Project Evaluations</CardTitle>
+                      <CardDescription>Submit job-based reviews for assigned staff.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex items-center justify-between">
+                      <div className="text-sm text-muted-foreground">
+                        Open the evaluation form for this job and record team performance.
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => navigate(`/project-evaluations?jobId=${selectedJob.id}`)}
+                      >
+                        Evaluate Job
+                      </Button>
                     </CardContent>
                   </Card>
 

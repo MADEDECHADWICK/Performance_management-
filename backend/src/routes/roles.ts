@@ -114,7 +114,7 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
     
     // Audit log
     await createAudit({
-      user_id: req.user?.sub,
+      user_id: req.user?.userId,
       action: 'ROLE_CREATED',
       entity_type: 'Role',
     });
@@ -161,7 +161,7 @@ router.put('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, re
     
     // Audit log
     await createAudit({
-      user_id: req.user?.sub,
+      user_id: req.user?.userId,
       action: 'ROLE_UPDATED',
       entity_type: 'Role',
     });
@@ -206,7 +206,7 @@ router.delete('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest,
     
     // Audit log
     await createAudit({
-      user_id: req.user?.sub,
+      user_id: req.user?.userId,
       action: 'ROLE_DEACTIVATED',
       entity_type: 'Role',
     });

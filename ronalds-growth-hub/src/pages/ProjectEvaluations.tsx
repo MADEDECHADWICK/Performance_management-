@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,8 @@ type ProjectEvaluation = {
   evaluatorType: string;
   overallScore?: number | null;
   comments?: string | null;
+  createdAt?: string | Date;
+  submittedAt?: string | Date | null;
   evaluatee?: { id: number; firstName: string; lastName: string } | null;
   evaluator?: { id: number; firstName: string; lastName: string } | null;
   job?: { id: number; jobName: string; status: string } | null;
@@ -46,6 +49,7 @@ const ratingFields = [
 const ProjectEvaluations = () => {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [jobId, setJobId] = useState<string>("");
   const [staff, setStaff] = useState<StaffAssignment[]>([]);
@@ -56,10 +60,40 @@ const ProjectEvaluations = () => {
   const [evaluations, setEvaluations] = useState<ProjectEvaluation[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const evaluationSummary = useMemo(() => {
+    if (evaluations.length === 0) {
+      return { count: 0, average: 0, lastUpdated: null as string | null };
+    }
+    const scoresList = evaluations
+      .map((item) => Number(item.overallScore))
+      .filter((value) => Number.isFinite(value));
+    const average =
+      scoresList.length > 0
+        ? Math.round((scoresList.reduce((a, b) => a + b, 0) / scoresList.length) * 10) / 10
+        : 0;
+    const latest = evaluations
+      .map((item) => item.submittedAt || item.createdAt)
+      .filter(Boolean)
+      .map((value) => new Date(value as any))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    return {
+      count: evaluations.length,
+      average,
+      lastUpdated: latest ? latest.toLocaleDateString() : null,
+    };
+  }, [evaluations]);
+
   const selectedJob = useMemo(
     () => jobs.find((item) => String(item.id) === jobId) || null,
     [jobs, jobId]
   );
+
+  useEffect(() => {
+    const presetJobId = searchParams.get("jobId");
+    if (presetJobId) {
+      setJobId(presetJobId);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const loadJobs = async () => {
@@ -67,6 +101,10 @@ const ProjectEvaluations = () => {
         const response: any = await apiFetch("GET", "/jobs?status=planned,in_progress");
         const items = response?.data?.items || response?.data || response || [];
         setJobs(items);
+        const presetJobId = searchParams.get("jobId");
+        if (presetJobId && items.some((job: JobItem) => String(job.id) === presetJobId)) {
+          setJobId(presetJobId);
+        }
       } catch (error: any) {
         toast({
           title: "Error loading jobs",
@@ -283,6 +321,29 @@ const ProjectEvaluations = () => {
 
         <Card>
           <CardHeader>
+            <CardTitle>Evaluation Snapshot</CardTitle>
+            <CardDescription>Summary for the selected job.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Total Evaluations</p>
+              <p className="text-2xl font-semibold">{evaluationSummary.count}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Average Score</p>
+              <p className="text-2xl font-semibold">{evaluationSummary.average}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Last Updated</p>
+              <p className="text-sm font-medium">
+                {evaluationSummary.lastUpdated || "No submissions yet"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Recent Project Evaluations</CardTitle>
             <CardDescription>Latest submissions for the selected job.</CardDescription>
           </CardHeader>
@@ -304,14 +365,14 @@ const ProjectEvaluations = () => {
                           {evaluation.evaluatee?.firstName} {evaluation.evaluatee?.lastName}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {evaluation.job?.jobName} • {evaluation.evaluator?.firstName}{" "}
+                          {evaluation.job?.jobName} - {evaluation.evaluator?.firstName}{" "}
                           {evaluation.evaluator?.lastName}
                         </p>
                       </div>
                       <Badge variant="outline">{evaluation.evaluatorType}</Badge>
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
-                      Score: {evaluation.overallScore ?? "—"} • Status: {evaluation.status}
+                      Score: {evaluation.overallScore ?? "--"} - Status: {evaluation.status}
                     </div>
                     {evaluation.comments && (
                       <p className="mt-2 text-sm">{evaluation.comments}</p>

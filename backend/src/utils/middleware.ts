@@ -50,7 +50,7 @@ export const withPermissions = (...permissions: string[]): RequestHandler[] => [
  */
 export const withJobAccess = (): RequestHandler[] => [
   ...authenticated(),
-  requireJobAccess,
+  requireJobAccess(),
 ];
 
 /**

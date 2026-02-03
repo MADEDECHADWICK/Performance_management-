@@ -17,7 +17,9 @@ export class NotificationController {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
       const type = (req.query.type as string) || undefined;
-      const status = (req.query.status as string) || undefined;
+      const rawStatus = req.query.status as string | undefined;
+      const status =
+        rawStatus === 'read' || rawStatus === 'unread' ? rawStatus : undefined;
       const scope = (req.query.scope as string) || 'mine';
 
       const auth = {

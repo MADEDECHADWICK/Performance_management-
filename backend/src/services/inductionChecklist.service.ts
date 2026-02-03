@@ -1,6 +1,7 @@
 import prisma from "../prisma";
 import { NotificationService } from "./notifications.service";
 import { ChecklistStatus, OnboardingStatus } from "@prisma/client";
+import { createAudit } from "../utils/audit";
 
 export interface AuthContext {
   userId: number;
@@ -117,7 +118,7 @@ class InductionChecklistServiceClass {
       include: {
         employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
         onboardingCase: true,
-        items: { orderBy: { orderIndex: "asc" } },
+        items: { orderBy: { orderIndex: "asc" }, include: { document: true } },
       },
     });
 
@@ -152,7 +153,7 @@ class InductionChecklistServiceClass {
 
     const item = await prisma.inductionChecklistItem.findUnique({
       where: { id: itemId },
-      select: { id: true, checklistId: true, isCompleted: true },
+      select: { id: true, checklistId: true, isCompleted: true, requiresDocument: true, documentId: true },
     });
 
     if (!item || item.checklistId !== checklistId) {
@@ -166,6 +167,12 @@ class InductionChecklistServiceClass {
       return this.getChecklistById(checklistId);
     }
 
+    if (item.requiresDocument && !item.documentId) {
+      const err = new Error("Document required before completing this item");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
     // Mark item complete
     await prisma.inductionChecklistItem.update({
       where: { id: itemId },
@@ -175,6 +182,12 @@ class InductionChecklistServiceClass {
         completedAt: new Date(),
       },
     });
+
+    await createAudit({
+      action: "complete_onboarding_checklist_item",
+      entity_type: "InductionChecklistItem",
+      user_id: auth.userId,
+    }).catch(() => null);
 
     // Recompute checklist completion
     const items = await prisma.inductionChecklistItem.findMany({
@@ -233,6 +246,113 @@ class InductionChecklistServiceClass {
         }
       );
     }
+
+    return this.getChecklistById(checklistId);
+  }
+
+  async sendReminder(checklistId: number, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const checklist = await prisma.inductionChecklist.findUnique({
+      where: { id: checklistId },
+      select: {
+        id: true,
+        checklistName: true,
+        status: true,
+        employeeProfileId: true,
+        dueDate: true,
+      },
+    });
+
+    if (!checklist) {
+      const err = new Error("Checklist not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: checklist.employeeProfileId,
+        type: "action",
+        title: "Onboarding checklist reminder",
+        message: checklist.dueDate
+          ? `Reminder: "${checklist.checklistName}" is due on ${checklist.dueDate.toDateString()}.`
+          : `Reminder: Please complete your onboarding checklist "${checklist.checklistName}".`,
+        actionRequired: true,
+        link: "/onboarding",
+      },
+      {
+        userId: auth.userId,
+        profileId: auth.profileId,
+        roleName: auth.roles?.[0],
+      }
+    );
+
+    return { sent: true };
+  }
+
+  async attachItemDocument(
+    checklistId: number,
+    itemId: number,
+    documentId: number,
+    auth: AuthContext
+  ) {
+    const checklist = await prisma.inductionChecklist.findUnique({
+      where: { id: checklistId },
+      select: { id: true, employeeProfileId: true },
+    });
+    if (!checklist) {
+      const err = new Error("Checklist not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const isEmployee = checklist.employeeProfileId === auth.profileId;
+    if (!this.isPrivileged(auth) && !isEmployee) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const item = await prisma.inductionChecklistItem.findUnique({
+      where: { id: itemId },
+      select: { id: true, checklistId: true },
+    });
+    if (!item || item.checklistId !== checklistId) {
+      const err = new Error("Checklist item not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const doc = await prisma.document.findUnique({
+      where: { id: documentId },
+      select: { id: true, entityType: true, entityId: true },
+    });
+    if (!doc) {
+      const err = new Error("Document not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    if (doc.entityType !== "InductionChecklist" || doc.entityId !== checklistId) {
+      const err = new Error("Document is not linked to this checklist");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    await prisma.inductionChecklistItem.update({
+      where: { id: itemId },
+      data: { documentId },
+    });
+
+    await createAudit({
+      action: "attach_onboarding_checklist_document",
+      entity_type: "InductionChecklistItem",
+      user_id: auth.userId,
+    }).catch(() => null);
 
     return this.getChecklistById(checklistId);
   }

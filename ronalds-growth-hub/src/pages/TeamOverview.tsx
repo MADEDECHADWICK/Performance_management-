@@ -194,11 +194,12 @@ const TeamOverview = () => {
       setTeamProjects(mockTeamProjects);
     } catch (error: any) {
       console.error("Error loading team overview:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load team overview data.",
-        variant: "destructive"
-      });
+      if (error?.status === 404) {
+        setMetrics(null);
+        setTeamMembers([]);
+        setTeamProjects([]);
+        return;
+      }
     } finally {
       setLoading(false);
     }

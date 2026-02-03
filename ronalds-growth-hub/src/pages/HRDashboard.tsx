@@ -21,14 +21,17 @@ import {
   TrendingDown,
   Award,
   AlertCircle,
+  ClipboardCheck,
   Shield,
-  Circle
+  Circle,
+  RefreshCw
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import apiFetch, { authAPI } from "@/integrations/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Profile {
   first_name: string;
@@ -52,6 +55,7 @@ interface PerformanceData {
   learningGrowthScore: number;
   okrScore: number;
   projectEvaluationScore: number;
+  lossAlert?: boolean;
 }
 
 interface CompanyMetrics {
@@ -82,6 +86,7 @@ interface NotificationCard {
 }
 
 const HRDashboard = () => {
+  const { isAdmin } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [pendingTasks, setPendingTasks] = useState(0);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
@@ -89,7 +94,9 @@ const HRDashboard = () => {
   const [subordinates, setSubordinates] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<NotificationCard[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [missingChecklistCount, setMissingChecklistCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRecomputeLoading, setIsRecomputeLoading] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -115,12 +122,13 @@ const HRDashboard = () => {
       if (!user) return;
 
       await Promise.all([
-      loadPendingTasks(user.id),
-      loadNotifications(),
-      loadPersonalPerformance(user.id),
-      loadCompanyMetrics(),
-      loadSubordinates(user.id)
-    ]);
+        loadPendingTasks(user.id),
+        loadNotifications(),
+        loadPersonalPerformance(user.id),
+        loadCompanyMetrics(),
+        loadSubordinates(user.id),
+        loadMissingChecklists()
+      ]);
 
       const mapped = mapProfile(user);
       if (mapped) setProfile(mapped);
@@ -188,6 +196,7 @@ const HRDashboard = () => {
           typeof nonFinancial.customerSatisfactionScore === 'number'
             ? Math.round((nonFinancial.customerSatisfactionScore / 20) * 10) / 10
             : 0;
+        const lossAlert = Boolean(performancePayload?.scoreBreakdown?.lossAlert);
 
         setPerformance({
           overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
@@ -202,6 +211,7 @@ const HRDashboard = () => {
           learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
           okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+          lossAlert,
         });
         return;
       }
@@ -263,10 +273,36 @@ const HRDashboard = () => {
         internalProcessScore: Math.round(internalProcessScore),
         learningGrowthScore: Math.round(learningGrowthScore),
         okrScore: 0,
-        projectEvaluationScore: 0
+        projectEvaluationScore: 0,
+        lossAlert: false,
       });
     } catch (error) {
       console.error("Error loading performance:", error);
+    }
+  };
+
+  const handleRecomputeScores = async () => {
+    try {
+      setIsRecomputeLoading(true);
+      await apiFetch("POST", "/performance-scores/recalculate", {});
+      toast({
+        title: "Scores refreshed",
+        description: "Performance scores have been recalculated.",
+      });
+      const user = await authAPI.me();
+      if (user?.id) {
+        await loadPersonalPerformance(user.id);
+      }
+      await loadCompanyMetrics();
+    } catch (error) {
+      console.error("Error recalculating scores:", error);
+      toast({
+        title: "Error",
+        description: "Failed to recalculate performance scores.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRecomputeLoading(false);
     }
   };
 
@@ -276,6 +312,17 @@ const HRDashboard = () => {
       setCompanyMetrics(metrics);
     } catch (error) {
       console.error("Error loading company metrics:", error);
+    }
+  };
+
+  const loadMissingChecklists = async () => {
+    try {
+      const response = await apiFetch("GET", "/employees/missing-induction");
+      const items = response?.data ?? response ?? [];
+      setMissingChecklistCount(Array.isArray(items) ? items.length : 0);
+    } catch (error) {
+      console.error("Error loading missing checklists", error);
+      setMissingChecklistCount(0);
     }
   };
 
@@ -308,13 +355,28 @@ const HRDashboard = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">
-            {profile?.position || "HR"} Dashboard
-          </h2>
-          <p className="text-muted-foreground">
-            View your personal performance and manage company-wide operations
-          </p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2">
+              {profile?.position || "HR"} Dashboard
+            </h2>
+            <p className="text-muted-foreground">
+              View your personal performance and manage company-wide operations
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRecomputeScores}
+            disabled={isRecomputeLoading}
+          >
+            {isRecomputeLoading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Recompute scores
+          </Button>
         </div>
 
         <Tabs defaultValue="personal" className="w-full">
@@ -343,7 +405,12 @@ const HRDashboard = () => {
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
-                  <Star className="h-4 w-4 text-accent" />
+                  <div className="flex items-center gap-2">
+                    {performance?.lossAlert && (
+                      <Badge variant="destructive">Loss alert</Badge>
+                    )}
+                    <Star className="h-4 w-4 text-accent" />
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-primary">
@@ -564,6 +631,23 @@ const HRDashboard = () => {
 
           {/* Company Overview Tab - Analytics for HR/Admin */}
           <TabsContent value="company" className="space-y-6">
+            {isAdmin && (
+              <div className="flex items-center justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRecomputeScores}
+                  disabled={isRecomputeLoading}
+                >
+                  {isRecomputeLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  Recompute scores
+                </Button>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -595,6 +679,19 @@ const HRDashboard = () => {
 
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Missing Checklists</CardTitle>
+                  <ClipboardCheck className="h-4 w-4 text-warning" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-foreground">
+                    {missingChecklistCount}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Employees without induction</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Collected (Month)</CardTitle>
                   <TrendingUp className="h-4 w-4 text-success" />
                 </CardHeader>
@@ -610,7 +707,12 @@ const HRDashboard = () => {
 
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Firm Profit (Month)</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-sm font-medium">Firm Profit (Month)</CardTitle>
+                    {(companyMetrics?.firmProfit || 0) < 0 && (
+                      <Badge variant="destructive">Loss</Badge>
+                    )}
+                  </div>
                   <DollarSign className="h-4 w-4 text-secondary" />
                 </CardHeader>
                 <CardContent>

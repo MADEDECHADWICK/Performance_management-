@@ -76,4 +76,15 @@ router.get(
   DepartmentController.getDepartmentManager
 );
 
+/**
+ * GET /departments/:departmentId/team-kpis
+ * Team-level KPI breakdown for a department
+ * Query: status (active|inactive|all)
+ */
+router.get(
+  "/:departmentId/team-kpis",
+  ...authenticated(),
+  DepartmentController.getDepartmentTeamKpis
+);
+
 export default router;

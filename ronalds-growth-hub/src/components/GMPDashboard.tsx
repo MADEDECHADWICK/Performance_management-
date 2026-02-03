@@ -48,6 +48,7 @@ interface FirmMetrics {
   active_clients: number;
   total_departments: number;
   evaluations_this_month: number;
+  utilization_rate?: number;
 }
 
 interface PartnerRanking {
@@ -91,9 +92,34 @@ interface DepartmentData {
 
 interface DashboardData {
   firmMetrics: FirmMetrics;
+  financials?: {
+    totalRevenue?: number;
+    totalProfit?: number;
+    projectedRevenue?: number;
+    collectedAmount?: number;
+    totalCost?: number;
+    collectionRate?: number;
+  };
   partnerRankings: PartnerRanking[];
   managerRankings: ManagerRanking[];
   departmentBreakdown: DepartmentData[];
+  revenueTrend?: Array<{ month: string | Date; collected: number }>;
+  projectionTrend?: Array<{ month: string | Date; projected: number; collected: number }>;
+  alertsSummary?: {
+    engagementsApprovedNotStarted?: number;
+    pendingOverBudget?: number;
+  };
+}
+
+interface ProposalMetrics {
+  totalOpportunities: number;
+  pipelineValue: number;
+  weightedPipelineValue: number;
+  avgDealSize: number;
+  conversionRate: number;
+  wonThisMonth: number;
+  lostThisMonth: number;
+  hotLeads: number;
 }
 
 interface PersonalData {
@@ -122,6 +148,7 @@ export default function GMPDashboard() {
   const [personalData, setPersonalData] = useState<PersonalData | null>(null);
   const [alertsData, setAlertsData] = useState<AlertsData | null>(null);
   const [lossAlertCount, setLossAlertCount] = useState(0);
+  const [pipelineMetrics, setPipelineMetrics] = useState<ProposalMetrics | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   useEffect(() => {
@@ -138,7 +165,7 @@ export default function GMPDashboard() {
         return;
       }
 
-      await Promise.all([loadDashboardData(), loadPersonalData(), loadAlertsData()]);
+      await Promise.all([loadDashboardData(), loadPersonalData(), loadAlertsData(), loadPipelineMetrics()]);
       setLastUpdated(new Date());
     } catch (error) {
       console.error("Error loading GMP dashboard:", error);
@@ -171,15 +198,15 @@ export default function GMPDashboard() {
       console.error("Error loading dashboard overview:", error);
       setDashboardData({
         firmMetrics: {
-          total_employees: 156,
-          total_partners: 8,
-          total_managers: 24,
-          total_revenue: 45200000,
-          total_fees: 38400000,
-          active_jobs: 89,
-          active_clients: 156,
-          total_departments: 6,
-          evaluations_this_month: 45,
+          total_employees: 0,
+          total_partners: 0,
+          total_managers: 0,
+          total_revenue: 0,
+          total_fees: 0,
+          active_jobs: 0,
+          active_clients: 0,
+          total_departments: 0,
+          evaluations_this_month: 0,
         },
         partnerRankings: [],
         managerRankings: [],
@@ -240,6 +267,16 @@ export default function GMPDashboard() {
     }
   };
 
+  const loadPipelineMetrics = async () => {
+    try {
+      const data = await apiFetch("GET", "/proposals/metrics");
+      setPipelineMetrics(data);
+    } catch (error) {
+      console.error("Error loading pipeline metrics:", error);
+      setPipelineMetrics(null);
+    }
+  };
+
   const handleRefresh = async () => {
     await verifyGMPAccessAndLoadData();
     toast({
@@ -262,31 +299,53 @@ export default function GMPDashboard() {
   };
 
   const firmMetrics = dashboardData?.firmMetrics;
-  const collected = firmMetrics?.total_revenue ?? 0;
-  const projected = firmMetrics?.total_fees ?? 0;
-  const profitability = collected - projected;
+  const collected =
+    dashboardData?.financials?.collectedAmount ??
+    dashboardData?.financials?.totalRevenue ??
+    firmMetrics?.total_revenue ??
+    0;
+  const projected =
+    dashboardData?.financials?.projectedRevenue ??
+    firmMetrics?.total_fees ??
+    0;
+  const profitability =
+    dashboardData?.financials?.totalProfit ??
+    (dashboardData?.financials?.totalCost !== undefined
+      ? collected - Number(dashboardData?.financials?.totalCost || 0)
+      : collected - projected);
   const atRiskCount = alertsData?.jobsAtRisk?.length ?? 0;
   const atRiskExposure = alertsData?.jobsAtRisk?.reduce((sum, job) => {
     const fee = Number(job.feeAmount ?? job.fee ?? job.jobFee ?? 0);
     return sum + (Number.isNaN(fee) ? 0 : fee);
   }, 0) ?? 0;
 
-  const pipelineValue = dashboardData?.departmentBreakdown?.reduce((sum, dept) => {
-    const fees = Number(dept.department_fees ?? 0);
-    return sum + (Number.isNaN(fees) ? 0 : fees);
-  }, 0) ?? 0;
+  const pipelineValue = pipelineMetrics?.pipelineValue ?? 0;
 
-  const revenueTrend = (() => {
-    const now = new Date();
-    const base = collected ? Math.max(collected / 6, 0) : 0;
-    return Array.from({ length: 6 }).map((_, index) => {
-      const pointDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
-      return {
-        month: pointDate.toLocaleString("en-US", { month: "short" }),
-        collected: Math.round(base * (0.9 + index * 0.04)),
-      };
-    });
-  })();
+  const revenueTrend =
+    dashboardData?.projectionTrend && dashboardData.projectionTrend.length > 0
+      ? dashboardData.projectionTrend.map((row) => ({
+          month: new Date(row.month).toLocaleString("en-US", { month: "short" }),
+          collected: Number(row.collected || 0),
+          projected: Number(row.projected || 0),
+        }))
+      : dashboardData?.revenueTrend && dashboardData.revenueTrend.length > 0
+      ? dashboardData.revenueTrend.map((row) => ({
+          month: new Date(row.month).toLocaleString("en-US", { month: "short" }),
+          collected: Number(row.collected || 0),
+          projected: 0,
+        }))
+      : (() => {
+          const now = new Date();
+          const base = collected ? Math.max(collected / 6, 0) : 0;
+          return Array.from({ length: 6 }).map((_, index) => {
+            const pointDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+            return {
+              month: pointDate.toLocaleString("en-US", { month: "short" }),
+              collected: Math.round(base * (0.9 + index * 0.04)),
+              projected: Math.round(base * (0.95 + index * 0.03)),
+            };
+          });
+        })();
 
   const departmentSplit = dashboardData?.departmentBreakdown?.map((dept) => ({
     department: dept.department_code || dept.department_name,
@@ -307,14 +366,14 @@ export default function GMPDashboard() {
     },
     {
       label: "Over-budget / extra time approvals",
-      value: alertsData?.pendingEvaluations?.length ?? 0,
-      tone: (alertsData?.pendingEvaluations?.length ?? 0) > 0 ? "default" : "secondary",
+      value: dashboardData?.alertsSummary?.pendingOverBudget ?? 0,
+      tone: (dashboardData?.alertsSummary?.pendingOverBudget ?? 0) > 0 ? "default" : "secondary",
       route: "/timesheets",
     },
     {
       label: "Engagements approved, not started",
-      value: 0,
-      tone: "secondary",
+      value: dashboardData?.alertsSummary?.engagementsApprovedNotStarted ?? 0,
+      tone: (dashboardData?.alertsSummary?.engagementsApprovedNotStarted ?? 0) > 0 ? "default" : "secondary",
       route: "/client-onboarding-queue",
     },
     {
@@ -379,7 +438,10 @@ export default function GMPDashboard() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Profitability (MTD)</CardTitle>
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                Profitability (MTD)
+                {profitability < 0 && <Badge variant="destructive">Loss</Badge>}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-primary">{formatCurrency(profitability)}</div>
@@ -388,13 +450,13 @@ export default function GMPDashboard() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Utilization</CardTitle>
+              <CardTitle className="text-sm font-medium">Utilization (MTD)</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-primary">
-                {firmMetrics?.evaluations_this_month ? formatPercentage(firmMetrics.evaluations_this_month) : ""}
+                {formatPercentage(firmMetrics?.utilization_rate ?? 0)}
               </div>
-              <p className="text-xs text-muted-foreground">Billable hours / capacity</p>
+              <p className="text-xs text-muted-foreground">Billable vs total hours</p>
             </CardContent>
           </Card>
           <Card>
@@ -435,6 +497,7 @@ export default function GMPDashboard() {
                   <YAxis />
                   <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                   <Line type="monotone" dataKey="collected" stroke="#2563eb" strokeWidth={3} />
+                  <Line type="monotone" dataKey="projected" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 4" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -454,6 +517,33 @@ export default function GMPDashboard() {
                   </ResponsiveContainer>
                 ) : (
                   <p className="text-sm text-muted-foreground">No department data yet.</p>
+                )}
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-sm font-medium text-muted-foreground mb-2">Pipeline snapshot</p>
+                {pipelineMetrics ? (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span>Opportunities</span>
+                      <span className="font-semibold">{pipelineMetrics.totalOpportunities}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Pipeline value</span>
+                      <span className="font-semibold">{formatCurrency(pipelineMetrics.pipelineValue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Conversion rate</span>
+                      <span className="font-semibold">{pipelineMetrics.conversionRate}%</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Won / Lost (MTD)</span>
+                      <span className="font-semibold">
+                        {pipelineMetrics.wonThisMonth} / {pipelineMetrics.lostThisMonth}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No pipeline metrics yet.</p>
                 )}
               </div>
               <div>
@@ -528,7 +618,9 @@ export default function GMPDashboard() {
                   </TableHeader>
                   <TableBody>
                     {dashboardData.partnerRankings.map((partner) => {
-                      const profit = partner.portfolio_revenue - partner.portfolio_fees;
+                      const profit =
+                        partner.portfolio_profit ??
+                        partner.portfolio_revenue - partner.portfolio_fees;
                       return (
                         <TableRow key={partner.partner_id}>
                           <TableCell className="font-medium">{partner.name}</TableCell>

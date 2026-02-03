@@ -1,4 +1,5 @@
 import prisma from "../prisma";
+import { createAudit } from "../utils/audit";
 import { OnboardingStatus } from "@prisma/client";
 
 export interface AuthContext {
@@ -148,6 +149,12 @@ class EmployeeOnboardingCaseServiceImpl {
       },
     });
 
+    await createAudit({
+      action: "create_onboarding_case",
+      entity_type: "EmployeeOnboardingCase",
+      user_id: auth.userId,
+    }).catch(() => null);
+
     return created;
   }
 
@@ -220,7 +227,7 @@ class EmployeeOnboardingCaseServiceImpl {
     // Ensure exists
     await prisma.employeeOnboardingCase.findUniqueOrThrow({ where: { id: caseId } });
 
-    return prisma.employeeOnboardingCase.update({
+    const updated = await prisma.employeeOnboardingCase.update({
       where: { id: caseId },
       data: {
         status: input.status,
@@ -236,6 +243,14 @@ class EmployeeOnboardingCaseServiceImpl {
         inductionChecklist: { select: { id: true, status: true, completionPercent: true } },
       },
     });
+
+    await createAudit({
+      action: `update_onboarding_case_${updated.status || "updated"}`,
+      entity_type: "EmployeeOnboardingCase",
+      user_id: auth.userId,
+    }).catch(() => null);
+
+    return updated;
   }
 }
 

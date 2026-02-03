@@ -226,14 +226,14 @@ export class FeedbackService {
       where: { id: feedbackId },
       data: {
         status,
-        updated_at: new Date(),
+        updatedAt: new Date(),
       },
       include: {
         giver: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
         recipient: {
-          select: { id: true, first_name: true, last_name: true },
+          select: { id: true, firstName: true, lastName: true },
         },
       },
     });
@@ -255,16 +255,16 @@ export class FeedbackService {
 
     const [totalFeedback, byType, byStatus] = await Promise.all([
       prisma.feedback.count({
-        where: { recipient_profile_id: profileId },
+        where: { recipientProfileId: profileId },
       }),
       prisma.feedback.groupBy({
         by: ['type'],
-        where: { recipient_profile_id: profileId },
+        where: { recipientProfileId: profileId },
         _count: true,
       }),
       prisma.feedback.groupBy({
         by: ['status'],
-        where: { recipient_profile_id: profileId },
+        where: { recipientProfileId: profileId },
         _count: true,
       }),
     ]);
@@ -301,7 +301,7 @@ export class FeedbackService {
     // ✅ VERIFY ACCESS
     const canDelete =
       auth.roleName === 'admin' ||
-      feedback.giver_profile_id === auth.profileId;
+      feedback.giverProfileId === auth.profileId;
 
     if (!canDelete) {
       throw {

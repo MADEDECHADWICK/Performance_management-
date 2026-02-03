@@ -43,16 +43,12 @@ router.post('/', async (req, res) => {
   try {
     const { employee_id, recommendation, target_completion, status } = req.body;
     
-    const created = await prisma.developmentRecommendation.create({
-      data: {
-        employee_id,
-        recommendation,
-        target_completion,
-        status: status || 'pending',
-      }
-    });
-    
-    return res.json(created);
+    const created = await prisma.$queryRaw`
+      INSERT INTO development_recommendations (employee_id, recommendation, target_completion, status)
+      VALUES (${employee_id}, ${recommendation}, ${target_completion}, ${status || "pending"})
+      RETURNING *`;
+
+    return res.json(Array.isArray(created) ? created[0] : created);
   } catch (err: any) {
     console.error('Error creating development recommendation:', err);
     return res.status(500).json({ error: err.message });
@@ -77,13 +73,16 @@ router.patch('/:id', async (req, res) => {
       updateData.status = status;
     }
     
-    // Prisma automatically updates updatedAt
-    const updated = await prisma.developmentRecommendation.update({
-      where: { id },
-      data: updateData,
-    });
-    
-    return res.json(updated);
+    const updated = await prisma.$queryRaw`
+      UPDATE development_recommendations
+      SET
+        recommendation = COALESCE(${updateData.recommendation}, recommendation),
+        target_completion = COALESCE(${updateData.target_completion}, target_completion),
+        status = COALESCE(${updateData.status}, status)
+      WHERE id = ${id}::uuid
+      RETURNING *`;
+
+    return res.json(Array.isArray(updated) ? updated[0] : updated);
   } catch (err: any) {
     console.error('Error updating development recommendation:', err);
     return res.status(500).json({ error: err.message });
@@ -94,9 +93,8 @@ router.patch('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    await prisma.developmentRecommendation.delete({
-      where: { id: id }
-    });
+    await prisma.$executeRaw`
+      DELETE FROM development_recommendations WHERE id = ${id}::uuid`;
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

@@ -421,11 +421,14 @@ router.post('/projections', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'monthYear and projectedAmount are required' });
     }
 
+    const resolvedClientId = clientId ? Number(clientId) : undefined;
+    const resolvedDepartmentId = departmentId ? Number(departmentId) : undefined;
+
     const projection = await prisma.revenueProjection.upsert({
       where: {
         clientId_departmentId_monthYear: {
-          clientId: clientId ? Number(clientId) : null,
-          departmentId: departmentId ? Number(departmentId) : null,
+          clientId: (resolvedClientId ?? null) as any,
+          departmentId: (resolvedDepartmentId ?? null) as any,
           monthYear: new Date(monthYear),
         },
       },
@@ -434,8 +437,8 @@ router.post('/projections', authMiddleware, async (req: AuthRequest, res) => {
         currency: currency || 'KES',
       },
       create: {
-        clientId: clientId ? Number(clientId) : null,
-        departmentId: departmentId ? Number(departmentId) : null,
+        clientId: resolvedClientId,
+        departmentId: resolvedDepartmentId,
         monthYear: new Date(monthYear),
         projectedAmount,
         currency: currency || 'KES',

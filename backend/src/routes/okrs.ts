@@ -2,6 +2,7 @@ import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { createAudit } from "../utils/audit";
+import { OkrApprovalStatus, OkrStatus } from "@prisma/client";
 
 const router = Router();
 
@@ -15,8 +16,13 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
       ? Number(req.query.departmentId)
       : undefined;
     const cycleId = req.query.cycleId ? Number(req.query.cycleId) : undefined;
-    const status = req.query.status as string | undefined;
-    const approvalStatus = req.query.approvalStatus as string | undefined;
+    const status = typeof req.query.status === "string" && req.query.status in OkrStatus
+      ? (req.query.status as OkrStatus)
+      : undefined;
+    const approvalStatus =
+      typeof req.query.approvalStatus === "string" && req.query.approvalStatus in OkrApprovalStatus
+        ? (req.query.approvalStatus as OkrApprovalStatus)
+        : undefined;
 
     const objectives = await prisma.okrObjective.findMany({
       where: {
@@ -37,7 +43,7 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 const getApproverProfileId = async (req: AuthRequest) => {
-  const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+  const userId = req.user?.userId;
   if (!userId) return null;
   const profile = await prisma.profile.findUnique({
     where: { userId },
@@ -99,8 +105,8 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
         cycleId: cycleId ? Number(cycleId) : undefined,
         startDate: startDate ? new Date(startDate) : undefined,
         endDate: endDate ? new Date(endDate) : undefined,
-        status: status || "active",
-        approvalStatus: approvalStatus || "pending",
+        status: (status as OkrStatus) || OkrStatus.active,
+        approvalStatus: (approvalStatus as OkrApprovalStatus) || OkrApprovalStatus.pending,
         submittedAt: new Date(),
         keyResults: keyResults?.length
           ? {
@@ -110,7 +116,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
                 targetValue: kr.targetValue,
                 currentValue: kr.currentValue ?? 0,
                 weight: kr.weight ?? undefined,
-                status: kr.status || "active",
+                status: (kr.status as OkrStatus) || OkrStatus.active,
               })),
             }
           : undefined,
@@ -118,7 +124,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       include: { keyResults: true },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:create",
       entity_type: "okr_objective",
@@ -160,8 +166,8 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
         ...(cycleId !== undefined && { cycleId: Number(cycleId) }),
         ...(startDate !== undefined && { startDate: startDate ? new Date(startDate) : null }),
         ...(endDate !== undefined && { endDate: endDate ? new Date(endDate) : null }),
-        ...(status !== undefined && { status }),
-        ...(approvalStatus !== undefined && { approvalStatus }),
+        ...(status !== undefined && { status: status as OkrStatus }),
+        ...(approvalStatus !== undefined && { approvalStatus: approvalStatus as OkrApprovalStatus }),
       },
       include: { keyResults: true },
     });
@@ -178,7 +184,7 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
       });
     }
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:update",
       entity_type: "okr_objective",
@@ -202,25 +208,25 @@ router.post("/:id/submit", authMiddleware, async (req: AuthRequest, res) => {
     const objective = await prisma.okrObjective.update({
       where: { id: Number(id) },
       data: {
-        approvalStatus: "pending",
+        approvalStatus: OkrApprovalStatus.pending,
         submittedAt: new Date(),
       },
       include: { keyResults: true },
     });
 
     const changedByProfileId = await getApproverProfileId(req);
-    if (existing && existing.approvalStatus !== "pending") {
+    if (existing && existing.approvalStatus !== OkrApprovalStatus.pending) {
       await logOkrHistory({
         objectiveId: Number(id),
         changeType: "approval_update",
         field: "approvalStatus",
         previousValue: existing.approvalStatus,
-        newValue: "pending",
+        newValue: OkrApprovalStatus.pending,
         changedByProfileId,
       });
     }
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:submit",
       entity_type: "okr_objective",
@@ -247,7 +253,7 @@ router.post("/:id/approve", authMiddleware, async (req: AuthRequest, res) => {
     const objective = await prisma.okrObjective.update({
       where: { id: Number(id) },
       data: {
-        approvalStatus: "approved",
+        approvalStatus: OkrApprovalStatus.approved,
         approvedAt: new Date(),
         approvedByProfileId: approverProfileId ?? undefined,
         approvalNotes: approvalNotes ?? undefined,
@@ -260,12 +266,12 @@ router.post("/:id/approve", authMiddleware, async (req: AuthRequest, res) => {
       changeType: "approval_update",
       field: "approvalStatus",
       previousValue: existing?.approvalStatus ?? null,
-      newValue: "approved",
+      newValue: OkrApprovalStatus.approved,
       note: approvalNotes ?? undefined,
       changedByProfileId: approverProfileId ?? undefined,
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:approve",
       entity_type: "okr_objective",
@@ -292,7 +298,7 @@ router.post("/:id/reject", authMiddleware, async (req: AuthRequest, res) => {
     const objective = await prisma.okrObjective.update({
       where: { id: Number(id) },
       data: {
-        approvalStatus: "rejected",
+        approvalStatus: OkrApprovalStatus.rejected,
         approvedAt: new Date(),
         approvedByProfileId: approverProfileId ?? undefined,
         approvalNotes: approvalNotes ?? undefined,
@@ -305,12 +311,12 @@ router.post("/:id/reject", authMiddleware, async (req: AuthRequest, res) => {
       changeType: "approval_update",
       field: "approvalStatus",
       previousValue: existing?.approvalStatus ?? null,
-      newValue: "rejected",
+      newValue: OkrApprovalStatus.rejected,
       note: approvalNotes ?? undefined,
       changedByProfileId: approverProfileId ?? undefined,
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:reject",
       entity_type: "okr_objective",
@@ -330,7 +336,7 @@ router.delete("/:id", authMiddleware, async (req: AuthRequest, res) => {
     const { id } = req.params;
     await prisma.okrObjective.delete({ where: { id: Number(id) } });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: "okr:delete",
       entity_type: "okr_objective",
@@ -362,7 +368,7 @@ router.post("/:id/key-results", authMiddleware, async (req: AuthRequest, res) =>
         targetValue,
         currentValue: currentValue ?? 0,
         weight: weight ?? undefined,
-        status: status || "active",
+        status: (status as OkrStatus) || OkrStatus.active,
       },
     });
 
@@ -391,7 +397,7 @@ router.patch("/key-results/:krId", authMiddleware, async (req: AuthRequest, res)
         ...(targetValue !== undefined && { targetValue }),
         ...(currentValue !== undefined && { currentValue }),
         ...(weight !== undefined && { weight }),
-        ...(status !== undefined && { status }),
+        ...(status !== undefined && { status: status as OkrStatus }),
       },
     });
 

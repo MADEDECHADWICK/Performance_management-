@@ -107,7 +107,16 @@ export class RoleAwareAnalyticsService {
     profileId?: number
   ): Promise<EmployeeNonFinancialMetrics | null> {
     try {
-      if (!profileId) return null;
+      if (!profileId) {
+        return {
+          employeeId: 0,
+          employeeName: 'Unknown',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
+      }
       // Get the most recent evaluation for this employee
       const evaluation = await prisma.performanceScore.findFirst({
         where: { employeeProfileId: profileId },
@@ -115,7 +124,17 @@ export class RoleAwareAnalyticsService {
       });
 
       if (!evaluation) {
-        return null;
+        const profile = await prisma.profile.findUnique({
+          where: { id: profileId },
+        });
+        return {
+          employeeId: profileId,
+          employeeName: profile ? `${profile.firstName} ${profile.lastName}` : 'Unknown',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
       }
 
       const profile = await prisma.profile.findUnique({
@@ -143,7 +162,14 @@ export class RoleAwareAnalyticsService {
       };
     } catch (error) {
       console.error('Error fetching employee non-financial metrics:', error);
-      return null;
+      return {
+        employeeId: profileId || 0,
+        employeeName: 'Unknown',
+        learningGrowth: 0,
+        customerSatisfaction: 0,
+        internalProcesses: 0,
+        overallScore: 0,
+      };
     }
   }
 
@@ -155,7 +181,16 @@ export class RoleAwareAnalyticsService {
     partnerProfileId?: number
   ): Promise<EmployeeNonFinancialMetrics | null> {
     try {
-      if (!partnerProfileId) return null;
+      if (!partnerProfileId) {
+        return {
+          employeeId: 0,
+          employeeName: 'Partner Portfolio',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
+      }
       // First get partner's jobs
       const partnerJobs = await prisma.job.findMany({
         where: {
@@ -165,7 +200,14 @@ export class RoleAwareAnalyticsService {
       });
 
       if (partnerJobs.length === 0) {
-        return null;
+        return {
+          employeeId: partnerProfileId,
+          employeeName: 'Partner Portfolio',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
       }
 
       const jobIds = partnerJobs.map(j => j.id);
@@ -181,7 +223,14 @@ export class RoleAwareAnalyticsService {
       const teamMemberIds = [...new Set(jobStaffAssignments.map(j => j.employeeProfileId))];
 
       if (teamMemberIds.length === 0) {
-        return null;
+        return {
+          employeeId: partnerProfileId,
+          employeeName: 'Partner Portfolio',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
       }
 
       // Get evaluations for team members
@@ -192,7 +241,14 @@ export class RoleAwareAnalyticsService {
       });
 
       if (evaluations.length === 0) {
-        return null;
+        return {
+          employeeId: partnerProfileId,
+          employeeName: 'Partner Portfolio',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
       }
 
       // Calculate averages
@@ -215,7 +271,14 @@ export class RoleAwareAnalyticsService {
       };
     } catch (error) {
       console.error('Error fetching partner team metrics:', error);
-      return null;
+      return {
+        employeeId: partnerProfileId || 0,
+        employeeName: 'Partner Portfolio',
+        learningGrowth: 0,
+        customerSatisfaction: 0,
+        internalProcesses: 0,
+        overallScore: 0,
+      };
     }
   }
 
@@ -223,19 +286,46 @@ export class RoleAwareAnalyticsService {
     managerProfileId?: number
   ): Promise<EmployeeNonFinancialMetrics | null> {
     try {
-      if (!managerProfileId) return null;
+      if (!managerProfileId) {
+        return {
+          employeeId: 0,
+          employeeName: 'Manager Team',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
+      }
 
       const teamMembers = await prisma.profile.findMany({
         where: { managerId: managerProfileId, status: 'active' },
         select: { id: true },
       });
       const teamMemberIds = teamMembers.map((member) => member.id);
-      if (teamMemberIds.length === 0) return null;
+      if (teamMemberIds.length === 0) {
+        return {
+          employeeId: managerProfileId,
+          employeeName: 'Manager Team',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
+      }
 
       const evaluations = await prisma.performanceScore.findMany({
         where: { employeeProfileId: { in: teamMemberIds } },
       });
-      if (evaluations.length === 0) return null;
+      if (evaluations.length === 0) {
+        return {
+          employeeId: managerProfileId,
+          employeeName: 'Manager Team',
+          learningGrowth: 0,
+          customerSatisfaction: 0,
+          internalProcesses: 0,
+          overallScore: 0,
+        };
+      }
 
       const nonFinScores = evaluations.map((e) => Number(e.nonFinancialWeighted || e.evaluationScore || 0));
       const avgNonFinScore = nonFinScores.reduce((a, b) => a + b, 0) / nonFinScores.length;
@@ -252,7 +342,14 @@ export class RoleAwareAnalyticsService {
       };
     } catch (error) {
       console.error('Error fetching manager team metrics:', error);
-      return null;
+      return {
+        employeeId: managerProfileId || 0,
+        employeeName: 'Manager Team',
+        learningGrowth: 0,
+        customerSatisfaction: 0,
+        internalProcesses: 0,
+        overallScore: 0,
+      };
     }
   }
 
@@ -358,27 +455,42 @@ export class RoleAwareAnalyticsService {
    */
   static async getEmployeeFinancialMetrics(profileId?: number): Promise<any> {
     try {
-      if (!profileId) return null;
-      // Get employee's work logs and billable hours
-      const timeEntries = await prisma.timeEntry.findMany({
-        where: {
-          employeeProfileId: profileId,
-        },
-        include: { job: true },
-      });
-
-      if (timeEntries.length === 0) {
+      if (!profileId) {
         return {
           totalHours: 0,
           billableHours: 0,
           nonBillableHours: 0,
+          allocatedRevenueTotal: 0,
+          profitTotal: 0,
+          lossTotal: 0,
           jobBreakdown: [],
         };
       }
+      // Get employee's approved time entries for hours + costs
+      const timeEntries = await prisma.timeEntry.findMany({
+        where: {
+          employeeProfileId: profileId,
+          status: 'approved',
+        },
+        include: { job: true },
+      });
 
       let totalHours = 0;
       let billableHours = 0;
-      const jobMap = new Map<number, { jobTitle: string; totalHours: number; billableHours: number; revenue: number; cost: number; profitLoss: number }>();
+      const jobMap = new Map<number, { 
+        jobTitle: string; 
+        status: string;
+        lastWorkedAt: Date | null;
+        totalHours: number; 
+        billableHours: number; 
+        nonBillableHours: number;
+        revenue: number; 
+        cost: number; 
+        profitLoss: number;
+        allocatedRevenue: number;
+        profit: number;
+        loss: number;
+      }>();
 
       timeEntries.forEach(entry => {
         totalHours += Number(entry.hours || 0);
@@ -386,39 +498,105 @@ export class RoleAwareAnalyticsService {
         if (!entry.jobId) return;
         const current = jobMap.get(entry.jobId) || {
           jobTitle: entry.job?.jobName || 'Job',
+          status: entry.job?.status || 'in_progress',
+          lastWorkedAt: null,
           totalHours: 0,
           billableHours: 0,
+          nonBillableHours: 0,
           revenue: 0,
           cost: 0,
           profitLoss: 0,
+          allocatedRevenue: 0,
+          profit: 0,
+          loss: 0,
         };
         current.totalHours += Number(entry.hours || 0);
-        current.billableHours += entry.billable ? Number(entry.hours || 0) : 0;
+        if (entry.billable) {
+          current.billableHours += Number(entry.hours || 0);
+        } else {
+          current.nonBillableHours += Number(entry.hours || 0);
+        }
         current.revenue += Number(entry.billableAmount || 0);
         current.cost += Number(entry.costAmount || 0);
         current.profitLoss += Number(entry.profitLoss || 0);
+        const workedAt = entry.dateWorked ?? entry.createdAt ?? null;
+        if (!current.lastWorkedAt || (workedAt && workedAt > current.lastWorkedAt)) {
+          current.lastWorkedAt = workedAt;
+        }
         jobMap.set(entry.jobId, current);
+      });
+
+      const allocations = await prisma.revenueAllocation.findMany({
+        where: { employeeProfileId: profileId },
+        include: { job: true },
+      });
+
+      let allocatedRevenueTotal = 0;
+      let profitTotal = 0;
+      let lossTotal = 0;
+
+      allocations.forEach((allocation) => {
+        allocatedRevenueTotal += Number(allocation.allocatedAmount || 0);
+        profitTotal += Number(allocation.employeeProfit || 0);
+        lossTotal += Number(allocation.employeeLoss || 0);
+
+        if (!allocation.jobId) return;
+        const current = jobMap.get(allocation.jobId) || {
+          jobTitle: allocation.job?.jobName || 'Job',
+          status: allocation.job?.status || 'in_progress',
+          lastWorkedAt: null,
+          totalHours: 0,
+          billableHours: 0,
+          nonBillableHours: 0,
+          revenue: 0,
+          cost: 0,
+          profitLoss: 0,
+          allocatedRevenue: 0,
+          profit: 0,
+          loss: 0,
+        };
+        current.allocatedRevenue += Number(allocation.allocatedAmount || 0);
+        current.profit += Number(allocation.employeeProfit || 0);
+        current.loss += Number(allocation.employeeLoss || 0);
+        jobMap.set(allocation.jobId, current);
       });
 
       const jobBreakdown = Array.from(jobMap.entries()).map(([jobId, data]) => ({
         jobId,
         jobTitle: data.jobTitle,
+        status: data.status,
+        lastWorkedAt: data.lastWorkedAt,
         totalHours: data.totalHours,
         billableHours: data.billableHours,
+        nonBillableHours: data.nonBillableHours,
         revenue: data.revenue,
         cost: data.cost,
         profitLoss: data.profitLoss,
+        allocatedRevenue: data.allocatedRevenue,
+        profit: data.profit,
+        loss: data.loss,
       }));
 
       return {
         totalHours,
         billableHours,
         nonBillableHours: totalHours - billableHours,
+        allocatedRevenueTotal,
+        profitTotal,
+        lossTotal,
         jobBreakdown,
       };
     } catch (error) {
       console.error('Error fetching employee financial metrics:', error);
-      return null;
+      return {
+        totalHours: 0,
+        billableHours: 0,
+        nonBillableHours: 0,
+        allocatedRevenueTotal: 0,
+        profitTotal: 0,
+        lossTotal: 0,
+        jobBreakdown: [],
+      };
     }
   }
 
@@ -428,7 +606,16 @@ export class RoleAwareAnalyticsService {
    */
   static async getPartnerFinancialMetrics(partnerId?: number): Promise<PartnerFinancialMetrics | null> {
     try {
-      if (!partnerId) return null;
+      if (!partnerId) {
+        return {
+          partnerId: 0,
+          totalJobs: 0,
+          totalRevenue: 0,
+          totalProfit: 0,
+          averageProfitMargin: 0,
+          jobBreakdown: [],
+        };
+      }
       // Get all jobs owned by partner
       const jobs = await prisma.job.findMany({
         where: {
@@ -479,13 +666,22 @@ export class RoleAwareAnalyticsService {
       };
     } catch (error) {
       console.error('Error fetching partner financial metrics:', error);
-      return null;
+      return {
+        partnerId: partnerId || 0,
+        totalJobs: 0,
+        totalRevenue: 0,
+        totalProfit: 0,
+        averageProfitMargin: 0,
+        jobBreakdown: [],
+      };
     }
   }
 
   static async getManagerFinancialMetrics(managerProfileId?: number): Promise<any> {
     try {
-      if (!managerProfileId) return null;
+      if (!managerProfileId) {
+        return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
+      }
       const teamMembers = await prisma.profile.findMany({
         where: { managerId: managerProfileId, status: 'active' },
         select: { id: true },
@@ -513,7 +709,7 @@ export class RoleAwareAnalyticsService {
       return totals;
     } catch (error) {
       console.error('Error fetching manager financial metrics:', error);
-      return null;
+      return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
     }
   }
 

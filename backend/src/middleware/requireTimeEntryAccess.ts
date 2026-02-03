@@ -26,13 +26,7 @@ export const requireTimeEntryAccess = async (
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
       include: {
-        job: {
-          include: {
-            staffing: {
-              where: { status: "active" },
-            },
-          },
-        },
+        job: true,
       },
     });
 

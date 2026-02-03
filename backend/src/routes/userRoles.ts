@@ -72,6 +72,7 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
         profile: {
           include: {
             department: true,
+            role: true,
           },
         },
       },
@@ -83,7 +84,7 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
       id: user.id,
       profileId: user.profile?.id,
       email: user.email,
-      name: user.name,
+      name: user.profile ? `${user.profile.firstName} ${user.profile.lastName}` : user.email,
       roles: user.roles.map(r => r.role.name),
       status: user.profile?.status || 'inactive',
       department: user.profile?.department?.name || 'Unassigned',
@@ -165,7 +166,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     return res.status(201).json({
-      id: created.id,
+      userId: created.userId,
+      roleId: created.roleId,
       message: `Role '${role}' assigned to user ${targetUser?.email || userId}`,
     });
   } catch (err: any) {
@@ -254,10 +256,10 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     return res.json({
-      id: newUserRole.id,
+      userId: newUserRole.userId,
+      roleId: newUserRole.roleId,
       message: `Role changed from '${oldRole}' to '${newRole}' for user ${targetUser?.email || userId}`,
       escalation: isEscalation,
-      userId: Number(userId),
       oldRole,
       newRole,
       changedBy: currentUserId,

@@ -93,6 +93,7 @@ const GMPLogin = lazy(() => import("./pages/GMPLogin"));
 const Todos = lazy(() => import("./pages/Todos"));
 const RoleManagement = lazy(() => import("./pages/RoleManagement"));
 const PositionsRates = lazy(() => import("./pages/PositionsRates"));
+const RecruitmentCandidates = lazy(() => import("./pages/RecruitmentCandidates"));
 
 const queryClient = new QueryClient();
 
@@ -149,6 +150,7 @@ const App = () => (
               <Route path="/role-management" element={<RoleManagement />} />
               <Route path="/positions-rates" element={<PositionsRates />} />
               <Route path="/calibration" element={<Calibration />} />
+              <Route path="/recruitment-candidates" element={<RecruitmentCandidates />} />
               
               {/* Evaluations */}
               <Route path="/evaluations" element={<Evaluations />} />

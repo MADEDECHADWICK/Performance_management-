@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
-import { useToast } from '@/hooks/use-toast';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { apiFetch, timeEntriesAPI } from '@/lib/api';
 import { 
   Users, 
@@ -67,6 +68,10 @@ interface Job {
   revenue: number;
   cost: number;
   budgetUtilization: number;
+  costingStatus: string;
+  costingFee: number;
+  costingEstimatedCost: number;
+  costingEstimatedHours: number;
   clientName: string;
   departmentName: string | null;
   startDate: string | null;
@@ -97,6 +102,7 @@ interface PersonalPerformance {
   utilizationRate: number;
   okrScore: number;
   projectEvaluationScore: number;
+  lossAlert?: boolean;
 }
 
 interface NotificationItem {
@@ -107,8 +113,44 @@ interface NotificationItem {
   createdAt?: string;
 }
 
+interface PendingTimeEntry {
+  id: number;
+  hours: number;
+  dateWorked?: string;
+  job?: { id: number; jobName: string };
+  employee?: { firstName: string; lastName: string };
+}
+
+interface ApprovalRequest {
+  id: number;
+  jobId: number;
+  status: string;
+  additionalHoursRequested: number;
+  requestedAt?: string;
+  job?: { id: number; jobName: string; client?: { clientName?: string } };
+  employee?: { firstName: string; lastName: string };
+}
+
+interface ApprovalAuditLog {
+  id: number;
+  action: string;
+  entityType?: string | null;
+  entityId?: number | null;
+  metadata?: any;
+  createdAt?: string;
+}
+
+interface WorkloadMetrics {
+  total_team_members: number;
+  avg_utilization: number;
+  overloaded_employees: number;
+  underutilized_employees: number;
+  critical_deadlines: number;
+  capacity_variance: number;
+  burnout_risk: number;
+}
+
 const ManagerDashboard = () => {
-  const { toast } = useToast();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
@@ -128,8 +170,15 @@ const ManagerDashboard = () => {
   const [allocationSummaries, setAllocationSummaries] = useState<Record<number, AllocationSummary>>({});
   const [alerts, setAlerts] = useState<NotificationItem[]>([]);
   const [pendingAlertsCount, setPendingAlertsCount] = useState(0);
+  const [pendingTimeEntries, setPendingTimeEntries] = useState<PendingTimeEntry[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
+  const [approvalAudit, setApprovalAudit] = useState<ApprovalAuditLog[]>([]);
+  const [workloadMetrics, setWorkloadMetrics] = useState<WorkloadMetrics | null>(null);
   const [financialData, setFinancialData] = useState<any>(null);
   const [evaluationData, setEvaluationData] = useState<any>(null);
+  const [jobSearch, setJobSearch] = useState('');
+  const [jobStatusFilter, setJobStatusFilter] = useState('');
+  const [pendingOnly, setPendingOnly] = useState(false);
 
   useEffect(() => {
     loadDashboardData();
@@ -142,8 +191,12 @@ const ManagerDashboard = () => {
       // Load overview data first
       const overviewResponse = await apiFetch('GET', '/manager-dashboard/overview');
       setOverview(overviewResponse);
+      const workloadResponse = await apiFetch('GET', '/manager/workload-metrics');
+      setWorkloadMetrics(workloadResponse);
       await loadAlerts();
       await loadPersonalPerformance();
+      await loadApprovals();
+      await loadApprovalAudit();
 
       // Load other data based on active tab
       if (activeTab === 'team') {
@@ -152,12 +205,19 @@ const ManagerDashboard = () => {
       }
       
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate('/auth');
+        return;
+      }
+      if (error?.status === 404) {
+        setOverview(null);
+        setTeamData(null);
+        setJobData(null);
+        setFinancialData(null);
+        setEvaluationData(null);
+        return;
+      }
       console.error('Error loading dashboard data:', error);
-      toast({
-        title: 'Error',
-        description: error.message || 'Failed to load dashboard data',
-        variant: 'destructive',
-      });
     } finally {
       setLoading(false);
     }
@@ -202,12 +262,26 @@ const ManagerDashboard = () => {
           break;
       }
     } catch (error: any) {
+      if (error?.status === 401) {
+        navigate('/auth');
+        return;
+      }
+      if (error?.status === 404) {
+        if (tab === 'team') {
+          setTeamData(null);
+        }
+        if (tab === 'jobs') {
+          setJobData(null);
+        }
+        if (tab === 'financials') {
+          setFinancialData(null);
+        }
+        if (tab === 'evaluations') {
+          setEvaluationData(null);
+        }
+        return;
+      }
       console.error(`Error loading ${tab} data:`, error);
-      toast({
-        title: 'Error',
-        description: `Failed to load ${tab} data`,
-        variant: 'destructive',
-      });
     } finally {
       setLoading(false);
     }
@@ -234,6 +308,7 @@ const ManagerDashboard = () => {
         const financial = performancePayload.financial;
         const nonFinancial = performancePayload.nonFinancial || {};
         const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
+        const lossAlert = Boolean(performancePayload?.scoreBreakdown?.lossAlert);
 
         setPersonalPerformance({
           overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
@@ -242,10 +317,71 @@ const ManagerDashboard = () => {
           utilizationRate: utilizationPercent,
           okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+          lossAlert,
         });
       }
     } catch (error) {
       console.error('Error loading personal performance:', error);
+    }
+  };
+
+  const loadApprovals = async () => {
+    try {
+      const [pendingEntries, requests] = await Promise.all([
+        timeEntriesAPI.getPendingApprovals(),
+        timeEntriesAPI.listApprovalRequests({ status: 'pending' }),
+      ]);
+      setPendingTimeEntries(Array.isArray(pendingEntries) ? pendingEntries.slice(0, 5) : []);
+      setApprovalRequests(Array.isArray(requests) ? requests.slice(0, 5) : []);
+    } catch (error) {
+      console.error('Error loading approvals:', error);
+    }
+  };
+
+  const handleApproveTimeEntry = async (id: number) => {
+    await timeEntriesAPI.approve(id);
+    await loadApprovals();
+    await loadApprovalAudit();
+  };
+
+  const handleRejectTimeEntry = async (id: number) => {
+    const reason = window.prompt('Rejection reason (optional):') || 'Rejected';
+    await timeEntriesAPI.reject(id, reason);
+    await loadApprovals();
+    await loadApprovalAudit();
+  };
+
+  const handleApproveRequest = async (id: number) => {
+    const notes = window.prompt('Approval notes (optional):') || undefined;
+    await timeEntriesAPI.approveApprovalRequest(id, notes);
+    await loadApprovals();
+    await loadApprovalAudit();
+  };
+
+  const handleRejectRequest = async (id: number) => {
+    const notes = window.prompt('Rejection reason (optional):') || undefined;
+    await timeEntriesAPI.rejectApprovalRequest(id, notes);
+    await loadApprovals();
+    await loadApprovalAudit();
+  };
+
+  const loadApprovalAudit = async () => {
+    try {
+      const logs = await apiFetch('GET', '/audit-logs?limit=50');
+      const list = Array.isArray(logs) ? logs : [];
+      const filtered = list.filter((log) => {
+        const action = String(log.action || '');
+        return (
+          action.startsWith('time_entry_approved') ||
+          action.startsWith('time_entry_rejected') ||
+          action.startsWith('approval_request_approved') ||
+          action.startsWith('approval_request_rejected') ||
+          action.startsWith('job_costing_updated')
+        );
+      });
+      setApprovalAudit(filtered.slice(0, 6));
+    } catch (error) {
+      console.error('Error loading approval audit logs:', error);
     }
   };
 
@@ -274,6 +410,31 @@ const ManagerDashboard = () => {
     setActiveTab(tab);
     loadTabData(tab);
   };
+
+  const filteredJobs = (jobData?.portfolio || []).filter((job) => {
+    if (jobStatusFilter && job.status !== jobStatusFilter) return false;
+    if (jobSearch.trim()) {
+      const query = jobSearch.toLowerCase();
+      const haystack = [job.title, job.jobNumber, job.clientName, job.status]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    if (pendingOnly && !approvalCountsByJob[job.jobId]) return false;
+    return true;
+  });
+
+  const approvalCountsByJob = pendingTimeEntries.reduce((acc, entry) => {
+    const jobId = entry.job?.id;
+    if (jobId) acc[jobId] = (acc[jobId] || 0) + 1;
+    return acc;
+  }, {} as Record<number, number>);
+
+  approvalRequests.forEach((req) => {
+    const jobId = req.jobId;
+    approvalCountsByJob[jobId] = (approvalCountsByJob[jobId] || 0) + 1;
+  });
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-KE', {
@@ -323,6 +484,19 @@ const ManagerDashboard = () => {
     return <Badge variant={config.variant as any}>{config.label}</Badge>;
   };
 
+  const getCostingBadge = (job: Job) => {
+    if (!job.costingStatus || job.costingStatus === 'missing') {
+      return <Badge variant="outline">Not costed</Badge>;
+    }
+
+    if (job.costingFee > 0 && job.costingEstimatedCost > job.costingFee) {
+      return <Badge variant="destructive">Over fee</Badge>;
+    }
+
+    const label = job.costingStatus.replace(/_/g, ' ');
+    return <Badge variant="secondary">{label}</Badge>;
+  };
+
   if (loading && !overview) {
     return (
       <DashboardLayout>
@@ -351,7 +525,12 @@ const ManagerDashboard = () => {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-2">
+                  {personalPerformance.lossAlert && (
+                    <Badge variant="destructive">Loss alert</Badge>
+                  )}
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{personalPerformance.overallScore}</div>
@@ -425,6 +604,16 @@ const ManagerDashboard = () => {
         )}
 
         {/* Overview Cards */}
+        {!overview && (
+          <Card className="border-dashed mb-6">
+            <CardHeader>
+              <CardTitle>No manager analytics yet</CardTitle>
+              <CardDescription>
+                Team and job metrics will appear once activity is recorded.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
         {overview && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4 mb-6">
             <Card>
@@ -506,6 +695,54 @@ const ManagerDashboard = () => {
           </div>
         )}
 
+        {workloadMetrics && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Workload Health</CardTitle>
+                <CardDescription>Team capacity and utilization summary.</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => navigate('/workload-management')}>
+                View workload
+              </Button>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+              <div>
+                <p className="text-sm text-muted-foreground">Team members</p>
+                <p className="text-xl font-semibold">{workloadMetrics.total_team_members}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Avg utilization</p>
+                <p className="text-xl font-semibold">
+                  {Math.round(workloadMetrics.avg_utilization)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Overloaded</p>
+                <p className="text-xl font-semibold text-destructive">
+                  {workloadMetrics.overloaded_employees}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Underutilized</p>
+                <p className="text-xl font-semibold">
+                  {workloadMetrics.underutilized_employees}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Critical deadlines</p>
+                <p className="text-xl font-semibold">{workloadMetrics.critical_deadlines}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Burnout risk</p>
+                <p className="text-xl font-semibold">
+                  {Math.round(workloadMetrics.burnout_risk)}%
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Main Tabs */}
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList className="grid w-full grid-cols-4">
@@ -575,6 +812,132 @@ const ManagerDashboard = () => {
 
               <Card>
                 <CardHeader>
+                  <CardTitle>Approval Queue</CardTitle>
+                  <CardDescription>Pending submissions and extra-time requests.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap gap-3">
+                    <Badge variant="secondary">
+                      {pendingTimeEntries.length} time entries
+                    </Badge>
+                    <Badge variant="secondary">
+                      {approvalRequests.length} hour requests
+                    </Badge>
+                    <Badge variant="outline">
+                      {pendingTimeEntries.length + approvalRequests.length} total pending
+                    </Badge>
+                    <Button variant="outline" size="sm" onClick={() => navigate('/timesheets')}>
+                      Review queue
+                    </Button>
+                  </div>
+                  {pendingTimeEntries.length === 0 && approvalRequests.length === 0 && (
+                    <div className="text-sm text-muted-foreground">
+                      No pending approvals right now.
+                    </div>
+                  )}
+                  {pendingTimeEntries.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Time entries awaiting approval</p>
+                      {pendingTimeEntries.map((entry) => (
+                        <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                          <div>
+                            <span className="font-medium">
+                              {entry.employee?.firstName} {entry.employee?.lastName}
+                            </span>{' '}
+                            · {entry.job?.jobName || 'Job'} · {Number(entry.hours || 0).toFixed(1)}h
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">Submitted</Badge>
+                            <Button size="sm" onClick={() => handleApproveTimeEntry(entry.id)}>
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRejectTimeEntry(entry.id)}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {approvalRequests.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Additional hours requests</p>
+                      {approvalRequests.map((request) => (
+                        <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                          <div>
+                            <span className="font-medium">
+                              {request.employee?.firstName} {request.employee?.lastName}
+                            </span>{' '}
+                            · {request.job?.jobName || 'Job'} · {request.additionalHoursRequested}h
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary">Pending</Badge>
+                            <Button size="sm" onClick={() => handleApproveRequest(request.id)}>
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRejectRequest(request.id)}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Approval Audit Trail</CardTitle>
+                  <CardDescription>Recent approvals, rejections, and costing changes.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {approvalAudit.length === 0 && (
+                    <div className="text-sm text-muted-foreground">
+                      No approval actions recorded yet.
+                    </div>
+                  )}
+                  {approvalAudit.map((log) => (
+                    <div key={log.id} className="rounded-md border p-3 text-sm">
+                      <p className="font-medium">{log.action.replace(/_/g, ' ')}</p>
+                      {log.metadata?.jobId && (
+                        <p className="text-xs text-muted-foreground">
+                          Job #{log.metadata.jobId}
+                        </p>
+                      )}
+                      {log.metadata?.approvalNotes && (
+                        <p className="text-xs text-muted-foreground">
+                          Notes: {log.metadata.approvalNotes}
+                        </p>
+                      )}
+                      {log.metadata?.approvedByProfileId && (
+                        <p className="text-xs text-muted-foreground">
+                          Approved by profile #{log.metadata.approvedByProfileId}
+                        </p>
+                      )}
+                      {log.metadata?.totalEstimatedCost !== undefined && (
+                        <p className="text-xs text-muted-foreground">
+                          Estimated cost: KES {Number(log.metadata.totalEstimatedCost || 0).toFixed(0)}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        {log.createdAt ? new Date(log.createdAt).toLocaleString() : 'Recently'}
+                      </p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
                   <CardTitle>Recent Activity</CardTitle>
                   <CardDescription>Latest team and job updates</CardDescription>
                 </CardHeader>
@@ -608,6 +971,16 @@ const ManagerDashboard = () => {
           </TabsContent>
 
           <TabsContent value="team" className="space-y-4">
+            {!teamData && (
+              <Card className="border-dashed">
+                <CardHeader>
+                  <CardTitle>No team data yet</CardTitle>
+                  <CardDescription>
+                    Assign team members to start tracking team performance.
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            )}
             {teamData && (
               <>
                 {/* Team Financial Summary */}
@@ -756,6 +1129,16 @@ const ManagerDashboard = () => {
           </TabsContent>
 
           <TabsContent value="jobs" className="space-y-4">
+            {!jobData && (
+              <Card className="border-dashed">
+                <CardHeader>
+                  <CardTitle>No managed jobs yet</CardTitle>
+                  <CardDescription>
+                    Jobs assigned to your team will appear here.
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            )}
             {jobData && (
               <Card>
                 <CardHeader>
@@ -763,6 +1146,47 @@ const ManagerDashboard = () => {
                   <CardDescription>Jobs you manage and their current status</CardDescription>
                 </CardHeader>
                 <CardContent>
+                  <div className="grid gap-3 md:grid-cols-[200px_1fr] mb-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="managerJobStatus">Status</Label>
+                      <select
+                        id="managerJobStatus"
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        value={jobStatusFilter}
+                        onChange={(event) => setJobStatusFilter(event.target.value)}
+                      >
+                        <option value="">All statuses</option>
+                        <option value="planned">Planned</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="on_hold">On hold</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="managerJobSearch">Search</Label>
+                      <Input
+                        id="managerJobSearch"
+                        placeholder="Job, client, or status"
+                        value={jobSearch}
+                        onChange={(event) => setJobSearch(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 pb-4">
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={pendingOnly}
+                        onChange={(event) => setPendingOnly(event.target.checked)}
+                      />
+                      Pending approvals only
+                    </label>
+                    {Object.keys(approvalCountsByJob).length > 0 && (
+                      <Badge variant="outline">
+                        Jobs with pending approvals: {Object.keys(approvalCountsByJob).length}
+                      </Badge>
+                    )}
+                  </div>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -772,12 +1196,21 @@ const ManagerDashboard = () => {
                         <TableHead>Budget</TableHead>
                         <TableHead>Actual</TableHead>
                         <TableHead>Remaining (Job)</TableHead>
+                        <TableHead>Approvals</TableHead>
+                        <TableHead>Costing</TableHead>
                         <TableHead>Revenue</TableHead>
                         <TableHead>Progress</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {jobData.portfolio.map((job) => (
+                      {filteredJobs.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={10} className="text-center text-muted-foreground">
+                            No jobs match the current filters.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {filteredJobs.map((job) => (
                         <TableRow key={job.jobId}>
                           <TableCell>
                             <div>
@@ -800,11 +1233,34 @@ const ManagerDashboard = () => {
                                 ? Number(allocationSummary.remainingJobHours)
                                 : fallbackRemaining;
                               return (
-                                <span className={remaining <= 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
-                                  {remaining.toFixed(1)}h
-                                </span>
+                                <div className="flex flex-col gap-1">
+                                  <span className={remaining <= 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                                    {remaining.toFixed(1)}h
+                                  </span>
+                                  {remaining <= 0 && <Badge variant="destructive">Over-allocated</Badge>}
+                                  {remaining > 0 && remaining < 5 && <Badge variant="secondary">Low buffer</Badge>}
+                                </div>
                               );
                             })()}
+                          </TableCell>
+                          <TableCell>
+                            {approvalCountsByJob[job.jobId] ? (
+                              <Badge variant="outline">
+                                {approvalCountsByJob[job.jobId]} pending
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">None</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
+                              {getCostingBadge(job)}
+                              {job.costingFee > 0 && (
+                                <span className="text-xs text-muted-foreground">
+                                  Fee: {formatCurrency(job.costingFee)}
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>{formatCurrency(job.revenue)}</TableCell>
                           <TableCell>

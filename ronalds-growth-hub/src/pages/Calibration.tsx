@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/integrations/apiClient";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 type CalibrationItem = {
   id: number;
@@ -16,6 +18,20 @@ type CalibrationItem = {
   zScore: number;
   isOutlier: boolean;
   employee?: { id: number; firstName: string; lastName: string; department?: { name: string } | null };
+  calibratedBy?: { firstName: string; lastName: string } | null;
+  calibratedAt?: string | null;
+};
+
+type AuditLogItem = {
+  id: number;
+  action: string;
+  entity_type?: string;
+  entity_id?: number | null;
+  user_id?: string | null;
+  ip_address?: string | null;
+  metadata?: any;
+  employee_name?: string | null;
+  created_at?: string;
 };
 
 const Calibration = () => {
@@ -23,14 +39,35 @@ const Calibration = () => {
   const [cycleId, setCycleId] = useState<string>("");
   const [departmentId, setDepartmentId] = useState<string>("");
   const [items, setItems] = useState<CalibrationItem[]>([]);
+  const [recentCalibrations, setRecentCalibrations] = useState<AuditLogItem[]>([]);
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [cycles, setCycles] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [stats, setStats] = useState<{ mean: number; stdDev: number; count: number }>({
+    mean: 0,
+    stdDev: 0,
+    count: 0,
+  });
+  const [outliersOnly, setOutliersOnly] = useState(false);
 
-  const stats = useMemo(() => {
-    const scores = items.map((item) => item.totalScore || 0);
-    if (scores.length === 0) return { mean: 0, count: 0 };
-    const mean = scores.reduce((sum, value) => sum + value, 0) / scores.length;
-    return { mean: Math.round(mean * 100) / 100, count: scores.length };
-  }, [items]);
+  const loadLookups = async () => {
+    try {
+      const [cycleRes, deptRes]: any[] = await Promise.all([
+        apiFetch("GET", "/evaluation-cycles"),
+        apiFetch("GET", "/departments"),
+      ]);
+      const cycleItems = cycleRes?.data || cycleRes || [];
+      const deptItems = deptRes?.data || deptRes || [];
+      setCycles(Array.isArray(cycleItems) ? cycleItems : []);
+      setDepartments(Array.isArray(deptItems) ? deptItems : []);
+    } catch (error: any) {
+      toast({
+        title: "Failed to load filters",
+        description: error?.message || "Unable to load cycles or departments",
+        variant: "destructive",
+      });
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -39,8 +76,18 @@ const Calibration = () => {
       if (departmentId) params.append("departmentId", departmentId);
       const query = params.toString();
       const response: any = await apiFetch("GET", `/calibration/scores${query ? `?${query}` : ""}`);
-      const data = response?.data?.items || response?.data || response || [];
+      const payload = response?.data || response || {};
+      const data = payload?.items || payload;
       setItems(Array.isArray(data) ? data : []);
+      if (payload?.stats) {
+        setStats({
+          mean: payload.stats.mean ?? 0,
+          stdDev: payload.stats.stdDev ?? 0,
+          count: payload.stats.count ?? (Array.isArray(data) ? data.length : 0),
+        });
+      } else {
+        setStats((prev) => ({ ...prev, count: Array.isArray(data) ? data.length : 0 }));
+      }
     } catch (error: any) {
       toast({
         title: "Failed to load calibration scores",
@@ -50,8 +97,25 @@ const Calibration = () => {
     }
   };
 
+  const loadRecentCalibrations = async () => {
+    try {
+      const response: any = await apiFetch("GET", "/audit-logs?limit=80");
+      const rows = Array.isArray(response) ? response : response?.data || [];
+      const filtered = rows.filter(
+        (item: AuditLogItem) =>
+          item?.action === "calibration:update" || item?.entity_type === "performance_score"
+      );
+      setRecentCalibrations(filtered.slice(0, 6));
+    } catch (error: any) {
+      // avoid blocking the page on audit log load
+      setRecentCalibrations([]);
+    }
+  };
+
   useEffect(() => {
+    loadLookups();
     loadData();
+    loadRecentCalibrations();
   }, []);
 
   const handleSave = async (item: CalibrationItem) => {
@@ -92,22 +156,47 @@ const Calibration = () => {
             <CardTitle>Filters</CardTitle>
             <CardDescription>Load evaluation cycle or department-specific scores.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-3">
+          <CardContent className="grid gap-4 md:grid-cols-4">
             <div className="space-y-2">
-              <Label>Evaluation Cycle ID</Label>
-              <Input
-                value={cycleId}
-                onChange={(event) => setCycleId(event.target.value)}
-                placeholder="Optional cycle id"
-              />
+              <Label>Evaluation Cycle</Label>
+              <Select value={cycleId || "all"} onValueChange={(value) => setCycleId(value === "all" ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All cycles" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All cycles</SelectItem>
+                  {cycles.map((cycle) => (
+                    <SelectItem key={cycle.id} value={String(cycle.id)}>
+                      {cycle.name || `Cycle ${cycle.id}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
-              <Label>Department ID</Label>
-              <Input
-                value={departmentId}
-                onChange={(event) => setDepartmentId(event.target.value)}
-                placeholder="Optional department id"
-              />
+              <Label>Department</Label>
+              <Select
+                value={departmentId || "all"}
+                onValueChange={(value) => setDepartmentId(value === "all" ? "" : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="All departments" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All departments</SelectItem>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={String(dept.id)}>
+                      {dept.name || `Department ${dept.id}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-end gap-3">
+              <div className="flex items-center gap-2">
+                <Switch checked={outliersOnly} onCheckedChange={setOutliersOnly} />
+                <Label>Outliers only</Label>
+              </div>
             </div>
             <div className="flex items-end">
               <Button onClick={loadData}>Refresh</Button>
@@ -119,16 +208,16 @@ const Calibration = () => {
           <CardHeader>
             <CardTitle>Calibration Summary</CardTitle>
             <CardDescription>
-              Mean score: {stats.mean} • Employees: {stats.count}
+              Mean score: {stats.mean} - Std dev: {stats.stdDev} - Employees: {stats.count}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {items.length === 0 ? (
+            {(outliersOnly ? items.filter((item) => item.isOutlier) : items).length === 0 ? (
               <div className="text-sm text-muted-foreground">
                 No performance scores available for calibration.
               </div>
             ) : (
-              items.map((item) => (
+              (outliersOnly ? items.filter((item) => item.isOutlier) : items).map((item) => (
                 <div key={item.id} className="rounded-lg border border-border p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -136,8 +225,17 @@ const Calibration = () => {
                         {item.employee?.firstName} {item.employee?.lastName}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Dept: {item.employee?.department?.name || "—"} • Score: {item.totalScore}
+                        Dept: {item.employee?.department?.name || "--"} - Score: {item.totalScore}
                       </p>
+                      {(item.calibratedBy || item.calibratedAt) && (
+                        <p className="text-xs text-muted-foreground">
+                          Calibrated by:{" "}
+                          {item.calibratedBy
+                            ? `${item.calibratedBy.firstName} ${item.calibratedBy.lastName}`
+                            : "--"}{" "}
+                          - {item.calibratedAt ? new Date(item.calibratedAt).toLocaleDateString() : "--"}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant={item.isOutlier ? "destructive" : "secondary"}>
@@ -191,6 +289,44 @@ const Calibration = () => {
                     >
                       {savingId === item.id ? "Saving..." : "Save Calibration"}
                     </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Calibrations</CardTitle>
+            <CardDescription>Latest adjustments captured in the audit log.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {recentCalibrations.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No calibration updates yet.</p>
+            ) : (
+              recentCalibrations.map((item) => (
+                <div key={item.id} className="flex items-center justify-between rounded-md border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Calibration update</p>
+                    <p className="text-xs text-muted-foreground">
+                      {item.created_at ? new Date(item.created_at).toLocaleString() : "Unknown time"}
+                    </p>
+                    {(item.metadata?.calibratedScore !== undefined ||
+                      item.metadata?.calibrationNote) && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Score:{" "}
+                        {item.metadata?.calibratedScore !== undefined
+                          ? item.metadata.calibratedScore
+                          : "--"}
+                        {item.metadata?.calibrationNote
+                          ? ` • ${item.metadata.calibrationNote}`
+                          : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {item.employee_name ? item.employee_name : item.user_id ? `User ${item.user_id}` : "System"}
                   </div>
                 </div>
               ))

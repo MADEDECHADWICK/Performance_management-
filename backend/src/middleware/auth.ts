@@ -63,6 +63,16 @@ export interface AuthRequest extends Request {
 }
 
 /**
+ * Build a lightweight auth context from a request.
+ * Useful for service calls expecting { userId, profileId, roles }.
+ */
+export const authFromReq = (req: AuthRequest) => ({
+  userId: req.user?.userId ?? 0,
+  profileId: req.profile?.id ?? req.user?.profileId ?? 0,
+  roles: req.userRoles ?? req.user?.authRoles ?? [],
+});
+
+/**
  * Expected JWT payload
  */
 type AccessTokenPayload = {

@@ -73,9 +73,10 @@ export class DocumentController {
       const mimeType = uploadedFile?.mimetype || bodyMimeType;
 
       if (!fileName || !filePath) {
-        return res
+        res
           .status(400)
           .json(errorResponse("File upload or filePath is required", 400));
+        return;
       }
 
       const result = await DocumentService.uploadDocument(

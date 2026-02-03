@@ -81,7 +81,16 @@ router.get('/non-financial', authMiddleware, async (req: AuthRequest, res) => {
     const context = await buildAnalyticsContext(userId);
     const analytics = await RoleAwareAnalyticsService.getNonFinancialAnalytics(context);
 
-    return res.json(analytics);
+    return res.json(
+      analytics || {
+        avgLearningGrowth: 0,
+        avgCustomerSatisfaction: 0,
+        avgInternalProcesses: 0,
+        avgOverallScore: 0,
+        totalEmployees: 0,
+        departmentAverages: [],
+      }
+    );
   } catch (err: any) {
     console.error('Error fetching non-financial analytics:', err);
     return res.status(500).json({ error: err.message });
@@ -111,7 +120,16 @@ router.get('/financial', authMiddleware, async (req: AuthRequest, res) => {
     const context = await buildAnalyticsContext(userId);
     const analytics = await RoleAwareAnalyticsService.getFinancialAnalytics(context);
 
-    return res.json(analytics);
+    return res.json(
+      analytics || {
+        totalRevenue: 0,
+        totalProfit: 0,
+        averageProfitMargin: 0,
+        totalEmployees: 0,
+        revenueByDepartment: [],
+        revenueByPartner: [],
+      }
+    );
   } catch (err: any) {
     console.error('Error fetching financial analytics:', err);
     return res.status(500).json({ error: err.message });
@@ -156,8 +174,26 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
       isGmp: context.isGmp,
       isEmployee: context.isEmployee,
       userProfile: profile,
-      nonFinancial,
-      financial,
+      nonFinancial:
+        nonFinancial ||
+        {
+          avgLearningGrowth: 0,
+          avgCustomerSatisfaction: 0,
+          avgInternalProcesses: 0,
+          avgOverallScore: 0,
+          totalEmployees: 0,
+          departmentAverages: [],
+        },
+      financial:
+        financial ||
+        {
+          totalRevenue: 0,
+          totalProfit: 0,
+          averageProfitMargin: 0,
+          totalEmployees: 0,
+          revenueByDepartment: [],
+          revenueByPartner: [],
+        },
     });
   } catch (err: any) {
     console.error('Error fetching dashboard analytics:', err);
@@ -185,11 +221,13 @@ router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Check admin authorization
-    const roles = await prisma.userRole.findMany({
-      where: { userId },
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { roles: { include: { role: true } } },
     });
 
-    const isAdmin = roles.some(r => r.role === 'admin' || r.role === 'super_admin');
+    const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
+    const isAdmin = roleNames.includes("admin") || roleNames.includes("super_admin");
     if (!isAdmin) {
       return res.status(403).json({
         error: 'Only admins can access company-wide analytics',

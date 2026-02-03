@@ -53,7 +53,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       competencies,
       questions,
     } = req.body;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     const templateName = name ?? template_name;
     const resolvedType = templateType ?? template_type;
     const resolvedCategory = bscCategory ?? bsc_category;
@@ -105,7 +105,7 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       is_active,
       isActive,
     } = req.body;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     
     const template = await prisma.evaluationTemplate.update({
       where: { id: parseInt(id) },
@@ -141,7 +141,7 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user?.sub ? Number(req.user.sub) : undefined;
+    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     
     await prisma.evaluationTemplate.delete({
       where: { id: parseInt(id) },

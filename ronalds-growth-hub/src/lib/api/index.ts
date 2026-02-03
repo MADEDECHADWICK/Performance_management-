@@ -19,10 +19,13 @@ export { default as evaluationsAPI } from './evaluations';
 export { default as kpisAPI } from './kpis';
 export { default as dashboardsAPI } from './dashboards';
 export { default as documentsAPI } from './documents';
+export { default as departmentsAPI } from './departments';
 export { default as surveysAPI } from './surveys';
 export { default as proposalsAPI } from './proposals';
 export { default as engagementLettersAPI } from './engagementLetters';
 export { default as rolesAPI } from './roles';
+export { default as recruitmentCandidatesAPI } from './recruitmentCandidates';
+export { default as notificationTemplatesAPI } from './notificationTemplates';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -35,10 +38,13 @@ import evaluationsAPI from './evaluations';
 import kpisAPI from './kpis';
 import dashboardsAPI from './dashboards';
 import documentsAPI from './documents';
+import departmentsAPI from './departments';
 import surveysAPI from './surveys';
 import proposalsAPI from './proposals';
 import engagementLettersAPI from './engagementLetters';
 import rolesAPI from './roles';
+import recruitmentCandidatesAPI from './recruitmentCandidates';
+import notificationTemplatesAPI from './notificationTemplates';
 
 const API = {
   auth: authAPI,
@@ -51,10 +57,13 @@ const API = {
   kpis: kpisAPI,
   dashboards: dashboardsAPI,
   documents: documentsAPI,
+  departments: departmentsAPI,
   surveys: surveysAPI,
   proposals: proposalsAPI,
   engagementLetters: engagementLettersAPI,
   roles: rolesAPI,
+  recruitmentCandidates: recruitmentCandidatesAPI,
+  notificationTemplates: notificationTemplatesAPI,
 };
 
 export default API;

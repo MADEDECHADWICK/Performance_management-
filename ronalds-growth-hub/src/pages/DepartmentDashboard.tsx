@@ -4,7 +4,7 @@ import apiFetch, { authAPI } from "@/integrations/apiClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, Users, TrendingUp, Award, Download, FileText, Plus, Trash2 } from "lucide-react";
+import { Building2, Users, TrendingUp, TrendingDown, Award, Download, FileText, Plus, Trash2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -37,31 +37,114 @@ const DepartmentDashboard = () => {
   const [departmentEmployees, setDepartmentEmployees] = useState<any[]>([]);
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const [editingTeam, setEditingTeam] = useState<any>(null);
+  const [rankingSearch, setRankingSearch] = useState("");
+  const [rankingView, setRankingView] = useState("top");
+  const [selectedTeamId, setSelectedTeamId] = useState("all");
+  const [memberStatusFilter, setMemberStatusFilter] = useState("all");
+  const [teamKpis, setTeamKpis] = useState<any[]>([]);
 
-  const loadDepartmentStats = async (deptId: string) => {
+  const normalizeArray = (payload: any) => {
+    if (Array.isArray(payload)) return payload;
+    if (payload?.data && Array.isArray(payload.data)) return payload.data;
+    if (payload?.payload && Array.isArray(payload.payload)) return payload.payload;
+    return [];
+  };
+
+  const departmentList = Array.isArray(departments) ? departments : normalizeArray(departments);
+  const filteredRankings = allDeptRankings
+    .filter((dept) => {
+      if (!rankingSearch.trim()) return true;
+      const query = rankingSearch.toLowerCase();
+      return [dept.name, dept.department_code, dept.department_name]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    })
+    .slice()
+    .sort((a, b) => {
+      if (rankingView === "bottom") {
+        return parseFloat(a.overallScore) - parseFloat(b.overallScore);
+      }
+      return parseFloat(b.overallScore) - parseFloat(a.overallScore);
+    });
+
+  const toNumber = (value: any) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  };
+
+  const loadDepartmentStats = async (deptId: string, teamId?: string, statusFilter?: string) => {
     try {
       setLoading(true);
       const employees = await apiFetch<any[]>('GET', `/profiles?department_id=${deptId}`);
-      
-      // Use mock data for calculations to avoid API errors
-      const activeEmployees = employees?.filter(e => e.status === 'active') || [];
-      const totalEmployees = employees?.length || 0;
-      
+      const employeesList = normalizeArray(employees);
+      const [nonFinancialRes, financialRes] = await Promise.all([
+        apiFetch<any>('GET', '/analytics/non-financial').catch(() => null),
+        apiFetch<any[]>('GET', '/financial-summary/departments').catch(() => null),
+      ]);
+
+      const teamMemberIds = new Set<string>();
+      if (teamId && teamId !== "all") {
+        const selectedTeam = teams.find((team) => String(team.id) === String(teamId));
+        selectedTeam?.evaluation_team_members?.forEach((member: any) => {
+          const profileId =
+            member.employee_id ||
+            member.profile_id ||
+            member.profileId ||
+            member?.profiles?.id;
+          if (profileId) teamMemberIds.add(String(profileId));
+        });
+      }
+
+      const filteredEmployees = employeesList.filter((employee) => {
+        if (teamId && teamId !== "all" && !teamMemberIds.has(String(employee.id))) return false;
+        if (statusFilter && statusFilter !== "all") {
+          return String(employee.status || "").toLowerCase() === statusFilter;
+        }
+        return true;
+      });
+
+      const activeEmployees = filteredEmployees.filter(e => e.status === 'active') || [];
+      const totalEmployees = filteredEmployees.length || 0;
+      const dept = departmentList.find((d) => String(d.id) === String(deptId));
+      const deptName = dept?.name || dept?.department_name;
+      const departmentAverages = normalizeArray(nonFinancialRes?.departmentAverages);
+      const deptNonFinancial = departmentAverages.find((item: any) => {
+        return String(item.department || item.department_name || "").toLowerCase() === String(deptName || "").toLowerCase();
+      });
+      const financialDepartments = normalizeArray(financialRes);
+      const deptFinancial = financialDepartments.find((item: any) => {
+        const matchId = item.department_id ?? item.departmentId ?? item.id;
+        if (matchId) return String(matchId) === String(deptId);
+        return String(item.department_name || item.departmentName || "").toLowerCase() === String(deptName || "").toLowerCase();
+      });
+
+      const avgNonFinancialScore = toNumber(deptNonFinancial?.avgScore);
+      const avgFinancialScore = toNumber(
+        deptFinancial?.avg_utilization_rate ??
+          deptFinancial?.avgUtilizationRate ??
+          deptFinancial?.avg_utilization ??
+          0
+      );
+      const overallScore = avgNonFinancialScore || 0;
+
       setDeptStats({
         totalEmployees,
         activeEmployees: activeEmployees.length,
-        avgOverallScore: (Math.random() * 10 + 85).toFixed(1), // 85-95 range
-        avgFinancialScore: (Math.random() * 10 + 80).toFixed(1), // 80-90 range  
-        avgNonFinancialScore: (Math.random() * 10 + 85).toFixed(1), // 85-95 range
-        avgClientRating: (Math.random() * 0.8 + 4.2).toFixed(1), // 4.2-5.0 range
-        recommendationRate: (Math.random() * 10 + 88).toFixed(1), // 88-98% range
-        reviewCount: Math.floor(Math.random() * totalEmployees) + totalEmployees,
-        clientEvalCount: Math.floor(Math.random() * 20) + 10,
-        topPerformers: employees?.slice(0, 5) || [],
+        avgOverallScore: overallScore.toFixed(1),
+        avgFinancialScore: avgFinancialScore.toFixed(1),
+        avgNonFinancialScore: avgNonFinancialScore.toFixed(1),
+        avgClientRating: toNumber(deptNonFinancial?.avgClientRating).toFixed(1),
+        recommendationRate: toNumber(deptNonFinancial?.recommendationRate).toFixed(1),
+        reviewCount: toNumber(deptNonFinancial?.employeeCount || 0),
+        openReviews: toNumber(deptNonFinancial?.openReviews || 0),
+        clientEvalCount: toNumber(deptNonFinancial?.clientEvalCount || 0),
+        topPerformers: filteredEmployees.slice(0, 5) || [],
       });
     } catch (error: any) {
       console.error("Error loading department stats:", error);
-      toast({ title: "Error", description: "Failed to load department statistics.", variant: "destructive" });
+      setDeptStats(null);
     } finally {
       setLoading(false);
     }
@@ -74,24 +157,33 @@ const DepartmentDashboard = () => {
 
   useEffect(() => {
     if (selectedDept) {
-      loadDepartmentStats(selectedDept);
+      loadDepartmentStats(selectedDept, selectedTeamId, memberStatusFilter);
       loadTeams(selectedDept);
       loadDepartmentEmployees(selectedDept);
+      loadTeamKpis(selectedDept, memberStatusFilter);
     }
   }, [selectedDept]);
+
+  useEffect(() => {
+    if (selectedDept) {
+      loadDepartmentStats(selectedDept, selectedTeamId, memberStatusFilter);
+      loadTeamKpis(selectedDept, memberStatusFilter);
+    }
+  }, [selectedDept, selectedTeamId, memberStatusFilter, teams]);
 
   const loadDepartments = async () => {
     try {
       const data = await apiFetch<any[]>('GET', '/departments');
-      setDepartments(data || []);
-      if (data && data.length > 0) setSelectedDept(data[0].id);
+      const list = normalizeArray(data);
+      setDepartments(list);
+      if (list.length > 0) setSelectedDept(String(list[0].id));
     } catch (error: any) {
       console.error("Error loading departments:", error);
       // Set empty array to prevent UI issues
       setDepartments([]);
       toast({
-        title: "Error",
-        description: "Failed to load departments.",
+        title: "Unable to load departments",
+        description: "Department data is unavailable right now.",
         variant: "destructive",
       });
     }
@@ -99,28 +191,42 @@ const DepartmentDashboard = () => {
 
   const loadAllDepartmentRankings = async () => {
     try {
-      const depts = await apiFetch<any[]>('GET', '/departments');
-      
-      // Use mock data for now to avoid API errors
-      const rankings = (depts || []).map((dept, index) => ({
-        id: dept.id,
-        name: dept.name,
-        memberCount: Math.floor(Math.random() * 15) + 5, // Mock 5-20 members
-        avgFinancial: (Math.floor(Math.random() * 500000) + 100000).toFixed(0), // Mock revenue
-        avgNonFinancial: (Math.random() * 30 + 70).toFixed(1), // Mock 70-100 score
-        overallScore: (Math.random() * 20 + 80).toFixed(1), // Mock 80-100 overall
-        clientEvalCount: Math.floor(Math.random() * 10) + 3, // Mock 3-12 evaluations
-      }));
+      const [deptsResponse, financialRes, nonFinancialRes] = await Promise.all([
+        apiFetch<any[]>('GET', '/departments'),
+        apiFetch<any[]>('GET', '/financial-summary/departments').catch(() => []),
+        apiFetch<any>('GET', '/analytics/non-financial').catch(() => null),
+      ]);
+      const depts = normalizeArray(deptsResponse);
+      const financialDepartments = normalizeArray(financialRes);
+      const departmentAverages = normalizeArray(nonFinancialRes?.departmentAverages);
+
+      const rankings = depts.map((dept) => {
+        const deptName = dept.name || dept.department_name;
+        const fin = financialDepartments.find((item: any) => {
+          const matchId = item.department_id ?? item.departmentId ?? item.id;
+          if (matchId) return String(matchId) === String(dept.id);
+          return String(item.department_name || item.departmentName || "").toLowerCase() === String(deptName || "").toLowerCase();
+        });
+        const non = departmentAverages.find((item: any) =>
+          String(item.department || item.department_name || "").toLowerCase() === String(deptName || "").toLowerCase()
+        );
+
+        return {
+          id: dept.id,
+          name: deptName,
+          memberCount: toNumber(fin?.total_employees || non?.employeeCount),
+          avgFinancial: toNumber(fin?.revenue).toFixed(0),
+          avgNonFinancial: toNumber(non?.avgScore).toFixed(1),
+          overallScore: toNumber(non?.avgScore).toFixed(1),
+          clientEvalCount: toNumber(non?.clientEvalCount || non?.employeeCount),
+        };
+      });
 
       rankings.sort((a, b) => parseFloat(b.overallScore) - parseFloat(a.overallScore));
       setAllDeptRankings(rankings);
     } catch (error: any) {
       console.error("Error loading department rankings:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load department statistics.",
-        variant: "destructive"
-      });
+      setAllDeptRankings([]);
     }
   };
 
@@ -153,7 +259,7 @@ const DepartmentDashboard = () => {
   const loadTeams = async (deptId: string) => {
     try {
       const teamsData = await apiFetch<any[]>('GET', `/evaluation_teams?department_id=${deptId}`);
-      setTeams(teamsData || []);
+      setTeams(normalizeArray(teamsData));
     } catch (error: any) {
       console.error("Error loading teams:", error);
       // Set empty array on error to prevent UI issues
@@ -161,10 +267,24 @@ const DepartmentDashboard = () => {
     }
   };
 
+  const loadTeamKpis = async (deptId: string, statusFilter?: string) => {
+    try {
+      const query = statusFilter && statusFilter !== "all" ? `?status=${statusFilter}` : "";
+      const data = await apiFetch<any[]>(
+        "GET",
+        `/departments/${deptId}/team-kpis${query}`
+      );
+      setTeamKpis(normalizeArray(data));
+    } catch (error: any) {
+      console.error("Error loading team KPIs:", error);
+      setTeamKpis([]);
+    }
+  };
+
   const loadDepartmentEmployees = async (deptId: string) => {
     try {
       const data = await apiFetch<any[]>('GET', `/profiles?department_id=${deptId}&status=active`);
-      setDepartmentEmployees(data || []);
+      setDepartmentEmployees(normalizeArray(data));
     } catch (error: any) {
       console.error("Error loading employees:", error);
     }
@@ -254,18 +374,22 @@ const DepartmentDashboard = () => {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Select value={selectedDept} onValueChange={setSelectedDept}>
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder="Select department" />
-              </SelectTrigger>
-              <SelectContent>
-                {departments.map((dept) => (
-                  <SelectItem key={dept.id} value={dept.id}>
-                    {dept.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {departmentList.length > 0 ? (
+              <Select value={selectedDept} onValueChange={setSelectedDept}>
+                <SelectTrigger className="w-64">
+                  <SelectValue placeholder="Select department" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departmentList.map((dept) => (
+                    <SelectItem key={dept.id} value={String(dept.id)}>
+                      {dept.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="text-sm text-muted-foreground">No departments available</div>
+            )}
             <Button variant="outline" size="icon" onClick={exportToExcel} title="Export to Excel">
               <Download className="h-4 w-4" />
             </Button>
@@ -284,6 +408,46 @@ const DepartmentDashboard = () => {
           <TabsContent value="performance" className="space-y-4">
             {deptStats && selectedDept ? (
               <>
+                <div className="flex flex-col gap-3 rounded-lg border border-muted/40 bg-muted/10 p-4 md:flex-row md:items-end md:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">Department Filters</p>
+                    <p className="text-xs text-muted-foreground">
+                      Use these to narrow team-level insights when data is available.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Team</Label>
+                      <Select value={selectedTeamId} onValueChange={setSelectedTeamId}>
+                        <SelectTrigger className="w-[200px]">
+                          <SelectValue placeholder="All teams" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All teams</SelectItem>
+                          {teams.map((team) => (
+                            <SelectItem key={team.id} value={String(team.id)}>
+                              {team.team_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Member status</Label>
+                      <Select value={memberStatusFilter} onValueChange={setMemberStatusFilter}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="All members" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All members</SelectItem>
+                          <SelectItem value="active">Active only</SelectItem>
+                          <SelectItem value="inactive">Inactive only</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                   <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -292,9 +456,14 @@ const DepartmentDashboard = () => {
                     </CardHeader>
                     <CardContent>
                       <div className="text-2xl font-bold">{deptStats.totalEmployees}</div>
-                      <p className="text-xs text-muted-foreground">
-                        {deptStats.activeEmployees} active
-                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">
+                          {deptStats.activeEmployees} active
+                        </span>
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">
+                          {deptStats.openReviews} open reviews
+                        </span>
+                      </div>
                     </CardContent>
                   </Card>
 
@@ -405,12 +574,142 @@ const DepartmentDashboard = () => {
                     </CardContent>
                   </Card>
                 </div>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Team KPI Breakdown</CardTitle>
+                    <CardDescription>Snapshot by evaluation teams within this department</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                        Teams: {teamKpis.length}
+                      </span>
+                      <span className="rounded-full bg-rose-50 px-2 py-1 text-rose-700">
+                        Needs attention:{" "}
+                        {
+                          teamKpis.filter((team) => {
+                            const delta = Number(team.deltaOverall || 0);
+                            const trend =
+                              team.trendDirection ||
+                              (delta > 0 ? "up" : delta < 0 ? "down" : "flat");
+                            return (
+                              trend === "down" &&
+                              Math.abs(delta) >= 1 &&
+                              Number(team.previousOverallScore || 0) > 0
+                            );
+                          }).length
+                        }
+                      </span>
+                    </div>
+                    {loading && teams.length > 0 ? (
+                      <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
+                        <p className="text-sm font-medium text-foreground">Loading team KPIs…</p>
+                        <p className="text-xs text-muted-foreground">
+                          Fetching the latest performance scores for each team.
+                        </p>
+                      </div>
+                    ) : teamKpis.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
+                        <p className="text-sm font-medium text-foreground">
+                          {teams.length === 0 ? "No teams configured" : "No team KPI scores yet"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {teams.length === 0
+                            ? "Create evaluation teams to see team-level KPI performance."
+                            : "Team scores will appear after the first performance scores are calculated."}
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        {selectedTeamId !== "all" &&
+                          !teamKpis.some((team) => String(team.teamId) === selectedTeamId) && (
+                            <div className="mb-4 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-center text-xs text-muted-foreground">
+                              The selected team does not have KPI data yet.
+                            </div>
+                          )}
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {teamKpis
+                          .filter((team) =>
+                            selectedTeamId === "all"
+                              ? true
+                              : String(team.teamId) === selectedTeamId
+                          )
+                          .map((team) => {
+                            const teamOverall = Number(team.overallScore || 0).toFixed(1);
+                            const teamFinancial = Number(team.financialScore || 0).toFixed(1);
+                            const teamNonFinancial = Number(team.nonFinancialScore || 0).toFixed(1);
+                            const delta = Number(team.deltaOverall || 0);
+                            const trend =
+                              team.trendDirection || (delta > 0 ? "up" : delta < 0 ? "down" : "flat");
+                            const needsAttention =
+                              trend === "down" &&
+                              Math.abs(delta) >= 1 &&
+                              Number(team.previousOverallScore || 0) > 0;
+
+                          return (
+                            <Card key={team.teamId} className="border-muted/40">
+                              <CardHeader className="pb-2">
+                                <CardTitle className="text-base font-semibold">{team.teamName}</CardTitle>
+                                <CardDescription className="flex flex-wrap items-center gap-2">
+                                  <span>{team.activeCount} active · {team.memberCount} total</span>
+                                  <span
+                                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                                    title={`Previous score: ${Number(team.previousOverallScore || 0).toFixed(1)}%`}
+                                  >
+                                    {trend === "up" && <TrendingUp className="h-3 w-3 text-emerald-500" />}
+                                    {trend === "down" && <TrendingDown className="h-3 w-3 text-rose-500" />}
+                                    {trend === "flat" && <span className="h-3 w-3 text-muted-foreground">•</span>}
+                                    {Math.abs(delta).toFixed(1)} pts
+                                  </span>
+                                  {needsAttention && (
+                                    <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700">
+                                      Needs attention
+                                    </span>
+                                  )}
+                                </CardDescription>
+                              </CardHeader>
+                              <CardContent className="space-y-3">
+                                <div>
+                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                                    <span>Financial KPI</span>
+                                    <span className="text-foreground font-medium">{teamFinancial}%</span>
+                                  </div>
+                                  <Progress value={parseFloat(teamFinancial)} className="h-2" />
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                                    <span>Non-Financial KPI</span>
+                                    <span className="text-foreground font-medium">{teamNonFinancial}%</span>
+                                  </div>
+                                  <Progress value={parseFloat(teamNonFinancial)} className="h-2" />
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                                    <span>Overall Score</span>
+                                    <span className="text-foreground font-medium">{teamOverall}%</span>
+                                  </div>
+                                  <Progress value={parseFloat(teamOverall)} className="h-2" />
+                                </div>
+                              </CardContent>
+                            </Card>
+                          );
+                        })}
+                      </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
               </>
             ) : (
               <Card>
                 <CardContent className="p-8">
-                  <div className="text-center text-muted-foreground">
-                    Select a department to view performance data
+                  <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
+                    <Building2 className="h-6 w-6 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">Select a department to view performance data</p>
+                    <p className="text-xs text-muted-foreground">
+                      Choose a department above to load KPIs, reviews, and insights.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -424,6 +723,40 @@ const DepartmentDashboard = () => {
               </CardHeader>
               <CardContent>
                 {allDeptRankings.length > 0 ? (
+                  <>
+                    <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-end md:justify-between">
+                      <div className="flex flex-1 flex-wrap gap-3">
+                        <div className="flex flex-col gap-1">
+                          <Label className="text-xs font-medium text-muted-foreground">View</Label>
+                          <Select value={rankingView} onValueChange={setRankingView}>
+                            <SelectTrigger className="w-[160px]">
+                              <SelectValue placeholder="Ranking view" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="top">Top performers</SelectItem>
+                              <SelectItem value="bottom">Bottom performers</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <Label className="text-xs font-medium text-muted-foreground">Search</Label>
+                          <Input
+                            placeholder="Department name"
+                            value={rankingSearch}
+                            onChange={(event) => setRankingSearch(event.target.value)}
+                          />
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setRankingSearch("");
+                            setRankingView("top");
+                          }}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    </div>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -437,10 +770,17 @@ const DepartmentDashboard = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {allDeptRankings.map((dept, index) => (
+                      {filteredRankings.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={7} className="text-center text-muted-foreground">
+                            No departments match the current filters.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {filteredRankings.map((dept, index) => (
                         <TableRow
                           key={dept.id}
-                          className={selectedDept === dept.id ? "bg-muted/50" : ""}
+                          className={selectedDept === String(dept.id) ? "bg-muted/50" : ""}
                         >
                           <TableCell className="font-bold">
                             {index === 0 && <Award className="inline h-4 w-4 text-accent mr-1" />}
@@ -458,9 +798,16 @@ const DepartmentDashboard = () => {
                       ))}
                     </TableBody>
                   </Table>
+                  </>
                 ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No department data available
+                  <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
+                    <div className="inline-flex flex-col items-center gap-2">
+                      <Building2 className="h-6 w-6 text-muted-foreground" />
+                      <p className="text-sm font-medium text-foreground">No department data available</p>
+                      <p className="text-xs text-muted-foreground">
+                        Rankings will appear once evaluations and finance data are captured.
+                      </p>
+                    </div>
                   </div>
                 )}
               </CardContent>

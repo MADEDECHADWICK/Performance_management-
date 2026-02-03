@@ -14,6 +14,13 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import EmptyState from "@/components/ui/empty-state";
+import {
+  PAGE_STACK,
+  SECTION_STACK,
+  SECTION_TITLE,
+  SECTION_SUBTITLE,
+} from "@/components/ui/cardStyles";
 
 interface Feedback {
   id: number;
@@ -83,11 +90,20 @@ const ContinuousFeedback = () => {
       setSurveySummary(surveyAnalytics?.data ?? surveyAnalytics ?? null);
 
     } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error loading feedback",
-        description: error.message,
-      });
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 404) {
+        setFeedback([]);
+        setEmployees([]);
+        setSurveySummary(null);
+        return;
+      }
+      // Avoid noisy toasts for empty states; keep UI usable.
+      setFeedback([]);
+      setEmployees([]);
+      setSurveySummary(null);
     } finally {
       setLoading(false);
     }
@@ -160,11 +176,11 @@ const ContinuousFeedback = () => {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className={PAGE_STACK}>
         <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold">Continuous Feedback</h1>
-            <p className="text-muted-foreground mt-2">
+            <h1 className={SECTION_TITLE}>Continuous Feedback</h1>
+            <p className={SECTION_SUBTITLE}>
               Give and receive real-time recognition and constructive feedback
             </p>
           </div>
@@ -266,7 +282,7 @@ const ContinuousFeedback = () => {
           </Dialog>
         </div>
 
-        <Tabs defaultValue="received" className="space-y-4">
+        <Tabs defaultValue="received" className={SECTION_STACK}>
           <TabsList>
             <TabsTrigger value="received">Received ({receivedFeedback.length})</TabsTrigger>
             <TabsTrigger value="given">Given</TabsTrigger>
@@ -301,7 +317,7 @@ const ContinuousFeedback = () => {
             </Card>
           )}
 
-          <TabsContent value="received" className="space-y-4">
+          <TabsContent value="received" className={SECTION_STACK}>
             {receivedFeedback.map((item) => (
               <Card key={item.id}>
                 <CardHeader>
@@ -328,18 +344,15 @@ const ContinuousFeedback = () => {
             ))}
 
             {receivedFeedback.length === 0 && (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-12">
-                  <MessageSquare className="h-12 w-12 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground text-center">
-                    No feedback received yet. Keep up the great work!
-                  </p>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={<MessageSquare className="h-12 w-12" />}
+                title="No feedback received yet"
+                description="Keep up the great work!"
+              />
             )}
           </TabsContent>
 
-          <TabsContent value="given" className="space-y-4">
+          <TabsContent value="given" className={SECTION_STACK}>
             {givenFeedback.map((item) => (
               <Card key={item.id}>
                 <CardHeader>
@@ -366,26 +379,20 @@ const ContinuousFeedback = () => {
             ))}
 
             {givenFeedback.length === 0 && (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-12">
-                  <MessageSquare className="h-12 w-12 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground text-center">
-                    Feedback you've given will appear here
-                  </p>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={<MessageSquare className="h-12 w-12" />}
+                title="No feedback shared yet"
+                description="Feedback you give will appear here."
+              />
             )}
           </TabsContent>
 
-          <TabsContent value="public" className="space-y-4">
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <ThumbsUp className="h-12 w-12 text-muted-foreground mb-4" />
-                <p className="text-muted-foreground text-center">
-                  Public feedback feed coming soon
-                </p>
-              </CardContent>
-            </Card>
+          <TabsContent value="public" className={SECTION_STACK}>
+            <EmptyState
+              icon={<ThumbsUp className="h-12 w-12" />}
+              title="Public feedback feed coming soon"
+              description="We’ll surface approved public praise here."
+            />
           </TabsContent>
         </Tabs>
       </div>

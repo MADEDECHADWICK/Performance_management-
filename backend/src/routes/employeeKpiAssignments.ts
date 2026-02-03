@@ -86,7 +86,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
     await createAudit({
       action: 'employee_kpi_assignment:create',
       entity_type: 'employee_kpi_assignment',
@@ -99,12 +99,12 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         recipientProfileId: assignment.employeeProfileId,
         type: 'info',
         title: 'New KPI assigned',
-        message: `A KPI "${assignment.kpi?.title ?? 'KPI'}" has been assigned to you.`,
+        message: `A KPI "${assignment.kpi?.name ?? 'KPI'}" has been assigned to you.`,
         actionRequired: false,
         link: '/kpi-management',
       },
       {
-        userId: req.user?.userId ?? req.user?.id ?? 0,
+        userId: req.user?.userId ?? 0,
         profileId: req.profile?.id ?? 0,
         roleName: req.profile?.role?.name,
       }
@@ -147,7 +147,7 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
     await createAudit({
       action: 'employee_kpi_assignment:update',
       entity_type: 'employee_kpi_assignment',
@@ -160,12 +160,12 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
         recipientProfileId: assignment.employeeProfileId,
         type: 'info',
         title: 'KPI updated',
-        message: `Your KPI "${assignment.kpi?.title ?? 'KPI'}" was updated.`,
+        message: `Your KPI "${assignment.kpi?.name ?? 'KPI'}" was updated.`,
         actionRequired: false,
         link: '/kpi-management',
       },
       {
-        userId: req.user?.userId ?? req.user?.id ?? 0,
+        userId: req.user?.userId ?? 0,
         profileId: req.profile?.id ?? 0,
         roleName: req.profile?.role?.name,
       }
@@ -186,7 +186,7 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
       where: { id: parseInt(id) },
     });
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
     await createAudit({
       action: 'employee_kpi_assignment:delete',
       entity_type: 'employee_kpi_assignment',

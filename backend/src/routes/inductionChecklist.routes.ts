@@ -6,6 +6,7 @@ import {
   createInductionChecklistValidators,
   getInductionChecklistValidators,
   completeInductionItemValidators,
+  attachInductionItemDocumentValidators,
 } from "../validators/inductionChecklist.validators";
 
 const router = Router();
@@ -41,6 +42,28 @@ router.patch(
   validateRequest(completeInductionItemValidators),
   handleValidationErrors,
   InductionChecklistController.completeItem
+);
+
+/**
+ * PATCH /induction-checklists/:checklistId/items/:itemId/document
+ */
+router.patch(
+  "/:checklistId/items/:itemId/document",
+  authenticated(),
+  validateRequest(attachInductionItemDocumentValidators),
+  handleValidationErrors,
+  InductionChecklistController.attachDocument
+);
+
+/**
+ * POST /induction-checklists/:checklistId/remind (HR/Admin)
+ */
+router.post(
+  "/:checklistId/remind",
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  validateRequest(getInductionChecklistValidators),
+  handleValidationErrors,
+  InductionChecklistController.remind
 );
 
 export default router;

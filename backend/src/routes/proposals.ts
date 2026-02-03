@@ -2,6 +2,8 @@ import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
+import { ProposalStatus } from "@prisma/client";
+import { notifyHrGroup } from "../services/hrNotifications";
 
 const router = Router();
 
@@ -19,7 +21,7 @@ router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
       prisma.proposal.count({ where: { status: "lost" } }),
     ]);
 
-    const openStatuses = ["draft", "sent"] as const;
+    const openStatuses: ProposalStatus[] = ["draft", "sent"];
     const openProposals = await prisma.proposal.findMany({
       where: { status: { in: openStatuses } },
       select: { proposedFee: true, probability: true },
@@ -241,6 +243,8 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
         .json(errorResponse("clientId, proposalTitle, serviceType, proposedFee, and proposalDate are required", 400));
     }
 
+    let onboardingToNotify: { id: number; clientName: string } | null = null;
+    let shouldNotifyHrOnWon = false;
     const created = await prisma.$transaction(async (tx) => {
       const proposal = await tx.proposal.create({
         data: {
@@ -277,6 +281,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       });
 
       if (status === "won") {
+        shouldNotifyHrOnWon = true;
         const uploaderProfileId = req.user?.profileId;
         if (!uploaderProfileId) {
           throw new Error("Missing uploader profile id for onboarding creation");
@@ -303,12 +308,39 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
           },
         });
 
+        const engagementDoc = await tx.document.findFirst({
+          where: {
+            entityType: "Proposal",
+            entityId: proposal.id,
+            documentType: "engagement_letter",
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
+        const proposalDoc = await tx.document.findFirst({
+          where: {
+            entityType: "Proposal",
+            entityId: proposal.id,
+            documentType: "proposal",
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
+
+        const resolvedDoc = engagementDoc ?? proposalDoc;
+        if (resolvedDoc) {
+          await tx.engagementLetter.update({
+            where: { id: engagementLetter.id },
+            data: { documentId: resolvedDoc.id },
+          });
+        }
+
         const existingOnboardingForClient = await tx.clientOnboarding.findFirst({
           where: { clientId: proposal.clientId },
         });
 
         if (!existingOnboardingForClient) {
-          await tx.clientOnboarding.create({
+          const onboarding = await tx.clientOnboarding.create({
             data: {
               engagementLetterId: engagementLetter.id,
               clientId: proposal.clientId,
@@ -323,11 +355,32 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
               notes: "Auto-created from won proposal.",
             },
           });
+          onboardingToNotify = { id: onboarding.id, clientName: onboarding.clientName };
         }
       }
 
       return proposal;
     });
+
+    if (onboardingToNotify) {
+      await notifyHrGroup(
+        {
+          title: "New onboarding from won proposal",
+          body: `Client onboarding for "${onboardingToNotify.clientName}" is awaiting HR review.`,
+          relatedEntityId: onboardingToNotify.id,
+        },
+        req
+      );
+    } else if (shouldNotifyHrOnWon) {
+      await notifyHrGroup(
+        {
+          title: "Proposal marked as won",
+          body: `Proposal "${created.proposalTitle}" was marked as won and requires HR review.`,
+          relatedEntityId: created.id,
+        },
+        req
+      );
+    }
 
     res.status(201).json(successResponse(created, "Proposal created", 201));
   } catch (error) {
@@ -376,6 +429,8 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
     const shouldCreateOnboarding =
       req.body.status === "won" && existingProposal.status !== "won";
 
+    let onboardingToNotify: { id: number; clientName: string } | null = null;
+    let shouldNotifyHrOnWon = shouldCreateOnboarding;
     const updated = await prisma.$transaction(async (tx) => {
       const proposal = await tx.proposal.update({
         where: { id: proposalId },
@@ -423,12 +478,39 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
             },
           }));
 
+        const engagementDoc = await tx.document.findFirst({
+          where: {
+            entityType: "Proposal",
+            entityId: proposal.id,
+            documentType: "engagement_letter",
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
+        const proposalDoc = await tx.document.findFirst({
+          where: {
+            entityType: "Proposal",
+            entityId: proposal.id,
+            documentType: "proposal",
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
+
+        const resolvedDoc = engagementDoc ?? proposalDoc;
+        if (resolvedDoc && !engagementLetter.documentId) {
+          await tx.engagementLetter.update({
+            where: { id: engagementLetter.id },
+            data: { documentId: resolvedDoc.id },
+          });
+        }
+
         const existingOnboardingForClient = await tx.clientOnboarding.findFirst({
           where: { clientId: proposal.clientId },
         });
 
         if (!existingOnboardingForClient) {
-          await tx.clientOnboarding.create({
+          const onboarding = await tx.clientOnboarding.create({
             data: {
               engagementLetterId: engagementLetter.id,
               clientId: proposal.clientId,
@@ -443,11 +525,32 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
               notes: "Auto-created from won proposal.",
             },
           });
+          onboardingToNotify = { id: onboarding.id, clientName: onboarding.clientName };
         }
       }
 
       return proposal;
     });
+
+    if (onboardingToNotify) {
+      await notifyHrGroup(
+        {
+          title: "New onboarding from won proposal",
+          body: `Client onboarding for "${onboardingToNotify.clientName}" is awaiting HR review.`,
+          relatedEntityId: onboardingToNotify.id,
+        },
+        req
+      );
+    } else if (shouldNotifyHrOnWon) {
+      await notifyHrGroup(
+        {
+          title: "Proposal marked as won",
+          body: `Proposal "${updated.proposalTitle}" was marked as won and requires HR review.`,
+          relatedEntityId: updated.id,
+        },
+        req
+      );
+    }
 
     res.json(successResponse(updated, "Proposal updated"));
   } catch (error) {

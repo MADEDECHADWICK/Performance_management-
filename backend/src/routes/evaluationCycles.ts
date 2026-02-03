@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { EvaluationCycleStatus } from '@prisma/client';
 import prisma from '../prisma';
 
 const router = Router();
@@ -9,7 +10,7 @@ router.get('/', async (req, res) => {
   try {
     const { status } = req.query;
     const cycles = await prisma.evaluationCycle.findMany({
-      where: status ? { status: status as string } : undefined,
+      where: status ? { status: status as EvaluationCycleStatus } : undefined,
       include: {
         definitions: true,
         performanceScores: true,
@@ -73,7 +74,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         description,
         startDate: new Date(resolvedStart),
         endDate: new Date(resolvedEnd),
-        status: status || 'draft',
+        status: (status as EvaluationCycleStatus) || EvaluationCycleStatus.draft,
         createdByProfileId: profileId || undefined,
       },
     });
@@ -106,7 +107,7 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
         ...(description && { description }),
         ...(startDate || start_date ? { startDate: new Date(startDate || start_date) } : {}),
         ...(endDate || end_date ? { endDate: new Date(endDate || end_date) } : {}),
-        ...(status && { status }),
+        ...(status && { status: status as EvaluationCycleStatus }),
       },
     });
     return res.json(cycle);

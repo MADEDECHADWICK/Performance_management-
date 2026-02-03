@@ -13,11 +13,11 @@ router.get('/', async (req, res) => {
       ids = (employee_ids as string).split(',').map(id => parseInt(id.trim()));
     }
 
-    const allocations = await prisma.employeeProjectAllocation.findMany({
-      where: ids.length > 0 ? { employee_id: { in: ids } } : undefined,
+    const allocations = await prisma.jobStaffAssignment.findMany({
+      where: ids.length > 0 ? { employeeProfileId: { in: ids } } : undefined,
       include: {
         employee: true,
-        project: true,
+        job: true,
       },
     });
     return res.json(allocations);

@@ -3,6 +3,7 @@ import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { NotificationService } from "../services/notifications.service";
+import { notifyProfilesByRoles } from "../services/notificationRecipients";
 import crypto from "crypto";
 
 const router = Router();
@@ -307,17 +308,66 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + Number(expiresInDays) * 24 * 60 * 60 * 1000);
 
-    const created = await prisma.clientSatisfactionSurvey.create({
-      data: {
-        clientId: Number(clientId),
-        jobId: jobId ? Number(jobId) : undefined,
-        surveyToken: buildToken(),
-        sentAt: now,
-        expiresAt,
-      },
-    });
+  const created = await prisma.clientSatisfactionSurvey.create({
+    data: {
+      clientId: Number(clientId),
+      jobId: jobId ? Number(jobId) : undefined,
+      surveyToken: buildToken(),
+      sentAt: now,
+      expiresAt,
+    },
+  });
 
-    res.status(201).json(successResponse(created, "Survey created", 201));
+    const job = jobId
+      ? await prisma.job.findUnique({
+          where: { id: Number(jobId) },
+          select: { id: true, jobName: true, partnerProfileId: true, managerProfileId: true },
+        })
+      : null;
+
+    if (job?.partnerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.partnerProfileId,
+          type: "info",
+          title: "Client survey sent",
+          message: `A satisfaction survey was sent for "${job.jobName}".`,
+          jobId: job.id,
+          link: "/client-surveys",
+          actionRequired: false,
+        },
+        { userId: 0, profileId: 0, roleName: "system" }
+      );
+    }
+
+    if (job?.managerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.managerProfileId,
+          type: "info",
+          title: "Client survey sent",
+          message: `A satisfaction survey was sent for "${job.jobName}".`,
+          jobId: job.id,
+          link: "/client-surveys",
+          actionRequired: false,
+        },
+        { userId: 0, profileId: 0, roleName: "system" }
+      );
+    }
+
+    await notifyProfilesByRoles(
+      ["marketing"],
+      {
+        title: "Client survey sent",
+        message: "A client survey has been sent and is awaiting response.",
+        link: "/client-surveys",
+        relatedEntityId: job?.id,
+        actionRequired: false,
+      },
+      { user: { userId: 0, profileId: 0 } } as any
+    );
+
+  res.status(201).json(successResponse(created, "Survey created", 201));
   } catch (error) {
     console.error("Error creating survey:", error);
     res.status(500).json(errorResponse("Failed to create survey", 500));
@@ -404,6 +454,18 @@ router.post("/token/:token/submit", async (req, res) => {
           { userId: 0, profileId: 0, roleName: "system" }
         );
       }
+
+      await notifyProfilesByRoles(
+        ["marketing"],
+        {
+          title: "Client survey submitted",
+          message: `Client feedback received for "${job?.jobName || "job"}".`,
+          link: "/client-surveys",
+          relatedEntityId: job?.id,
+          actionRequired: false,
+        },
+        { user: { userId: 0, profileId: 0 } } as any
+      );
     }
 
     res.json(successResponse(updated, "Survey submitted"));

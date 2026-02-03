@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 import { clientsAPI, clientOnboardingsAPI, proposalsAPI, surveysAPI } from "@/lib/api";
-import { Building2, FileText, Briefcase, TrendingUp, Star, ArrowUpRight } from "lucide-react";
+import { Building2, FileText, Briefcase, TrendingUp, Star, ArrowUpRight, MailCheck, MailWarning } from "lucide-react";
 
 export default function MarketingDashboard() {
   const { data: clientsData } = useQuery({
@@ -35,16 +35,38 @@ export default function MarketingDashboard() {
     queryFn: () => surveysAPI.getAnalytics(),
   });
 
+  const { data: pendingSurveys } = useQuery({
+    queryKey: ["survey-pending"],
+    queryFn: () => surveysAPI.getPending(),
+  });
+
+  const { data: completedSurveys } = useQuery({
+    queryKey: ["survey-completed"],
+    queryFn: () => surveysAPI.getCompleted(),
+  });
+
+  const { data: recentSurveys } = useQuery({
+    queryKey: ["survey-recent"],
+    queryFn: () => surveysAPI.list({ page: 1, pageSize: 5 }),
+  });
+
   const clients = clientsData?.data || [];
   const onboardings = onboardingData?.data || [];
   const upcomingJobs = upcomingData?.data || [];
   const pipelineTrend = proposalMetrics?.pipelineTrend || [];
   const surveyTrends = surveyAnalytics?.trends || [];
+  const surveyList = recentSurveys?.surveys || [];
   const currentPipeline = pipelineTrend.length > 0 ? pipelineTrend[pipelineTrend.length - 1] : null;
   const pipelineMax = Math.max(
     1,
     ...pipelineTrend.flatMap((item: any) => [item.created || 0, item.won || 0, item.lost || 0])
   );
+  const hasSurveyAnalytics =
+    (surveyAnalytics?.averageRatings?.overall ?? null) !== null &&
+    (surveyAnalytics?.totalSurveys ?? 0) > 0;
+  const pendingSurveyCount = pendingSurveys?.total ?? 0;
+  const completedSurveyCount = completedSurveys?.total ?? 0;
+  const routedSurveyCount = pendingSurveyCount + completedSurveyCount;
 
   const pendingHR = useMemo(
     () => onboardings.filter((o: any) => o.status === "pending_hr_review"),
@@ -119,8 +141,12 @@ export default function MarketingDashboard() {
               <CardTitle className="text-sm text-muted-foreground">Client Satisfaction</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{surveyAnalytics?.averageRatings?.overall?.toFixed(1) || "-"}</div>
-              <p className="text-xs text-muted-foreground">Avg rating</p>
+              <div className="text-2xl font-bold">
+                {surveyAnalytics?.averageRatings?.overall?.toFixed(1) || "--"}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {hasSurveyAnalytics ? "Avg rating" : "No survey data yet"}
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -270,7 +296,7 @@ export default function MarketingDashboard() {
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span>{item.month}</span>
                         <span>
-                          {item.created || 0} created • {item.won || 0} won • {item.lost || 0} lost
+                          {item.created || 0} created - {item.won || 0} won - {item.lost || 0} lost
                         </span>
                       </div>
                       <div className="flex gap-2">
@@ -320,6 +346,30 @@ export default function MarketingDashboard() {
               <CardDescription>Latest survey performance.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border p-3">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <MailWarning className="h-4 w-4 text-amber-500" />
+                    Pending surveys
+                  </div>
+                  <div className="text-xl font-semibold">{pendingSurveyCount}</div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <MailCheck className="h-4 w-4 text-emerald-500" />
+                    Completed surveys
+                  </div>
+                  <div className="text-xl font-semibold">{completedSurveyCount}</div>
+                </div>
+                <div className="rounded-lg border p-3 sm:col-span-2">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <MailCheck className="h-4 w-4 text-primary" />
+                    Surveys routed
+                  </div>
+                  <div className="text-xl font-semibold">{routedSurveyCount}</div>
+                  <p className="text-xs text-muted-foreground">Pending + completed</p>
+                </div>
+              </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Response rate</span>
                 <span className="font-medium">{surveyAnalytics?.responseRate ? `${(surveyAnalytics.responseRate * 100).toFixed(0)}%` : "0%"}</span>
@@ -328,6 +378,37 @@ export default function MarketingDashboard() {
                 <span className="text-sm text-muted-foreground">Total surveys</span>
                 <span className="font-medium">{surveyAnalytics?.totalSurveys || 0}</span>
               </div>
+              {surveyList.length === 0 && (
+                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  No survey responses yet. Send surveys after job completion to populate insights.
+                </div>
+              )}
+              {surveyList.length > 0 && (
+                <div className="pt-2 border-t space-y-2">
+                  <p className="text-xs uppercase text-muted-foreground">Recent surveys</p>
+                  <div className="space-y-2">
+                    {surveyList.map((survey) => (
+                      <div key={survey.id} className="flex items-center justify-between text-xs">
+                        <div>
+                          <p className="font-medium">
+                            {survey.client?.clientName || "Client"}
+                          </p>
+                          <p className="text-muted-foreground">
+                            {survey.job?.jobName || "Engagement"}{" "}
+                            {survey.completedAt ? " - completed" : " - pending"}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold">
+                            {survey.overallSatisfaction ? survey.overallSatisfaction.toFixed(1) : "--"}
+                          </p>
+                          <p className="text-muted-foreground">overall</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {surveyTrends.length > 0 && (
                 <div className="pt-2 border-t space-y-2">
                   <p className="text-xs uppercase text-muted-foreground">Survey trends</p>

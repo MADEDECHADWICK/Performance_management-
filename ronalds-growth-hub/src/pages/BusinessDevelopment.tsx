@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { proposalsAPI, clientsAPI } from "@/lib/api";
+import { proposalsAPI, clientsAPI, documentsAPI, surveysAPI } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Target, TrendingUp, DollarSign, Zap } from "lucide-react";
+import { Search, Plus, Target, TrendingUp, DollarSign, Zap, Paperclip } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
@@ -45,6 +45,10 @@ export default function BusinessDevelopment() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [lostReasonDrafts, setLostReasonDrafts] = useState<Record<number, string>>({});
   const [lostReasonEditingId, setLostReasonEditingId] = useState<number | null>(null);
+  const [proposalAttachment, setProposalAttachment] = useState<File | null>(null);
+  const [engagementAttachment, setEngagementAttachment] = useState<File | null>(null);
+  const [attachingProposalId, setAttachingProposalId] = useState<number | null>(null);
+  const [attachingEngagementId, setAttachingEngagementId] = useState<number | null>(null);
 
   const [proposalForm, setProposalForm] = useState({
     clientId: "",
@@ -78,12 +82,24 @@ export default function BusinessDevelopment() {
     queryFn: () => clientsAPI.list({ page: 1, pageSize: 200 }),
   });
 
+  const { data: pendingSurveyData } = useQuery({
+    queryKey: ["surveys", "pending"],
+    queryFn: () => surveysAPI.getPending(),
+  });
+
+  const { data: completedSurveyData } = useQuery({
+    queryKey: ["surveys", "completed"],
+    queryFn: () => surveysAPI.getCompleted(),
+  });
+
   const proposals = proposalsData?.data || [];
   const clients = clientsData?.data || [];
+  const pendingSurveys = pendingSurveyData?.surveys || [];
+  const completedSurveys = completedSurveyData?.surveys || [];
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      proposalsAPI.create({
+    mutationFn: async () => {
+      const created = await proposalsAPI.create({
         clientId: Number(proposalForm.clientId),
         proposalTitle: proposalForm.proposalTitle,
         serviceType: proposalForm.serviceType,
@@ -92,7 +108,48 @@ export default function BusinessDevelopment() {
         expectedStart: proposalForm.expectedStart || undefined,
         probability: Number(proposalForm.probability),
         status: proposalForm.status,
-      }),
+      });
+
+      const proposal = (created as any)?.data ?? created;
+      if (proposalAttachment && proposal?.id) {
+        try {
+          await documentsAPI.uploadFile(proposalAttachment, {
+            documentType: "proposal",
+            entityType: "Proposal",
+            entityId: proposal.id,
+            accessLevel: "hr",
+            isRequired: false,
+            description: `Proposal attachment for ${proposal.proposalTitle}`,
+          });
+        } catch (uploadError: any) {
+          toast({
+            title: "Proposal saved, attachment failed",
+            description: uploadError?.message || "Could not upload proposal attachment.",
+            variant: "destructive",
+          });
+        }
+      }
+      if (engagementAttachment && proposal?.id) {
+        try {
+          await documentsAPI.uploadFile(engagementAttachment, {
+            documentType: "engagement_letter",
+            entityType: "Proposal",
+            entityId: proposal.id,
+            accessLevel: "hr",
+            isRequired: false,
+            description: `Engagement letter for ${proposal.proposalTitle}`,
+          });
+        } catch (uploadError: any) {
+          toast({
+            title: "Proposal saved, engagement letter failed",
+            description: uploadError?.message || "Could not upload engagement letter.",
+            variant: "destructive",
+          });
+        }
+      }
+
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["proposals"] });
       queryClient.invalidateQueries({ queryKey: ["proposal-metrics"] });
@@ -108,6 +165,8 @@ export default function BusinessDevelopment() {
         probability: "50",
         status: "sent",
       });
+      setProposalAttachment(null);
+      setEngagementAttachment(null);
     },
     onError: (error: any) => {
       toast({
@@ -135,12 +194,87 @@ export default function BusinessDevelopment() {
     },
   });
 
+  const sendSurveyMutation = useMutation({
+    mutationFn: (clientId: number) => surveysAPI.create({ clientId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["surveys", "pending"] });
+      queryClient.invalidateQueries({ queryKey: ["surveys", "completed"] });
+      queryClient.invalidateQueries({ queryKey: ["survey-analytics"] });
+      toast({ title: "Survey routed", description: "Client survey has been queued." });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Survey failed",
+        description: error?.message || "Could not send client survey.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const pipelineValue = metrics?.pipelineValue || 0;
   const conversionRate = metrics?.conversionRate || 0;
   const avgDealSize = metrics?.avgDealSize || 0;
   const hotLeads = metrics?.hotLeads || 0;
 
   const filteredProposals = useMemo(() => proposals, [proposals]);
+
+  const getSurveyRoutingStatus = (proposal: any) => {
+    const clientId = proposal?.clientId || proposal?.client?.id;
+    if (!clientId) return "not_sent";
+    const hasCompleted = completedSurveys.some((survey: any) => survey.clientId === clientId);
+    if (hasCompleted) return "received";
+    const hasPending = pendingSurveys.some((survey: any) => survey.clientId === clientId);
+    if (hasPending) return "pending";
+    return "not_sent";
+  };
+
+  const handleAttachProposalFile = async (proposal: any, file: File | null) => {
+    if (!file || !proposal?.id) return;
+    setAttachingProposalId(proposal.id);
+    try {
+      await documentsAPI.uploadFile(file, {
+        documentType: "proposal",
+        entityType: "Proposal",
+        entityId: proposal.id,
+        accessLevel: "hr",
+        isRequired: false,
+        description: `Proposal attachment for ${proposal.proposalTitle}`,
+      });
+      toast({ title: "Attachment uploaded", description: "Proposal file saved." });
+    } catch (error: any) {
+      toast({
+        title: "Attachment failed",
+        description: error?.message || "Could not upload proposal attachment.",
+        variant: "destructive",
+      });
+    } finally {
+      setAttachingProposalId(null);
+    }
+  };
+
+  const handleAttachEngagementLetter = async (proposal: any, file: File | null) => {
+    if (!file || !proposal?.id) return;
+    setAttachingEngagementId(proposal.id);
+    try {
+      await documentsAPI.uploadFile(file, {
+        documentType: "engagement_letter",
+        entityType: "Proposal",
+        entityId: proposal.id,
+        accessLevel: "hr",
+        isRequired: false,
+        description: `Engagement letter for ${proposal.proposalTitle}`,
+      });
+      toast({ title: "Engagement letter uploaded", description: "File saved." });
+    } catch (error: any) {
+      toast({
+        title: "Attachment failed",
+        description: error?.message || "Could not upload engagement letter.",
+        variant: "destructive",
+      });
+    } finally {
+      setAttachingEngagementId(null);
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -281,6 +415,46 @@ export default function BusinessDevelopment() {
                     </Select>
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label>Proposal Attachment (optional)</Label>
+                  <Input
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      setProposalAttachment(file);
+                    }}
+                  />
+                  {proposalAttachment ? (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: {proposalAttachment.name}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Upload engagement letter or proposal document.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Engagement Letter (optional)</Label>
+                  <Input
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      setEngagementAttachment(file);
+                    }}
+                  />
+                  {engagementAttachment ? (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: {engagementAttachment.name}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Attach engagement letter if already signed.
+                    </p>
+                  )}
+                </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setDialogOpen(false)}>
                     Cancel
@@ -393,6 +567,44 @@ export default function BusinessDevelopment() {
                       <TableCell>
                         <div className="font-medium">{proposal.proposalTitle}</div>
                         <div className="text-xs text-muted-foreground">{proposal.serviceType}</div>
+                        <div className="mt-2 space-y-1">
+                          <label
+                            htmlFor={`proposal-attach-${proposal.id}`}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline cursor-pointer"
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {attachingProposalId === proposal.id ? "Uploading..." : "Attach file"}
+                          </label>
+                          <input
+                            id={`proposal-attach-${proposal.id}`}
+                            type="file"
+                            accept=".pdf,.doc,.docx"
+                            className="hidden"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null;
+                              handleAttachProposalFile(proposal, file);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                          <label
+                            htmlFor={`engagement-attach-${proposal.id}`}
+                            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline cursor-pointer"
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {attachingEngagementId === proposal.id ? "Uploading..." : "Attach engagement letter"}
+                          </label>
+                          <input
+                            id={`engagement-attach-${proposal.id}`}
+                            type="file"
+                            accept=".pdf,.doc,.docx"
+                            className="hidden"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null;
+                              handleAttachEngagementLetter(proposal, file);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="space-y-2">
@@ -433,6 +645,43 @@ export default function BusinessDevelopment() {
                               View onboarding queue
                             </Link>
                           )}
+                          {proposal.status === "won" && (
+                            <Link
+                              to={`/client-surveys?clientId=${proposal.clientId || proposal.client?.id || ""}`}
+                              className="inline-block pt-1 text-xs hover:underline"
+                            >
+                              {(() => {
+                                const surveyStatus = getSurveyRoutingStatus(proposal);
+                                if (surveyStatus === "received") {
+                                  return <Badge variant="secondary">Survey received</Badge>;
+                                }
+                                if (surveyStatus === "pending") {
+                                  return <Badge variant="outline">Survey pending</Badge>;
+                                }
+                                  return (
+                                    <Badge variant="outline" className="text-muted-foreground">
+                                      Survey not sent
+                                    </Badge>
+                                  );
+                                })()}
+                            </Link>
+                          )}
+                          {proposal.status === "won" &&
+                            getSurveyRoutingStatus(proposal) === "not_sent" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={sendSurveyMutation.isPending}
+                                onClick={() => {
+                                  const clientId = proposal.clientId || proposal.client?.id;
+                                  if (!clientId) return;
+                                  sendSurveyMutation.mutate(Number(clientId));
+                                }}
+                              >
+                                {sendSurveyMutation.isPending ? "Routing..." : "Send survey"}
+                              </Button>
+                            )}
                           {proposal.status === "lost" && (
                             <div className="space-y-2">
                               {lostReasonEditingId === proposal.id ? (

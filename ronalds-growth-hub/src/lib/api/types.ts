@@ -5,6 +5,7 @@
 // Enums
 export type EmployeeStatus = 'active' | 'inactive' | 'separated';
 export type OnboardingStatus = 'pending' | 'in_progress' | 'completed';
+export type OffboardingStatus = 'initiated' | 'in_progress' | 'completed';
 export type DocumentAccessLevel = 'employee' | 'manager' | 'hr' | 'admin';
 export type DocumentVerificationStatus = 'pending' | 'verified' | 'rejected';
 export type ClientStatus = 'active' | 'inactive';
@@ -98,6 +99,25 @@ export interface PositionRole {
   defaultAccess: any;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RecruitmentCandidate {
+  id: number;
+  fullName: string;
+  email?: string | null;
+  phoneNumber?: string | null;
+  positionApplied: string;
+  departmentId?: number | null;
+  stage: RecruitmentStage;
+  notes?: string | null;
+  createdByProfileId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  department?: Department | null;
+  createdBy?: Profile | null;
+  offerLetterDocumentId?: number | null;
+  offerLetterDocument?: Document | null;
+  onboardingCase?: EmployeeOnboardingCase | null;
 }
 
 export interface AuthRole {
@@ -532,6 +552,21 @@ export interface EmployeeOnboardingCase {
   employee?: Profile;
   hrOwner?: Profile;
   inductionChecklist?: InductionChecklist;
+}
+
+export interface EmployeeOffboardingCase {
+  id: number;
+  profileId?: number;
+  hrOwnerProfileId?: number;
+  status: OffboardingStatus;
+  reason?: string;
+  notes?: string;
+  initiatedAt: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  employee?: Profile;
+  hrOwner?: Profile;
 }
 
 // API Response Types

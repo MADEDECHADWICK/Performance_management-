@@ -15,6 +15,7 @@ import authRoutes from './auth';
 import departmentRoutes from './departments.routes';
 import documentsRoutes from './documents.routes';
 import employeeOnboardingRoutes from './employeeOnboardingCase.routes';
+import employeeOffboardingRoutes from './employeeOffboardingCase.routes';
 import evaluationRoutes from './evaluations.routes';
 import inductionChecklistRoutes from './inductionChecklist.routes';
 import partnerRoutes from './partners.routes';
@@ -40,6 +41,7 @@ import evaluationAssignmentsRoutes from './evaluationAssignments';
 import evaluationCyclesRoutes from './evaluationCycles';
 import evaluationResultAreasRoutes from './evaluationResultAreas';
 import evaluationTemplatesRoutes from './evaluationTemplates';
+import evaluationDefinitionsRoutes from './evaluationDefinitions';
 import feedbackRoutes from './feedback';
 import financialSummaryRoutes from './financialSummary';
 import financeDashboardRoutes from './financeDashboard';
@@ -52,6 +54,7 @@ import okrRoutes from './okrs';
 import managerDashboardRoutes from './managerDashboard';
 import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
 import notificationsRoutes from './notifications';
+import notificationTemplatesRoutes from './notificationTemplates';
 import peerEvaluationsRoutes from './peerEvaluations';
 import performanceReviewsRoutes from './performanceReviews';
 import positionRatesRoutes from './positionRates';
@@ -71,6 +74,7 @@ import upwardEvaluationsRoutes from './upwardEvaluations';
 import userRolesRoutes from './userRoles';
 import workLogsRoutes from './workLogs';
 import adHocEvaluationsRoutes from './adHocEvaluations';
+import recruitmentCandidatesRoutes from './recruitmentCandidates.routes';
 
 const router = Router();
 
@@ -90,6 +94,7 @@ router.use('/auth', authRoutes);
 router.use('/departments', authMiddleware, departmentRoutes);
 router.use('/documents', authMiddleware, documentsRoutes);
 router.use('/onboarding', authMiddleware, employeeOnboardingRoutes);
+router.use('/offboarding', authMiddleware, employeeOffboardingRoutes);
 router.use('/evaluations', authMiddleware, evaluationRoutes);
 router.use('/induction-checklist', authMiddleware, inductionChecklistRoutes);
 router.use('/partners', authMiddleware, partnerRoutes);
@@ -115,6 +120,7 @@ router.use('/evaluation-result-areas', authMiddleware, evaluationResultAreasRout
 router.use('/evaluation-templates', authMiddleware, evaluationTemplatesRoutes);
 // Backward-compat alias used by older frontend paths
 router.use('/evaluation_templates', authMiddleware, evaluationTemplatesRoutes);
+router.use('/evaluation-definitions', authMiddleware, evaluationDefinitionsRoutes);
 router.use('/employee-evaluations', authMiddleware, employeeEvaluationsRoutes);
 router.use('/client-evaluations', authMiddleware, clientEvaluationsRoutes);
 router.use('/peer-evaluations', authMiddleware, peerEvaluationsRoutes);
@@ -135,6 +141,8 @@ router.use('/employee-roles', authMiddleware, employeeRolesRoutes);
 router.use('/employee-project-allocations', authMiddleware, employeeProjectAllocationsRoutes);
 router.use('/subordinates', authMiddleware, subordinatesRoutes);
 router.use('/team-management', authMiddleware, teamManagementRoutes);
+// Backward-compatible alias for manager workload endpoints
+router.use('/manager', authMiddleware, teamManagementRoutes);
 router.use('/clients', authMiddleware, clientsRoutes);
 router.use('/engagement-letters', authMiddleware, engagementLettersRoutes);
 router.use('/client-onboardings', authMiddleware, clientOnboardingsRoutes);
@@ -145,6 +153,7 @@ router.use('/proposals', authMiddleware, proposalsRoutes);
 router.use('/surveys', surveysRoutes);
 router.use('/feedback', authMiddleware, feedbackRoutes);
 router.use('/notifications', authMiddleware, notificationsRoutes);
+router.use('/notification-templates', authMiddleware, notificationTemplatesRoutes);
 router.use('/manager-dashboard', authMiddleware, managerDashboardRoutes);
 router.use('/gmp-dashboard', authMiddleware, gmpDashboardRoutes);
 router.use('/hr-dashboard', authMiddleware, hrDashboardRoutes);
@@ -155,6 +164,7 @@ router.use('/position-rates', authMiddleware, positionRatesRoutes);
 router.use('/projects', authMiddleware, projectsRoutes);
 router.use('/todos', authMiddleware, todosRoutes);
 router.use('/work-logs', authMiddleware, workLogsRoutes);
+router.use('/recruitment-candidates', authMiddleware, recruitmentCandidatesRoutes);
 
 // Health check
 router.get('/health', (req, res) => {

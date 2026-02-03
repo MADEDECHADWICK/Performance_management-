@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import prisma from "../prisma";
 import { errorResponse, successResponse } from "../utils/response";
+import { createAudit } from "../utils/audit";
 
 const router = Router();
 
@@ -114,6 +115,18 @@ router.patch("/scores/:id", authMiddleware, async (req: AuthRequest, res) => {
       include: {
         employee: { select: { id: true, firstName: true, lastName: true } },
       },
+    });
+
+    await createAudit({
+      action: "calibration:update",
+      entity_type: "performance_score",
+      entity_id: updated.id,
+      user_id: req.user?.userId ?? undefined,
+      metadata: {
+        calibratedScore: updated.calibratedScore,
+        calibrationNote: updated.calibrationNote,
+      },
+      ip_address: req.ip,
     });
 
     res.json(successResponse(updated, "Calibration saved"));

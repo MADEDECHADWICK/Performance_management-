@@ -9,8 +9,8 @@ const ROLE_GROUPS: Record<string, string[]> = {
 };
 
 const buildAuthContext = (req: AuthRequest) => ({
-  userId: req.user?.userId ?? req.user?.id ?? req.userId ?? 0,
-  profileId: req.user?.profileId ?? req.profileId ?? req.profile?.id ?? 0,
+  userId: req.user?.userId ?? 0,
+  profileId: req.user?.profileId ?? req.profile?.id ?? 0,
   roleName: req.profile?.role?.name,
 });
 
@@ -117,7 +117,7 @@ export const notifyProfile = async (
 };
 
 export const notifyJobCreation = async (
-  job: { id: number; jobName: string; managerProfileId?: number; partnerProfileId?: number },
+  job: { id: number; jobName: string; managerProfileId?: number | null; partnerProfileId?: number | null },
   auth: AuthRequest
 ) => {
   const message = {
@@ -161,7 +161,7 @@ export const notifyJobStaff = async (
 };
 
 export const notifyJobCompletion = async (
-  job: { id: number; jobName: string; managerProfileId?: number; partnerProfileId?: number },
+  job: { id: number; jobName: string; managerProfileId?: number | null; partnerProfileId?: number | null },
   auth: AuthRequest
 ) => {
   const message = {

@@ -115,14 +115,10 @@ router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: Au
     
     // Audit log
     await createAudit({
-      user_id: req.user?.sub,
+      user_id: req.user?.userId,
       action: 'EMPLOYEE_ROLE_ASSIGNED',
       entity_type: 'Profile',
-      metadata: {
-        notes: notes ?? null,
-        oldRole: oldRoleName,
-        newRole: newRole.name,
-      },
+      ip_address: req.ip,
     });
     
     res.json({

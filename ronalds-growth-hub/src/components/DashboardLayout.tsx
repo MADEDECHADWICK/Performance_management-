@@ -516,6 +516,7 @@ function AppSidebar({
                   <SidebarMenu>
                     <NavItem path="/employee-management" icon={Users} label="Employee Management" />
 
+                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" />
                     <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" />
                     <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" />
                     <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" />

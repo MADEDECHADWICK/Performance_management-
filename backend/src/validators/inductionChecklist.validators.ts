@@ -27,3 +27,9 @@ export const completeInductionItemValidators = [
   param("checklistId").isInt({ min: 1 }),
   param("itemId").isInt({ min: 1 }),
 ];
+
+export const attachInductionItemDocumentValidators = [
+  param("checklistId").isInt({ min: 1 }),
+  param("itemId").isInt({ min: 1 }),
+  body("documentId").isInt({ min: 1 }),
+];

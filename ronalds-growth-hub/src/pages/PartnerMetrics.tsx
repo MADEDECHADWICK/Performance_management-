@@ -4,7 +4,6 @@ import apiFetch, { authAPI } from "@/integrations/apiClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
@@ -90,7 +89,6 @@ interface TeamMember {
 }
 
 const PartnerMetrics = () => {
-  const { toast } = useToast();
   const [kpis, setKpis] = useState<PartnerKPIs | null>(null);
   const [performanceData, setPerformanceData] = useState<PerformanceData[]>([]);
   const [jobPerformance, setJobPerformance] = useState<JobPerformance[]>([]);
@@ -210,11 +208,11 @@ const PartnerMetrics = () => {
       }
     } catch (error: any) {
       console.error("Error loading partner metrics:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load partner metrics data.",
-        variant: "destructive"
-      });
+      setKpis(null);
+      setPerformanceData([]);
+      setJobPerformance([]);
+      setTeamMembers([]);
+      setLossAlertCount(0);
     } finally {
       setLoading(false);
     }
@@ -310,6 +308,16 @@ const PartnerMetrics = () => {
         </div>
 
         {/* Key Performance Indicators */}
+        {!kpis && (
+          <Card className="border-dashed">
+            <CardHeader>
+              <CardTitle>No partner analytics yet</CardTitle>
+              <CardDescription>
+                Metrics will populate once portfolio activity is recorded.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
         {kpis && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>

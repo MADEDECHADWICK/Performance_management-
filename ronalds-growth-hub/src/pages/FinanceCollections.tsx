@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
+import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 
 type Collection = {
@@ -26,10 +28,11 @@ type Collection = {
 };
 
 type ClientOption = { id: number; clientName: string };
-type JobOption = { id: number; jobCode: string | null; jobName: string };
+type JobOption = { id: number; jobCode: string | null; jobName: string | null; clientId?: number | null };
 
 export default function FinanceCollections() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -53,7 +56,7 @@ export default function FinanceCollections() {
       const results = await Promise.allSettled([
         apiFetch<Collection[]>("GET", "/finance-dashboard/collections?limit=100"),
         apiFetch<{ data: ClientOption[] } | ClientOption[]>("GET", "/clients?page=1&pageSize=100"),
-        apiFetch<{ data: JobOption[] } | JobOption[]>("GET", "/jobs?page=1&pageSize=100"),
+        apiFetch<{ data: JobOption[] } | { jobs: JobOption[] } | JobOption[]>("GET", "/jobs?page=1&pageSize=100"),
       ]);
 
       const [collectionsResult, clientsResult, jobsResult] = results;
@@ -68,18 +71,36 @@ export default function FinanceCollections() {
       }
 
       if (jobsResult.status === "fulfilled") {
-        const resolvedJobs = Array.isArray(jobsResult.value)
+        const resolvedJobsRaw = Array.isArray(jobsResult.value)
           ? jobsResult.value
-          : (jobsResult.value as any).data || [];
+          : (jobsResult.value as any).data || (jobsResult.value as any).jobs || [];
+        const resolvedJobs = resolvedJobsRaw.map((job: any) => ({
+          id: job.id,
+          jobCode: job.jobCode ?? null,
+          jobName: job.jobName ?? null,
+          clientId: job.clientId ?? job.client?.id ?? null,
+        }));
         setJobs(resolvedJobs);
       }
     } catch (error: any) {
       console.error("Collections error:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to load collections",
-        variant: "destructive",
-      });
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 403) {
+        toast({
+          title: "Access restricted",
+          description: "You don't have permission to view collections.",
+          variant: "destructive",
+        });
+      }
+      if (error?.status === 404) {
+        setCollections([]);
+        setClients([]);
+        setJobs([]);
+        return;
+      }
     } finally {
       setLoading(false);
     }
@@ -89,10 +110,34 @@ export default function FinanceCollections() {
     loadCollections();
   }, []);
 
+  const filteredJobs = useMemo(() => {
+    if (!paymentForm.clientId) return jobs;
+    const clientId = Number(paymentForm.clientId);
+    return jobs.filter((job) => !job.clientId || job.clientId === clientId);
+  }, [jobs, paymentForm.clientId]);
+
   const totalCollected = useMemo(
     () => collections.reduce((sum, payment) => sum + (payment.paymentAmount || 0), 0),
     [collections]
   );
+
+  const recentCollections = useMemo(() => {
+    const byDate = new Map<string, number>();
+    collections.forEach((payment) => {
+      const date = new Date(payment.paymentDate);
+      if (Number.isNaN(date.getTime())) return;
+      const key = date.toISOString().slice(0, 10);
+      byDate.set(key, (byDate.get(key) || 0) + (payment.paymentAmount || 0));
+    });
+    return Array.from(byDate.entries())
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .slice(-7)
+      .map(([date, amount]) => ({
+        date,
+        amount,
+        label: new Date(date).toLocaleDateString("en-KE", { month: "short", day: "numeric" }),
+      }));
+  }, [collections]);
 
   const handlePaymentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -183,6 +228,38 @@ export default function FinanceCollections() {
           </Card>
         </div>
 
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Recent Collections</CardTitle>
+            <CardDescription>Last 7 payment days</CardDescription>
+          </CardHeader>
+          <CardContent className="h-32">
+            {recentCollections.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No recent collections yet.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={recentCollections}>
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
+                  <YAxis hide />
+                  <Tooltip
+                    formatter={(value: number) => [`KES ${value.toLocaleString()}`, "Collected"]}
+                    labelFormatter={(label) => `Date: ${label}`}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="amount"
+                    stroke="hsl(var(--chart-1))"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
@@ -222,12 +299,17 @@ export default function FinanceCollections() {
                       }
                     >
                       <option value="">Select job</option>
-                      {jobs.map((job) => (
+                      {filteredJobs.map((job) => (
                         <option key={job.id} value={job.id}>
                           {job.jobCode ? `${job.jobCode} - ${job.jobName}` : job.jobName}
                         </option>
                       ))}
                     </select>
+                    {paymentForm.clientId && filteredJobs.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        No jobs found for the selected client.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -236,6 +318,8 @@ export default function FinanceCollections() {
                     <Input
                       id="paymentAmount"
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={paymentForm.paymentAmount}
                       onChange={(event) =>
                         setPaymentForm((prev) => ({ ...prev, paymentAmount: event.target.value }))

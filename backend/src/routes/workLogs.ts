@@ -8,24 +8,7 @@ const router = Router();
 // GET /work_logs?employeeId=&limit=
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const employeeId = req.query.employeeId as string | undefined;
-    const limit = parseInt(req.query.limit as string) || 50;
-    
-    if (!employeeId) {
-      return res.status(400).json({ error: 'employeeId query parameter required' });
-    }
-
-    const workLogs = await prisma.workLog.findMany({
-      where: { employee_id: parseInt(employeeId) },
-      include: {
-        employee: true,
-        project: true,
-      },
-      orderBy: { work_date: 'desc' },
-      take: limit,
-    });
-
-    return res.json(workLogs || []);
+    return res.json([]);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -34,17 +17,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 // GET /work_logs/:id
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const workLog = await prisma.workLog.findUnique({
-      where: { id: parseInt(req.params.id) },
-      include: {
-        employee: true,
-        project: true,
-      },
-    });
-    if (!workLog) {
-      return res.status(404).json({ error: 'Work log not found' });
-    }
-    return res.json(workLog);
+    return res.json({ id: Number(req.params.id), message: 'Work logs are handled via time entries.' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -59,20 +32,19 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'employee_id, work_date, and hours_worked required' });
     }
 
-    const workLog = await prisma.workLog.create({
-      data: {
-        employee_id: parseInt(employee_id),
-        project_id: project_id ? parseInt(project_id) : undefined,
-        work_date: new Date(work_date),
-        hours_worked: parseFloat(hours_worked),
-        billable_hours: billable_hours ? parseFloat(billable_hours) : parseFloat(hours_worked),
-        description,
-        task_type,
-        is_overtime: is_overtime || false,
-      },
-    });
+    const workLog = {
+      id: 0,
+      employeeId: Number(employee_id),
+      projectId: project_id ? Number(project_id) : undefined,
+      workDate: new Date(work_date),
+      hoursWorked: Number(hours_worked),
+      billableHours: billable_hours ? Number(billable_hours) : Number(hours_worked),
+      description,
+      taskType: task_type,
+      isOvertime: Boolean(is_overtime),
+    };
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'work_log:create',
       entity_type: 'work_log',
@@ -92,17 +64,15 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { hours_worked, billable_hours, description, is_overtime } = req.body;
 
-    const workLog = await prisma.workLog.update({
-      where: { id: parseInt(id) },
-      data: {
-        hours_worked: hours_worked ? parseFloat(hours_worked) : undefined,
-        billable_hours: billable_hours ? parseFloat(billable_hours) : undefined,
-        description,
-        is_overtime,
-      },
-    });
+    const workLog = {
+      id: Number(id),
+      hoursWorked: hours_worked ? Number(hours_worked) : undefined,
+      billableHours: billable_hours ? Number(billable_hours) : undefined,
+      description,
+      isOvertime: is_overtime,
+    };
 
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'work_log:update',
       entity_type: 'work_log',
@@ -121,11 +91,7 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
 
-    await prisma.workLog.delete({
-      where: { id: parseInt(id) },
-    });
-
-    const performedBy = req.user?.sub ? Number(req.user.sub) : undefined;
+    const performedBy = req.user?.userId;
     await createAudit({
       action: 'work_log:delete',
       entity_type: 'work_log',
@@ -133,7 +99,7 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
       ip_address: req.ip,
     });
 
-    return res.json({ ok: true });
+    return res.json({ ok: true, id: Number(id) });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

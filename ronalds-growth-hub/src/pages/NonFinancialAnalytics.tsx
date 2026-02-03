@@ -3,10 +3,11 @@ import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { apiFetch, authAPI } from "@/integrations/apiClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Loader2, TrendingUp, Users, Target, Award, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { PAGE_STACK, SECTION_TITLE, SECTION_SUBTITLE } from "@/components/ui/cardStyles";
+import EmptyState from "@/components/ui/empty-state";
 
 interface AnalyticsData {
   userRole: string;
@@ -55,16 +56,19 @@ const NonFinancialAnalytics = () => {
 
       // Use the new role-aware analytics endpoint
       const data = await apiFetch("GET", "/analytics/dashboard");
-      console.log("Analytics data received:", data);  // DEBUG
       setAnalyticsData(data);
-    } catch (error: unknown) {
-      const err = error as Record<string, string>;
+    } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 404) {
+        setAnalyticsData(null);
+        return;
+      }
       console.error("Error loading analytics:", error);
-      toast({
-        title: "Error",
-        description: err.error || "Failed to load analytics",
-        variant: "destructive",
-      });
+      // Avoid noisy toasts for empty analytics; fall back to empty state.
+      setAnalyticsData(null);
     } finally {
       setLoading(false);
     }
@@ -126,19 +130,11 @@ const NonFinancialAnalytics = () => {
   if (!analyticsData) {
     return (
       <DashboardLayout>
-        <Card className="border-destructive/50 bg-destructive/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertCircle className="h-5 w-5" />
-              No Analytics Available
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Analytics data is not yet available. Please complete performance evaluations to see metrics.
-            </p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<AlertCircle className="h-10 w-10" />}
+          title="No analytics available yet"
+          description="Complete performance evaluations to unlock analytics insights."
+        />
       </DashboardLayout>
     );
   }
@@ -159,12 +155,12 @@ const NonFinancialAnalytics = () => {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className={PAGE_STACK}>
         <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">
+          <h2 className={SECTION_TITLE}>
             {roleLabel} Non-Financial Performance
           </h2>
-          <p className="text-muted-foreground">
+          <p className={SECTION_SUBTITLE}>
             Your Balanced Scorecard metrics {analyticsData.isAdmin && "(Company-wide aggregates)"}
             {analyticsData.isPartner && "(Portfolio team metrics)"}
             {analyticsData.isEmployee && "(Personal metrics)"}

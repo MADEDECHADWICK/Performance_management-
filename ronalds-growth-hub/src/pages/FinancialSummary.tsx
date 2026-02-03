@@ -26,6 +26,9 @@ interface EmployeeJobRow {
   billableAmount: number;
   nonBillableAmount: number;
   profitLoss: number;
+  allocatedRevenue?: number;
+  profit?: number;
+  loss?: number;
 }
 
 const COLORS = ['hsl(var(--primary))', 'hsl(var(--secondary))', 'hsl(var(--accent))', 'hsl(var(--muted))', 'hsl(var(--destructive))'];
@@ -46,9 +49,12 @@ export default function FinancialSummary() {
     profitAmount: 0,
     lossAmount: 0,
     overtimeHours: 0,
+    allocatedRevenue: 0,
   });
   const [employeeDateFrom, setEmployeeDateFrom] = useState("");
   const [employeeDateTo, setEmployeeDateTo] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
+  const [employeeStatusFilter, setEmployeeStatusFilter] = useState("");
 
   useEffect(() => {
     loadAnalytics();
@@ -71,10 +77,17 @@ export default function FinancialSummary() {
       if (data?.isEmployee) {
         await loadEmployeeBreakdown();
       }
-    } catch (error: unknown) {
-      const err = error as Record<string, string>;
-      console.error("Error loading analytics:", error);
-      setErrorMessage(err.error || "Failed to load financial analytics");
+    } catch (error: any) {
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      if (error?.status === 404) {
+        setErrorMessage(null);
+      } else {
+        console.error("Error loading analytics:", error);
+        setErrorMessage(error?.error || "Failed to load financial analytics");
+      }
       // Provide safe fallback so the dashboard still renders
       const fallbackUser = await authAPI.me().catch(() => null);
       setAnalyticsData({
@@ -123,9 +136,16 @@ export default function FinancialSummary() {
         profitAmount: 0,
         lossAmount: 0,
         overtimeHours: 0,
+        allocatedRevenue: 0,
       };
 
       const byJob = new Map<number, EmployeeJobRow>();
+      const allocationBreakdown = Array.isArray(analyticsData?.financial?.jobBreakdown)
+        ? analyticsData?.financial?.jobBreakdown
+        : [];
+      const allocationMap = new Map<number, any>(
+        allocationBreakdown.map((row: any) => [row.jobId, row])
+      );
 
       const filteredEntries = entries.filter((entry: any) => {
         const rawDate = entry.workDate ?? entry.date ?? entry.createdAt;
@@ -172,6 +192,7 @@ export default function FinancialSummary() {
         }
 
         if (!byJob.has(jobId)) {
+          const allocation = allocationMap.get(jobId);
           byJob.set(jobId, {
             jobId,
             jobName,
@@ -183,6 +204,9 @@ export default function FinancialSummary() {
             billableAmount: 0,
             nonBillableAmount: 0,
             profitLoss: 0,
+            allocatedRevenue: allocation?.allocatedRevenue || 0,
+            profit: allocation?.profit || 0,
+            loss: allocation?.loss || 0,
           });
         }
 
@@ -205,14 +229,27 @@ export default function FinancialSummary() {
         totals.overtimeHours += Number(request.additionalHoursRequested || 0);
       });
 
+      const allocationTotal = Number(analyticsData?.financial?.allocatedRevenueTotal || 0);
+      totals.allocatedRevenue = allocationTotal;
+
       const jobRows = Array.from(byJob.values()).sort((a, b) => {
         const aTime = a.lastWorkedAt ? new Date(a.lastWorkedAt).getTime() : 0;
         const bTime = b.lastWorkedAt ? new Date(b.lastWorkedAt).getTime() : 0;
         return bTime - aTime;
       });
 
+      const filteredRows = jobRows.filter((job) => {
+        if (employeeStatusFilter && job.status !== employeeStatusFilter) return false;
+        if (employeeSearch.trim()) {
+          const query = employeeSearch.toLowerCase();
+          const haystack = [job.jobName, job.status].filter(Boolean).join(" ").toLowerCase();
+          if (!haystack.includes(query)) return false;
+        }
+        return true;
+      });
+
       setEmployeeTotals(totals);
-      setEmployeeJobs(jobRows);
+      setEmployeeJobs(filteredRows);
     } catch (error) {
       console.error("Failed to load employee financial breakdown", error);
     }
@@ -251,7 +288,7 @@ export default function FinancialSummary() {
           </p>
         </div>
 
-        {(errorMessage || !analyticsData) && !analyticsData?.isEmployee && (
+        {errorMessage && !analyticsData?.isEmployee && (
           <Card className="border-destructive/30 bg-destructive/5">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-destructive">
@@ -285,13 +322,16 @@ export default function FinancialSummary() {
               <CardTitle className="text-sm">Personal Job Financials</CardTitle>
               <CardDescription>Billable vs non-billable, profit/loss, and overtime.</CardDescription>
             </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium">Billable Amount</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-primary">
+                <div
+                  className="text-2xl font-bold text-primary leading-tight break-words"
+                  title={`KES ${employeeTotals.billableAmount.toLocaleString()}`}
+                >
                   KES {employeeTotals.billableAmount.toLocaleString()}
                   </div>
                   <p className="text-xs text-muted-foreground">{employeeTotals.billableHours.toFixed(1)} billable hours</p>
@@ -299,10 +339,27 @@ export default function FinancialSummary() {
               </Card>
             <Card>
               <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Allocated Revenue</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div
+                  className="text-2xl font-bold text-primary leading-tight break-words"
+                  title={`KES ${employeeTotals.allocatedRevenue.toLocaleString()}`}
+                >
+                  KES {employeeTotals.allocatedRevenue.toLocaleString()}
+                </div>
+                <p className="text-xs text-muted-foreground">Cash collected and allocated</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium">Non-billable Amount</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-primary">
+                <div
+                  className="text-2xl font-bold text-primary leading-tight break-words"
+                  title={`KES ${employeeTotals.nonBillableAmount.toLocaleString()}`}
+                >
                   KES {employeeTotals.nonBillableAmount.toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">{employeeTotals.nonBillableHours.toFixed(1)} non-billable hours</p>
@@ -313,7 +370,10 @@ export default function FinancialSummary() {
                 <CardTitle className="text-sm font-medium">Profit</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-primary">
+                <div
+                  className="text-2xl font-bold text-primary leading-tight break-words"
+                  title={`KES ${employeeTotals.profitAmount.toLocaleString()}`}
+                >
                   KES {employeeTotals.profitAmount.toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">Positive variance</p>
@@ -324,7 +384,10 @@ export default function FinancialSummary() {
                 <CardTitle className="text-sm font-medium">Loss</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-primary">
+                <div
+                  className="text-2xl font-bold text-primary leading-tight break-words"
+                  title={`KES ${employeeTotals.lossAmount.toLocaleString()}`}
+                >
                   KES {employeeTotals.lossAmount.toLocaleString()}
                 </div>
                 <p className="text-xs text-muted-foreground">Negative variance</p>
@@ -335,7 +398,7 @@ export default function FinancialSummary() {
                 <CardTitle className="text-sm font-medium">Approved Overtime</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-primary">
+                  <div className="text-2xl font-bold text-primary leading-tight break-words">
                     {employeeTotals.overtimeHours.toFixed(1)} hrs
                   </div>
                   <p className="text-xs text-muted-foreground">Additional approved hours</p>
@@ -357,7 +420,10 @@ export default function FinancialSummary() {
                     <DollarSign className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div
+                      className="text-2xl font-bold text-primary leading-tight break-words"
+                      title={`KES ${(f.totalRevenue || 0).toLocaleString()}`}
+                    >
                       KES {(f.totalRevenue || 0).toLocaleString()}
                     </div>
                     <p className="text-xs text-muted-foreground">Company-wide revenue</p>
@@ -373,7 +439,10 @@ export default function FinancialSummary() {
                     <DollarSign className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div
+                      className="text-2xl font-bold text-primary leading-tight break-words"
+                      title={`KES ${(f.portfolioRevenue || 0).toLocaleString()}`}
+                    >
                       KES {(f.portfolioRevenue || 0).toLocaleString()}
                     </div>
                     <p className="text-xs text-muted-foreground">Your team's revenue</p>
@@ -389,7 +458,10 @@ export default function FinancialSummary() {
                     <TrendingUp className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div
+                      className="text-2xl font-bold text-primary leading-tight break-words"
+                      title={`KES ${(f.totalCost || 0).toLocaleString()}`}
+                    >
                       KES {(f.totalCost || 0).toLocaleString()}
                     </div>
                     <p className="text-xs text-muted-foreground">Total operating cost</p>
@@ -405,7 +477,7 @@ export default function FinancialSummary() {
                     <TrendingUp className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div className="text-2xl font-bold text-primary leading-tight break-words">
                       {f.totalRevenue > 0 ? (((f.totalRevenue - f.totalCost) / f.totalRevenue) * 100).toFixed(1) : 0}%
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -425,7 +497,7 @@ export default function FinancialSummary() {
                     <TrendingUp className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div className="text-2xl font-bold text-primary leading-tight break-words">
                       {(f.totalHours || 0).toFixed(1)}
                     </div>
                     <p className="text-xs text-muted-foreground">Hours worked</p>
@@ -441,7 +513,7 @@ export default function FinancialSummary() {
                     <Users className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div className="text-2xl font-bold text-primary leading-tight break-words">
                       {(f.billableHours || 0).toFixed(1)}
                     </div>
                     <p className="text-xs text-muted-foreground">Hours on billable projects</p>
@@ -456,7 +528,7 @@ export default function FinancialSummary() {
                     <Users className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div className="text-2xl font-bold text-primary leading-tight break-words">
                       {employeeJobs.length}
                     </div>
                     <p className="text-xs text-muted-foreground">With approved time</p>
@@ -472,7 +544,7 @@ export default function FinancialSummary() {
                     <Building2 className="h-4 w-4 text-accent" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold text-primary">
+                    <div className="text-2xl font-bold text-primary leading-tight break-words">
                       {f.activeDepartments}
                     </div>
                     <p className="text-xs text-muted-foreground">Active departments</p>
@@ -615,11 +687,37 @@ export default function FinancialSummary() {
                           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                         />
                       </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Status</span>
+                        <select
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                          value={employeeStatusFilter}
+                          onChange={(event) => setEmployeeStatusFilter(event.target.value)}
+                        >
+                          <option value="">All statuses</option>
+                          <option value="planned">Planned</option>
+                          <option value="in_progress">In progress</option>
+                          <option value="on_hold">On hold</option>
+                          <option value="completed">Completed</option>
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground">Search</span>
+                        <input
+                          type="text"
+                          placeholder="Job or status"
+                          value={employeeSearch}
+                          onChange={(event) => setEmployeeSearch(event.target.value)}
+                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
                           setEmployeeDateFrom("");
                           setEmployeeDateTo("");
+                          setEmployeeSearch("");
+                          setEmployeeStatusFilter("");
                         }}
                         className="h-9 rounded-md border border-input px-3 text-sm text-muted-foreground hover:text-foreground"
                       >
@@ -638,14 +736,16 @@ export default function FinancialSummary() {
                           <TableHead>Status</TableHead>
                           <TableHead>Last Worked</TableHead>
                           <TableHead className="text-right">Total Hours</TableHead>
-                          <TableHead className="text-right">Billable</TableHead>
-                          <TableHead className="text-right">Non-billable</TableHead>
-                          <TableHead className="text-right">Billable Amount</TableHead>
-                          <TableHead className="text-right">Profit / Loss</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {employeeJobs.map((job) => (
+                        <TableHead className="text-right">Billable</TableHead>
+                        <TableHead className="text-right">Non-billable</TableHead>
+                        <TableHead className="text-right">Non-billable Amount</TableHead>
+                        <TableHead className="text-right">Allocated Revenue</TableHead>
+                        <TableHead className="text-right">Billable Amount</TableHead>
+                        <TableHead className="text-right">Profit / Loss</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {employeeJobs.map((job) => (
                           <TableRow key={job.jobId}>
                             <TableCell className="font-medium">{job.jobName}</TableCell>
                             <TableCell className="capitalize">{job.status.replace(/_/g, " ")}</TableCell>
@@ -655,6 +755,10 @@ export default function FinancialSummary() {
                             <TableCell className="text-right">{job.totalHours.toFixed(1)}</TableCell>
                             <TableCell className="text-right">{job.billableHours.toFixed(1)}</TableCell>
                             <TableCell className="text-right">{job.nonBillableHours.toFixed(1)}</TableCell>
+                            <TableCell className="text-right">KES {job.nonBillableAmount.toLocaleString()}</TableCell>
+                            <TableCell className="text-right">
+                              KES {(job.allocatedRevenue || 0).toLocaleString()}
+                            </TableCell>
                             <TableCell className="text-right">KES {job.billableAmount.toLocaleString()}</TableCell>
                             <TableCell className="text-right">
                               KES {job.profitLoss.toLocaleString()}
