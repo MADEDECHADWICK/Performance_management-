@@ -38,12 +38,7 @@ npm install
 ```
 
 Create `backend/.env`:
-```bash
-DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/ronalds_db"
-DIRECT_DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/ronalds_db"
-JWT_SECRET="change-me"
-PORT=4000
-```
+
 
 Generate Prisma client and run migrations:
 ```bash
