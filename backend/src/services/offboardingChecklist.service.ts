@@ -35,6 +35,7 @@ class OffboardingChecklistServiceClass {
     return prisma.offboardingChecklistItem.findMany({
       where: { offboardingCaseId },
       orderBy: { orderIndex: "asc" },
+      include: { document: true },
     });
   }
 

@@ -200,7 +200,7 @@ export default function FinanceCollections() {
               <CardTitle className="text-sm font-medium">Total Collected</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalCollected.toLocaleString()}</div>
+              <div className="metric-value">KES {totalCollected.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Across recorded payments</p>
             </CardContent>
           </Card>
@@ -209,7 +209,7 @@ export default function FinanceCollections() {
               <CardTitle className="text-sm font-medium">Payments Recorded</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{collections.length}</div>
+              <div className="metric-value">{collections.length}</div>
               <p className="text-xs text-muted-foreground">Total payment entries</p>
             </CardContent>
           </Card>
@@ -218,7 +218,7 @@ export default function FinanceCollections() {
               <CardTitle className="text-sm font-medium">Last Payment</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="metric-value">
                 {collections[0]?.paymentDate
                   ? new Date(collections[0].paymentDate).toLocaleDateString()
                   : "--"}

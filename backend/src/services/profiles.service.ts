@@ -171,8 +171,14 @@ export class ProfileService {
       'avatar_url',
     ];
 
-    // Only admins can update department
-    if (auth.roleName === 'admin' && ('departmentId' in input || 'department_id' in input)) {
+    // Admin/HR can update department
+    const roleLabel = (auth.roleName || '').toLowerCase();
+    const canUpdateDepartment =
+      auth.roleName === 'admin' ||
+      roleLabel === 'hr' ||
+      roleLabel === 'hr_manager' ||
+      roleLabel.includes('hr');
+    if (canUpdateDepartment && ('departmentId' in input || 'department_id' in input)) {
       allowedFields.push('departmentId', 'department_id');
     }
 

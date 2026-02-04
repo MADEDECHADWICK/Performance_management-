@@ -30,7 +30,7 @@ router.get("/", ...authenticated(), DepartmentController.listDepartments);
  */
 router.post(
   "/",
-  ...withRoles("admin"),
+  ...withRoles("admin", "hr", "hr_manager"),
   validateRequest(createDepartmentValidators),
   handleValidationErrors,
   DepartmentController.createDepartment

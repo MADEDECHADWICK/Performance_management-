@@ -545,123 +545,123 @@ const Notifications = () => {
                 <CardDescription>Create reusable HR templates for consistent messaging.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <Input
-                  placeholder="Template label"
-                  value={templateForm.label}
-                  onChange={(event) =>
-                    setTemplateForm((prev) => ({ ...prev, label: event.target.value }))
-                  }
-                />
-                <Select
-                  value={templateForm.type}
-                  onValueChange={(value) => setTemplateForm((prev) => ({ ...prev, type: value }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="info">Info</SelectItem>
-                    <SelectItem value="action">Action</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                    <SelectItem value="escalation">Escalation</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Input
-                  placeholder="Title"
-                  value={templateForm.title}
-                  onChange={(event) =>
-                    setTemplateForm((prev) => ({ ...prev, title: event.target.value }))
-                  }
-                />
-                <Input
-                  placeholder="Message"
-                  value={templateForm.message}
-                  onChange={(event) =>
-                    setTemplateForm((prev) => ({ ...prev, message: event.target.value }))
-                  }
-                />
-                <div className="flex items-center gap-3">
-                  <label className="text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      className="mr-2"
-                      checked={templateForm.actionRequired}
-                      onChange={(event) =>
-                        setTemplateForm((prev) => ({
-                          ...prev,
-                          actionRequired: event.target.checked,
-                        }))
-                      }
-                    />
-                    Action required
-                  </label>
-                  <label className="text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      className="mr-2"
-                      checked={templateForm.isActive}
-                      onChange={(event) =>
-                        setTemplateForm((prev) => ({ ...prev, isActive: event.target.checked }))
-                      }
-                    />
-                    Active
-                  </label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    placeholder="Template label"
+                    value={templateForm.label}
+                    onChange={(event) =>
+                      setTemplateForm((prev) => ({ ...prev, label: event.target.value }))
+                    }
+                  />
+                  <Select
+                    value={templateForm.type}
+                    onValueChange={(value) => setTemplateForm((prev) => ({ ...prev, type: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="info">Info</SelectItem>
+                      <SelectItem value="action">Action</SelectItem>
+                      <SelectItem value="warning">Warning</SelectItem>
+                      <SelectItem value="escalation">Escalation</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    placeholder="Title"
+                    value={templateForm.title}
+                    onChange={(event) =>
+                      setTemplateForm((prev) => ({ ...prev, title: event.target.value }))
+                    }
+                  />
+                  <Input
+                    placeholder="Message"
+                    value={templateForm.message}
+                    onChange={(event) =>
+                      setTemplateForm((prev) => ({ ...prev, message: event.target.value }))
+                    }
+                  />
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        className="mr-2"
+                        checked={templateForm.actionRequired}
+                        onChange={(event) =>
+                          setTemplateForm((prev) => ({
+                            ...prev,
+                            actionRequired: event.target.checked,
+                          }))
+                        }
+                      />
+                      Action required
+                    </label>
+                    <label className="text-sm text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        className="mr-2"
+                        checked={templateForm.isActive}
+                        onChange={(event) =>
+                          setTemplateForm((prev) => ({ ...prev, isActive: event.target.checked }))
+                        }
+                      />
+                      Active
+                    </label>
+                  </div>
+                  <div className="md:col-span-2 flex items-center justify-end gap-2">
+                    {templateForm.id && (
+                      <Button variant="outline" onClick={resetTemplateForm}>
+                        Cancel
+                      </Button>
+                    )}
+                    <Button onClick={saveTemplate}>Save template</Button>
+                  </div>
                 </div>
-                <div className="md:col-span-2 flex items-center justify-end gap-2">
-                  {templateForm.id && (
-                    <Button variant="outline" onClick={resetTemplateForm}>
-                      Cancel
-                    </Button>
-                  )}
-                  <Button onClick={saveTemplate}>Save template</Button>
-                </div>
-              </div>
 
-              <div className="space-y-3">
-                {isTemplatesLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  </div>
-                ) : templates.length === 0 ? (
-                  <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    No templates yet. Create one to speed up HR notifications.
-                  </div>
-                ) : (
-                  templates.map((template) => (
-                    <div
-                      key={template.id}
-                      className="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-4"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-semibold">{template.label}</h4>
-                          <Badge variant={template.isActive ? "secondary" : "outline"}>
-                            {template.isActive ? "Active" : "Inactive"}
-                          </Badge>
-                          <Badge variant="outline" className="capitalize">
-                            {template.type}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{template.title}</p>
-                        <p className="text-xs text-muted-foreground">{template.message}</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => editTemplate(template)}>
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => deleteTemplate(template.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                <div className="space-y-3">
+                  {isTemplatesLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
                     </div>
-                  ))
-                )}
-              </div>
+                  ) : templates.length === 0 ? (
+                    <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                      No templates yet. Create one to speed up HR notifications.
+                    </div>
+                  ) : (
+                    templates.map((template) => (
+                      <div
+                        key={template.id}
+                        className="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-4"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-semibold">{template.label}</h4>
+                            <Badge variant={template.isActive ? "secondary" : "outline"}>
+                              {template.isActive ? "Active" : "Inactive"}
+                            </Badge>
+                            <Badge variant="outline" className="capitalize">
+                              {template.type}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{template.title}</p>
+                          <p className="text-xs text-muted-foreground">{template.message}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => editTemplate(template)}>
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => deleteTemplate(template.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </CardContent>
             </Card>
 
@@ -672,7 +672,7 @@ const Notifications = () => {
                   Send a notification to everyone in a specific access role.
                 </CardDescription>
               </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2">
+              <CardContent className="grid gap-3 md:grid-cols-2">
               <Select value={broadcastRole} onValueChange={setBroadcastRole}>
                 <SelectTrigger>
                   <SelectValue placeholder="Role" />
@@ -779,6 +779,11 @@ const Notifications = () => {
                       <div className="text-xs text-muted-foreground">
                         {log.entityType ?? log.entity_type ?? "System"}
                       </div>
+                      {(log.actor_name || log.user_id) && (
+                        <div className="text-xs text-muted-foreground">
+                          Actor: {log.actor_name || `User ${log.user_id}`}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

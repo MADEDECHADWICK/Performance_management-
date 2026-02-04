@@ -46,9 +46,7 @@ export default function BusinessDevelopment() {
   const [lostReasonDrafts, setLostReasonDrafts] = useState<Record<number, string>>({});
   const [lostReasonEditingId, setLostReasonEditingId] = useState<number | null>(null);
   const [proposalAttachment, setProposalAttachment] = useState<File | null>(null);
-  const [engagementAttachment, setEngagementAttachment] = useState<File | null>(null);
   const [attachingProposalId, setAttachingProposalId] = useState<number | null>(null);
-  const [attachingEngagementId, setAttachingEngagementId] = useState<number | null>(null);
 
   const [proposalForm, setProposalForm] = useState({
     clientId: "",
@@ -99,6 +97,10 @@ export default function BusinessDevelopment() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
+      if (!proposalAttachment) {
+        throw new Error("Proposal document is required before submission.");
+      }
+
       const created = await proposalsAPI.create({
         clientId: Number(proposalForm.clientId),
         proposalTitle: proposalForm.proposalTitle,
@@ -118,7 +120,7 @@ export default function BusinessDevelopment() {
             entityType: "Proposal",
             entityId: proposal.id,
             accessLevel: "hr",
-            isRequired: false,
+            isRequired: true,
             description: `Proposal attachment for ${proposal.proposalTitle}`,
           });
         } catch (uploadError: any) {
@@ -129,25 +131,6 @@ export default function BusinessDevelopment() {
           });
         }
       }
-      if (engagementAttachment && proposal?.id) {
-        try {
-          await documentsAPI.uploadFile(engagementAttachment, {
-            documentType: "engagement_letter",
-            entityType: "Proposal",
-            entityId: proposal.id,
-            accessLevel: "hr",
-            isRequired: false,
-            description: `Engagement letter for ${proposal.proposalTitle}`,
-          });
-        } catch (uploadError: any) {
-          toast({
-            title: "Proposal saved, engagement letter failed",
-            description: uploadError?.message || "Could not upload engagement letter.",
-            variant: "destructive",
-          });
-        }
-      }
-
       return created;
     },
     onSuccess: () => {
@@ -166,7 +149,6 @@ export default function BusinessDevelopment() {
         status: "sent",
       });
       setProposalAttachment(null);
-      setEngagementAttachment(null);
     },
     onError: (error: any) => {
       toast({
@@ -252,30 +234,6 @@ export default function BusinessDevelopment() {
     }
   };
 
-  const handleAttachEngagementLetter = async (proposal: any, file: File | null) => {
-    if (!file || !proposal?.id) return;
-    setAttachingEngagementId(proposal.id);
-    try {
-      await documentsAPI.uploadFile(file, {
-        documentType: "engagement_letter",
-        entityType: "Proposal",
-        entityId: proposal.id,
-        accessLevel: "hr",
-        isRequired: false,
-        description: `Engagement letter for ${proposal.proposalTitle}`,
-      });
-      toast({ title: "Engagement letter uploaded", description: "File saved." });
-    } catch (error: any) {
-      toast({
-        title: "Attachment failed",
-        description: error?.message || "Could not upload engagement letter.",
-        variant: "destructive",
-      });
-    } finally {
-      setAttachingEngagementId(null);
-    }
-  };
-
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -291,7 +249,7 @@ export default function BusinessDevelopment() {
                 New Proposal
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="w-[92vw] max-w-[480px] max-h-[82vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Create Proposal</DialogTitle>
                 <DialogDescription>Log a new business development opportunity.</DialogDescription>
@@ -416,10 +374,11 @@ export default function BusinessDevelopment() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Proposal Attachment (optional)</Label>
+                  <Label>Proposal Attachment *</Label>
                   <Input
                     type="file"
                     accept=".pdf,.doc,.docx"
+                    required
                     onChange={(event) => {
                       const file = event.target.files?.[0] || null;
                       setProposalAttachment(file);
@@ -431,27 +390,7 @@ export default function BusinessDevelopment() {
                     </p>
                   ) : (
                     <p className="text-xs text-muted-foreground">
-                      Upload engagement letter or proposal document.
-                    </p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label>Engagement Letter (optional)</Label>
-                  <Input
-                    type="file"
-                    accept=".pdf,.doc,.docx"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] || null;
-                      setEngagementAttachment(file);
-                    }}
-                  />
-                  {engagementAttachment ? (
-                    <p className="text-xs text-muted-foreground">
-                      Selected: {engagementAttachment.name}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Attach engagement letter if already signed.
+                      Upload the proposal document (required).
                     </p>
                   )}
                 </div>
@@ -459,7 +398,10 @@ export default function BusinessDevelopment() {
                   <Button variant="outline" onClick={() => setDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+                  <Button
+                    onClick={() => createMutation.mutate()}
+                    disabled={createMutation.isPending || !proposalAttachment}
+                  >
                     {createMutation.isPending ? "Saving..." : "Create Proposal"}
                   </Button>
                 </div>
@@ -583,24 +525,6 @@ export default function BusinessDevelopment() {
                             onChange={(event) => {
                               const file = event.target.files?.[0] || null;
                               handleAttachProposalFile(proposal, file);
-                              event.currentTarget.value = "";
-                            }}
-                          />
-                          <label
-                            htmlFor={`engagement-attach-${proposal.id}`}
-                            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline cursor-pointer"
-                          >
-                            <Paperclip className="h-3 w-3" />
-                            {attachingEngagementId === proposal.id ? "Uploading..." : "Attach engagement letter"}
-                          </label>
-                          <input
-                            id={`engagement-attach-${proposal.id}`}
-                            type="file"
-                            accept=".pdf,.doc,.docx"
-                            className="hidden"
-                            onChange={(event) => {
-                              const file = event.target.files?.[0] || null;
-                              handleAttachEngagementLetter(proposal, file);
                               event.currentTarget.value = "";
                             }}
                           />

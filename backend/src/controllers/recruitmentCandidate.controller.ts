@@ -68,14 +68,14 @@ export class RecruitmentCandidateController {
     }
   }
 
-  static async updateStage(req: Request, res: Response) {
+  static async updateStage(req: AuthRequest, res: Response) {
     try {
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json(errorResponse("Invalid candidate id", 400));
       const stage = req.body.stage as RecruitmentStage | undefined;
       if (!stage) return res.status(400).json(errorResponse("stage is required", 400));
 
-      const updated = await RecruitmentCandidateService.updateStage(id, stage);
+      const updated = await RecruitmentCandidateService.updateStage(id, stage, authFromReq(req));
       return res.json(successResponse(updated, "Candidate stage updated"));
     } catch (e: any) {
       console.error("RecruitmentCandidateController.updateStage error:", e);
@@ -83,7 +83,7 @@ export class RecruitmentCandidateController {
     }
   }
 
-  static async attachOfferLetter(req: Request, res: Response) {
+  static async attachOfferLetter(req: AuthRequest, res: Response) {
     try {
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json(errorResponse("Invalid candidate id", 400));
@@ -92,7 +92,7 @@ export class RecruitmentCandidateController {
         return res.status(400).json(errorResponse("documentId is required", 400));
       }
 
-      const updated = await RecruitmentCandidateService.attachOfferLetter(id, documentId);
+      const updated = await RecruitmentCandidateService.attachOfferLetter(id, documentId, authFromReq(req));
       return res.json(successResponse(updated, "Offer letter attached"));
     } catch (e: any) {
       console.error("RecruitmentCandidateController.attachOfferLetter error:", e);

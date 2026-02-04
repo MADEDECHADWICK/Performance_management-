@@ -397,6 +397,9 @@ model Department {
   departmentHeadId Int?     @map("department_head_id")
   departmentHead   Profile? @relation("DepartmentHead", fields: [departmentHeadId], references: [id], onDelete: SetNull)
 
+  partnerProfileId Int?     @map("partner_profile_id")
+  partner          Profile? @relation("DepartmentPartner", fields: [partnerProfileId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -412,6 +415,7 @@ model Department {
   okrObjectives         OkrObjective[]
 
   @@index([departmentHeadId])
+  @@index([partnerProfileId])
   @@map("departments")
 }
 
@@ -460,6 +464,7 @@ model Profile {
   departmentId      Int?
   roleId            Int?         @map("role_id")
   departmentsHeaded Department[] @relation("DepartmentHead")
+  departmentsAsPartner Department[] @relation("DepartmentPartner")
 
   hireDate       DateTime? @map("hire_date")
   separationDate DateTime? @map("separation_date")

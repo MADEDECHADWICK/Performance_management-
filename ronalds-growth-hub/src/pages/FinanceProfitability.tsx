@@ -145,7 +145,7 @@ export default function FinanceProfitability() {
               <CardTitle className="text-sm font-medium">Revenue</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalRevenue.toLocaleString()}</div>
+              <div className="metric-value">KES {totalRevenue.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Total revenue tracked</p>
             </CardContent>
           </Card>
@@ -154,7 +154,7 @@ export default function FinanceProfitability() {
               <CardTitle className="text-sm font-medium">Cost</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalCost.toLocaleString()}</div>
+              <div className="metric-value">KES {totalCost.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Total delivery cost</p>
             </CardContent>
           </Card>
@@ -163,7 +163,7 @@ export default function FinanceProfitability() {
               <CardTitle className="text-sm font-medium">Profit</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalProfit.toLocaleString()}</div>
+              <div className="metric-value">KES {totalProfit.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Estimated profit</p>
             </CardContent>
           </Card>
@@ -172,7 +172,7 @@ export default function FinanceProfitability() {
               <CardTitle className="text-sm font-medium">Avg Margin</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{averageMargin.toFixed(1)}%</div>
+              <div className="metric-value">{averageMargin.toFixed(1)}%</div>
               <p className="text-xs text-muted-foreground">Average job margin</p>
             </CardContent>
           </Card>

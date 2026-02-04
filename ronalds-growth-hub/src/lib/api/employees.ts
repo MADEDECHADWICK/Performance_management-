@@ -3,6 +3,7 @@
  * Includes profiles, onboarding, documents, and induction
  */
 import { api } from './client';
+import documentsAPI from './documents';
 import type { 
   Profile, 
   Document,
@@ -320,11 +321,29 @@ export const employeesAPI = {
   /**
    * Upload document for checklist item
    */
-  uploadChecklistDocument: async (checklistId: number, itemId: number, data: {
-    fileName: string;
-    filePath: string;
-  }): Promise<InductionChecklistItem> => {
-    return api.post(`/induction-checklist/${checklistId}/items/${itemId}/upload`, data);
+  uploadChecklistDocument: async (
+    checklistId: number,
+    itemId: number,
+    file: File,
+    options?: { accessLevel?: 'employee' | 'manager' | 'hr' | 'admin'; description?: string }
+  ): Promise<InductionChecklistItem> => {
+    const upload = await documentsAPI.uploadFile(file, {
+      documentType: 'onboarding_checklist',
+      entityType: 'InductionChecklist',
+      entityId: checklistId,
+      accessLevel: options?.accessLevel ?? 'employee',
+      isRequired: true,
+      description: options?.description ?? 'Checklist item document',
+    });
+
+    const documentId = (upload as any)?.data?.id ?? (upload as any)?.id;
+    if (!documentId) {
+      throw new Error('Upload succeeded but document id was missing.');
+    }
+
+    return api.patch(`/induction-checklist/${checklistId}/items/${itemId}/document`, {
+      documentId,
+    });
   },
 
   // ==================

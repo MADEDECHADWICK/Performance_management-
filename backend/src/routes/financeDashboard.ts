@@ -247,16 +247,25 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
         });
 
         let totalJobBillable = 0;
-        let totalBase = 0;
-
         employeeTotals.forEach((value) => {
           totalJobBillable += value.billable;
-          const base = Math.max(0, value.billable + value.profit - value.loss);
-          value.base = base;
-          totalBase += base;
         });
 
-        const allocationTotal = totalBase > 0 ? totalBase : totalJobBillable;
+        const paymentAmountNumber = Number(payment.paymentAmount || 0);
+        const paymentRatio =
+          totalJobBillable > 0 ? Math.min(1, paymentAmountNumber / totalJobBillable) : 0;
+
+        let totalBaseScaled = 0;
+        employeeTotals.forEach((value) => {
+          const scaledBillable = value.billable * paymentRatio;
+          const scaledProfit = value.profit * paymentRatio;
+          const scaledLoss = value.loss * paymentRatio;
+          const base = Math.max(0, scaledBillable + scaledProfit - scaledLoss);
+          value.base = base;
+          totalBaseScaled += base;
+        });
+
+        const allocationTotal = totalBaseScaled > 0 ? totalBaseScaled : totalJobBillable * paymentRatio;
 
         if (allocationTotal > 0) {
           await Promise.all(
@@ -270,24 +279,26 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
                   },
                 },
                 update: {
-                  employeeBillable: value.billable,
-                  employeeProfit: value.profit,
-                  employeeLoss: value.loss,
+                  employeeBillable: value.billable * paymentRatio,
+                  employeeProfit: value.profit * paymentRatio,
+                  employeeLoss: value.loss * paymentRatio,
                   totalJobBillable,
-                  allocationPercentage: value.base / allocationTotal,
-                  allocatedAmount: (value.base / allocationTotal) * Number(payment.paymentAmount),
+                  allocationPercentage: allocationTotal > 0 ? value.base / allocationTotal : 0,
+                  allocatedAmount:
+                    allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
                   allocationMonth,
                 },
                 create: {
                   jobId: job.id,
                   clientPaymentId: payment.id,
                   employeeProfileId,
-                  employeeBillable: value.billable,
-                  employeeProfit: value.profit,
-                  employeeLoss: value.loss,
+                  employeeBillable: value.billable * paymentRatio,
+                  employeeProfit: value.profit * paymentRatio,
+                  employeeLoss: value.loss * paymentRatio,
                   totalJobBillable,
-                  allocationPercentage: value.base / allocationTotal,
-                  allocatedAmount: (value.base / allocationTotal) * Number(payment.paymentAmount),
+                  allocationPercentage: allocationTotal > 0 ? value.base / allocationTotal : 0,
+                  allocatedAmount:
+                    allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
                   allocationMonth,
                 },
               })
@@ -565,21 +576,15 @@ router.get('/job-profitability', authMiddleware, async (req: AuthRequest, res) =
     });
 
     const profitability = jobs.map((job) => {
-      const revenueFromTime = job.timeEntries.reduce(
-        (sum, entry) => sum + Number(entry.billableAmount || 0),
-        0
-      );
       const cost = job.timeEntries.reduce(
         (sum, entry) => sum + Number(entry.costAmount || 0),
         0
       );
-      const revenue = job.billingType === 'fixed_fee' && Number(job.fixedFeeAmount || 0) > 0
-        ? Number(job.fixedFeeAmount || 0)
-        : revenueFromTime;
       const collected = job.payments.reduce(
         (sum, payment) => sum + Number(payment.paymentAmount || 0),
         0
       );
+      const revenue = collected;
 
       return {
         jobId: job.id,

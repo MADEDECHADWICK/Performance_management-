@@ -94,6 +94,12 @@ export class RecruitmentCandidateService {
   }
 
   static async update(id: number, input: UpdateCandidateInput) {
+    if (input.stage) {
+      const err = new Error("Use the stage update endpoint to change candidate stage");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
     return prisma.recruitmentCandidate.update({
       where: { id },
       data: {
@@ -102,13 +108,12 @@ export class RecruitmentCandidateService {
         phoneNumber: input.phoneNumber ?? undefined,
         positionApplied: input.positionApplied,
         departmentId: input.departmentId ?? undefined,
-        stage: input.stage,
         notes: input.notes ?? undefined,
       },
     });
   }
 
-  static async updateStage(id: number, stage: RecruitmentStage) {
+  static async updateStage(id: number, stage: RecruitmentStage, auth?: AuthContext) {
     if (stage === RecruitmentStage.accepted || stage === RecruitmentStage.hired) {
       const existing = await prisma.recruitmentCandidate.findUnique({
         where: { id },
@@ -132,7 +137,8 @@ export class RecruitmentCandidateService {
     await createAudit({
       action: `update_recruitment_stage_${stage}`,
       entity_type: "RecruitmentCandidate",
-      user_id: null,
+      entity_id: updated.id,
+      user_id: auth?.userId ?? null,
     }).catch(() => null);
 
     if ((stage === RecruitmentStage.accepted || stage === RecruitmentStage.hired) && !updated.onboardingCase) {
@@ -155,7 +161,7 @@ export class RecruitmentCandidateService {
     });
   }
 
-  static async attachOfferLetter(id: number, documentId: number) {
+  static async attachOfferLetter(id: number, documentId: number, auth?: AuthContext) {
     const doc = await prisma.document.findUnique({
       where: { id: documentId },
       select: { id: true, entityType: true, entityId: true },
@@ -179,7 +185,8 @@ export class RecruitmentCandidateService {
     await createAudit({
       action: "attach_offer_letter",
       entity_type: "RecruitmentCandidate",
-      user_id: null,
+      entity_id: updated.id,
+      user_id: auth?.userId ?? null,
     }).catch(() => null);
 
     return updated;

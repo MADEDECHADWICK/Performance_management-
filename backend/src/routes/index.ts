@@ -111,6 +111,8 @@ router.use('/time-entries', authMiddleware, timeEntriesRoutes);
 
 router.use('/analytics', authMiddleware, analyticRoutes);
 router.use('/audit-logs', authMiddleware, auditLogsRoutes);
+// Backward-compatible alias for older clients
+router.use('/audit_logs', authMiddleware, auditLogsRoutes);
 router.use('/financial-summary', authMiddleware, financialSummaryRoutes);
 router.use('/finance-dashboard', authMiddleware, financeDashboardRoutes);
 router.use('/job-profitability', authMiddleware, jobProfitabilityRoutes);

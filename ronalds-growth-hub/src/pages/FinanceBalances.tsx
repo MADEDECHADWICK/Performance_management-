@@ -127,7 +127,7 @@ export default function FinanceBalances() {
               <CardTitle className="text-sm font-medium">Total Client Balance</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalOutstanding.toLocaleString()}</div>
+              <div className="metric-value">KES {totalOutstanding.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Across all clients</p>
             </CardContent>
           </Card>
@@ -136,7 +136,7 @@ export default function FinanceBalances() {
               <CardTitle className="text-sm font-medium">Total Job Balance</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalJobBalance.toLocaleString()}</div>
+              <div className="metric-value">KES {totalJobBalance.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Across all jobs</p>
             </CardContent>
           </Card>

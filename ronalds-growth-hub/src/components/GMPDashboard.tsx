@@ -58,6 +58,7 @@ interface PartnerRanking {
   position: string;
   portfolio_revenue: number;
   portfolio_fees: number;
+  utilization_rate?: number;
   active_jobs: number;
   direct_reports: number;
   client_count: number;
@@ -286,12 +287,23 @@ export default function GMPDashboard() {
   };
 
   const formatCurrency = (amount: number) => {
+    const safe = Number.isFinite(amount) ? amount : 0;
     return new Intl.NumberFormat("en-KE", {
       style: "currency",
       currency: "KES",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
-    }).format(amount);
+    }).format(safe);
+  };
+
+  const formatCompactCurrency = (amount: number) => {
+    const safe = Number.isFinite(amount) ? amount : 0;
+    return new Intl.NumberFormat("en-KE", {
+      style: "currency",
+      currency: "KES",
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(safe);
   };
 
   const formatPercentage = (value: number) => {
@@ -618,16 +630,29 @@ export default function GMPDashboard() {
                   </TableHeader>
                   <TableBody>
                     {dashboardData.partnerRankings.map((partner) => {
+                      const revenue = Number(partner.portfolio_revenue || 0);
+                      const fees = Number(partner.portfolio_fees || 0);
                       const profit =
-                        partner.portfolio_profit ??
-                        partner.portfolio_revenue - partner.portfolio_fees;
+                        Number(partner.portfolio_profit ?? revenue - fees) || 0;
                       return (
                         <TableRow key={partner.partner_id}>
                           <TableCell className="font-medium">{partner.name}</TableCell>
                           <TableCell className="text-right">{partner.active_jobs}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(partner.portfolio_revenue)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(profit)}</TableCell>
-                          <TableCell className="text-right"></TableCell>
+                          <TableCell className="text-right" title={formatCurrency(revenue)}>
+                            {formatCompactCurrency(revenue)}
+                          </TableCell>
+                          <TableCell className="text-right" title={formatCurrency(profit)}>
+                            {formatCompactCurrency(profit)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {Number.isFinite(partner.utilization_rate) ? (
+                              <Badge variant="outline">
+                                {formatPercentage(partner.utilization_rate as number)}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline">--</Badge>
+                            )}
+                          </TableCell>
                         </TableRow>
                       );
                     })}

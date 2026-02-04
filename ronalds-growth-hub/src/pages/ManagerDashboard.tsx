@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -178,6 +178,20 @@ const ManagerDashboard = () => {
   const [evaluationData, setEvaluationData] = useState<any>(null);
   const [jobSearch, setJobSearch] = useState('');
   const [jobStatusFilter, setJobStatusFilter] = useState('');
+
+  const toNumber = (value: any) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const safeWorkloadMetrics = {
+    total_team_members: toNumber(workloadMetrics?.total_team_members),
+    avg_utilization: toNumber(workloadMetrics?.avg_utilization),
+    overloaded_employees: toNumber(workloadMetrics?.overloaded_employees),
+    underutilized_employees: toNumber(workloadMetrics?.underutilized_employees),
+    critical_deadlines: toNumber(workloadMetrics?.critical_deadlines),
+    burnout_risk: toNumber(workloadMetrics?.burnout_risk),
+  };
   const [pendingOnly, setPendingOnly] = useState(false);
 
   useEffect(() => {
@@ -709,34 +723,34 @@ const ManagerDashboard = () => {
             <CardContent className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
               <div>
                 <p className="text-sm text-muted-foreground">Team members</p>
-                <p className="text-xl font-semibold">{workloadMetrics.total_team_members}</p>
+                <p className="text-xl font-semibold">{safeWorkloadMetrics.total_team_members}</p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Avg utilization</p>
                 <p className="text-xl font-semibold">
-                  {Math.round(workloadMetrics.avg_utilization)}%
+                  {Math.round(safeWorkloadMetrics.avg_utilization)}%
                 </p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Overloaded</p>
                 <p className="text-xl font-semibold text-destructive">
-                  {workloadMetrics.overloaded_employees}
+                  {safeWorkloadMetrics.overloaded_employees}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Underutilized</p>
                 <p className="text-xl font-semibold">
-                  {workloadMetrics.underutilized_employees}
+                  {safeWorkloadMetrics.underutilized_employees}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Critical deadlines</p>
-                <p className="text-xl font-semibold">{workloadMetrics.critical_deadlines}</p>
+                <p className="text-xl font-semibold">{safeWorkloadMetrics.critical_deadlines}</p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Burnout risk</p>
                 <p className="text-xl font-semibold">
-                  {Math.round(workloadMetrics.burnout_risk)}%
+                  {Math.round(safeWorkloadMetrics.burnout_risk)}%
                 </p>
               </div>
             </CardContent>
@@ -791,19 +805,35 @@ const ManagerDashboard = () => {
                   <CardDescription>Common tasks and workflows</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Button className="w-full justify-start" variant="outline">
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => navigate('/team-performance')}
+                  >
                     <User className="h-4 w-4 mr-2" />
                     Review Team Performance
                   </Button>
-                  <Button className="w-full justify-start" variant="outline">
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => navigate('/timesheets')}
+                  >
                     <CheckCircle className="h-4 w-4 mr-2" />
                     Approve Timesheets
                   </Button>
-                  <Button className="w-full justify-start" variant="outline">
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => navigate('/evaluations')}
+                  >
                     <AlertCircle className="h-4 w-4 mr-2" />
                     Complete Pending Evaluations
                   </Button>
-                  <Button className="w-full justify-start" variant="outline">
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => navigate('/jobs')}
+                  >
                     <Briefcase className="h-4 w-4 mr-2" />
                     Assign Team to Jobs
                   </Button>
@@ -844,7 +874,7 @@ const ManagerDashboard = () => {
                             <span className="font-medium">
                               {entry.employee?.firstName} {entry.employee?.lastName}
                             </span>{' '}
-                            · {entry.job?.jobName || 'Job'} · {Number(entry.hours || 0).toFixed(1)}h
+                            - {entry.job?.jobName || 'Job'} - {Number(entry.hours || 0).toFixed(1)}h
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">Submitted</Badge>
@@ -872,7 +902,7 @@ const ManagerDashboard = () => {
                             <span className="font-medium">
                               {request.employee?.firstName} {request.employee?.lastName}
                             </span>{' '}
-                            · {request.job?.jobName || 'Job'} · {request.additionalHoursRequested}h
+                            - {request.job?.jobName || 'Job'} - {request.additionalHoursRequested}h
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge variant="secondary">Pending</Badge>

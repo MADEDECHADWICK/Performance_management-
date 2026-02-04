@@ -199,6 +199,19 @@ export default function FinanceDashboard() {
     ? new Date(collections[0].paymentDate).toLocaleDateString()
     : "No payments yet";
 
+  const formatCurrency = (amount: number) =>
+    `KES ${Number(amount || 0).toLocaleString("en-KE")}`;
+
+  const formatCompactCurrency = (amount: number) => {
+    const safe = Number(amount || 0);
+    const compact = new Intl.NumberFormat("en-KE", {
+      notation: "compact",
+      compactDisplay: "short",
+      maximumFractionDigits: 1,
+    }).format(safe);
+    return `KES ${compact}`;
+  };
+
   if (loading) {
     return (
       <DashboardLayout>
@@ -246,7 +259,9 @@ export default function FinanceDashboard() {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {overview.projectedMonth.toLocaleString()}</div>
+              <div className="metric-value" title={formatCurrency(overview.projectedMonth)}>
+                {formatCompactCurrency(overview.projectedMonth)}
+              </div>
               <p className="text-xs text-muted-foreground">Current month plan</p>
             </CardContent>
           </Card>
@@ -256,7 +271,9 @@ export default function FinanceDashboard() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {overview.collectedMonth.toLocaleString()}</div>
+              <div className="metric-value" title={formatCurrency(overview.collectedMonth)}>
+                {formatCompactCurrency(overview.collectedMonth)}
+              </div>
               <p className="text-xs text-muted-foreground">Current month actual</p>
             </CardContent>
           </Card>
@@ -266,7 +283,9 @@ export default function FinanceDashboard() {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {overview.varianceMonth.toLocaleString()}</div>
+              <div className="metric-value" title={formatCurrency(overview.varianceMonth)}>
+                {formatCompactCurrency(overview.varianceMonth)}
+              </div>
               <p className="text-xs text-muted-foreground">Projected vs collected</p>
             </CardContent>
           </Card>
@@ -276,7 +295,9 @@ export default function FinanceDashboard() {
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {overview.totalOutstanding.toLocaleString()}</div>
+              <div className="metric-value" title={formatCurrency(overview.totalOutstanding)}>
+                {formatCompactCurrency(overview.totalOutstanding)}
+              </div>
               <p className="text-xs text-muted-foreground">Across all jobs</p>
             </CardContent>
           </Card>
@@ -286,7 +307,7 @@ export default function FinanceDashboard() {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{overview.collectionRate.toFixed(1)}%</div>
+              <div className="metric-value">{overview.collectionRate.toFixed(1)}%</div>
               <p className="text-xs text-muted-foreground">Collected vs fees</p>
             </CardContent>
           </Card>
@@ -372,7 +393,7 @@ export default function FinanceDashboard() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-2xl font-bold">KES {overview.totalCollected.toLocaleString()}</p>
+                    <p className="metric-value">KES {overview.totalCollected.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">Total collected to date</p>
                   </div>
                   <p className="text-xs text-muted-foreground">Latest payment: {latestCollectionDate}</p>
@@ -389,7 +410,7 @@ export default function FinanceDashboard() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-2xl font-bold">KES {overview.projectedMonth.toLocaleString()}</p>
+                    <p className="metric-value">KES {overview.projectedMonth.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">Current month target</p>
                   </div>
                   <p className="text-xs text-muted-foreground">Active projections: {projections.length}</p>
@@ -406,7 +427,7 @@ export default function FinanceDashboard() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-2xl font-bold">KES {overview.totalOutstanding.toLocaleString()}</p>
+                    <p className="metric-value">KES {overview.totalOutstanding.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">Outstanding balance</p>
                   </div>
                   <p className="text-xs text-muted-foreground">Clients with balance: {clientBalances.length}</p>
@@ -423,7 +444,7 @@ export default function FinanceDashboard() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-2xl font-bold">KES {totalProfit.toLocaleString()}</p>
+                    <p className="metric-value">KES {totalProfit.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">Estimated profit</p>
                   </div>
                   <p className="text-xs text-muted-foreground">Avg margin: {averageMargin.toFixed(1)}%</p>
@@ -440,7 +461,7 @@ export default function FinanceDashboard() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-2xl font-bold">KES {totalAllocated.toLocaleString()}</p>
+                    <p className="metric-value">KES {totalAllocated.toLocaleString()}</p>
                     <p className="text-xs text-muted-foreground">Latest allocations</p>
                   </div>
                   <p className="text-xs text-muted-foreground">Allocations logged: {allocations.length}</p>

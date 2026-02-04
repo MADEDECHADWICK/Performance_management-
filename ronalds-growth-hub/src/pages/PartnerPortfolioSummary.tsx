@@ -31,6 +31,7 @@ export default function PartnerPortfolioSummary() {
   const [loading, setLoading] = useState(true);
   const [partnerRankings, setPartnerRankings] = useState<PartnerRanking[]>([]);
   const [search, setSearch] = useState("");
+  const [viewerIsPartner, setViewerIsPartner] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -39,13 +40,32 @@ export default function PartnerPortfolioSummary() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const user = await authAPI.me();
+      const response = await authAPI.me();
+      const user = (response as any)?.data ?? response;
       if (!user) {
         navigate("/auth");
         return;
       }
+      const roleNames: string[] = [];
+      if (Array.isArray((user as any)?.authRoles)) {
+        roleNames.push(...((user as any).authRoles as string[]));
+      }
+      if (Array.isArray(user?.roles)) {
+        roleNames.push(
+          ...user.roles
+            .map((role: any) => role?.role?.name ?? role?.name ?? "")
+            .filter(Boolean)
+        );
+      }
+      const normalizedRoles = roleNames.map((role) => String(role).toLowerCase());
+      const positionTitle = String(user?.profile?.positionTitle ?? "").toLowerCase();
+      setViewerIsPartner(
+        Boolean(user?.profile?.isPartner) ||
+          normalizedRoles.includes("partner") ||
+          positionTitle.includes("partner")
+      );
       const data = await apiFetch("GET", "/gmp-dashboard/overview");
-      const payload = data as DashboardData;
+      const payload = ((data as any)?.data ?? data) as DashboardData;
       setPartnerRankings(payload.partnerRankings || []);
     } catch (error) {
       console.error("Failed to load partner portfolio summary", error);
@@ -68,9 +88,11 @@ export default function PartnerPortfolioSummary() {
   const summary = useMemo(() => {
     const totals = partnerRankings.reduce(
       (acc, partner) => {
-        acc.totalRevenue += partner.portfolio_revenue;
-        acc.totalProfit += partner.portfolio_revenue - partner.portfolio_fees;
-        acc.activeJobs += partner.active_jobs;
+        const revenue = Number(partner.portfolio_revenue || 0);
+        const fees = Number(partner.portfolio_fees || 0);
+        acc.totalRevenue += Number.isFinite(revenue) ? revenue : 0;
+        acc.totalProfit += Number.isFinite(revenue - fees) ? revenue - fees : 0;
+        acc.activeJobs += Number.isFinite(partner.active_jobs) ? partner.active_jobs : 0;
         acc.count += 1;
         return acc;
       },
@@ -86,12 +108,23 @@ export default function PartnerPortfolioSummary() {
   }, [partnerRankings]);
 
   const formatCurrency = (amount: number) => {
+    const safe = Number.isFinite(amount) ? amount : 0;
     return new Intl.NumberFormat("en-KE", {
       style: "currency",
       currency: "KES",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
-    }).format(amount);
+    }).format(safe);
+  };
+
+  const formatCompactCurrency = (amount: number) => {
+    const safe = Number.isFinite(amount) ? amount : 0;
+    return new Intl.NumberFormat("en-KE", {
+      style: "currency",
+      currency: "KES",
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(safe);
   };
 
   if (loading) {
@@ -120,7 +153,12 @@ export default function PartnerPortfolioSummary() {
               <CardTitle className="text-sm font-medium">Total Revenue (MTD)</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(summary.totalRevenue)}</div>
+              <div
+                className="metric-value text-primary"
+                title={formatCurrency(summary.totalRevenue)}
+              >
+                {formatCompactCurrency(summary.totalRevenue)}
+              </div>
               <p className="text-xs text-muted-foreground">All partner portfolios</p>
             </CardContent>
           </Card>
@@ -129,7 +167,12 @@ export default function PartnerPortfolioSummary() {
               <CardTitle className="text-sm font-medium">Total Profit / Loss</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(summary.totalProfit)}</div>
+              <div
+                className="metric-value text-primary"
+                title={formatCurrency(summary.totalProfit)}
+              >
+                {formatCompactCurrency(summary.totalProfit)}
+              </div>
               <p className="text-xs text-muted-foreground">Revenue minus fees</p>
             </CardContent>
           </Card>
@@ -138,7 +181,7 @@ export default function PartnerPortfolioSummary() {
               <CardTitle className="text-sm font-medium">Active Jobs</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{summary.activeJobs}</div>
+              <div className="metric-value text-primary">{summary.activeJobs}</div>
               <p className="text-xs text-muted-foreground">Across partner portfolios</p>
             </CardContent>
           </Card>
@@ -147,7 +190,12 @@ export default function PartnerPortfolioSummary() {
               <CardTitle className="text-sm font-medium">Avg Profit per Partner</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(summary.avgProfit)}</div>
+              <div
+                className="metric-value text-primary"
+                title={formatCurrency(summary.avgProfit)}
+              >
+                {formatCompactCurrency(summary.avgProfit)}
+              </div>
               <p className="text-xs text-muted-foreground">Portfolio health benchmark</p>
             </CardContent>
           </Card>
@@ -169,8 +217,11 @@ export default function PartnerPortfolioSummary() {
                   className="pl-9"
                 />
               </div>
-              <Button variant="outline" onClick={() => navigate("/partner-dashboard")}>
-                Open partner dashboard
+              <Button
+                variant="outline"
+                onClick={() => navigate(viewerIsPartner ? "/partner-dashboard" : "/gmp-dashboard")}
+              >
+                Open dashboard
               </Button>
             </div>
 
@@ -193,7 +244,9 @@ export default function PartnerPortfolioSummary() {
                   </TableHeader>
                   <TableBody>
                     {filteredPartners.map((partner) => {
-                      const profit = partner.portfolio_revenue - partner.portfolio_fees;
+                      const revenue = Number(partner.portfolio_revenue || 0);
+                      const fees = Number(partner.portfolio_fees || 0);
+                      const profit = Number.isFinite(revenue - fees) ? revenue - fees : 0;
                       return (
                         <TableRow key={partner.partner_id}>
                           <TableCell className="font-medium">
@@ -204,10 +257,14 @@ export default function PartnerPortfolioSummary() {
                           </TableCell>
                           <TableCell>{partner.department}</TableCell>
                           <TableCell className="text-right">{partner.active_jobs}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(partner.portfolio_revenue)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(profit)}</TableCell>
+                          <TableCell className="text-right" title={formatCurrency(revenue)}>
+                            {formatCompactCurrency(revenue)}
+                          </TableCell>
+                          <TableCell className="text-right" title={formatCurrency(profit)}>
+                            {formatCompactCurrency(profit)}
+                          </TableCell>
                           <TableCell className="text-right">
-                            <Badge variant="outline">—</Badge>
+                            <Badge variant="outline">--</Badge>
                           </TableCell>
                         </TableRow>
                       );

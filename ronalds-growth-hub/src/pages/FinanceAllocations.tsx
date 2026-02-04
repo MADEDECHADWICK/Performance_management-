@@ -179,7 +179,7 @@ export default function FinanceAllocations() {
               <CardTitle className="text-sm font-medium">Allocated Revenue</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalAllocated.toLocaleString()}</div>
+              <div className="metric-value">KES {totalAllocated.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Total allocations</p>
             </CardContent>
           </Card>
@@ -188,7 +188,7 @@ export default function FinanceAllocations() {
               <CardTitle className="text-sm font-medium">Profit Allocated</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalProfit.toLocaleString()}</div>
+              <div className="metric-value">KES {totalProfit.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Profit share</p>
             </CardContent>
           </Card>
@@ -197,7 +197,7 @@ export default function FinanceAllocations() {
               <CardTitle className="text-sm font-medium">Loss Allocated</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalLoss.toLocaleString()}</div>
+              <div className="metric-value">KES {totalLoss.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Loss share</p>
             </CardContent>
           </Card>

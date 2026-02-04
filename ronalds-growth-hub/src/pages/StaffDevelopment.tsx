@@ -111,11 +111,13 @@ const StaffDevelopment = () => {
     employee_id: '',
     course_name: '',
     training_type: 'internal',
+    delivery_mode: 'physical',
     start_date: new Date(),
     provider: '',
     cost: 0,
     notes: ''
   });
+  const [trainingAttachment, setTrainingAttachment] = useState<File | null>(null);
 
   useEffect(() => {
     fetchStaffDevelopmentData();
@@ -219,6 +221,27 @@ const StaffDevelopment = () => {
       });
       
       if (response.ok) {
+        const created = await response.json().catch(() => null);
+        const trainingRecordId = created?.id;
+
+        if (trainingAttachment && trainingRecordId) {
+          const formData = new FormData();
+          formData.append('file', trainingAttachment);
+          formData.append('documentType', 'training_material');
+          formData.append('entityType', 'TrainingRecord');
+          formData.append('entityId', String(trainingRecordId));
+          formData.append('accessLevel', 'manager');
+          formData.append('description', `Training material for ${newTraining.course_name}`);
+
+          await fetch('http://localhost:4000/api/documents/upload', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`
+            },
+            body: formData
+          });
+        }
+
         setShowNewTraining(false);
         fetchStaffDevelopmentData();
         // Reset form
@@ -226,11 +249,13 @@ const StaffDevelopment = () => {
           employee_id: '',
           course_name: '',
           training_type: 'internal',
+          delivery_mode: 'physical',
           start_date: new Date(),
           provider: '',
           cost: 0,
           notes: ''
         });
+        setTrainingAttachment(null);
       }
     } catch (error) {
       console.error('Error scheduling training:', error);
@@ -267,7 +292,7 @@ const StaffDevelopment = () => {
                   Schedule Training
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[500px]">
+            <DialogContent className="w-[95vw] max-w-[520px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Schedule New Training</DialogTitle>
                   <DialogDescription>
@@ -301,6 +326,22 @@ const StaffDevelopment = () => {
                     </Select>
                   </div>
                   <div className="grid gap-2">
+                    <label className="text-sm font-medium">Delivery Mode</label>
+                    <Select
+                      value={newTraining.delivery_mode}
+                      onValueChange={(value) => setNewTraining({ ...newTraining, delivery_mode: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="physical">Physical</SelectItem>
+                        <SelectItem value="online">Online</SelectItem>
+                        <SelectItem value="video_upload">Upload video</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
                     <label className="text-sm font-medium">Provider</label>
                     <Input
                       value={newTraining.provider}
@@ -323,6 +364,28 @@ const StaffDevelopment = () => {
                       onChange={(e) => setNewTraining({...newTraining, notes: e.target.value})}
                       placeholder="Additional notes or requirements"
                     />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">
+                      Training Material (optional for online/video)
+                    </label>
+                    <Input
+                      type="file"
+                      accept=".mp4,.mov,.avi,.mkv,.pdf,.doc,.docx"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] || null;
+                        setTrainingAttachment(file);
+                      }}
+                    />
+                    {trainingAttachment ? (
+                      <p className="text-xs text-muted-foreground">
+                        Selected: {trainingAttachment.name}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Upload a video or materials if needed.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-end gap-3">

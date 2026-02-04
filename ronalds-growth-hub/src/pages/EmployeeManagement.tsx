@@ -36,17 +36,18 @@ interface Department {
   id: string;
   name: string;
   description: string | null;
-  department_code: string | null;
   department_head_id: string | null;
   department_head_name?: string;
+  partner_profile_id?: string | null;
+  partner_name?: string;
   employee_count?: number;
 }
 
 interface DepartmentFormData {
   name: string;
   description: string;
-  department_code: string;
   department_head_id: string;
+  partner_profile_id: string;
 }
 
 interface Role {
@@ -152,6 +153,33 @@ const isChecklistOverdue = (caseItem: OnboardingCase) => {
   return due.getTime() < Date.now();
 };
 
+const extractItems = (payload: any) => {
+  const data = payload?.data ?? payload;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+};
+
+const getRoleLabel = (emp: any) =>
+  String(
+    emp?.role?.name ??
+      emp?.position ??
+      emp?.positionTitle ??
+      emp?.position_title ??
+      ""
+  );
+
+const isPartnerEmployee = (emp: any) => {
+  const label = getRoleLabel(emp).toLowerCase();
+  return Boolean(emp?.is_partner || emp?.isPartner || label.includes("partner"));
+};
+
+const isManagerEmployee = (emp: any) => {
+  const label = getRoleLabel(emp).toLowerCase();
+  return !isPartnerEmployee(emp) && label.includes("manager");
+};
+
 const EmployeeManagement = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -160,12 +188,25 @@ const EmployeeManagement = () => {
   const [departmentDialogOpen, setDepartmentDialogOpen] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [deletingDepartmentId, setDeletingDepartmentId] = useState<string | null>(null);
+  const [departmentMemberIds, setDepartmentMemberIds] = useState<string[]>([]);
   const [departmentForm, setDepartmentForm] = useState<DepartmentFormData>({
     name: "",
     description: "",
-    department_code: "",
     department_head_id: "",
+    partner_profile_id: "",
   });
+
+  const safeDepartments = Array.isArray(departments) ? departments : [];
+  const partnerEmployees = employees.filter((emp: any) => isPartnerEmployee(emp));
+  const managerEmployees = employees.filter((emp: any) => isManagerEmployee(emp));
+
+  const toggleDepartmentMember = (employeeId: string) => {
+    setDepartmentMemberIds((prev) =>
+      prev.includes(employeeId)
+        ? prev.filter((id) => id !== employeeId)
+        : [...prev, employeeId]
+    );
+  };
   const [employeeDialogOpen, setEmployeeDialogOpen] = useState(false);
   const [employeeForm, setEmployeeForm] = useState({
     email: "",
@@ -174,6 +215,7 @@ const EmployeeManagement = () => {
     last_name: "",
     phone: "",
     position: "",
+    role_id: "",
     department_id: "",
     manager_id: "",
     hire_date: "",
@@ -239,26 +281,70 @@ const EmployeeManagement = () => {
       setLoading(true);
 
       // Load employees with department info
-      const employeesData = await apiFetch('GET', "/profiles?include_department=true");
+      const employeesResponse = await apiFetch('GET', "/profiles?include_department=true&page=1&pageSize=100");
+      const employeesData = extractItems(employeesResponse);
 
       // Load departments
-      const departmentsData = await apiFetch('GET', "/departments");
+      const departmentsResponse = await apiFetch('GET', "/departments?page=1&pageSize=100");
+      const departmentsData = extractItems(departmentsResponse);
 
       // Count employees per department and add department head info
-      const departmentsWithCounts = (departmentsData || []).map((dept: any) => {
-        const empCount = employeesData?.filter((e: any) => {
+      const safeDepartments = Array.isArray(departmentsData) ? departmentsData : [];
+      const safeEmployees = Array.isArray(employeesData) ? employeesData : [];
+
+      const normalizedEmployees = safeEmployees.map((emp: any) => {
+        const firstName = emp.first_name ?? emp.firstName ?? "";
+        const lastName = emp.last_name ?? emp.lastName ?? "";
+        const email = emp.email ?? emp.user?.email ?? "";
+        const position =
+          emp.position ??
+          emp.positionTitle ??
+          emp.position_title ??
+          emp.role?.name ??
+          "";
+        const departmentId =
+          emp.department_id ?? emp.departmentId ?? emp.department?.id ?? "";
+        return {
+          ...emp,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          position,
+          department_id: departmentId,
+        };
+      });
+
+      const departmentsWithCounts = safeDepartments.map((dept: any) => {
+        const empCount = normalizedEmployees.filter((e: any) => {
           // Check both snake_case and camelCase for compatibility
           const deptId = e.departmentId || e.department_id;
           return deptId === dept.id;
         }).length || 0;
-        return { 
-          ...dept, 
+        const head = dept.departmentHead ?? dept.department_head ?? null;
+        const partner = dept.partner ?? null;
+        const headName =
+          dept.department_head_name ??
+          (head
+            ? `${head.firstName ?? head.first_name ?? ""} ${head.lastName ?? head.last_name ?? ""}`.trim()
+            : undefined);
+        const partnerName =
+          dept.partner_name ??
+          (partner
+            ? `${partner.firstName ?? partner.first_name ?? ""} ${partner.lastName ?? partner.last_name ?? ""}`.trim()
+            : undefined);
+        return {
+          ...dept,
           employee_count: empCount,
-          department_head_name: dept.department_head_name 
+          department_head_name: headName,
+          partner_name: partnerName,
+          department_head_id:
+            dept.department_head_id ?? dept.departmentHeadId ?? head?.id ?? null,
+          partner_profile_id:
+            dept.partner_profile_id ?? dept.partnerProfileId ?? partner?.id ?? null,
         };
       });
 
-      setEmployees(employeesData || []);
+      setEmployees(normalizedEmployees);
       setDepartments(departmentsWithCounts);
       
       // Load roles
@@ -297,8 +383,10 @@ const EmployeeManagement = () => {
         apiFetch("GET", "/onboarding"),
         apiFetch("GET", "/offboarding"),
       ]);
-      setOnboardingCases(onboardingData?.data || onboardingData || []);
-      setOffboardingCases(offboardingData?.data || offboardingData || []);
+      const safeOnboardingCases = extractItems(onboardingData);
+      const safeOffboardingCases = extractItems(offboardingData);
+      setOnboardingCases(Array.isArray(safeOnboardingCases) ? safeOnboardingCases : []);
+      setOffboardingCases(Array.isArray(safeOffboardingCases) ? safeOffboardingCases : []);
     } catch (error: any) {
       console.warn("Failed to load lifecycle data:", error);
     } finally {
@@ -306,7 +394,11 @@ const EmployeeManagement = () => {
     }
   };
 
-  const filteredOnboardingCases = onboardingCases.filter((caseItem) => {
+  const safeOnboardingCases = Array.isArray(onboardingCases) ? onboardingCases : [];
+  const safeEmployees = Array.isArray(employees) ? employees : [];
+  const safeOffboardingCases = Array.isArray(offboardingCases) ? offboardingCases : [];
+
+  const filteredOnboardingCases = safeOnboardingCases.filter((caseItem) => {
     if (onboardingFilter === "pending") {
       return caseItem.status === "pending" || caseItem.status === "in_progress";
     }
@@ -520,9 +612,10 @@ const EmployeeManagement = () => {
     setDepartmentForm({
       name: "",
       description: "",
-      department_code: "",
       department_head_id: "",
+      partner_profile_id: "",
     });
+    setDepartmentMemberIds([]);
     setDepartmentDialogOpen(true);
   };
 
@@ -531,9 +624,20 @@ const EmployeeManagement = () => {
     setDepartmentForm({
       name: department.name,
       description: department.description || "",
-      department_code: department.department_code || "",
-      department_head_id: department.department_head_id || "",
+      department_head_id: department.department_head_id
+        ? String(department.department_head_id)
+        : "",
+      partner_profile_id: department.partner_profile_id
+        ? String(department.partner_profile_id)
+        : "",
     });
+    const selectedMembers = employees
+      .filter((emp: any) => {
+        const deptId = emp.departmentId || emp.department_id;
+        return String(deptId || "") === String(department.id);
+      })
+      .map((emp: any) => String(emp.id));
+    setDepartmentMemberIds(selectedMembers);
     setDepartmentDialogOpen(true);
   };
 
@@ -546,31 +650,81 @@ const EmployeeManagement = () => {
       });
       return;
     }
+    if (!departmentForm.department_head_id || departmentForm.department_head_id === "none") {
+      toast({
+        title: "Department head required",
+        description: "Please select a manager as department head.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!departmentForm.partner_profile_id || departmentForm.partner_profile_id === "none") {
+      toast({
+        title: "Assigned partner required",
+        description: "Please select the partner responsible for this department.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const managerIds = new Set(managerEmployees.map((emp: any) => String(emp.id)));
+    if (!managerIds.has(String(departmentForm.department_head_id))) {
+      toast({
+        title: "Invalid department head",
+        description: "Department head must be a manager.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const partnerIds = new Set(partnerEmployees.map((emp: any) => String(emp.id)));
+    if (!partnerIds.has(String(departmentForm.partner_profile_id))) {
+      toast({
+        title: "Invalid partner assignment",
+        description: "Assigned partner must be a partner profile.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
+      let departmentId: string | undefined;
       const departmentData = {
         name: departmentForm.name.trim(),
         description: departmentForm.description.trim() || null,
-        department_code: departmentForm.department_code.trim() || null,
-        department_head_id: departmentForm.department_head_id && departmentForm.department_head_id !== "none" 
-          ? departmentForm.department_head_id 
+        departmentHeadId: departmentForm.department_head_id
+          ? Number(departmentForm.department_head_id)
+          : null,
+        partnerProfileId: departmentForm.partner_profile_id
+          ? Number(departmentForm.partner_profile_id)
           : null,
       };
 
       if (editingDepartment) {
         await apiFetch("PATCH", `/departments/${editingDepartment.id}`, departmentData);
+        departmentId = editingDepartment.id;
 
         toast({
           title: "Success",
           description: "Department updated successfully",
         });
       } else {
-        await apiFetch("POST", "/departments", departmentData);
+        const createResponse = await apiFetch("POST", "/departments", departmentData);
+        const createdDepartment = (createResponse as any)?.data ?? createResponse;
+        departmentId = createdDepartment?.id;
 
         toast({
           title: "Success",
           description: "Department created successfully",
         });
+      }
+
+      if (departmentId && departmentMemberIds.length > 0) {
+        await Promise.all(
+          departmentMemberIds.map((empId) =>
+            apiFetch("PATCH", `/profiles/${empId}`, {
+              department_id: departmentId,
+            })
+          )
+        );
       }
 
       setDepartmentDialogOpen(false);
@@ -587,8 +741,10 @@ const EmployeeManagement = () => {
   const handleDeleteDepartment = async (departmentId: string) => {
     try {
       // Check if department has employees
-      const employees = await apiFetch("GET", `/profiles?department_id=${departmentId}`);
-      const count = employees?.length || 0;
+      const response = await apiFetch("GET", `/profiles?department_id=${departmentId}`);
+      const payload = (response as any)?.data ?? response ?? [];
+      const safeEmployees = Array.isArray(payload) ? payload : [];
+      const count = safeEmployees.length || 0;
 
       if (count && count > 0) {
         toast({
@@ -626,6 +782,7 @@ const EmployeeManagement = () => {
       last_name: "",
       phone: "",
       position: "",
+      role_id: "",
       department_id: "",
       manager_id: "",
       hire_date: new Date().toISOString().split("T")[0],
@@ -865,6 +1022,14 @@ const EmployeeManagement = () => {
       });
       return;
     }
+    if (!employeeForm.role_id) {
+      toast({
+        title: "Role required",
+        description: "Select a billing position for this employee.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       setLoading(true);
 
@@ -881,6 +1046,18 @@ const EmployeeManagement = () => {
         status: employeeForm.status,
         hourly_rate: employeeForm.hourly_rate ? parseFloat(employeeForm.hourly_rate) : null,
       });
+
+      const profileResponse = await apiFetch(
+        "GET",
+        `/profiles/email/${encodeURIComponent(employeeForm.email.trim())}`
+      );
+      const profile = (profileResponse as any)?.data ?? profileResponse;
+      const profileId = profile?.id;
+      if (profileId && employeeForm.role_id) {
+        await apiFetch("PUT", `/employees/${profileId}/role`, {
+          roleId: Number(employeeForm.role_id),
+        });
+      }
 
       toast({
         title: "Success",
@@ -1139,7 +1316,7 @@ const EmployeeManagement = () => {
                   <Building2 className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">{departments.length}</div>
+                  <div className="text-2xl font-bold">{safeDepartments.length}</div>
                 </CardContent>
               </Card>
             </div>
@@ -1164,7 +1341,7 @@ const EmployeeManagement = () => {
                   <div className="text-center py-8 text-muted-foreground">Loading departments...</div>
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {departments.map((dept) => (
+                    {safeDepartments.map((dept) => (
                       <Card key={dept.id} className="relative">
                         <CardHeader>
                           <div className="flex items-start justify-between gap-2">
@@ -1173,11 +1350,6 @@ const EmployeeManagement = () => {
                                 <Building2 className="h-5 w-5" />
                                 {dept.name}
                               </CardTitle>
-                              {dept.department_code && (
-                                <p className="text-sm text-muted-foreground mt-1">
-                                  Code: {dept.department_code}
-                                </p>
-                              )}
                             </div>
                             <div className="flex gap-1">
                               <Button
@@ -1211,6 +1383,12 @@ const EmployeeManagement = () => {
                               <span className="font-medium">{dept.department_head_name}</span>
                             </div>
                           )}
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">Partner:</span>
+                            <span className="font-medium">
+                              {dept.partner_name || "Unassigned"}
+                            </span>
+                          </div>
                         </CardContent>
                       </Card>
                     ))}
@@ -1345,13 +1523,13 @@ const EmployeeManagement = () => {
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                       <span>
-                        Pending: {onboardingCases.filter((c) => c.status === "pending").length}
+                        Pending: {safeOnboardingCases.filter((c) => c.status === "pending").length}
                       </span>
                       <span>
-                        In Progress: {onboardingCases.filter((c) => c.status === "in_progress").length}
+                        In Progress: {safeOnboardingCases.filter((c) => c.status === "in_progress").length}
                       </span>
                       <span>
-                        Completed: {onboardingCases.filter((c) => c.status === "completed").length}
+                        Completed: {safeOnboardingCases.filter((c) => c.status === "completed").length}
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1516,13 +1694,13 @@ const EmployeeManagement = () => {
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                       <span>
-                        Initiated: {offboardingCases.filter((c) => c.status === "initiated").length}
+                        Initiated: {safeOffboardingCases.filter((c) => c.status === "initiated").length}
                       </span>
                       <span>
-                        In Progress: {offboardingCases.filter((c) => c.status === "in_progress").length}
+                        In Progress: {safeOffboardingCases.filter((c) => c.status === "in_progress").length}
                       </span>
                       <span>
-                        Completed: {offboardingCases.filter((c) => c.status === "completed").length}
+                        Completed: {safeOffboardingCases.filter((c) => c.status === "completed").length}
                       </span>
                     </div>
                     <div className="rounded-md border">
@@ -1539,14 +1717,14 @@ const EmployeeManagement = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {offboardingCases.length === 0 ? (
+                        {safeOffboardingCases.length === 0 ? (
                           <TableRow>
                             <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
                               No offboarding cases yet.
                             </TableCell>
                           </TableRow>
                         ) : (
-                          offboardingCases.map((oc) => (
+                          safeOffboardingCases.map((oc) => (
                             <TableRow key={oc.id}>
                               <TableCell>
                                 {oc.employee
@@ -1613,7 +1791,7 @@ const EmployeeManagement = () => {
 
         {/* Create/Edit Department Dialog */}
         <Dialog open={departmentDialogOpen} onOpenChange={setDepartmentDialogOpen}>
-          <DialogContent className="sm:max-w-[500px]">
+          <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
                 {editingDepartment ? "Edit Department" : "Create Department"}
@@ -1637,20 +1815,6 @@ const EmployeeManagement = () => {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="code">Department Code (Optional)</Label>
-                <Input
-                  id="code"
-                  value={departmentForm.department_code}
-                  onChange={(e) =>
-                    setDepartmentForm({
-                      ...departmentForm,
-                      department_code: e.target.value,
-                    })
-                  }
-                  placeholder="e.g., ENG, SAL, HR"
-                />
-              </div>
-              <div className="grid gap-2">
                 <Label htmlFor="description">Description (Optional)</Label>
                 <Textarea
                   id="description"
@@ -1666,13 +1830,13 @@ const EmployeeManagement = () => {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="head">Department Head (Optional)</Label>
+                <Label htmlFor="head">Department Head (Manager) *</Label>
                 <Select
-                  value={departmentForm.department_head_id || "none"}
+                  value={departmentForm.department_head_id || ""}
                   onValueChange={(value) =>
                     setDepartmentForm({
                       ...departmentForm,
-                      department_head_id: value === "none" ? "" : value,
+                      department_head_id: value,
                     })
                   }
                 >
@@ -1680,14 +1844,80 @@ const EmployeeManagement = () => {
                     <SelectValue placeholder="Select department head" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    {employees.map((emp) => (
+                    {managerEmployees.length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No managers available
+                      </SelectItem>
+                    )}
+                    {managerEmployees.map((emp: any) => (
                       <SelectItem key={emp.id} value={emp.id}>
-                        {emp.first_name} {emp.last_name} - {emp.position}
+                        {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Manager"}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="partner">Assigned Partner *</Label>
+                <Select
+                  value={departmentForm.partner_profile_id || ""}
+                  onValueChange={(value) =>
+                    setDepartmentForm({
+                      ...departmentForm,
+                      partner_profile_id: value,
+                    })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select partner" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {partnerEmployees.length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No partners available
+                      </SelectItem>
+                    )}
+                    {partnerEmployees.map((emp: any) => (
+                      <SelectItem key={emp.id} value={emp.id}>
+                        {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Partner"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Assign Employees (Optional)</Label>
+                <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
+                  {employees.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      No employees available for assignment.
+                    </p>
+                  )}
+                  {employees.map((emp: any) => (
+                    <label key={emp.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={departmentMemberIds.includes(String(emp.id))}
+                        onChange={() => toggleDepartmentMember(String(emp.id))}
+                      />
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span>
+                          {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Employee"}
+                        </span>
+                        {isManagerEmployee(emp) && (
+                          <Badge variant="outline" className="text-[10px]">Manager</Badge>
+                        )}
+                        {isPartnerEmployee(emp) && (
+                          <Badge variant="outline" className="text-[10px]">Partner</Badge>
+                        )}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Selected employees will be assigned to this department.
+                </p>
               </div>
             </div>
             <DialogFooter>
@@ -1801,13 +2031,38 @@ const EmployeeManagement = () => {
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="emp-position">Position</Label>
-                  <Input
-                    id="emp-position"
-                    value={employeeForm.position}
-                    onChange={(e) =>
-                      setEmployeeForm({ ...employeeForm, position: e.target.value })
-                    }
-                  />
+                  <Select
+                    value={employeeForm.role_id || ""}
+                    onValueChange={(value) => {
+                      const selectedRole = roles.find(
+                        (role) => String(role.id) === value
+                      );
+                      setEmployeeForm({
+                        ...employeeForm,
+                        role_id: value,
+                        position: selectedRole?.name || "",
+                        hourly_rate: selectedRole?.billing_rate
+                          ? String(selectedRole.billing_rate)
+                          : "",
+                      });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select position" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles.length === 0 && (
+                        <SelectItem value="none" disabled>
+                          No roles available
+                        </SelectItem>
+                      )}
+                      {roles.map((role) => (
+                        <SelectItem key={role.id} value={String(role.id)}>
+                          {role.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -1828,7 +2083,7 @@ const EmployeeManagement = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No Department</SelectItem>
-                      {departments.map((dept) => (
+                      {safeDepartments.map((dept) => (
                         <SelectItem key={dept.id} value={dept.id}>
                           {dept.name}
                         </SelectItem>
@@ -1852,7 +2107,7 @@ const EmployeeManagement = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No Manager</SelectItem>
-                      {employees.map((emp) => (
+                      {safeEmployees.map((emp) => (
                         <SelectItem key={emp.id} value={emp.id}>
                           {emp.first_name} {emp.last_name}
                         </SelectItem>
@@ -1881,10 +2136,12 @@ const EmployeeManagement = () => {
                     type="number"
                     step="0.01"
                     value={employeeForm.hourly_rate}
-                    onChange={(e) =>
-                      setEmployeeForm({ ...employeeForm, hourly_rate: e.target.value })
-                    }
+                    readOnly
+                    disabled
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Auto-filled from the selected position.
+                  </p>
                 </div>
               </div>
 
@@ -2301,9 +2558,26 @@ const EmployeeManagement = () => {
                             Document required
                           </Badge>
                         )}
-                        {task.documentId && (
-                          <div className="text-xs text-muted-foreground">
-                            Document attached (ID {task.documentId})
+                        {task.document?.filePath && (
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <FileText className="h-4 w-4 text-emerald-500" />
+                            <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                              <a
+                                href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${task.document.filePath}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Preview
+                              </a>
+                            </Button>
+                            <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                              <a
+                                href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${task.document.filePath}`}
+                                download
+                              >
+                                Download
+                              </a>
+                            </Button>
                           </div>
                         )}
                       </div>

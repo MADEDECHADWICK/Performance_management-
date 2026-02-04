@@ -249,6 +249,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         portfolio_revenue: revenue,
         portfolio_fees: fees,
         portfolio_profit: 0,
+        utilization_rate: 0,
         active_jobs: activeJobCount,
         direct_reports: 0,
         client_count: clientCount,
@@ -259,6 +260,31 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
     const partnerJobIds = partnerRankings.flatMap((partner) => {
       const target = partners.find((p) => p.id === partner.partner_id);
       return target?.jobsAsPartner?.map((job) => job.id) || [];
+    });
+
+    const [hoursByJob, billableHoursByJob] = await Promise.all([
+      prisma.timeEntry.groupBy({
+        by: ['jobId'],
+        _sum: { hours: true },
+        where: { jobId: { in: partnerJobIds } },
+      }),
+      prisma.timeEntry.groupBy({
+        by: ['jobId'],
+        _sum: { hours: true },
+        where: { jobId: { in: partnerJobIds }, billable: true },
+      }),
+    ]);
+
+    const totalHoursByJob = new Map<number, number>();
+    hoursByJob.forEach((row) => {
+      if (!row.jobId) return;
+      totalHoursByJob.set(row.jobId, Number(row._sum.hours || 0));
+    });
+
+    const billableHoursMap = new Map<number, number>();
+    billableHoursByJob.forEach((row) => {
+      if (!row.jobId) return;
+      billableHoursMap.set(row.jobId, Number(row._sum.hours || 0));
     });
 
     const jobProfitability = await prisma.timeEntry.groupBy({
@@ -280,6 +306,14 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         return sum + (profitByJob.get(job.id) || 0);
       }, 0);
       partner.portfolio_profit = profit;
+      const totalHoursForPartner = jobsAsPartner.reduce((sum, job) => {
+        return sum + (totalHoursByJob.get(job.id) || 0);
+      }, 0);
+      const billableHoursForPartner = jobsAsPartner.reduce((sum, job) => {
+        return sum + (billableHoursMap.get(job.id) || 0);
+      }, 0);
+      partner.utilization_rate =
+        totalHoursForPartner > 0 ? (billableHoursForPartner / totalHoursForPartner) * 100 : 0;
     });
 
     const revenueTrend = await prisma.$queryRaw<

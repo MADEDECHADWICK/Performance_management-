@@ -32,6 +32,14 @@ interface KPI {
   bsc_category: string | null;
 }
 
+const extractItems = (payload: any) => {
+  const data = payload?.data ?? payload;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+};
+
 const EvaluationManagement = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -92,6 +100,9 @@ const EvaluationManagement = () => {
 
   const learningWeightTotal = evaluationWeight + okrWeight + feedbackWeight;
   const learningWeightsValid = learningWeightTotal === 100;
+  const employeeOptions = Array.isArray(employees) ? employees : [];
+  const departmentOptions = Array.isArray(departments) ? departments : [];
+  const safeDepartmentEmployees = Array.isArray(departmentEmployees) ? departmentEmployees : [];
 
   useEffect(() => {
     loadCycles();
@@ -109,7 +120,7 @@ const EvaluationManagement = () => {
   const loadCycles = async () => {
     try {
       const data = await apiFetch('GET', "/evaluation-cycles");
-      setCycles(data || []);
+      setCycles(extractItems(data));
     } catch (error: any) {
       console.error("Error loading cycles:", error);
       toast({
@@ -124,8 +135,8 @@ const EvaluationManagement = () => {
 
   const loadEmployees = async () => {
     try {
-      const data = await apiFetch('GET', "/profiles?status=active");
-      setEmployees(data || []);
+      const response = await apiFetch('GET', "/profiles?status=active&page=1&pageSize=100");
+      setEmployees(extractItems(response));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate("/auth");
@@ -142,7 +153,7 @@ const EvaluationManagement = () => {
   const loadKPIs = async () => {
     try {
       const data = await apiFetch('GET', "/kpis?is_active=true");
-      setKpis(data || []);
+      setKpis(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate("/auth");
@@ -158,8 +169,8 @@ const EvaluationManagement = () => {
 
   const loadDepartments = async () => {
     try {
-      const data = await apiFetch('GET', "/departments");
-      setDepartments(data || []);
+      const data = await apiFetch('GET', "/departments?page=1&pageSize=200");
+      setDepartments(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate("/auth");
@@ -175,9 +186,13 @@ const EvaluationManagement = () => {
 
   const loadDepartmentEmployees = async (deptId: string) => {
     try {
-      const data = await apiFetch('GET', `/profiles?department_id=${deptId}&status=active`);
-      setDepartmentEmployees(data || []);
-      setIncludedEmployees((data || []).map((e: any) => e.id));
+      const response = await apiFetch(
+        'GET',
+        `/profiles?department_id=${deptId}&status=active&page=1&pageSize=200`
+      );
+      const safeEmployees = extractItems(response);
+      setDepartmentEmployees(safeEmployees);
+      setIncludedEmployees(safeEmployees.map((e: any) => e.id));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate("/auth");
@@ -841,7 +856,7 @@ const EvaluationManagement = () => {
                         <SelectValue placeholder="Choose a department" />
                       </SelectTrigger>
                       <SelectContent>
-                        {departments.map((dept) => (
+                        {departmentOptions.map((dept) => (
                           <SelectItem key={dept.id} value={dept.id}>
                             {dept.name}
                           </SelectItem>
@@ -864,7 +879,7 @@ const EvaluationManagement = () => {
                 <CardContent>
                   <ScrollArea className="h-[300px] pr-4">
                     <div className="space-y-2">
-                      {departmentEmployees.map((emp) => (
+                      {safeDepartmentEmployees.map((emp) => (
                         <div key={emp.id} className="flex items-center space-x-2 p-2 hover:bg-muted rounded">
                           <Checkbox
                             checked={includedEmployees.includes(emp.id)}
@@ -934,7 +949,7 @@ const EvaluationManagement = () => {
                         <SelectValue placeholder="Select evaluators" />
                       </SelectTrigger>
                       <SelectContent>
-                        {employees.map((emp) => (
+                        {employeeOptions.map((emp) => (
                           <SelectItem key={emp.id} value={emp.id}>
                             {emp.first_name} {emp.last_name} {emp.position ? `- ${emp.position}` : ""}
                           </SelectItem>
@@ -943,7 +958,7 @@ const EvaluationManagement = () => {
                     </Select>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {selectedEvaluators.map((id) => {
-                        const emp = employees.find(e => e.id === id);
+                        const emp = employeeOptions.find(e => e.id === id);
                         return (
                           <div key={id} className="bg-secondary px-3 py-1 rounded-md text-sm flex items-center gap-2">
                             {emp?.first_name} {emp?.last_name}
@@ -972,7 +987,7 @@ const EvaluationManagement = () => {
                         <SelectValue placeholder="Select persons" />
                       </SelectTrigger>
                       <SelectContent>
-                        {employees.map((emp) => (
+                        {employeeOptions.map((emp) => (
                           <SelectItem key={emp.id} value={emp.id}>
                             {emp.first_name} {emp.last_name} {emp.position ? `- ${emp.position}` : ""}
                           </SelectItem>
@@ -981,7 +996,7 @@ const EvaluationManagement = () => {
                     </Select>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {selectedEvaluatees.map((id) => {
-                        const emp = employees.find(e => e.id === id);
+                        const emp = employeeOptions.find(e => e.id === id);
                         return (
                           <div key={id} className="bg-secondary px-3 py-1 rounded-md text-sm flex items-center gap-2">
                             {emp?.first_name} {emp?.last_name}

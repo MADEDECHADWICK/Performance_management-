@@ -31,6 +31,11 @@ export const createDepartmentValidators = [
     .optional()
     .isInt({ min: 1 })
     .withMessage("Valid departmentHeadId required if provided"),
+
+  body("partnerProfileId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid partnerProfileId required if provided"),
 ];
 
 /**
@@ -57,6 +62,11 @@ export const updateDepartmentValidators = [
     .optional()
     .isInt({ min: 1 })
     .withMessage("Valid departmentHeadId required if provided"),
+
+  body("partnerProfileId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid partnerProfileId required if provided"),
 ];
 
 /**

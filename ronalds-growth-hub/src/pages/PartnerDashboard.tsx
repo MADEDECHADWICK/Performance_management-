@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authAPI, apiFetch, surveysAPI, timeEntriesAPI } from '@/lib/api';
@@ -166,6 +166,7 @@ const PartnerDashboard = () => {
   const [jobSearch, setJobSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [activeTab, setActiveTab] = useState('jobs');
+  const tabsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     loadDashboardData();
@@ -330,17 +331,26 @@ const PartnerDashboard = () => {
       minimumFractionDigits: 0,
     }).format(amount);
 
+  const formatCompactCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      notation: 'compact',
+      compactDisplay: 'short',
+      maximumFractionDigits: 1,
+    }).format(amount);
+
   const formatMonth = (value?: string) => {
-    if (!value) return '—';
+    if (!value) return '?';
     const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return '—';
+    if (Number.isNaN(parsed.getTime())) return '?';
     return parsed.toLocaleDateString('en-KE', { month: 'short', year: 'numeric' });
   };
 
   const formatDate = (value?: string | null) => {
-    if (!value) return 'â€”';
+    if (!value) return '?';
     const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return 'â€”';
+    if (Number.isNaN(parsed.getTime())) return '?';
     return parsed.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
@@ -434,7 +444,7 @@ const PartnerDashboard = () => {
 
         {/* Key Metrics Grid */}
         {personalPerformance && (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
@@ -446,7 +456,7 @@ const PartnerDashboard = () => {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{personalPerformance.overallScore}</div>
+                <div className="metric-value">{personalPerformance.overallScore}</div>
                 <p className="text-xs text-muted-foreground">Financial + non-financial</p>
               </CardContent>
             </Card>
@@ -457,8 +467,8 @@ const PartnerDashboard = () => {
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">
-                  KES {personalPerformance.revenue.toFixed(0)}
+                <div className="metric-value" title={formatCurrency(personalPerformance.revenue)}>
+                  {formatCompactCurrency(personalPerformance.revenue)}
                 </div>
               </CardContent>
             </Card>
@@ -469,8 +479,8 @@ const PartnerDashboard = () => {
                 <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">
-                  KES {personalPerformance.netProfit.toFixed(0)}
+                <div className="metric-value" title={formatCurrency(personalPerformance.netProfit)}>
+                  {formatCompactCurrency(personalPerformance.netProfit)}
                 </div>
               </CardContent>
             </Card>
@@ -481,23 +491,21 @@ const PartnerDashboard = () => {
                 <BarChart3 className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">
-                  {personalPerformance.utilizationRate}%
-                </div>
+                <div className="metric-value">{personalPerformance.utilizationRate}%</div>
                 <p className="text-xs text-muted-foreground">Billable vs allocated</p>
               </CardContent>
             </Card>
           </div>
         )}
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Total Jobs</CardTitle>
               <Briefcase className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{portfolio?.totalJobs || 0}</div>
+              <div className="metric-value">{portfolio?.totalJobs || 0}</div>
               <p className="text-xs text-muted-foreground">
                 {portfolio?.activeJobs || 0} active
               </p>
@@ -510,8 +518,8 @@ const PartnerDashboard = () => {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {formatCurrency(portfolio?.totalFee || 0)}
+              <div className="metric-value" title={formatCurrency(portfolio?.totalFee || 0)}>
+                {formatCompactCurrency(portfolio?.totalFee || 0)}
               </div>
             </CardContent>
           </Card>
@@ -522,8 +530,8 @@ const PartnerDashboard = () => {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {formatCurrency(portfolio?.totalRevenueCollected || 0)}
+              <div className="metric-value" title={formatCurrency(portfolio?.totalRevenueCollected || 0)}>
+                {formatCompactCurrency(portfolio?.totalRevenueCollected || 0)}
               </div>
             </CardContent>
           </Card>
@@ -534,8 +542,8 @@ const PartnerDashboard = () => {
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {formatCurrency(portfolio?.totalCost || 0)}
+              <div className="metric-value" title={formatCurrency(portfolio?.totalCost || 0)}>
+                {formatCompactCurrency(portfolio?.totalCost || 0)}
               </div>
             </CardContent>
           </Card>
@@ -546,8 +554,8 @@ const PartnerDashboard = () => {
               <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {formatCurrency(portfolio?.totalProfit || 0)}
+              <div className="metric-value" title={formatCurrency(portfolio?.totalProfit || 0)}>
+                {formatCompactCurrency(portfolio?.totalProfit || 0)}
               </div>
             </CardContent>
           </Card>
@@ -558,9 +566,7 @@ const PartnerDashboard = () => {
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {(portfolio?.averageMargin || 0).toFixed(1)}%
-              </div>
+              <div className="metric-value">{(portfolio?.averageMargin || 0).toFixed(1)}%</div>
             </CardContent>
           </Card>
 
@@ -570,19 +576,17 @@ const PartnerDashboard = () => {
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {portfolio?.totalTeamSize || 0}
-              </div>
+              <div className="metric-value">{portfolio?.totalTeamSize || 0}</div>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="md:col-span-2 xl:col-span-2">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
+              <div className="metric-value">
                 {approvalRequests.length || pendingAlertsCount || summary?.pendingTimeEntriesCount || 0}
               </div>
               <p className="text-xs text-muted-foreground">Awaiting action</p>
@@ -603,14 +607,27 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent className="flex items-center justify-between">
               <div>
-                <p className="text-2xl font-bold text-destructive">
-                  {formatCurrency(totalLossExposure)}
+                <p className="metric-value text-destructive" title={formatCurrency(totalLossExposure)}>
+                  {formatCompactCurrency(totalLossExposure)}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Review allocations and job scopes.
                 </p>
               </div>
-              <Button variant="outline" onClick={() => setActiveTab('allocations')}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setActiveTab('allocations');
+                  setSearchParams((prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set('tab', 'allocations');
+                    return next;
+                  });
+                  setTimeout(() => {
+                    tabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }, 0);
+                }}
+              >
                 View allocation audit
               </Button>
             </CardContent>
@@ -630,13 +647,13 @@ const PartnerDashboard = () => {
               <CardContent className="grid gap-3 sm:grid-cols-3">
                 <div>
                   <p className="text-sm text-muted-foreground">Completed surveys</p>
-                  <p className="text-2xl font-bold">
+                  <p className="metric-value">
                     {summary.clientFeedback.completedSurveys}/{summary.clientFeedback.totalSurveys}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Avg satisfaction</p>
-                  <p className="text-2xl font-bold">
+                  <p className="metric-value">
                     {summary.clientFeedback.avgOverallSatisfaction.toFixed(1)} / 5
                   </p>
                 </div>
@@ -690,20 +707,21 @@ const PartnerDashboard = () => {
         )}
 
         {/* Tabs for different views */}
-        <Tabs value={activeTab} onValueChange={(value) => {
-          setActiveTab(value);
-          setSearchParams((prev) => {
-            const next = new URLSearchParams(prev);
-            next.set('tab', value);
-            return next;
-          });
-        }} className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="jobs">Top Jobs</TabsTrigger>
-            <TabsTrigger value="allocations">Allocations</TabsTrigger>
-            <TabsTrigger value="approvals">Approvals</TabsTrigger>
-            <TabsTrigger value="details">Portfolio Details</TabsTrigger>
-          </TabsList>
+        <div ref={tabsRef}>
+          <Tabs value={activeTab} onValueChange={(value) => {
+            setActiveTab(value);
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set('tab', value);
+              return next;
+            });
+          }} className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="jobs">Top Jobs</TabsTrigger>
+              <TabsTrigger value="allocations">Allocations</TabsTrigger>
+              <TabsTrigger value="approvals">Approvals</TabsTrigger>
+              <TabsTrigger value="details">Portfolio Details</TabsTrigger>
+            </TabsList>
 
           <TabsContent value="jobs" className="space-y-4">
             {alerts.length > 0 && (
@@ -1208,7 +1226,8 @@ const PartnerDashboard = () => {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
+          </Tabs>
+        </div>
       </div>
     </DashboardLayout>
   );

@@ -226,7 +226,7 @@ export default function FinanceProjections() {
               <CardTitle className="text-sm font-medium">Projected</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalProjected.toLocaleString()}</div>
+              <div className="metric-value">KES {totalProjected.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Total projected revenue</p>
             </CardContent>
           </Card>
@@ -235,7 +235,7 @@ export default function FinanceProjections() {
               <CardTitle className="text-sm font-medium">Collected</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {totalCollected.toLocaleString()}</div>
+              <div className="metric-value">KES {totalCollected.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Total collected so far</p>
             </CardContent>
           </Card>
@@ -244,7 +244,7 @@ export default function FinanceProjections() {
               <CardTitle className="text-sm font-medium">Projection Count</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{projections.length}</div>
+              <div className="metric-value">{projections.length}</div>
               <p className="text-xs text-muted-foreground">Active projection entries</p>
             </CardContent>
           </Card>

@@ -22,6 +22,7 @@ export interface DepartmentCreateInput {
   description?: string;
   departmentCode?: string;
   departmentHeadId?: number;
+  partnerProfileId?: number;
 }
 
 export interface DepartmentUpdateInput {
@@ -29,6 +30,7 @@ export interface DepartmentUpdateInput {
   description?: string;
   departmentCode?: string;
   departmentHeadId?: number | null;
+  partnerProfileId?: number | null;
 }
 
 export interface ListDepartmentsOptions {
@@ -121,14 +123,36 @@ export class DepartmentService {
       }
     }
 
-    // Validate head profile if provided
+    // Validate head profile if provided (must be a manager, not partner)
     if (input.departmentHeadId) {
       const head = await prisma.profile.findUnique({
         where: { id: input.departmentHeadId },
-        select: { id: true },
+        select: {
+          id: true,
+          isPartner: true,
+          positionTitle: true,
+          role: { select: { name: true } },
+        },
       });
-      if (!head) {
-        const err = new Error("departmentHeadId does not reference an existing profile");
+      const roleLabel = `${head?.role?.name ?? head?.positionTitle ?? ""}`.toLowerCase();
+      const isManager = roleLabel.includes("manager");
+      if (!head || head.isPartner || !isManager) {
+        const err = new Error("departmentHeadId must reference a manager profile");
+        (err as any).statusCode = 400;
+        throw err;
+      }
+    }
+
+    if (input.partnerProfileId) {
+      const partner = await prisma.profile.findUnique({
+        where: { id: input.partnerProfileId },
+        select: { id: true, isPartner: true, positionTitle: true },
+      });
+      const isPartner =
+        partner?.isPartner ||
+        partner?.positionTitle?.toLowerCase().includes("partner");
+      if (!partner || !isPartner) {
+        const err = new Error("partnerProfileId must reference a partner profile");
         (err as any).statusCode = 400;
         throw err;
       }
@@ -140,6 +164,7 @@ export class DepartmentService {
         description: input.description,
         departmentCode: input.departmentCode,
         departmentHeadId: input.departmentHeadId,
+        partnerProfileId: input.partnerProfileId,
       },
       include: {
         departmentHead: {
@@ -149,6 +174,19 @@ export class DepartmentService {
           select: { profiles: true, jobs: true, kpis: true },
         },
       },
+    }).then(async (created) => {
+      if (!created.partnerProfileId) return created;
+      const partner = await prisma.profile.findUnique({
+        where: { id: created.partnerProfileId },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      return {
+        ...created,
+        partner,
+        partner_name: partner
+          ? `${partner.firstName ?? ""} ${partner.lastName ?? ""}`.trim()
+          : undefined,
+      };
     });
   }
 
@@ -172,7 +210,18 @@ export class DepartmentService {
       throw err;
     }
 
-    return department;
+    if (!department?.partnerProfileId) return department;
+    const partner = await prisma.profile.findUnique({
+      where: { id: department.partnerProfileId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    return {
+      ...department,
+      partner,
+      partner_name: partner
+        ? `${partner.firstName ?? ""} ${partner.lastName ?? ""}`.trim()
+        : undefined,
+    };
   }
 
   /**
@@ -204,7 +253,41 @@ export class DepartmentService {
       prisma.department.count(),
     ]);
 
-    return { departments, total };
+    const partnerIds = Array.from(
+      new Set(
+        departments
+          .map((dept) => dept.partnerProfileId)
+          .filter((id): id is number => typeof id === "number")
+      )
+    );
+    const partners = partnerIds.length
+      ? await prisma.profile.findMany({
+          where: { id: { in: partnerIds } },
+          select: { id: true, firstName: true, lastName: true },
+        })
+      : [];
+    const partnerMap = new Map(
+      partners.map((partner) => [
+        partner.id,
+        {
+          ...partner,
+          name: `${partner.firstName ?? ""} ${partner.lastName ?? ""}`.trim(),
+        },
+      ])
+    );
+
+    const enriched = departments.map((dept) => {
+      const partner = dept.partnerProfileId ? partnerMap.get(dept.partnerProfileId) : undefined;
+      return {
+        ...dept,
+        partner: partner
+          ? { id: partner.id, firstName: partner.firstName, lastName: partner.lastName }
+          : undefined,
+        partner_name: partner?.name,
+      };
+    });
+
+    return { departments: enriched, total };
   }
 
   /**
@@ -261,33 +344,68 @@ export class DepartmentService {
       }
     }
 
-    // Validate head profile if provided
+    // Validate head profile if provided (must be a manager, not partner)
     if (typeof input.departmentHeadId === "number") {
       const head = await prisma.profile.findUnique({
         where: { id: input.departmentHeadId },
-        select: { id: true },
+        select: {
+          id: true,
+          isPartner: true,
+          positionTitle: true,
+          role: { select: { name: true } },
+        },
       });
-      if (!head) {
-        const err = new Error("departmentHeadId does not reference an existing profile");
+      const roleLabel = `${head?.role?.name ?? head?.positionTitle ?? ""}`.toLowerCase();
+      const isManager = roleLabel.includes("manager");
+      if (!head || head.isPartner || !isManager) {
+        const err = new Error("departmentHeadId must reference a manager profile");
+        (err as any).statusCode = 400;
+        throw err;
+      }
+    }
+
+    if (typeof input.partnerProfileId === "number") {
+      const partner = await prisma.profile.findUnique({
+        where: { id: input.partnerProfileId },
+        select: { id: true, isPartner: true, positionTitle: true },
+      });
+      const isPartner =
+        partner?.isPartner ||
+        partner?.positionTitle?.toLowerCase().includes("partner");
+      if (!partner || !isPartner) {
+        const err = new Error("partnerProfileId must reference a partner profile");
         (err as any).statusCode = 400;
         throw err;
       }
     }
 
     try {
-      return await prisma.department.update({
+      const updated = await prisma.department.update({
         where: { id: departmentId },
         data: {
           name: input.name,
           description: input.description,
           departmentCode: input.departmentCode,
           departmentHeadId: input.departmentHeadId,
+          partnerProfileId: input.partnerProfileId,
         },
         include: {
           departmentHead: { select: { id: true, firstName: true, lastName: true } },
           _count: { select: { profiles: true, jobs: true, kpis: true } },
         },
       });
+      if (!updated.partnerProfileId) return updated;
+      const partner = await prisma.profile.findUnique({
+        where: { id: updated.partnerProfileId },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      return {
+        ...updated,
+        partner,
+        partner_name: partner
+          ? `${partner.firstName ?? ""} ${partner.lastName ?? ""}`.trim()
+          : null,
+      };
     } catch (e: any) {
       // Prisma throws if record not found
       const err = new Error("Department not found");

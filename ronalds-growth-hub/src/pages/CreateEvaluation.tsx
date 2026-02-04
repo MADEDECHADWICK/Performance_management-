@@ -36,6 +36,14 @@ interface KPI {
   category: string;
 }
 
+const extractItems = (payload: any) => {
+  const data = payload?.data ?? payload;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+};
+
 export default function CreateEvaluation() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -89,6 +97,9 @@ export default function CreateEvaluation() {
   
   // Result areas (KPIs)
   const [selectedKpis, setSelectedKpis] = useState<Array<{ kpi_id: string; weight: number }>>([]);
+  const employeeOptions = Array.isArray(employees) ? employees : [];
+  const templateOptions = Array.isArray(templates) ? templates : [];
+  const kpiOptions = Array.isArray(kpis) ? kpis : [];
 
   useEffect(() => {
     loadTemplates();
@@ -99,7 +110,7 @@ export default function CreateEvaluation() {
   const loadTemplates = async () => {
     try {
       const data = await apiFetch('GET', '/evaluation_templates?is_active=true');
-      setTemplates(data || []);
+      setTemplates(extractItems(data));
     } catch (error) {
       console.log('Templates not available:', error);
       setTemplates([]);
@@ -108,8 +119,8 @@ export default function CreateEvaluation() {
 
   const loadEmployees = async () => {
     try {
-      const data = await apiFetch('GET', '/profiles?status=active');
-      setEmployees(data || []);
+      const data = await apiFetch('GET', '/profiles?status=active&page=1&pageSize=100');
+      setEmployees(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate('/auth');
@@ -126,7 +137,7 @@ export default function CreateEvaluation() {
   const loadKPIs = async () => {
     try {
       const data = await apiFetch('GET', '/kpis?is_active=true');
-      setKPIs(data || []);
+      setKPIs(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
         navigate('/auth');
@@ -224,7 +235,7 @@ export default function CreateEvaluation() {
         evaluatorType: string;
       }> = [];
 
-      const profileById = new Map(employees.map((emp) => [emp.id, emp]));
+      const profileById = new Map(employeeOptions.map((emp) => [emp.id, emp]));
 
       const addAssignment = (evaluatorId: string, evaluateeId: string, type: string) => {
         if (!evaluatorId || evaluatorId === evaluateeId) return;
@@ -259,7 +270,7 @@ export default function CreateEvaluation() {
               addAssignment(evaluatorId, evaluateeId, "peer")
             );
           } else {
-            let peerCandidates = employees.filter((emp) => emp.id !== evaluateeId);
+            let peerCandidates = employeeOptions.filter((emp) => emp.id !== evaluateeId);
             if (peerAssignmentMode === "manager" && managerId) {
               peerCandidates = peerCandidates.filter(
                 (emp) =>
@@ -285,7 +296,7 @@ export default function CreateEvaluation() {
               addAssignment(evaluatorId, evaluateeId, "direct_report")
             );
           } else {
-            const directReports = employees.filter(
+            const directReports = employeeOptions.filter(
               (emp) =>
                 (emp.manager_id ?? (emp as any).managerId) &&
                 String(emp.manager_id ?? (emp as any).managerId) === evaluateeId
@@ -360,7 +371,7 @@ export default function CreateEvaluation() {
                   <SelectValue placeholder="Select template" />
                 </SelectTrigger>
                 <SelectContent>
-                  {templates.map(template => (
+                  {templateOptions.map(template => (
                     <SelectItem key={template.id} value={template.id}>
                       {template.name}
                     </SelectItem>
@@ -426,7 +437,7 @@ export default function CreateEvaluation() {
                   <SelectValue placeholder="Select managers" />
                 </SelectTrigger>
                 <SelectContent>
-                  {employees.map(emp => (
+                  {employeeOptions.map(emp => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.first_name} {emp.last_name} - {emp.position}
                     </SelectItem>
@@ -435,7 +446,7 @@ export default function CreateEvaluation() {
               </Select>
               <div className="mt-2 flex flex-wrap gap-2">
                 {selectedDownwardEvaluators.map(id => {
-                  const emp = employees.find(e => e.id === id);
+                  const emp = employeeOptions.find(e => e.id === id);
                   return emp ? (
                     <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
                       {emp.first_name} {emp.last_name}
@@ -488,7 +499,7 @@ export default function CreateEvaluation() {
                   <SelectValue placeholder="Select peer evaluators" />
                 </SelectTrigger>
                 <SelectContent>
-                  {employees.map(emp => (
+                  {employeeOptions.map(emp => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.first_name} {emp.last_name} - {emp.position}
                     </SelectItem>
@@ -497,7 +508,7 @@ export default function CreateEvaluation() {
               </Select>
               <div className="mt-2 flex flex-wrap gap-2">
                 {selectedPeerEvaluators.map(id => {
-                  const emp = employees.find(e => e.id === id);
+                  const emp = employeeOptions.find(e => e.id === id);
                   return emp ? (
                     <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
                       {emp.first_name} {emp.last_name}
@@ -520,7 +531,7 @@ export default function CreateEvaluation() {
                   <SelectValue placeholder="Select direct reports" />
                 </SelectTrigger>
                 <SelectContent>
-                  {employees.map(emp => (
+                  {employeeOptions.map(emp => (
                     <SelectItem key={emp.id} value={emp.id}>
                       {emp.first_name} {emp.last_name} - {emp.position}
                     </SelectItem>
@@ -529,7 +540,7 @@ export default function CreateEvaluation() {
               </Select>
               <div className="mt-2 flex flex-wrap gap-2">
                 {selectedUpwardEvaluators.map(id => {
-                  const emp = employees.find(e => e.id === id);
+                  const emp = employeeOptions.find(e => e.id === id);
                   return emp ? (
                     <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
                       {emp.first_name} {emp.last_name}
@@ -552,7 +563,7 @@ export default function CreateEvaluation() {
                 <SelectValue placeholder="Select evaluatees" />
               </SelectTrigger>
               <SelectContent>
-                {employees.map(emp => (
+                {employeeOptions.map(emp => (
                   <SelectItem key={emp.id} value={emp.id}>
                     {emp.first_name} {emp.last_name} - {emp.position}
                   </SelectItem>
@@ -561,7 +572,7 @@ export default function CreateEvaluation() {
             </Select>
             <div className="mt-2 flex flex-wrap gap-2">
               {selectedEvaluatees.map(id => {
-                const emp = employees.find(e => e.id === id);
+                const emp = employeeOptions.find(e => e.id === id);
                 return emp ? (
                   <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
                     {emp.first_name} {emp.last_name}
@@ -583,7 +594,7 @@ export default function CreateEvaluation() {
                 <SelectValue placeholder="Add KPI" />
               </SelectTrigger>
               <SelectContent>
-                {kpis.map(kpi => (
+                {kpiOptions.map(kpi => (
                   <SelectItem key={kpi.id} value={kpi.id}>
                     {kpi.name} ({kpi.category})
                   </SelectItem>
@@ -592,7 +603,7 @@ export default function CreateEvaluation() {
             </Select>
 
             {selectedKpis.map(({ kpi_id, weight }) => {
-              const kpi = kpis.find(k => k.id === kpi_id);
+              const kpi = kpiOptions.find(k => k.id === kpi_id);
               return kpi ? (
                 <div key={kpi_id} className="flex items-center gap-4 p-3 border rounded">
                   <div className="flex-1">

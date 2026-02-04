@@ -15,6 +15,31 @@ router.get('/', async (req, res) => {
     const scoreIds = logs
       .filter((log) => log.entityType === 'performance_score' && log.entityId)
       .map((log) => log.entityId as number);
+    const userIds = Array.from(
+      new Set(
+        logs
+          .map((log) => (log.userId != null ? Number(log.userId) : null))
+          .filter((id): id is number => Number.isFinite(id))
+      )
+    );
+    const profileIds = Array.from(
+      new Set(
+        logs
+          .map((log) => {
+            const meta = (log.metadata ?? {}) as Record<string, any>;
+            return (
+              meta.actorProfileId ??
+              meta.profileId ??
+              meta.performedByProfileId ??
+              meta.approvedByProfileId ??
+              meta.assignedByProfileId ??
+              null
+            );
+          })
+          .filter((id): id is number => Number.isFinite(Number(id)))
+          .map((id) => Number(id))
+      )
+    );
     const scoreLookup = new Map<number, { employeeName: string }>();
     if (scoreIds.length > 0) {
       const scores = await prisma.performanceScore.findMany({
@@ -26,6 +51,31 @@ router.get('/', async (req, res) => {
           ? `${score.employee.firstName} ${score.employee.lastName}`
           : "Employee";
         scoreLookup.set(score.id, { employeeName: name });
+      });
+    }
+
+    const actorLookup = new Map<number, string>();
+    if (userIds.length > 0) {
+      const users = await prisma.user.findMany({
+        where: { id: { in: userIds } },
+        include: { profile: { select: { firstName: true, lastName: true } } },
+      });
+      users.forEach((user) => {
+        const name = user.profile
+          ? `${user.profile.firstName} ${user.profile.lastName}`
+          : user.email || `User #${user.id}`;
+        actorLookup.set(user.id, name);
+      });
+    }
+
+    const profileLookup = new Map<number, string>();
+    if (profileIds.length > 0) {
+      const profiles = await prisma.profile.findMany({
+        where: { id: { in: profileIds } },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      profiles.forEach((profile) => {
+        profileLookup.set(profile.id, `${profile.firstName} ${profile.lastName}`);
       });
     }
     // transform to snake_case keys expected by frontend
@@ -41,6 +91,22 @@ router.get('/', async (req, res) => {
         l.entityType === 'performance_score' && l.entityId
           ? scoreLookup.get(l.entityId)?.employeeName || null
           : null,
+      actor_name:
+        l.userId != null
+          ? actorLookup.get(Number(l.userId)) || null
+          : (() => {
+              const meta = (l.metadata ?? {}) as Record<string, any>;
+              const profileId =
+                meta.actorProfileId ??
+                meta.profileId ??
+                meta.performedByProfileId ??
+                meta.approvedByProfileId ??
+                meta.assignedByProfileId ??
+                null;
+              return profileId != null
+                ? profileLookup.get(Number(profileId)) || null
+                : null;
+            })(),
       created_at: l.createdAt,
     }));
     return res.json(out);
