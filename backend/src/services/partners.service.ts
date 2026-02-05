@@ -354,10 +354,15 @@ export class PartnerService {
       const paymentTotal = paymentsByJob.get(job.id) || 0;
       const feeAmount = Number(job.fixedFeeAmount || 0);
       const amountCollected = paymentTotal;
-      const costAmount = job.timeEntries.reduce((sum, entry) => {
+      const timeEntries = job.timeEntries as Array<{
+        costAmount?: unknown;
+        billableAmount?: unknown;
+        profitLoss?: unknown;
+      }>;
+      const costAmount = timeEntries.reduce((sum, entry) => {
         const hasCost = 'costAmount' in entry;
         const entryCost = hasCost
-          ? Number((entry as { costAmount?: unknown }).costAmount || 0)
+          ? Number(entry.costAmount || 0)
           : Number(entry.billableAmount || 0) - Number(entry.profitLoss || 0);
         return sum + entryCost;
       }, 0);
