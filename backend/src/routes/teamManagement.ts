@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import createAudit from '../utils/audit';
 
@@ -506,7 +507,7 @@ router.post('/redistribute-workload', authMiddleware, async (req: AuthRequest, r
         employeeProfileId: Number(toEmployeeId),
         assignedRoleId: existingAssignment.assignedRoleId,
         assignedHourlyRate: existingAssignment.assignedHourlyRate,
-        roleSnapshot: existingAssignment.roleSnapshot,
+        roleSnapshot: existingAssignment.roleSnapshot ?? Prisma.DbNull,
         roleOnJob: existingAssignment.roleOnJob,
         assignedByProfileId: profileId || existingAssignment.assignedByProfileId || null,
       },
