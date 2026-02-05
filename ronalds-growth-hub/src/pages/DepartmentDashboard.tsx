@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import apiFetch, { authAPI } from "@/integrations/apiClient";
+import { apiFetch,  authAPI } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";

@@ -1,4 +1,4 @@
-import apiFetch from "@/integrations/apiClient";
+import { apiFetch } from "@/lib/api";
 
 export type NotificationTemplate = {
   id: number;

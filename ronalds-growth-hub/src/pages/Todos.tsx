@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import apiFetch, { authAPI } from "@/integrations/apiClient";
+import { apiFetch,  authAPI } from "@/lib/api";
 import { CheckCircle2, Clock, AlertCircle, FileText, DollarSign, Calendar } from "lucide-react";
 import { format } from "date-fns";
 

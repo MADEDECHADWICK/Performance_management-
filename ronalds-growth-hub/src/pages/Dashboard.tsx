@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { BarChart3, TrendingUp, Users, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { apiFetch, authAPI } from "@/integrations/apiClient";
+import { apiFetch, authAPI } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Bell } from "lucide-react";
 

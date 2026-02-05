@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { apiFetch, authAPI } from "@/integrations/apiClient";
+import { apiFetch, authAPI } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,7 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/hooks/use-toast";
 import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { rolesAPI, employeeRolesAPI } from "@/integrations/apiClient";
+import { rolesAPI, employeeRolesAPI } from "@/lib/api";
 import documentsAPI from "@/lib/api/documents";
 
 interface Employee {

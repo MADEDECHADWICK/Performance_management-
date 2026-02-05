@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import apiFetch, { authAPI } from "@/integrations/apiClient";
+import { apiFetch,  authAPI } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";

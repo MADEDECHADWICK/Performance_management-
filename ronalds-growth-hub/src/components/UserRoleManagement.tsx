@@ -28,7 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import apiFetch from "@/integrations/apiClient";
+import { apiFetch } from "@/lib/api";
 import { Loader2, Search, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 interface User {

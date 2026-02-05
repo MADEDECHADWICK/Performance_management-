@@ -27,7 +27,7 @@ import {
   Activity
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch } from "@/integrations/apiClient";
+import { apiFetch } from "@/lib/api";
 
 interface WorkloadData {
   employee_id: number;

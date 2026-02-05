@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/integrations/apiClient";
+import { apiFetch, authAPI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

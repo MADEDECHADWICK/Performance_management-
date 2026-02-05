@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { apiFetch, authAPI } from "@/integrations/apiClient";
+import { apiFetch, authAPI, documentsAPI } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -121,23 +121,30 @@ export default function CompleteEvaluation() {
 
   const uploadEvidence = async () => {
     const urls: string[] = [];
-      const user = await authAPI.me();
+    const user = await authAPI.me();
+    const entityId =
+      assignment?.evalueeProfileId ??
+      assignment?.profileId ??
+      user?.profile?.id ??
+      undefined;
+    const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
     for (const file of evidenceFiles) {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${user?.id}/${Date.now()}.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("evaluation-evidence")
-        .upload(fileName, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from("evaluation-evidence")
-        .getPublicUrl(fileName);
-
-      urls.push(publicUrl);
+      const response = await documentsAPI.uploadFile(file, {
+        documentType: "performance_review",
+        entityType: "employee",
+        entityId,
+        accessLevel: "manager",
+        description: "Evaluation evidence",
+      });
+      const filePath =
+        (response as any)?.data?.filePath ?? (response as any)?.filePath ?? "";
+      if (filePath) {
+        const resolvedUrl = filePath.startsWith("http")
+          ? filePath
+          : `${baseUrl}${filePath}`;
+        urls.push(resolvedUrl);
+      }
     }
 
     return urls;

@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Bell, CheckCircle2, ExternalLink, Filter, Loader2, Trash2, Shield } from "lucide-react";
-import apiFetch from "@/integrations/apiClient";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import notificationTemplatesAPI, { NotificationTemplate } from "@/lib/api/notificationTemplates";

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import apiFetch, { authAPI, setToken } from "@/integrations/apiClient";
+import { apiFetch,  authAPI, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Building2, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";

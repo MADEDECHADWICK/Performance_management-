@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch } from "@/integrations/apiClient";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
