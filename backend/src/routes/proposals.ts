@@ -243,9 +243,9 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
         .json(errorResponse("clientId, proposalTitle, serviceType, proposedFee, and proposalDate are required", 400));
     }
 
-    let onboardingToNotify: { id: number; clientName: string } | null = null;
-    let shouldNotifyHrOnWon = false;
-    const created = await prisma.$transaction(async (tx) => {
+    const createdResult = await prisma.$transaction(async (tx) => {
+      let onboardingToNotify: { id: number; clientName: string } | null = null;
+      let shouldNotifyHrOnWon = false;
       const proposal = await tx.proposal.create({
         data: {
           clientId: Number(clientId),
@@ -359,8 +359,10 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
         }
       }
 
-      return proposal;
+      return { proposal, onboardingToNotify, shouldNotifyHrOnWon };
     });
+
+    const { proposal: created, onboardingToNotify, shouldNotifyHrOnWon } = createdResult;
 
     if (onboardingToNotify) {
       await notifyHrGroup(
@@ -429,9 +431,9 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
     const shouldCreateOnboarding =
       req.body.status === "won" && existingProposal.status !== "won";
 
-    let onboardingToNotify: { id: number; clientName: string } | null = null;
-    let shouldNotifyHrOnWon = shouldCreateOnboarding;
-    const updated = await prisma.$transaction(async (tx) => {
+    const updatedResult = await prisma.$transaction(async (tx) => {
+      let onboardingToNotify: { id: number; clientName: string } | null = null;
+      let shouldNotifyHrOnWon = shouldCreateOnboarding;
       const proposal = await tx.proposal.update({
         where: { id: proposalId },
         data,
@@ -529,8 +531,10 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
         }
       }
 
-      return proposal;
+      return { proposal, onboardingToNotify, shouldNotifyHrOnWon };
     });
+
+    const { proposal: updated, onboardingToNotify, shouldNotifyHrOnWon } = updatedResult;
 
     if (onboardingToNotify) {
       await notifyHrGroup(
