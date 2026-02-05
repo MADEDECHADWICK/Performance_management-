@@ -285,7 +285,13 @@ export class PartnerService {
         staffing: { select: { employeeProfileId: true } },
         timeEntries: {
           where: { status: 'approved' },
-          select: { hours: true, billable: true, profitLoss: true, billableAmount: true },
+          select: {
+            hours: true,
+            billable: true,
+            profitLoss: true,
+            billableAmount: true,
+            costAmount: true,
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -348,10 +354,13 @@ export class PartnerService {
       const paymentTotal = paymentsByJob.get(job.id) || 0;
       const feeAmount = Number(job.fixedFeeAmount || 0);
       const amountCollected = paymentTotal;
-      const costAmount = job.timeEntries.reduce(
-        (sum, entry) => sum + Number(entry.costAmount || 0),
-        0
-      );
+      const costAmount = job.timeEntries.reduce((sum, entry) => {
+        const hasCost = 'costAmount' in entry;
+        const entryCost = hasCost
+          ? Number((entry as { costAmount?: unknown }).costAmount || 0)
+          : Number(entry.billableAmount || 0) - Number(entry.profitLoss || 0);
+        return sum + entryCost;
+      }, 0);
       const profit = amountCollected - costAmount;
 
       const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
