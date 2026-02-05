@@ -1,4 +1,5 @@
 import prisma from '../prisma';
+import { Prisma } from "@prisma/client";
 
 type CreateAuditParams = {
   action: string;
@@ -6,26 +7,35 @@ type CreateAuditParams = {
   entity_id?: number | null;
   user_id?: number | null;
   ip_address?: string | null;
-  metadata?: Record<string, any> | null;
+  metadata?: Prisma.InputJsonValue | null;
 };
 
 const resolveActorUserId = async (
   userId: number | null | undefined,
-  metadata: Record<string, any> | null | undefined
+  metadata: Prisma.InputJsonValue | null | undefined
 ) => {
   if (userId) return userId;
+
+  const meta =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : null;
+
   const candidateProfileId =
-    metadata?.actorProfileId ??
-    metadata?.profileId ??
-    metadata?.performedByProfileId ??
-    metadata?.approvedByProfileId ??
-    metadata?.assignedByProfileId ??
+    (meta?.actorProfileId as number | undefined) ??
+    (meta?.profileId as number | undefined) ??
+    (meta?.performedByProfileId as number | undefined) ??
+    (meta?.approvedByProfileId as number | undefined) ??
+    (meta?.assignedByProfileId as number | undefined) ??
     null;
+
   if (!candidateProfileId) return null;
+
   const actor = await prisma.user.findFirst({
-    where: { profileId: Number(candidateProfileId) },
+    where: { profile: { id: Number(candidateProfileId) } },
     select: { id: true },
   });
+
   return actor?.id ?? null;
 };
 
@@ -39,7 +49,7 @@ export async function createAudit(params: CreateAuditParams) {
       entityId: entity_id ?? null,
       ipAddress: ip_address || null,
       userId: resolvedUserId,
-      metadata: metadata ?? null,
+      metadata: metadata ?? undefined,
     },
   });
 }
