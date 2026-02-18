@@ -5,11 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+import AppRouteGuard from "@/components/auth/AppRouteGuard";
 
 // Core pages
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+const SetPassword = lazy(() => import("./pages/SetPassword"));
 
 // Dashboards
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -115,93 +117,409 @@ const App = () => (
               {/* Public Routes */}
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/set-password" element={<SetPassword />} />
               <Route path="/gmp-login" element={<GMPLogin />} />
               
               {/* Dashboards */}
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/hr-dashboard" element={<HRDashboard />} />
-              <Route path="/partner-dashboard" element={<PartnerDashboard />} />
-              <Route path="/manager-dashboard" element={<ManagerDashboard />} />
-              <Route path="/gmp-dashboard" element={<GMPDashboard />} />
-              <Route path="/department-dashboard" element={<DepartmentDashboard />} />
+              <Route path="/dashboard" element={<AppRouteGuard><Dashboard /></AppRouteGuard>} />
+              <Route
+                path="/hr-dashboard"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <HRDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/partner-dashboard"
+                element={
+                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                    <PartnerDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/manager-dashboard"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                    <ManagerDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/gmp-dashboard"
+                element={
+                  <AppRouteGuard allow={["gmp", "admin"]}>
+                    <GMPDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/department-dashboard"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                    <DepartmentDashboard />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Client Management */}
-              <Route path="/clients" element={<ClientsListPage />} />
-              <Route path="/clients/new" element={<ClientFormPage />} />
-              <Route path="/clients/:id" element={<ClientDetailPage />} />
-              <Route path="/clients/:id/edit" element={<ClientFormPage />} />
-              <Route path="/client-portfolio" element={<ClientPortfolio />} />
-              <Route path="/marketing-dashboard" element={<MarketingDashboard />} />
-              <Route path="/engagement-letters" element={<EngagementLetters />} />
-              <Route path="/client-onboarding-queue" element={<ClientOnboardingQueue />} />
+              <Route
+                path="/clients"
+                element={
+                  <AppRouteGuard allow={["marketing", "manager", "partner", "finance", "gmp", "admin", "hr"]}>
+                    <ClientsListPage />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/clients/new"
+                element={
+                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                    <ClientFormPage />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/clients/:id"
+                element={
+                  <AppRouteGuard allow={["marketing", "manager", "partner", "finance", "gmp", "admin", "hr"]}>
+                    <ClientDetailPage />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/clients/:id/edit"
+                element={
+                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                    <ClientFormPage />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/client-portfolio"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr", "marketing"]}>
+                    <ClientPortfolio />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/marketing-dashboard"
+                element={
+                  <AppRouteGuard allow={["marketing", "gmp", "admin", "hr"]}>
+                    <MarketingDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/engagement-letters"
+                element={
+                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                    <EngagementLetters />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/client-onboarding-queue"
+                element={
+                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                    <ClientOnboardingQueue />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Job Management */}
-              <Route path="/jobs" element={<JobWorkflowDashboard />} />
-              <Route path="/jobs/create" element={<AdminJobCreation />} />
-              <Route path="/admin-job-creation" element={<AdminJobCreation />} />
-              <Route path="/job-workflow-dashboard" element={<JobWorkflowDashboard />} />
+              <Route
+                path="/jobs"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                    <JobWorkflowDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/jobs/create"
+                element={
+                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                    <AdminJobCreation />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/admin-job-creation"
+                element={
+                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                    <AdminJobCreation />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/job-workflow-dashboard"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                    <JobWorkflowDashboard />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Time Management */}
-              <Route path="/timesheets" element={<TimesheetsNew />} />
+              <Route path="/timesheets" element={<AppRouteGuard><TimesheetsNew /></AppRouteGuard>} />
               
               {/* Employee & Profile */}
-              <Route path="/profile" element={<EmployeeProfile />} />
-              <Route path="/employee-management" element={<EmployeeManagement />} />
-              <Route path="/role-management" element={<RoleManagement />} />
-              <Route path="/positions-rates" element={<PositionsRates />} />
-              <Route path="/calibration" element={<Calibration />} />
-              <Route path="/recruitment-candidates" element={<RecruitmentCandidates />} />
+              <Route path="/profile" element={<AppRouteGuard><EmployeeProfile /></AppRouteGuard>} />
+              <Route
+                path="/employee-management"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <EmployeeManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/role-management"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <RoleManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/positions-rates"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <PositionsRates />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/calibration"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <Calibration />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/recruitment-candidates"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <RecruitmentCandidates />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Evaluations */}
-              <Route path="/evaluations" element={<Evaluations />} />
-              <Route path="/evaluation-management" element={<EvaluationManagement />} />
-              <Route path="/create-evaluation" element={<CreateEvaluation />} />
-              <Route path="/evaluation/:assignmentId" element={<CompleteEvaluation />} />
-              <Route path="/manager-evaluation" element={<ManagerEvaluationPage />} />
-              <Route path="/project-evaluations" element={<ProjectEvaluations />} />
-              <Route path="/upward-reviews" element={<UpwardReviews />} />
+              <Route path="/evaluations" element={<AppRouteGuard><Evaluations /></AppRouteGuard>} />
+              <Route
+                path="/evaluation-management"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <EvaluationManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/create-evaluation"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <CreateEvaluation />
+                  </AppRouteGuard>
+                }
+              />
+              <Route path="/evaluation/:assignmentId" element={<AppRouteGuard><CompleteEvaluation /></AppRouteGuard>} />
+              <Route
+                path="/manager-evaluation"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <ManagerEvaluationPage />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/project-evaluations"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <ProjectEvaluations />
+                  </AppRouteGuard>
+                }
+              />
+              <Route path="/upward-reviews" element={<AppRouteGuard><UpwardReviews /></AppRouteGuard>} />
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
               
               {/* KPIs & Goals */}
-              <Route path="/kpi-management" element={<KPIManagement />} />
-              <Route path="/goals" element={<Goals />} />
-              <Route path="/scorecard" element={<Scorecard />} />
+              <Route
+                path="/kpi-management"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <KPIManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route path="/goals" element={<AppRouteGuard><Goals /></AppRouteGuard>} />
+              <Route path="/scorecard" element={<AppRouteGuard><Scorecard /></AppRouteGuard>} />
               
               {/* Feedback */}
-              <Route path="/feedback" element={<Feedback />} />
-              <Route path="/continuous-feedback" element={<ContinuousFeedback />} />
+              <Route path="/feedback" element={<AppRouteGuard><Feedback /></AppRouteGuard>} />
+              <Route path="/continuous-feedback" element={<AppRouteGuard><ContinuousFeedback /></AppRouteGuard>} />
               
               {/* Analytics & Reports */}
-              <Route path="/reports" element={<Reports />} />
-              <Route path="/non-financial-analytics" element={<NonFinancialAnalytics />} />
-              <Route path="/financial-summary" element={<FinancialSummary />} />
-              <Route path="/finance-dashboard" element={<FinanceDashboard />} />
-              <Route path="/finance-collections" element={<FinanceCollections />} />
-              <Route path="/finance-projections" element={<FinanceProjections />} />
-              <Route path="/finance-balances" element={<FinanceBalances />} />
-              <Route path="/finance-profitability" element={<FinanceProfitability />} />
-              <Route path="/finance-allocations" element={<FinanceAllocations />} />
-              <Route path="/audit-logs" element={<AuditLogs />} />
-              <Route path="/notifications" element={<Notifications />} />
+              <Route path="/reports" element={<AppRouteGuard><Reports /></AppRouteGuard>} />
+              <Route
+                path="/non-financial-analytics"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <NonFinancialAnalytics />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/financial-summary"
+                element={
+                  <AppRouteGuard allow={["finance", "manager", "partner", "admin", "hr", "gmp", "employee"]}>
+                    <FinancialSummary />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-dashboard"
+                element={
+                  <AppRouteGuard>
+                    <FinanceDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-collections"
+                element={
+                  <AppRouteGuard>
+                    <FinanceCollections />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-projections"
+                element={
+                  <AppRouteGuard>
+                    <FinanceProjections />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-balances"
+                element={
+                  <AppRouteGuard>
+                    <FinanceBalances />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-profitability"
+                element={
+                  <AppRouteGuard>
+                    <FinanceProfitability />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-allocations"
+                element={
+                  <AppRouteGuard>
+                    <FinanceAllocations />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/audit-logs"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <AuditLogs />
+                  </AppRouteGuard>
+                }
+              />
+              <Route path="/notifications" element={<AppRouteGuard><Notifications /></AppRouteGuard>} />
               
               {/* Team & Development */}
-              <Route path="/team-performance" element={<TeamPerformance />} />
-              <Route path="/team-overview" element={<TeamOverview />} />
-              <Route path="/staff-development" element={<StaffDevelopment />} />
-              <Route path="/development-plan" element={<DevelopmentPlan />} />
+              <Route
+                path="/team-performance"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <TeamPerformance />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/team-overview"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <TeamOverview />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/staff-development"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <StaffDevelopment />
+                  </AppRouteGuard>
+                }
+              />
+              <Route path="/development-plan" element={<AppRouteGuard><DevelopmentPlan /></AppRouteGuard>} />
               
               {/* Partner & Manager Features */}
-              <Route path="/workload-management" element={<WorkloadManagement />} />
-              <Route path="/business-development" element={<BusinessDevelopment />} />
-              <Route path="/partner-metrics" element={<PartnerMetrics />} />
-              <Route path="/partner-portfolio-summary" element={<PartnerPortfolioSummary />} />
+              <Route
+                path="/workload-management"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <WorkloadManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/business-development"
+                element={
+                  <AppRouteGuard allow={["partner", "manager", "admin", "hr", "gmp", "marketing"]}>
+                    <BusinessDevelopment />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/partner-metrics"
+                element={
+                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                    <PartnerMetrics />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/partner-portfolio-summary"
+                element={
+                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                    <PartnerPortfolioSummary />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Documents & Surveys */}
-              <Route path="/documents" element={<DocumentManagement />} />
-              <Route path="/client-surveys" element={<ClientSurveys />} />
+              <Route
+                path="/documents"
+                element={
+                  <AppRouteGuard allow={["employee", "marketing", "manager", "partner", "finance", "admin", "hr", "gmp"]}>
+                    <DocumentManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/client-surveys"
+                element={
+                  <AppRouteGuard allow={["marketing", "manager", "partner", "admin", "hr", "gmp"]}>
+                    <ClientSurveys />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Other */}
-              <Route path="/todos" element={<Todos />} />
+              <Route path="/todos" element={<AppRouteGuard><Todos /></AppRouteGuard>} />
               
               {/* Catch-all */}
               <Route path="*" element={<NotFound />} />

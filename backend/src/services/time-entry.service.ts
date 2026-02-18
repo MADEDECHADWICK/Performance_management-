@@ -7,6 +7,7 @@
  */
 
 import { prisma } from '../prisma';
+import { Prisma } from '@prisma/client';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
 
@@ -23,32 +24,72 @@ interface ListOptions {
   jobId?: number;
   dateFrom?: Date;
   dateTo?: Date;
+  billableOnly?: boolean;
 }
 
 export class TimeEntryService {
-  private static async resolveHourlyRate(jobId: number, employeeProfileId: number) {
+  private static resolveJobBudgetHours(job: {
+    budgetHours?: any;
+    jobCosting?: { budgetCap?: { totalAllocatedHours?: any }; totalEstimatedHours?: any } | null;
+  }) {
+    const fromBudgetCap = Number(
+      job.jobCosting?.budgetCap?.totalAllocatedHours ??
+        job.jobCosting?.totalEstimatedHours ??
+        0
+    );
+    if (fromBudgetCap > 0) return fromBudgetCap;
+    return Number(job.budgetHours || 0);
+  }
+
+  private static async runSerializable<T>(
+    fn: (tx: Prisma.TransactionClient) => Promise<T>
+  ): Promise<T> {
+    return prisma.$transaction(fn, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+  }
+
+  private static async resolveRates(jobId: number, employeeProfileId: number) {
     const assignment = await prisma.jobStaffAssignment.findFirst({
       where: { jobId, employeeProfileId },
-      select: { assignedHourlyRate: true },
+      select: {
+        assignedHourlyRate: true,
+        roleSnapshot: true,
+        role: { select: { billingRate: true } },
+      },
     });
 
-    return Number(assignment?.assignedHourlyRate || 0);
+    const snapshot = (assignment?.roleSnapshot || {}) as Record<string, any>;
+    const billingRate =
+      Number(
+        assignment?.assignedHourlyRate ??
+          snapshot.assignedHourlyRate ??
+          snapshot.billingRate ??
+          assignment?.role?.billingRate ??
+          0
+      ) || 0;
+
+    return { billingRate };
   }
 
   private static async calculateAmounts(
     jobId: number,
     employeeProfileId: number,
     hours: number,
-    billable: boolean
+    billable: boolean,
+    rates?: { billingRate: number }
   ) {
-    const hourlyRate = await TimeEntryService.resolveHourlyRate(jobId, employeeProfileId);
+    const resolvedRates =
+      rates ?? (await TimeEntryService.resolveRates(jobId, employeeProfileId));
+    const { billingRate } = resolvedRates;
     const totalHours = Number(hours || 0);
-    const billableAmount = billable ? totalHours * hourlyRate : 0;
-    const costAmount = totalHours * hourlyRate;
+    const billableAmount = billable ? totalHours * billingRate : 0;
+    const costAmount = totalHours * billingRate;
     const profitLoss = billableAmount - costAmount;
 
     return {
-      hourlyRate,
+      hourlyRate: billingRate,
+      costRate: billingRate,
       billableAmount,
       costAmount,
       profitLoss,
@@ -66,6 +107,9 @@ export class TimeEntryService {
         requiresAllocation: false,
         employeeAllocatedHours: 0,
         jobAllocatedHours: 0,
+        capEnforced: false,
+        allowOverage: false,
+        maxOveragePercent: 0,
       };
     }
 
@@ -81,6 +125,9 @@ export class TimeEntryService {
       requiresAllocation: true,
       employeeAllocatedHours,
       jobAllocatedHours,
+      capEnforced: jobCosting.budgetCap?.capEnforced ?? true,
+      allowOverage: jobCosting.budgetCap?.allowOverage ?? false,
+      maxOveragePercent: Number(jobCosting.budgetCap?.maxOveragePercent ?? 0),
     };
   }
 
@@ -170,8 +217,8 @@ export class TimeEntryService {
     const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
     const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
 
-    const baseJobHours = Number(jobAllocatedHours || job.budgetHours || 0);
-    const allowedJobHours = baseJobHours + approvedExtraJobHours;
+    const baseJobHours = jobAllocatedHours || TimeEntryService.resolveJobBudgetHours(job);
+    const allowedJobHours = Number(baseJobHours || 0) + approvedExtraJobHours;
     const allowedEmployeeHours = employeeAllocatedHours + approvedExtraEmployeeHours;
 
     const remainingJobHours = Math.max(0, allowedJobHours - loggedJobHours);
@@ -179,10 +226,10 @@ export class TimeEntryService {
 
     return {
       jobId,
-      jobBudgetHours: Number(job.budgetHours || 0),
+      jobBudgetHours: Number(baseJobHours || 0),
       requiresAllocation,
       employeeAllocatedHours,
-      jobAllocatedHours: baseJobHours,
+      jobAllocatedHours: Number(baseJobHours || 0),
       approvedExtraJobHours,
       approvedExtraEmployeeHours,
       loggedJobHours,
@@ -197,7 +244,7 @@ export class TimeEntryService {
    * List time entries with access control
    */
   static async listTimeEntries(options: ListOptions, auth: AuthContext) {
-    const { page, pageSize, status, jobId, dateFrom, dateTo } = options;
+    const { page, pageSize, status, jobId, dateFrom, dateTo, billableOnly } = options;
     const skip = (page - 1) * pageSize;
 
     // Build where clause based on user role
@@ -211,6 +258,10 @@ export class TimeEntryService {
     // Filter by status if specified
     if (status) {
       where.status = status;
+    }
+
+    if (typeof billableOnly === 'boolean') {
+      where.billable = billableOnly;
     }
 
     // Filter by date range if specified
@@ -286,6 +337,10 @@ export class TimeEntryService {
    */
   static async createTimeEntry(input: any, auth: AuthContext) {
     const { jobId, taskId, dateWorked, hours, description } = input;
+    const entryHours = Number(hours);
+    if (Number.isNaN(entryHours) || entryHours <= 0) {
+      throw { statusCode: 400, message: 'Invalid hours value' };
+    }
 
     // ✅ VERIFY JOB EXISTS
     const job = await prisma.job.findUnique({
@@ -310,10 +365,19 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY USER IS ASSIGNED TO THIS JOB (unless admin)
-    if (auth.roleName !== 'admin' && job.staffing.length === 0) {
+    const roleName = auth.roleName || '';
+    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    if (!isAdmin && job.staffing.length === 0) {
       throw {
         statusCode: 403,
         message: 'You are not assigned to this job',
+      };
+    }
+
+    if (!job.jobCosting && !isAdmin) {
+      throw {
+        statusCode: 400,
+        message: 'Job costing must be completed before logging time',
       };
     }
 
@@ -327,67 +391,6 @@ export class TimeEntryService {
       throw {
         statusCode: 400,
         message: 'No time allocation assigned for this job',
-      };
-    }
-
-    const approvedExtra = await prisma.timeEntryApprovalRequest.aggregate({
-      where: {
-        jobId: Number(jobId),
-        status: 'approved',
-      },
-      _sum: { additionalHoursRequested: true },
-    });
-
-    const approvedExtraEmployee = await prisma.timeEntryApprovalRequest.aggregate({
-      where: {
-        jobId: Number(jobId),
-        employeeProfileId: auth.profileId,
-        status: 'approved',
-      },
-      _sum: { additionalHoursRequested: true },
-    });
-
-    const approvedExtraJobHours = Number(approvedExtra._sum.additionalHoursRequested || 0);
-    const approvedExtraEmployeeHours = Number(
-      approvedExtraEmployee._sum.additionalHoursRequested || 0
-    );
-
-    const allowedJobHours =
-      Number(allocationSummary?.jobAllocatedHours ?? job.budgetHours ?? 0) + approvedExtraJobHours;
-    const allowedEmployeeHours =
-      Number(allocationSummary?.employeeAllocatedHours ?? 0) + approvedExtraEmployeeHours;
-
-    const loggedJobHoursResult = await prisma.timeEntry.aggregate({
-      where: {
-        jobId: Number(jobId),
-        status: { in: ['pending', 'submitted', 'approved'] },
-      },
-      _sum: { hours: true },
-    });
-
-    const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
-      where: {
-        jobId: Number(jobId),
-        employeeProfileId: auth.profileId,
-        status: { in: ['pending', 'submitted', 'approved'] },
-      },
-      _sum: { hours: true },
-    });
-
-    const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
-    const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
-
-    if (allowedEmployeeHours > 0 && loggedEmployeeHours + hours > allowedEmployeeHours) {
-      throw {
-        statusCode: 400,
-        message: `Time entry exceeds your allocation. Available: ${(allowedEmployeeHours - loggedEmployeeHours).toFixed(2)} hours`,
-      };
-    }
-
-    if (allowedJobHours > 0 && loggedJobHours + hours > allowedJobHours) {
-      throw {
-        statusCode: 400,
-        message: `Time entry exceeds job allocation. Available: ${(allowedJobHours - loggedJobHours).toFixed(2)} hours`,
       };
     }
 
@@ -405,40 +408,275 @@ export class TimeEntryService {
       }
     }
 
-    const billable = input.billable ?? true;
-    const amounts = await TimeEntryService.calculateAmounts(
-      Number(jobId),
-      auth.profileId,
-      Number(hours),
-      billable
+    const requestedBillable = input.billable ?? true;
+    const rates = await TimeEntryService.resolveRates(Number(jobId), auth.profileId);
+
+    const jobFee = Number(
+      job.jobCosting?.jobFee ||
+        (job.billingType === 'fixed_fee' ? job.fixedFeeAmount : 0) ||
+        0
     );
 
-    // ✅ CREATE TIME ENTRY
-    const timeEntry = await prisma.timeEntry.create({
-      data: {
-        jobId: Number(jobId),
-        employeeProfileId: auth.profileId,
-        hours,
-        description,
-        dateWorked: new Date(dateWorked),
-        taskId: taskId ? Number(taskId) : null,
-        billable,
-        billableAmount: amounts.billableAmount,
-        costAmount: amounts.costAmount,
-        profitLoss: amounts.profitLoss,
-        status: 'pending',
-      },
-      include: {
-        job: {
-          select: { id: true, jobName: true },
-        },
-        employee: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-      },
-    });
+    const capEnforced = allocationSummary?.capEnforced ?? true;
+    const allowOverage = allocationSummary?.allowOverage ?? false;
+    const maxOveragePercent = Number(allocationSummary?.maxOveragePercent ?? 0);
 
-    return timeEntry;
+    return TimeEntryService.runSerializable(async (tx) => {
+      const [approvedExtra, approvedExtraEmployee] = await Promise.all([
+        tx.timeEntryApprovalRequest.aggregate({
+          where: { jobId: Number(jobId), status: 'approved' },
+          _sum: { additionalHoursRequested: true },
+        }),
+        tx.timeEntryApprovalRequest.aggregate({
+          where: {
+            jobId: Number(jobId),
+            employeeProfileId: auth.profileId,
+            status: 'approved',
+          },
+          _sum: { additionalHoursRequested: true },
+        }),
+      ]);
+
+      const approvedExtraJobHoursRaw = Number(approvedExtra._sum.additionalHoursRequested || 0);
+      const approvedExtraEmployeeHoursRaw = Number(
+        approvedExtraEmployee._sum.additionalHoursRequested || 0
+      );
+
+      const baseJobAllocation = Number(
+        allocationSummary?.jobAllocatedHours ?? TimeEntryService.resolveJobBudgetHours(job) ?? 0
+      );
+      const baseEmployeeAllocation = Number(allocationSummary?.employeeAllocatedHours ?? 0);
+
+      const maxExtraJobHours = allowOverage ? baseJobAllocation * maxOveragePercent : 0;
+      const maxExtraEmployeeHours = allowOverage ? baseEmployeeAllocation * maxOveragePercent : 0;
+
+      const approvedExtraJobHours = allowOverage
+        ? Math.min(approvedExtraJobHoursRaw, maxExtraJobHours)
+        : 0;
+      const approvedExtraEmployeeHours = allowOverage
+        ? Math.min(approvedExtraEmployeeHoursRaw, maxExtraEmployeeHours)
+        : 0;
+
+      const effectiveJobAllocation = capEnforced
+        ? baseJobAllocation + approvedExtraJobHours
+        : Number.POSITIVE_INFINITY;
+      const effectiveEmployeeAllocation = capEnforced
+        ? baseEmployeeAllocation + approvedExtraEmployeeHours
+        : Number.POSITIVE_INFINITY;
+
+      const [loggedJobHoursResult, loggedEmployeeHoursResult] = await Promise.all([
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: Number(jobId),
+            status: { in: ['pending', 'submitted', 'approved'] },
+          },
+          _sum: { hours: true },
+        }),
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: Number(jobId),
+            employeeProfileId: auth.profileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+          },
+          _sum: { hours: true },
+        }),
+      ]);
+
+      const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
+      const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+      if (
+        Number.isFinite(effectiveEmployeeAllocation) &&
+        effectiveEmployeeAllocation > 0 &&
+        loggedEmployeeHours + entryHours > effectiveEmployeeAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Time entry exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
+        };
+      }
+
+      if (
+        Number.isFinite(effectiveJobAllocation) &&
+        effectiveJobAllocation > 0 &&
+        loggedJobHours + entryHours > effectiveJobAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Time entry exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
+        };
+      }
+
+      const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
+        ? Math.max(0, effectiveEmployeeAllocation - loggedEmployeeHours)
+        : Number.POSITIVE_INFINITY;
+      const remainingJobAllocation = Number.isFinite(effectiveJobAllocation)
+        ? Math.max(0, effectiveJobAllocation - loggedJobHours)
+        : Number.POSITIVE_INFINITY;
+
+      let remainingFeeCapHours = Number.POSITIVE_INFINITY;
+      if (jobFee > 0 && rates.billingRate > 0) {
+        const totalBillableAgg = await tx.timeEntry.aggregate({
+          where: {
+            jobId: Number(jobId),
+            status: { in: ['pending', 'submitted', 'approved'] },
+            billable: true,
+          },
+          _sum: { billableAmount: true },
+        });
+        const currentBillable = Number(totalBillableAgg._sum.billableAmount || 0);
+        remainingFeeCapHours = Math.max(
+          0,
+          (jobFee - currentBillable) / rates.billingRate
+        );
+      }
+
+      const remainingBillableHours = Math.max(
+        0,
+        Math.min(remainingEmployeeAllocation, remainingJobAllocation, remainingFeeCapHours)
+      );
+
+      const shouldSplit =
+        requestedBillable &&
+        remainingBillableHours > 0 &&
+        entryHours > remainingBillableHours;
+
+      const fullyNonBillable =
+        !requestedBillable || remainingBillableHours <= 0 || rates.billingRate <= 0;
+
+      if (shouldSplit) {
+        const billableHours = Number(remainingBillableHours.toFixed(2));
+        const nonBillableHours = Number((entryHours - billableHours).toFixed(2));
+
+        if (billableHours <= 0 || nonBillableHours <= 0) {
+          const finalBillable = requestedBillable && billableHours > 0;
+          const amounts = await TimeEntryService.calculateAmounts(
+            Number(jobId),
+            auth.profileId,
+            entryHours,
+            finalBillable,
+            rates
+          );
+
+          const timeEntry = await tx.timeEntry.create({
+            data: {
+              jobId: Number(jobId),
+              employeeProfileId: auth.profileId,
+              hours: entryHours,
+              description,
+              dateWorked: new Date(dateWorked),
+              taskId: taskId ? Number(taskId) : null,
+              billable: finalBillable,
+              billableAmount: amounts.billableAmount,
+              costAmount: amounts.costAmount,
+              profitLoss: amounts.profitLoss,
+              status: 'pending',
+            },
+            include: {
+              job: { select: { id: true, jobName: true } },
+              employee: { select: { id: true, firstName: true, lastName: true } },
+            },
+          });
+
+          if (!finalBillable && requestedBillable) {
+            return { ...timeEntry, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+          }
+
+          return timeEntry;
+        }
+
+        const [billableAmounts, nonBillableAmounts] = await Promise.all([
+          TimeEntryService.calculateAmounts(
+            Number(jobId),
+            auth.profileId,
+            billableHours,
+            true,
+            rates
+          ),
+          TimeEntryService.calculateAmounts(
+            Number(jobId),
+            auth.profileId,
+            nonBillableHours,
+            false,
+            rates
+          ),
+        ]);
+
+        const [billableEntry, nonBillableEntry] = await Promise.all([
+          tx.timeEntry.create({
+            data: {
+              jobId: Number(jobId),
+              employeeProfileId: auth.profileId,
+              hours: billableHours,
+              description,
+              dateWorked: new Date(dateWorked),
+              taskId: taskId ? Number(taskId) : null,
+              billable: true,
+              billableAmount: billableAmounts.billableAmount,
+              costAmount: billableAmounts.costAmount,
+              profitLoss: billableAmounts.profitLoss,
+              status: 'pending',
+            },
+            include: {
+              job: { select: { id: true, jobName: true } },
+              employee: { select: { id: true, firstName: true, lastName: true } },
+            },
+          }),
+          tx.timeEntry.create({
+            data: {
+              jobId: Number(jobId),
+              employeeProfileId: auth.profileId,
+              hours: nonBillableHours,
+              description,
+              dateWorked: new Date(dateWorked),
+              taskId: taskId ? Number(taskId) : null,
+              billable: false,
+              billableAmount: nonBillableAmounts.billableAmount,
+              costAmount: nonBillableAmounts.costAmount,
+              profitLoss: nonBillableAmounts.profitLoss,
+              status: 'pending',
+            },
+          }),
+        ]);
+
+        return { ...billableEntry, splitEntries: [nonBillableEntry] };
+      }
+
+      const finalBillable = requestedBillable && !fullyNonBillable;
+      const amounts = await TimeEntryService.calculateAmounts(
+        Number(jobId),
+        auth.profileId,
+        entryHours,
+        finalBillable,
+        rates
+      );
+
+      const timeEntry = await tx.timeEntry.create({
+        data: {
+          jobId: Number(jobId),
+          employeeProfileId: auth.profileId,
+          hours: entryHours,
+          description,
+          dateWorked: new Date(dateWorked),
+          taskId: taskId ? Number(taskId) : null,
+          billable: finalBillable,
+          billableAmount: amounts.billableAmount,
+          costAmount: amounts.costAmount,
+          profitLoss: amounts.profitLoss,
+          status: 'pending',
+        },
+        include: {
+          job: { select: { id: true, jobName: true } },
+          employee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+
+      if (fullyNonBillable && requestedBillable) {
+        return { ...timeEntry, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+      }
+
+      return timeEntry;
+    });
   }
 
   /**
@@ -544,6 +782,15 @@ export class TimeEntryService {
       };
     }
 
+    const roleName = auth.roleName || '';
+    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    if (!timeEntry.job?.jobCosting && !isAdmin) {
+      throw {
+        statusCode: 400,
+        message: 'Job costing must be completed before updating time',
+      };
+    }
+
     // ✅ VERIFY STATUS - can only update draft entries
     if (timeEntry.status !== 'pending') {
       throw {
@@ -552,62 +799,292 @@ export class TimeEntryService {
       };
     }
 
-    // ✅ CHECK BUDGET IF HOURS CHANGED
-    if (hours && hours !== timeEntry.hours) {
-      const budgetHours = Number(timeEntry.job.jobCosting?.budgetCap?.totalAllocatedHours ?? timeEntry.job.budgetHours ?? 0);
-      if (budgetHours > 0) {
-        const existingHours = await prisma.timeEntry.aggregate({
+    const updatedHours = typeof hours === 'number' ? hours : Number(timeEntry.hours || 0);
+    if (Number.isNaN(updatedHours) || updatedHours <= 0) {
+      throw { statusCode: 400, message: 'Invalid hours value' };
+    }
+
+    const allocationSummary = await TimeEntryService.getAllocationSummary(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId
+    );
+
+    if (allocationSummary?.requiresAllocation && allocationSummary.employeeAllocatedHours <= 0) {
+      throw { statusCode: 400, message: 'No time allocation assigned for this job' };
+    }
+
+    const rates = await TimeEntryService.resolveRates(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId
+    );
+
+    const jobFee = Number(
+      timeEntry.job.jobCosting?.jobFee ||
+        (timeEntry.job.billingType === 'fixed_fee' ? timeEntry.job.fixedFeeAmount : 0) ||
+        0
+    );
+    const capEnforced = allocationSummary?.capEnforced ?? true;
+    const allowOverage = allocationSummary?.allowOverage ?? false;
+    const maxOveragePercent = Number(allocationSummary?.maxOveragePercent ?? 0);
+
+    const requestedBillable =
+      typeof billable === 'boolean' ? billable : Boolean(timeEntry.billable);
+
+    return TimeEntryService.runSerializable(async (tx) => {
+      const [approvedExtraJob, approvedExtraEmployee] = await Promise.all([
+        tx.timeEntryApprovalRequest.aggregate({
+          where: { jobId: timeEntry.jobId, status: 'approved' },
+          _sum: { additionalHoursRequested: true },
+        }),
+        tx.timeEntryApprovalRequest.aggregate({
           where: {
             jobId: timeEntry.jobId,
-            status: { in: ['approved', 'submitted'] },
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: 'approved',
+          },
+          _sum: { additionalHoursRequested: true },
+        }),
+      ]);
+
+      const approvedExtraJobHoursRaw = Number(
+        approvedExtraJob._sum.additionalHoursRequested || 0
+      );
+      const approvedExtraEmployeeHoursRaw = Number(
+        approvedExtraEmployee._sum.additionalHoursRequested || 0
+      );
+
+      const baseJobAllocation = Number(
+        allocationSummary?.jobAllocatedHours ??
+          TimeEntryService.resolveJobBudgetHours(timeEntry.job) ??
+          0
+      );
+      const baseEmployeeAllocation = Number(allocationSummary?.employeeAllocatedHours ?? 0);
+
+      const maxExtraJobHours = allowOverage ? baseJobAllocation * maxOveragePercent : 0;
+      const maxExtraEmployeeHours = allowOverage ? baseEmployeeAllocation * maxOveragePercent : 0;
+
+      const approvedExtraJobHours = allowOverage
+        ? Math.min(approvedExtraJobHoursRaw, maxExtraJobHours)
+        : 0;
+      const approvedExtraEmployeeHours = allowOverage
+        ? Math.min(approvedExtraEmployeeHoursRaw, maxExtraEmployeeHours)
+        : 0;
+
+      const effectiveJobAllocation = capEnforced
+        ? baseJobAllocation + approvedExtraJobHours
+        : Number.POSITIVE_INFINITY;
+      const effectiveEmployeeAllocation = capEnforced
+        ? baseEmployeeAllocation + approvedExtraEmployeeHours
+        : Number.POSITIVE_INFINITY;
+
+      const [loggedJobHoursResult, loggedEmployeeHoursResult] = await Promise.all([
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            status: { in: ['pending', 'submitted', 'approved'] },
             id: { not: timeEntryId },
           },
           _sum: { hours: true },
+        }),
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        }),
+      ]);
+
+      const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
+      const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+      if (
+        Number.isFinite(effectiveEmployeeAllocation) &&
+        effectiveEmployeeAllocation > 0 &&
+        loggedEmployeeHours + updatedHours > effectiveEmployeeAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Time entry exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
+        };
+      }
+
+      if (
+        Number.isFinite(effectiveJobAllocation) &&
+        effectiveJobAllocation > 0 &&
+        loggedJobHours + updatedHours > effectiveJobAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Time entry exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
+        };
+      }
+
+      const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
+        ? Math.max(0, effectiveEmployeeAllocation - loggedEmployeeHours)
+        : Number.POSITIVE_INFINITY;
+      const remainingJobAllocation = Number.isFinite(effectiveJobAllocation)
+        ? Math.max(0, effectiveJobAllocation - loggedJobHours)
+        : Number.POSITIVE_INFINITY;
+
+      let remainingFeeCapHours = Number.POSITIVE_INFINITY;
+      if (jobFee > 0 && rates.billingRate > 0) {
+        const totalBillableAgg = await tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            billable: true,
+            id: { not: timeEntryId },
+          },
+          _sum: { billableAmount: true },
         });
 
-        const totalHours = (existingHours._sum.hours || 0) + hours;
-
-        if (totalHours > budgetHours) {
-          throw {
-            statusCode: 400,
-            message: `Updated hours would exceed job budget`,
-          };
-        }
+        const currentBillable = Number(totalBillableAgg._sum.billableAmount || 0);
+        remainingFeeCapHours = Math.max(
+          0,
+          (jobFee - currentBillable) / rates.billingRate
+        );
       }
-    }
 
-    const updatedHours = typeof hours === 'number' ? hours : Number(timeEntry.hours || 0);
-    const updatedBillable =
-      typeof billable === 'boolean' ? billable : Boolean(timeEntry.billable);
-    const amounts = await TimeEntryService.calculateAmounts(
-      timeEntry.jobId,
-      timeEntry.employeeProfileId,
-      updatedHours,
-      updatedBillable
-    );
+      const remainingBillableHours = Math.max(
+        0,
+        Math.min(remainingEmployeeAllocation, remainingJobAllocation, remainingFeeCapHours)
+      );
 
-    const updated = await prisma.timeEntry.update({
-      where: { id: timeEntryId },
-      data: {
-        hours: hours ?? timeEntry.hours,
-        description: description || timeEntry.description,
-        billable: updatedBillable,
-        billableAmount: amounts.billableAmount,
-        costAmount: amounts.costAmount,
-        profitLoss: amounts.profitLoss,
-        updatedAt: new Date(),
-      },
-      include: {
-        job: {
-          select: { id: true, jobName: true },
+      const shouldSplit =
+        requestedBillable &&
+        remainingBillableHours > 0 &&
+        updatedHours > remainingBillableHours;
+
+      const fullyNonBillable =
+        !requestedBillable || remainingBillableHours <= 0 || rates.billingRate <= 0;
+
+      if (shouldSplit) {
+        const billableHours = Number(remainingBillableHours.toFixed(2));
+        const nonBillableHours = Number((updatedHours - billableHours).toFixed(2));
+
+        if (billableHours <= 0 || nonBillableHours <= 0) {
+          const finalBillable = requestedBillable && billableHours > 0;
+          const amounts = await TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            updatedHours,
+            finalBillable,
+            rates
+          );
+
+          const updated = await tx.timeEntry.update({
+            where: { id: timeEntryId },
+            data: {
+              hours: updatedHours,
+              description: description || timeEntry.description,
+              billable: finalBillable,
+              billableAmount: amounts.billableAmount,
+              costAmount: amounts.costAmount,
+              profitLoss: amounts.profitLoss,
+              updatedAt: new Date(),
+            },
+            include: {
+              job: { select: { id: true, jobName: true } },
+              employee: { select: { id: true, firstName: true, lastName: true } },
+            },
+          });
+
+          if (!finalBillable && requestedBillable) {
+            return { ...updated, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+          }
+
+          return updated;
+        }
+
+        const [billableAmounts, nonBillableAmounts] = await Promise.all([
+          TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            billableHours,
+            true,
+            rates
+          ),
+          TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            nonBillableHours,
+            false,
+            rates
+          ),
+        ]);
+
+        const [updated, nonBillableEntry] = await Promise.all([
+          tx.timeEntry.update({
+            where: { id: timeEntryId },
+            data: {
+              hours: billableHours,
+              description: description || timeEntry.description,
+              billable: true,
+              billableAmount: billableAmounts.billableAmount,
+              costAmount: billableAmounts.costAmount,
+              profitLoss: billableAmounts.profitLoss,
+              updatedAt: new Date(),
+            },
+            include: {
+              job: { select: { id: true, jobName: true } },
+              employee: { select: { id: true, firstName: true, lastName: true } },
+            },
+          }),
+          tx.timeEntry.create({
+            data: {
+              jobId: timeEntry.jobId,
+              employeeProfileId: timeEntry.employeeProfileId,
+              hours: nonBillableHours,
+              description: description || timeEntry.description,
+              dateWorked: timeEntry.dateWorked,
+              taskId: timeEntry.taskId,
+              billable: false,
+              billableAmount: nonBillableAmounts.billableAmount,
+              costAmount: nonBillableAmounts.costAmount,
+              profitLoss: nonBillableAmounts.profitLoss,
+              status: 'pending',
+            },
+          }),
+        ]);
+
+        return { ...updated, splitEntries: [nonBillableEntry] };
+      }
+
+      const finalBillable = requestedBillable && !fullyNonBillable;
+      const amounts = await TimeEntryService.calculateAmounts(
+        timeEntry.jobId,
+        timeEntry.employeeProfileId,
+        updatedHours,
+        finalBillable,
+        rates
+      );
+
+      const updated = await tx.timeEntry.update({
+        where: { id: timeEntryId },
+        data: {
+          hours: updatedHours,
+          description: description || timeEntry.description,
+          billable: finalBillable,
+          billableAmount: amounts.billableAmount,
+          costAmount: amounts.costAmount,
+          profitLoss: amounts.profitLoss,
+          updatedAt: new Date(),
         },
-        employee: {
-          select: { id: true, firstName: true, lastName: true },
+        include: {
+          job: { select: { id: true, jobName: true } },
+          employee: { select: { id: true, firstName: true, lastName: true } },
         },
-      },
+      });
+
+      if (fullyNonBillable && requestedBillable) {
+        return { ...updated, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+      }
+
+      return updated;
     });
-
-    return updated;
   }
 
   /**
@@ -1035,57 +1512,301 @@ export class TimeEntryService {
     const elapsedHours = elapsedMs / (1000 * 60 * 60);
     const totalHours = Number((Number(timeEntry.hours) + elapsedHours).toFixed(2));
 
-    // ✅ VERIFY BUDGET AFTER ADDING TIME
     const job = await prisma.job.findUnique({
       where: { id: timeEntry.jobId },
       include: { jobCosting: { include: { budgetCap: true } } },
     });
 
-    const budgetHours = Number(job?.jobCosting?.budgetCap?.totalAllocatedHours ?? job?.budgetHours ?? 0);
-    if (budgetHours > 0) {
-      const existingHours = await prisma.timeEntry.aggregate({
-        where: {
-          jobId: timeEntry.jobId,
-          status: { in: ['approved', 'submitted'] },
-          id: { not: timeEntryId },
-        },
-        _sum: { hours: true },
-      });
-
-      const existingLoggedHours = Number(existingHours._sum.hours || 0);
-      if (totalHours + existingLoggedHours > budgetHours) {
-        throw {
-          statusCode: 400,
-          message: `Adding timer duration would exceed job budget`,
-        };
-      }
+    const roleName = auth.roleName || '';
+    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    if (!job?.jobCosting && !isAdmin) {
+      throw {
+        statusCode: 400,
+        message: 'Job costing must be completed before logging time',
+      };
     }
 
-    const amounts = await TimeEntryService.calculateAmounts(
+    const allocationSummary = await TimeEntryService.getAllocationSummary(
       timeEntry.jobId,
-      timeEntry.employeeProfileId,
-      totalHours,
-      Boolean(timeEntry.billable)
+      timeEntry.employeeProfileId
     );
 
-    const updated = await prisma.timeEntry.update({
-      where: { id: timeEntryId },
-      data: {
-        startedAt: null,
-        hours: totalHours,
-        billableAmount: amounts.billableAmount,
-        costAmount: amounts.costAmount,
-        profitLoss: amounts.profitLoss,
-        updatedAt: new Date(),
-      },
-      include: {
-        job: {
-          select: { id: true, jobName: true },
-        },
-      },
-    });
+    if (allocationSummary?.requiresAllocation && allocationSummary.employeeAllocatedHours <= 0) {
+      throw { statusCode: 400, message: 'No time allocation assigned for this job' };
+    }
 
-    return updated;
+    const rates = await TimeEntryService.resolveRates(
+      timeEntry.jobId,
+      timeEntry.employeeProfileId
+    );
+
+    const jobFee = Number(
+      job?.jobCosting?.jobFee ||
+        (job?.billingType === 'fixed_fee' ? job?.fixedFeeAmount : 0) ||
+        0
+    );
+
+    const capEnforced = allocationSummary?.capEnforced ?? true;
+    const allowOverage = allocationSummary?.allowOverage ?? false;
+    const maxOveragePercent = Number(allocationSummary?.maxOveragePercent ?? 0);
+    const requestedBillable = Boolean(timeEntry.billable);
+
+    return TimeEntryService.runSerializable(async (tx) => {
+      const [approvedExtraJob, approvedExtraEmployee] = await Promise.all([
+        tx.timeEntryApprovalRequest.aggregate({
+          where: { jobId: timeEntry.jobId, status: 'approved' },
+          _sum: { additionalHoursRequested: true },
+        }),
+        tx.timeEntryApprovalRequest.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: 'approved',
+          },
+          _sum: { additionalHoursRequested: true },
+        }),
+      ]);
+
+      const approvedExtraJobHoursRaw = Number(
+        approvedExtraJob._sum.additionalHoursRequested || 0
+      );
+      const approvedExtraEmployeeHoursRaw = Number(
+        approvedExtraEmployee._sum.additionalHoursRequested || 0
+      );
+
+      const baseJobAllocation = Number(
+        allocationSummary?.jobAllocatedHours ?? TimeEntryService.resolveJobBudgetHours(job) ?? 0
+      );
+      const baseEmployeeAllocation = Number(allocationSummary?.employeeAllocatedHours ?? 0);
+
+      const maxExtraJobHours = allowOverage ? baseJobAllocation * maxOveragePercent : 0;
+      const maxExtraEmployeeHours = allowOverage ? baseEmployeeAllocation * maxOveragePercent : 0;
+
+      const approvedExtraJobHours = allowOverage
+        ? Math.min(approvedExtraJobHoursRaw, maxExtraJobHours)
+        : 0;
+      const approvedExtraEmployeeHours = allowOverage
+        ? Math.min(approvedExtraEmployeeHoursRaw, maxExtraEmployeeHours)
+        : 0;
+
+      const effectiveJobAllocation = capEnforced
+        ? baseJobAllocation + approvedExtraJobHours
+        : Number.POSITIVE_INFINITY;
+      const effectiveEmployeeAllocation = capEnforced
+        ? baseEmployeeAllocation + approvedExtraEmployeeHours
+        : Number.POSITIVE_INFINITY;
+
+      const [loggedJobHoursResult, loggedEmployeeHoursResult] = await Promise.all([
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        }),
+        tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        }),
+      ]);
+
+      const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
+      const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+
+      if (
+        Number.isFinite(effectiveEmployeeAllocation) &&
+        effectiveEmployeeAllocation > 0 &&
+        loggedEmployeeHours + totalHours > effectiveEmployeeAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Adding timer duration exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
+        };
+      }
+
+      if (
+        Number.isFinite(effectiveJobAllocation) &&
+        effectiveJobAllocation > 0 &&
+        loggedJobHours + totalHours > effectiveJobAllocation
+      ) {
+        throw {
+          statusCode: 400,
+          message: `Adding timer duration exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
+        };
+      }
+
+      const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
+        ? Math.max(0, effectiveEmployeeAllocation - loggedEmployeeHours)
+        : Number.POSITIVE_INFINITY;
+      const remainingJobAllocation = Number.isFinite(effectiveJobAllocation)
+        ? Math.max(0, effectiveJobAllocation - loggedJobHours)
+        : Number.POSITIVE_INFINITY;
+
+      let remainingFeeCapHours = Number.POSITIVE_INFINITY;
+      if (jobFee > 0 && rates.billingRate > 0) {
+        const totalBillableAgg = await tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            billable: true,
+            id: { not: timeEntryId },
+          },
+          _sum: { billableAmount: true },
+        });
+
+        const currentBillable = Number(totalBillableAgg._sum.billableAmount || 0);
+        remainingFeeCapHours = Math.max(
+          0,
+          (jobFee - currentBillable) / rates.billingRate
+        );
+      }
+
+      const remainingBillableHours = Math.max(
+        0,
+        Math.min(remainingEmployeeAllocation, remainingJobAllocation, remainingFeeCapHours)
+      );
+
+      const shouldSplit =
+        requestedBillable &&
+        remainingBillableHours > 0 &&
+        totalHours > remainingBillableHours;
+
+      const fullyNonBillable =
+        !requestedBillable || remainingBillableHours <= 0 || rates.billingRate <= 0;
+
+      if (shouldSplit) {
+        const billableHours = Number(remainingBillableHours.toFixed(2));
+        const nonBillableHours = Number((totalHours - billableHours).toFixed(2));
+
+        if (billableHours <= 0 || nonBillableHours <= 0) {
+          const finalBillable = requestedBillable && billableHours > 0;
+          const amounts = await TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            totalHours,
+            finalBillable,
+            rates
+          );
+
+          const updated = await tx.timeEntry.update({
+            where: { id: timeEntryId },
+            data: {
+              startedAt: null,
+              hours: totalHours,
+              billable: finalBillable,
+              billableAmount: amounts.billableAmount,
+              costAmount: amounts.costAmount,
+              profitLoss: amounts.profitLoss,
+              updatedAt: new Date(),
+            },
+            include: {
+              job: {
+                select: { id: true, jobName: true },
+              },
+            },
+          });
+
+          if (!finalBillable && requestedBillable) {
+            return { ...updated, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+          }
+
+          return updated;
+        }
+
+        const [billableAmounts, nonBillableAmounts] = await Promise.all([
+          TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            billableHours,
+            true,
+            rates
+          ),
+          TimeEntryService.calculateAmounts(
+            timeEntry.jobId,
+            timeEntry.employeeProfileId,
+            nonBillableHours,
+            false,
+            rates
+          ),
+        ]);
+
+        const [updated, nonBillableEntry] = await Promise.all([
+          tx.timeEntry.update({
+            where: { id: timeEntryId },
+            data: {
+              startedAt: null,
+              hours: billableHours,
+              billable: true,
+              billableAmount: billableAmounts.billableAmount,
+              costAmount: billableAmounts.costAmount,
+              profitLoss: billableAmounts.profitLoss,
+              updatedAt: new Date(),
+            },
+            include: {
+              job: {
+                select: { id: true, jobName: true },
+              },
+            },
+          }),
+          tx.timeEntry.create({
+            data: {
+              jobId: timeEntry.jobId,
+              employeeProfileId: timeEntry.employeeProfileId,
+              hours: nonBillableHours,
+              description: timeEntry.description,
+              dateWorked: timeEntry.dateWorked,
+              taskId: timeEntry.taskId,
+              billable: false,
+              billableAmount: nonBillableAmounts.billableAmount,
+              costAmount: nonBillableAmounts.costAmount,
+              profitLoss: nonBillableAmounts.profitLoss,
+              status: timeEntry.status,
+            },
+          }),
+        ]);
+
+        return { ...updated, splitEntries: [nonBillableEntry] };
+      }
+
+      const finalBillable = requestedBillable && !fullyNonBillable;
+      const amounts = await TimeEntryService.calculateAmounts(
+        timeEntry.jobId,
+        timeEntry.employeeProfileId,
+        totalHours,
+        finalBillable,
+        rates
+      );
+
+      const updated = await tx.timeEntry.update({
+        where: { id: timeEntryId },
+        data: {
+          startedAt: null,
+          hours: totalHours,
+          billable: finalBillable,
+          billableAmount: amounts.billableAmount,
+          costAmount: amounts.costAmount,
+          profitLoss: amounts.profitLoss,
+          updatedAt: new Date(),
+        },
+        include: {
+          job: {
+            select: { id: true, jobName: true },
+          },
+        },
+      });
+
+      if (fullyNonBillable && requestedBillable) {
+        return { ...updated, forcedNonBillableReason: 'allocation_or_fee_exceeded' };
+      }
+
+      return updated;
+    });
   }
 
   /**
@@ -1208,7 +1929,12 @@ export class TimeEntryService {
    * Request additional hours for a job
    */
   static async createApprovalRequest(
-    input: { jobId: number; additionalHours: number; justification: string; requestType?: string },
+    input: {
+      jobId: number;
+      additionalHours: number;
+      justification: string;
+      requestType?: 'additional_hours' | 'over_budget';
+    },
     auth: AuthContext
   ) {
     const job = await prisma.job.findUnique({
@@ -1227,8 +1953,15 @@ export class TimeEntryService {
       throw { statusCode: 404, message: 'Job not found' };
     }
 
-    if (auth.roleName !== 'admin' && job.staffing.length === 0) {
+    const roleName = auth.roleName || '';
+    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+
+    if (!isAdmin && job.staffing.length === 0) {
       throw { statusCode: 403, message: 'You are not assigned to this job' };
+    }
+
+    if (!job.jobCosting && !isAdmin) {
+      throw { statusCode: 400, message: 'Job costing must be completed before requesting hours' };
     }
 
     const allocationSummary = await TimeEntryService.getAllocationSummary(
@@ -1240,6 +1973,10 @@ export class TimeEntryService {
 
     if (allocationSummary?.requiresAllocation && currentAllocatedHours <= 0) {
       throw { statusCode: 400, message: 'No time allocation assigned for this job' };
+    }
+
+    if (allocationSummary?.capEnforced && allocationSummary?.allowOverage === false) {
+      throw { statusCode: 409, message: 'Overage is not allowed for this job' };
     }
 
     const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
@@ -1255,6 +1992,7 @@ export class TimeEntryService {
 
     // Allow requests even if some allocated hours remain (manager can still approve/deny).
 
+      const requestType = input.requestType || 'additional_hours';
       const request = await prisma.timeEntryApprovalRequest.create({
         data: {
           jobId: input.jobId,
@@ -1263,7 +2001,7 @@ export class TimeEntryService {
           currentLoggedHours,
           additionalHoursRequested: input.additionalHours,
           justification: input.justification,
-          requestType: input.requestType || 'additional_hours',
+          requestType,
           status: 'pending',
         },
       });
@@ -1277,7 +2015,7 @@ export class TimeEntryService {
           jobId: input.jobId,
           employeeProfileId: auth.profileId,
           additionalHours: input.additionalHours,
-          requestType: input.requestType || 'additional_hours',
+          requestType,
         },
       });
 
@@ -1529,12 +2267,210 @@ export class TimeEntryService {
     }
 
   /**
+   * Approve over-budget request (manager stage or partner final stage)
+   */
+  static async approveOverBudgetRequest(
+    requestId: number,
+    approvalNotes: string | undefined,
+    auth: AuthContext
+  ) {
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(auth.roleName || '')) {
+      throw { statusCode: 403, message: 'Not authorized to approve over-budget requests' };
+    }
+
+    const request = await prisma.timeOverBudgetRequest.findUnique({
+      where: { id: requestId },
+      include: { job: true },
+    });
+
+    if (!request) {
+      throw { statusCode: 404, message: 'Over-budget request not found' };
+    }
+
+    const isAdmin = ['admin', 'super_admin'].includes(auth.roleName || '');
+    const isJobManager = request.job.managerProfileId === auth.profileId;
+    const isJobPartner = request.job.partnerProfileId === auth.profileId;
+
+    if (!isAdmin && !isJobManager && !isJobPartner) {
+      throw { statusCode: 403, message: 'Not authorized to approve this over-budget request' };
+    }
+
+    if (
+      ['manager_rejected', 'partner_rejected', 'partner_approved', 'auto_rejected'].includes(
+        request.status
+      )
+    ) {
+      throw { statusCode: 409, message: 'This over-budget request is already closed' };
+    }
+
+    const actingAsManager = isJobManager && !isJobPartner && !isAdmin;
+    const finalApprove = !request.requiresPartnerApproval || isJobPartner || isAdmin;
+
+    if (actingAsManager && request.status !== 'pending') {
+      throw { statusCode: 409, message: 'Only pending over-budget requests can be manager-approved' };
+    }
+
+    const nextStatus = finalApprove ? 'partner_approved' : 'manager_approved';
+    const updated = await prisma.timeOverBudgetRequest.update({
+      where: { id: requestId },
+      data: {
+        status: nextStatus,
+        managerApproved: request.managerApproved || actingAsManager || isAdmin,
+        partnerApproved: finalApprove,
+        approvalNotes: approvalNotes || null,
+      },
+      include: {
+        job: { select: { id: true, jobName: true } },
+        employee: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    await createAudit({
+      action:
+        nextStatus === 'manager_approved'
+          ? `over_budget_request_manager_approved:job_${request.jobId}`
+          : `over_budget_request_partner_approved:job_${request.jobId}`,
+      entity_type: 'time_over_budget_request',
+      entity_id: request.id,
+      user_id: auth.userId,
+      metadata: {
+        jobId: request.jobId,
+        employeeProfileId: request.employeeProfileId,
+        approvedByProfileId: auth.profileId,
+        stage: nextStatus,
+        approvalNotes: approvalNotes || null,
+      },
+    });
+
+    if (nextStatus === 'manager_approved' && request.job.partnerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: request.job.partnerProfileId,
+          type: 'action',
+          title: `Partner approval required for ${request.job.jobName}`,
+          message: `An over-budget request is awaiting partner decision for "${request.job.jobName}".`,
+          actionRequired: true,
+          jobId: request.job.id,
+          link: `/partner-dashboard?tab=approvals`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+    }
+
+    if (nextStatus === 'partner_approved') {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: request.employeeProfileId,
+          type: 'info',
+          title: 'Over-budget request approved',
+          message: `Your over-budget request for "${request.job.jobName}" was approved.`,
+          actionRequired: false,
+          jobId: request.job.id,
+          link: `/timesheets`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+      );
+    }
+
+    return updated;
+  }
+
+  /**
+   * Reject over-budget request (manager stage or partner final stage)
+   */
+  static async rejectOverBudgetRequest(
+    requestId: number,
+    approvalNotes: string | undefined,
+    auth: AuthContext
+  ) {
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(auth.roleName || '')) {
+      throw { statusCode: 403, message: 'Not authorized to reject over-budget requests' };
+    }
+
+    const request = await prisma.timeOverBudgetRequest.findUnique({
+      where: { id: requestId },
+      include: { job: true },
+    });
+
+    if (!request) {
+      throw { statusCode: 404, message: 'Over-budget request not found' };
+    }
+
+    const isAdmin = ['admin', 'super_admin'].includes(auth.roleName || '');
+    const isJobManager = request.job.managerProfileId === auth.profileId;
+    const isJobPartner = request.job.partnerProfileId === auth.profileId;
+
+    if (!isAdmin && !isJobManager && !isJobPartner) {
+      throw { statusCode: 403, message: 'Not authorized to reject this over-budget request' };
+    }
+
+    if (
+      ['manager_rejected', 'partner_rejected', 'partner_approved', 'auto_rejected'].includes(
+        request.status
+      )
+    ) {
+      throw { statusCode: 409, message: 'This over-budget request is already closed' };
+    }
+
+    const actingAsManager = isJobManager && !isJobPartner && !isAdmin;
+    const nextStatus = actingAsManager ? 'manager_rejected' : 'partner_rejected';
+
+    const updated = await prisma.timeOverBudgetRequest.update({
+      where: { id: requestId },
+      data: {
+        status: nextStatus,
+        managerApproved: false,
+        partnerApproved: false,
+        approvalNotes: approvalNotes || null,
+        rejectionReason: approvalNotes || request.rejectionReason || 'Rejected',
+      },
+      include: {
+        job: { select: { id: true, jobName: true } },
+        employee: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    await createAudit({
+      action:
+        nextStatus === 'manager_rejected'
+          ? `over_budget_request_manager_rejected:job_${request.jobId}`
+          : `over_budget_request_partner_rejected:job_${request.jobId}`,
+      entity_type: 'time_over_budget_request',
+      entity_id: request.id,
+      user_id: auth.userId,
+      metadata: {
+        jobId: request.jobId,
+        employeeProfileId: request.employeeProfileId,
+        rejectedByProfileId: auth.profileId,
+        stage: nextStatus,
+        approvalNotes: approvalNotes || null,
+      },
+    });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: request.employeeProfileId,
+        type: 'action',
+        title: 'Over-budget request rejected',
+        message: `Your over-budget request for "${request.job.jobName}" was rejected.`,
+        actionRequired: true,
+        jobId: request.job.id,
+        link: `/timesheets`,
+      },
+      { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+    );
+
+    return updated;
+  }
+
+  /**
    * Get time entry summary for a job
    */
   static async getJobTimeSummary(jobId: number, auth: AuthContext) {
     // ✅ VERIFY ACCESS TO JOB
     const job = await prisma.job.findUnique({
       where: { id: jobId },
+      include: { jobCosting: { include: { budgetCap: true } } },
     });
 
     if (!job) {
@@ -1574,9 +2510,9 @@ export class TimeEntryService {
       submittedHours: 0,
       pendingHours: 0,
       rejectedHours: 0,
-      budgetCap: Number(job.budgetHours || 0),
+      budgetCap: TimeEntryService.resolveJobBudgetHours(job),
       budgetUsed: 0,
-      budgetRemaining: Number(job.budgetHours || 0),
+      budgetRemaining: TimeEntryService.resolveJobBudgetHours(job),
       percentageUsed: 0,
       entriesByStatus: {
         pending: 0,

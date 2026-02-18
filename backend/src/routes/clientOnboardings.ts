@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
 import prisma from "../prisma";
-import { AuthRequest } from "../middleware/auth";
+import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/reqiureRole";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { notifyHrGroup } from "../services/hrNotifications";
@@ -23,7 +23,11 @@ const getPagination = (req: any) => {
 
 // GET /client-onboardings/upcoming-jobs
 // Lists approved onboarding records with approved engagement letters and no job yet
-router.get("/upcoming-jobs", async (req, res) => {
+router.get(
+  "/upcoming-jobs",
+  authMiddleware,
+  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  async (req, res) => {
   try {
     const { page, pageSize, skip } = getPagination(req);
 
@@ -68,7 +72,11 @@ router.get("/upcoming-jobs", async (req, res) => {
 });
 
 // GET /client-onboardings
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authMiddleware,
+  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  async (req, res) => {
   try {
     const { page, pageSize, skip } = getPagination(req);
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
@@ -116,7 +124,11 @@ router.get("/", async (req, res) => {
 });
 
 // GET /client-onboardings/:id
-router.get("/:id", async (req, res) => {
+router.get(
+  "/:id",
+  authMiddleware,
+  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  async (req, res) => {
   try {
     const id = parseId(req.params.id);
     if (!id) {
@@ -161,7 +173,11 @@ router.get("/:id", async (req, res) => {
 
 // POST /client-onboardings
 // Marketing submits a client onboarding request with an engagement letter
-router.post("/", async (req: AuthRequest, res) => {
+router.post(
+  "/",
+  authMiddleware,
+  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const {
       engagementLetterId,
@@ -244,7 +260,11 @@ router.post("/", async (req: AuthRequest, res) => {
 });
 
 // POST /client-onboardings/:id/approve
-router.post("/:id/approve", requireRole("hr", "hr_manager", "admin", "super_admin"), async (req: AuthRequest, res) => {
+router.post(
+  "/:id/approve",
+  authMiddleware,
+  requireRole("hr", "hr_manager", "admin", "super_admin"),
+  async (req: AuthRequest, res) => {
   try {
     const id = parseId(req.params.id);
     if (!id) {
@@ -309,7 +329,11 @@ router.post("/:id/approve", requireRole("hr", "hr_manager", "admin", "super_admi
 });
 
 // POST /client-onboardings/:id/reject
-router.post("/:id/reject", requireRole("hr", "hr_manager", "admin", "super_admin"), async (req: AuthRequest, res) => {
+router.post(
+  "/:id/reject",
+  authMiddleware,
+  requireRole("hr", "hr_manager", "admin", "super_admin"),
+  async (req: AuthRequest, res) => {
   try {
     const id = parseId(req.params.id);
     if (!id) {

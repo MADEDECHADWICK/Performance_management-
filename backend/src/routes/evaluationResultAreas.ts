@@ -1,12 +1,19 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
 
 // GET /evaluation_result_areas?ad_hoc_evaluation_id=xxx
-router.get('/', async (req, res) => {
+router.get(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req, res) => {
   try {
     const { ad_hoc_evaluation_id, fields } = req.query;
     let query = 'SELECT * FROM evaluation_result_areas';
@@ -27,7 +34,12 @@ router.get('/', async (req, res) => {
 });
 
 // POST /evaluation_result_areas - Batch insert KPIs
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req: AuthRequest, res) => {
   try {
     const { kpis } = req.body;
     if (!kpis || !Array.isArray(kpis) || kpis.length === 0) {

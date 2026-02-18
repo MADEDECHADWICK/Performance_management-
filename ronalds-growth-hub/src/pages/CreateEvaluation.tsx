@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -109,7 +109,7 @@ export default function CreateEvaluation() {
 
   const loadTemplates = async () => {
     try {
-      const data = await apiFetch('GET', '/evaluation_templates?is_active=true');
+      const data = await apiFetch('GET', '/evaluation-templates?is_active=true');
       setTemplates(extractItems(data));
     } catch (error) {
       console.log('Templates not available:', error);
@@ -190,8 +190,6 @@ export default function CreateEvaluation() {
     setLoading(true);
 
     try {
-      const user = await authAPI.me();
-      
       // Create evaluation
       const evaluationResponse = await apiFetch('POST', '/evaluation-definitions', {
         name: evaluationName,
@@ -327,7 +325,7 @@ export default function CreateEvaluation() {
       }
 
       if (dedupedAssignments.length > 0) {
-        await apiFetch('POST', '/evaluation_assignments', dedupedAssignments);
+        await apiFetch('POST', '/evaluation-assignments', dedupedAssignments);
       }
 
       // KPI weighting is handled in Phase B2 via evaluation definitions.

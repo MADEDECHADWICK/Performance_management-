@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { NotificationService } from "../services/notifications.service";
 import { notifyProfilesByRoles } from "../services/notificationRecipients";
@@ -16,7 +17,7 @@ const parseNumber = (value: unknown) => {
 const buildToken = () => crypto.randomBytes(16).toString("hex");
 
 // GET /surveys - list surveys
-router.get("/", authMiddleware, async (req: AuthRequest, res) => {
+router.get("/", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
   try {
     const page = parseNumber(req.query.page) || 1;
     const pageSize = parseNumber(req.query.pageSize) || 100;
@@ -71,7 +72,7 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /surveys/analytics
-router.get("/analytics", authMiddleware, async (_req: AuthRequest, res) => {
+router.get("/analytics", authMiddleware, requireModuleAccess("surveys"), async (_req: AuthRequest, res) => {
   try {
     const surveys = await prisma.clientSatisfactionSurvey.findMany({
       where: { completedAt: { not: null } },
@@ -181,7 +182,7 @@ router.get("/analytics", authMiddleware, async (_req: AuthRequest, res) => {
 });
 
 // GET /surveys/by-client
-router.get("/by-client", authMiddleware, async (_req: AuthRequest, res) => {
+router.get("/by-client", authMiddleware, requireModuleAccess("surveys"), async (_req: AuthRequest, res) => {
   try {
     const surveys = await prisma.clientSatisfactionSurvey.findMany({
       include: { client: { select: { id: true, clientName: true } } },
@@ -249,7 +250,7 @@ router.get("/by-client", authMiddleware, async (_req: AuthRequest, res) => {
 });
 
 // GET /surveys/:id
-router.get("/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.get("/:id", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
   try {
     const surveyId = parseNumber(req.params.id);
     if (!surveyId) {
@@ -298,7 +299,7 @@ router.get("/token/:token", async (req, res) => {
 });
 
 // POST /surveys - create survey
-router.post("/", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
   try {
     const { clientId, jobId, expiresInDays = 30 } = req.body;
     if (!clientId) {
@@ -375,7 +376,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /surveys/:id/remind
-router.post("/:id/remind", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/:id/remind", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
   try {
     const surveyId = parseNumber(req.params.id);
     if (!surveyId) {
@@ -476,7 +477,7 @@ router.post("/token/:token/submit", async (req, res) => {
 });
 
 // DELETE /surveys/:id
-router.delete("/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.delete("/:id", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
   try {
     const surveyId = parseNumber(req.params.id);
     if (!surveyId) {

@@ -17,7 +17,6 @@ export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
 export type TimeEntryStatus = 'pending' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
 export type OverBudgetRequestStatus = 'pending' | 'manager_approved' | 'manager_rejected' | 'partner_approved' | 'partner_rejected' | 'auto_rejected';
-export type BillableType = 'billable' | 'non_billable' | 'loss';
 export type TimeEntryApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 export type EvaluatorType = 'self' | 'manager' | 'peer' | 'direct_report' | 'client' | 'custom';
 export type EvaluationDefinitionStatus = 'draft' | 'published' | 'closed';
@@ -36,6 +35,7 @@ export interface User {
   lastLogin?: string;
   createdAt: string;
   updatedAt: string;
+  moduleAccess?: Record<string, string[]>;
   profile?: Profile;
   roles?: UserAuthRole[];
 }
@@ -94,7 +94,7 @@ export interface PositionRole {
   name: string;
   description?: string;
   billingRate: number;
-  costRate: number;
+  costRate?: number;
   isActive: boolean;
   defaultAccess: any;
   createdAt: string;
@@ -332,7 +332,7 @@ export interface TimeEntry {
   date: string;
   hours: number;
   description?: string;
-  billableType: BillableType;
+  billable?: boolean;
   hourlyRate: number;
   billableAmount: number;
   costAmount: number;
@@ -360,7 +360,7 @@ export interface TimeEntryApprovalRequest {
   currentLoggedHours: number;
   additionalHoursRequested: number;
   justification: string;
-  requestType: string;
+  requestType: 'additional_hours' | 'over_budget';
   status: TimeEntryApprovalRequestStatus;
   approvedByProfileId?: number;
   approvalNotes?: string;
@@ -376,7 +376,7 @@ export interface TimeOverBudgetRequest {
   jobId: number;
   requestedHours: number;
   reason: string;
-  billableType: BillableType;
+  billable?: boolean;
   status: OverBudgetRequestStatus;
   managerApprovedAt?: string;
   partnerApprovedAt?: string;
@@ -463,14 +463,16 @@ export interface Kpi {
   id: number;
   name: string;
   description?: string;
-  category: string;
-  isFinancial: boolean;
+  category?: string;
+  kpiType?: string;
   departmentId?: number;
   roleId?: number;
+  measurementUnit?: string;
   targetValue?: number;
-  targetCurrency?: string;
-  frequency?: string;
-  weight: number;
+  targetFrequency?: string;
+  targetType?: string;
+  targetText?: string;
+  weight?: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -483,7 +485,8 @@ export interface EmployeeKpiAssignment {
   employeeProfileId: number;
   kpiId: number;
   targetValue?: number;
-  currentValue?: number;
+  achievedValue?: number;
+  weight?: number;
   status: string;
   periodStart?: string;
   periodEnd?: string;
@@ -491,6 +494,20 @@ export interface EmployeeKpiAssignment {
   updatedAt: string;
   employee?: Profile;
   kpi?: Kpi;
+  tracking?: {
+    targetValue?: number | null;
+    achievedValue?: number | null;
+    derivedAchievedValueFromOkrs?: number | null;
+    progressPercent?: number;
+    okr?: {
+      objectiveCount: number;
+      approvedObjectiveCount: number;
+      completedObjectiveCount: number;
+      keyResultCount: number;
+      overallCompletionPercent: number;
+      lastUpdatedAt?: string | null;
+    };
+  };
 }
 
 // Notification

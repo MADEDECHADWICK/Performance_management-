@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { apiFetch, authAPI, documentsAPI } from "@/lib/api";
+import { apiFetch, documentsAPI } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Upload, X, Star } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface KPI {
   id: string;
@@ -26,6 +27,7 @@ export default function CompleteEvaluation() {
   const { assignmentId } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [assignment, setAssignment] = useState<any>(null);
@@ -41,7 +43,7 @@ export default function CompleteEvaluation() {
 
   const loadAssignment = async () => {
     try {
-      const assignmentData = await apiFetch("GET", `/evaluation_assignments/${assignmentId}`);
+      const assignmentData = await apiFetch("GET", `/evaluation-assignments/${assignmentId}`);
       if (!assignmentData) throw new Error("Assignment not found");
       setAssignment(assignmentData);
 
@@ -121,10 +123,10 @@ export default function CompleteEvaluation() {
 
   const uploadEvidence = async () => {
     const urls: string[] = [];
-    const user = await authAPI.me();
     const entityId =
       assignment?.evalueeProfileId ??
       assignment?.profileId ??
+      (user as any)?.profileId ??
       user?.profile?.id ??
       undefined;
     const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -165,7 +167,7 @@ export default function CompleteEvaluation() {
         evidenceUrls = [...evidenceUrls, ...newUrls];
       }
 
-      await apiFetch("PATCH", `/evaluation_assignments/${assignmentId}`, {
+      await apiFetch("PATCH", `/evaluation-assignments/${assignmentId}`, {
         responses,
         evidence_urls: evidenceUrls,
         evaluator_comments: generalComments
@@ -199,7 +201,7 @@ export default function CompleteEvaluation() {
         evidenceUrls = [...evidenceUrls, ...newUrls];
       }
 
-      await apiFetch("PATCH", `/evaluation_assignments/${assignmentId}`, {
+      await apiFetch("PATCH", `/evaluation-assignments/${assignmentId}`, {
         responses,
         evidence_urls: evidenceUrls,
         evaluator_comments: generalComments,

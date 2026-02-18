@@ -1,21 +1,14 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { loadProfile } from "../middleware/loadProfile";
+import { requireRole } from "../middleware/reqiureRole";
 import prisma from "../prisma";
 import { errorResponse, successResponse } from "../utils/response";
 import { createAudit } from "../utils/audit";
+import { NotificationService } from "../services/notifications.service";
+import { emitWebhook } from "../services/webhook.service";
 
 const router = Router();
-
-const hasCalibrationAccess = (req: AuthRequest) => {
-  const roles = ((req as any).userRoles || req.user?.authRoles || []) as string[];
-  const normalized = roles.map((role) => String(role).toLowerCase());
-  return (
-    normalized.includes("admin") ||
-    normalized.includes("super_admin") ||
-    normalized.includes("hr") ||
-    normalized.includes("hr_manager")
-  );
-};
 
 const computeStats = (values: number[]) => {
   if (values.length === 0) {
@@ -27,12 +20,13 @@ const computeStats = (values: number[]) => {
   return { mean, stdDev: Math.sqrt(variance) };
 };
 
-router.get("/scores", authMiddleware, async (req: AuthRequest, res) => {
+router.get(
+  "/scores",
+  authMiddleware,
+  loadProfile,
+  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  async (req: AuthRequest, res) => {
   try {
-    if (!hasCalibrationAccess(req)) {
-      return res.status(403).json(errorResponse("Access denied", 403));
-    }
-
     const evaluationCycleId = req.query.evaluationCycleId
       ? Number(req.query.evaluationCycleId)
       : undefined;
@@ -92,12 +86,13 @@ router.get("/scores", authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-router.patch("/scores/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.patch(
+  "/scores/:id",
+  authMiddleware,
+  loadProfile,
+  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  async (req: AuthRequest, res) => {
   try {
-    if (!hasCalibrationAccess(req)) {
-      return res.status(403).json(errorResponse("Access denied", 403));
-    }
-
     const id = Number(req.params.id);
     const { calibratedScore, calibrationNote } = req.body;
 
@@ -109,7 +104,7 @@ router.patch("/scores/:id", authMiddleware, async (req: AuthRequest, res) => {
             ? Number(calibratedScore)
             : null,
         calibrationNote: calibrationNote ?? null,
-        calibratedByProfileId: req.user?.profileId ?? null,
+        calibratedByProfileId: req.profile?.id ?? null,
         calibratedAt: new Date(),
       },
       include: {
@@ -135,5 +130,131 @@ router.patch("/scores/:id", authMiddleware, async (req: AuthRequest, res) => {
     res.status(500).json(errorResponse("Failed to save calibration", 500));
   }
 });
+
+router.patch(
+  "/assignments/:assignmentId/reopen",
+  authMiddleware,
+  loadProfile,
+  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  async (req: AuthRequest, res) => {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const { reason } = req.body ?? {};
+
+      const assignment = await prisma.evaluationAssignment.findUnique({
+        where: { id: assignmentId },
+      });
+
+      if (!assignment) {
+        return res.status(404).json(errorResponse("Evaluation assignment not found", 404));
+      }
+
+      if (assignment.status !== "submitted") {
+        return res
+          .status(409)
+          .json(errorResponse("Only submitted evaluations can be reopened", 409));
+      }
+
+      const updated = await prisma.evaluationAssignment.update({
+        where: { id: assignmentId },
+        data: {
+          status: "in_progress",
+          submittedAt: null,
+          evaluatorSigned: false,
+          evaluatorSignedAt: null,
+          evaluateeAcknowledged: false,
+          evaluateeAcknowledgedAt: null,
+          rejectionReason: reason ?? null,
+        },
+      });
+
+      await createAudit({
+        action: "evaluation_assignment.reopened",
+        entity_type: "evaluation_assignment",
+        entity_id: assignmentId,
+        user_id: req.user?.userId ?? undefined,
+        metadata: {
+          previousStatus: assignment.status,
+          newStatus: updated.status,
+          reason: reason ?? null,
+          evaluatorProfileId: assignment.evaluatorProfileId,
+          evaluateeProfileId: assignment.evaluateeProfileId,
+        },
+        ip_address: req.ip,
+      });
+
+      const auth = {
+        userId: req.user?.userId ?? 0,
+        profileId: req.profile?.id ?? 0,
+        roleName: req.profile?.role?.name,
+      };
+
+      const profiles = await prisma.profile.findMany({
+        where: { id: { in: [assignment.evaluatorProfileId, assignment.evaluateeProfileId] } },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      const byId = new Map(profiles.map((profile) => [profile.id, profile]));
+      const evaluator = byId.get(assignment.evaluatorProfileId);
+      const evaluatee = byId.get(assignment.evaluateeProfileId);
+
+      const templateData = {
+        assignmentId: assignment.id,
+        evaluationDefinitionId: assignment.evaluationDefinitionId,
+        evaluatorProfileId: assignment.evaluatorProfileId,
+        evaluateeProfileId: assignment.evaluateeProfileId,
+        evaluatorName: evaluator
+          ? `${evaluator.firstName} ${evaluator.lastName}`
+          : "Evaluator",
+        evaluateeName: evaluatee
+          ? `${evaluatee.firstName} ${evaluatee.lastName}`
+          : "Evaluatee",
+        reason: reason ?? "",
+      };
+
+      await NotificationService.createFromTemplate(
+        {
+          recipientProfileId: assignment.evaluatorProfileId,
+          label: "evaluation.reopened.evaluator",
+          data: templateData,
+          type: "action",
+          title: "Evaluation returned for updates",
+          message: "An evaluation was returned to in-progress for updates.",
+          evaluationDefinitionId: assignment.evaluationDefinitionId,
+          actionRequired: true,
+          link: `/evaluations/${assignment.id}`,
+        },
+        auth
+      );
+
+      await NotificationService.createFromTemplate(
+        {
+          recipientProfileId: assignment.evaluateeProfileId,
+          label: "evaluation.reopened.evaluatee",
+          data: templateData,
+          type: "info",
+          title: "Evaluation reopened",
+          message: "HR has reopened an evaluation for further updates.",
+          evaluationDefinitionId: assignment.evaluationDefinitionId,
+          actionRequired: false,
+          link: `/evaluations/${assignment.id}`,
+        },
+        auth
+      );
+
+      await emitWebhook("evaluation.reopened", {
+        assignmentId: assignment.id,
+        evaluateeProfileId: assignment.evaluateeProfileId,
+        evaluatorProfileId: assignment.evaluatorProfileId,
+        evaluationDefinitionId: assignment.evaluationDefinitionId,
+        reason: reason ?? null,
+      });
+
+      return res.json(successResponse(updated, "Evaluation reopened"));
+    } catch (error: any) {
+      console.error("Error reopening evaluation:", error);
+      return res.status(500).json(errorResponse("Failed to reopen evaluation", 500));
+    }
+  }
+);
 
 export default router;

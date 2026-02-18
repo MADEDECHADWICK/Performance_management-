@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { requireRole } from "../middleware/reqiureRole";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { ProposalStatus } from "@prisma/client";
 import { notifyHrGroup } from "../services/hrNotifications";
@@ -13,7 +14,11 @@ const parseNumber = (value: unknown) => {
 };
 
 // GET /proposals/metrics - pipeline summary
-router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
+router.get(
+  "/metrics",
+  authMiddleware,
+  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const [totalCount, wonCount, lostCount] = await Promise.all([
       prisma.proposal.count(),
@@ -43,6 +48,15 @@ router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const requestedStart =
+      typeof req.query.startDate === "string" ? new Date(req.query.startDate) : null;
+    const requestedEnd =
+      typeof req.query.endDate === "string" ? new Date(req.query.endDate) : null;
+    const periodStart =
+      requestedStart && !Number.isNaN(requestedStart.getTime()) ? requestedStart : monthStart;
+    const periodEnd =
+      requestedEnd && !Number.isNaN(requestedEnd.getTime()) ? requestedEnd : now;
+
     const [wonThisMonth, lostThisMonth] = await Promise.all([
       prisma.proposal.count({
         where: {
@@ -64,6 +78,42 @@ router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
         probability: { gte: 70 },
       },
     });
+
+    const wonProposalsInPeriod = await prisma.proposal.findMany({
+      where: {
+        status: "won",
+        wonAt: { gte: periodStart, lte: periodEnd },
+      },
+      select: {
+        clientId: true,
+        proposedFee: true,
+      },
+    });
+    const wonProposalValueInPeriod = wonProposalsInPeriod.reduce(
+      (sum, proposal) => sum + Number(proposal.proposedFee || 0),
+      0
+    );
+    const wonClientIdsInPeriod = Array.from(
+      new Set(wonProposalsInPeriod.map((proposal) => proposal.clientId))
+    );
+    const collectedFromWonClientsInPeriod =
+      wonClientIdsInPeriod.length > 0
+        ? Number(
+            (
+              await prisma.clientPayment.aggregate({
+                _sum: { paymentAmount: true },
+                where: {
+                  clientId: { in: wonClientIdsInPeriod },
+                  paymentDate: { gte: periodStart, lte: periodEnd },
+                },
+              })
+            )._sum.paymentAmount || 0
+          )
+        : 0;
+    const leadToCashRate =
+      wonProposalValueInPeriod > 0
+        ? (collectedFromWonClientsInPeriod / wonProposalValueInPeriod) * 100
+        : 0;
 
     const conversionRate =
       wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : 0;
@@ -140,6 +190,18 @@ router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
           wonThisMonth,
           lostThisMonth,
           hotLeads,
+          leadToCash: {
+            periodStart: periodStart.toISOString(),
+            periodEnd: periodEnd.toISOString(),
+            wonClients: wonClientIdsInPeriod.length,
+            wonProposalValue: wonProposalValueInPeriod,
+            collectedFromWonClients: collectedFromWonClientsInPeriod,
+            conversionRate: leadToCashRate,
+            outstandingGap: Math.max(
+              0,
+              wonProposalValueInPeriod - collectedFromWonClientsInPeriod
+            ),
+          },
           pipelineTrend,
         },
         "Proposal metrics retrieved"
@@ -152,7 +214,11 @@ router.get("/metrics", authMiddleware, async (_req: AuthRequest, res) => {
 });
 
 // GET /proposals - list proposals
-router.get("/", authMiddleware, async (req: AuthRequest, res) => {
+router.get(
+  "/",
+  authMiddleware,
+  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const page = parseNumber(req.query.page) || 1;
     const pageSize = parseNumber(req.query.pageSize) || 20;
@@ -193,7 +259,11 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /proposals/:id
-router.get("/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.get(
+  "/:id",
+  authMiddleware,
+  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const proposalId = parseNumber(req.params.id);
     if (!proposalId) {
@@ -220,7 +290,11 @@ router.get("/:id", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /proposals - create proposal
-router.post("/", authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  "/",
+  authMiddleware,
+  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const {
       clientId,
@@ -392,7 +466,11 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // PATCH /proposals/:id - update proposal
-router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.patch(
+  "/:id",
+  authMiddleware,
+  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  async (req: AuthRequest, res) => {
   try {
     const proposalId = parseNumber(req.params.id);
     if (!proposalId) {

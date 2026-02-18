@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import prisma from '../prisma';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
 
 const router = Router();
 
 // GET /peer_evaluations?evaluator_id=&cycle_id=
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { evaluator_id, cycle_id } = req.query;
     
@@ -17,7 +19,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /peer_evaluations
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { evaluator_id, evaluatee_id, cycle_id, scores } = req.body;
     

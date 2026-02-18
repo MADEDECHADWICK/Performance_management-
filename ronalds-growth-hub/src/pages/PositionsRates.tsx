@@ -28,10 +28,10 @@ import { Loader2, Plus, Pencil, Trash2 } from "lucide-react";
 
 type PositionRole = {
   id: number;
+  positionLevel?: string;
   name: string;
   description?: string;
   billingRate: number;
-  costRate: number;
   isActive: boolean;
   createdAt: string;
 };
@@ -39,7 +39,6 @@ type PositionRole = {
 const emptyForm = {
   name: "",
   billingRate: 0,
-  costRate: 0,
   description: "",
   isActive: true,
 };
@@ -56,8 +55,17 @@ export default function PositionsRates() {
   const loadRoles = async () => {
     try {
       setLoading(true);
-      const data = await api.get<PositionRole[]>("/roles");
-      setRoles(data || []);
+      const data = await api.get<any[]>("/position-rates");
+      const normalized = (data || []).map((item) => ({
+        id: item.id,
+        positionLevel: item.positionLevel ?? item.position_level,
+        name: item.positionLevel ?? item.position_level ?? item.name ?? "",
+        description: item.description ?? "",
+        billingRate: Number(item.billingRate ?? item.billing_rate ?? 0),
+        isActive: Boolean(item.isActive ?? item.is_active ?? true),
+        createdAt: item.createdAt ?? item.created_at ?? new Date().toISOString(),
+      }));
+      setRoles(normalized);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -84,7 +92,6 @@ export default function PositionsRates() {
     setForm({
       name: role.name,
       billingRate: role.billingRate,
-      costRate: role.costRate,
       description: role.description || "",
       isActive: role.isActive,
     });
@@ -103,13 +110,20 @@ export default function PositionsRates() {
 
     try {
       if (editingRole) {
-        await api.put(`/roles/${editingRole.id}`, form);
+        await api.patch(`/position-rates/${editingRole.id}`, {
+          billing_rate: Number(form.billingRate),
+          is_active: form.isActive,
+        });
         toast({
           title: "Updated",
           description: `${form.name} updated successfully.`,
         });
       } else {
-        await api.post("/roles", form);
+        await api.post("/position-rates", {
+          position_level: form.name.trim(),
+          billing_rate: Number(form.billingRate),
+          is_active: form.isActive,
+        });
         toast({
           title: "Created",
           description: `${form.name} created successfully.`,
@@ -130,7 +144,7 @@ export default function PositionsRates() {
     if (!confirm(`Deactivate ${role.name}?`)) return;
 
     try {
-      await api.delete(`/roles/${role.id}`);
+      await api.delete(`/position-rates/${role.id}`);
       toast({
         title: "Deactivated",
         description: `${role.name} is now inactive.`,
@@ -165,7 +179,7 @@ export default function PositionsRates() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Positions & Rates</h2>
             <p className="text-muted-foreground">
-              Manage billing positions used for job costing and revenue allocation.
+              Manage job-costing positions only. Access roles are assigned separately by HR.
             </p>
           </div>
           <Button onClick={openCreate} className="gap-2">
@@ -176,9 +190,9 @@ export default function PositionsRates() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Billing Positions</CardTitle>
+            <CardTitle>Billing Positions (Job Costing)</CardTitle>
             <CardDescription>
-              These positions control hourly billing rates for job costing.
+              Set the billing rate used for billing and job costing.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -192,8 +206,7 @@ export default function PositionsRates() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Position</TableHead>
-                      <TableHead>Billing Rate (KES/hr)</TableHead>
-                      <TableHead>Cost Rate (KES/hr)</TableHead>
+                      <TableHead>Billing Rate KES/hr</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -201,7 +214,7 @@ export default function PositionsRates() {
                   <TableBody>
                     {roles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        <TableCell colSpan={4} className="text-center text-muted-foreground">
                           No positions available.
                         </TableCell>
                       </TableRow>
@@ -218,9 +231,6 @@ export default function PositionsRates() {
                           </TableCell>
                           <TableCell>
                             {role.billingRate.toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            {role.costRate.toLocaleString()}
                           </TableCell>
                           <TableCell>
                             <Badge variant={role.isActive ? "default" : "secondary"}>
@@ -260,7 +270,7 @@ export default function PositionsRates() {
           <DialogHeader>
             <DialogTitle>{editingRole ? "Edit Position" : "New Position"}</DialogTitle>
             <DialogDescription>
-              Set the billing and cost rates used in job costing.
+              Set the billing rate for this position.
             </DialogDescription>
           </DialogHeader>
 
@@ -272,7 +282,13 @@ export default function PositionsRates() {
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
                 placeholder="e.g. Senior"
+                disabled={Boolean(editingRole)}
               />
+              {editingRole && (
+                <p className="text-xs text-muted-foreground">
+                  Position name is fixed once created. Create a new position level if the label should change.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="billing-rate">Billing rate (KES/hr)</Label>
@@ -282,17 +298,6 @@ export default function PositionsRates() {
                 value={form.billingRate}
                 onChange={(event) =>
                   setForm({ ...form, billingRate: Number(event.target.value) })
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="cost-rate">Cost rate (KES/hr)</Label>
-              <Input
-                id="cost-rate"
-                type="number"
-                value={form.costRate}
-                onChange={(event) =>
-                  setForm({ ...form, costRate: Number(event.target.value) })
                 }
               />
             </div>

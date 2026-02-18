@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Plus, Clock, CheckCircle, XCircle } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Project {
   id: string;
@@ -54,6 +55,7 @@ const Timesheets = () => {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [formData, setFormData] = useState({
     activity_type: "job",
@@ -67,8 +69,10 @@ const Timesheets = () => {
   });
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
     loadData();
-  }, []);
+  }, [authLoading, user]);
 
   // Calculate hours from start and end time
   const calculateHours = (startTime: string, endTime: string) => {
@@ -144,16 +148,15 @@ const Timesheets = () => {
 
   const loadData = async () => {
     try {
-      const me = await authAPI.me();
-      if (!me) return;
+      if (!user) return;
 
       const projectsData = await apiFetch('GET', '/projects?status=active');
       setProjects(projectsData || []);
 
-      const jobsData = await apiFetch('GET', `/jobs?assigned_to=${me.id}`);
+      const jobsData = await apiFetch('GET', `/jobs?assigned_to=${user.id}`);
       setJobs(jobsData || []);
 
-      const logsData = await apiFetch('GET', `/work_logs?employeeId=${me.id}&limit=50`);
+      const logsData = await apiFetch('GET', `/work_logs?employeeId=${user.id}&limit=50`);
       setWorkLogs(logsData || []);
     } catch (error: any) {
       toast({
@@ -170,10 +173,9 @@ const Timesheets = () => {
     e.preventDefault();
 
     try {
-      const me = await authAPI.me();
-      if (!me) return;
+      if (!user) return;
 
-      await apiFetch('POST', '/work_logs', { ...formData, employee_id: me.id, job_id: formData.job_id || null, project_id: null });
+      await apiFetch('POST', '/work_logs', { ...formData, employee_id: user.id, job_id: formData.job_id || null, project_id: null });
 
       toast({ title: 'Success', description: 'Time entry added successfully' });
       setDialogOpen(false);

@@ -313,6 +313,7 @@ export const upsertJobCostingValidators = [
     .withMessage("Valid jobId (integer) required"),
 
   body("jobFee")
+    .optional()
     .isFloat({ min: 0.01 })
     .withMessage("jobFee must be greater than 0"),
 

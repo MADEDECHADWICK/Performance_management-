@@ -77,6 +77,51 @@ interface Job {
   startDate: string | null;
   dueDate: string | null;
   completionPercentage: number;
+  plannedCost: number;
+  plannedHours: number;
+  actualCost: number;
+  costVariance: number;
+  hoursVariance: number;
+  costVariancePct: number;
+  hoursVariancePct: number;
+  feeCap: number;
+  remainingFeeBuffer: number;
+  isOverPlannedCost: boolean;
+  isOverPlannedHours: boolean;
+  isOverFeeCap: boolean;
+  pendingApprovalTotal: number;
+  approvalChain: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    cancelled: number;
+    overBudgetPending: number;
+    awaitingPartner: number;
+    partnerApproved: number;
+    partnerRejected: number;
+    latestStatus: string | null;
+    latestRequestedAt: string | null;
+    latestApprovedAt: string | null;
+    latestApproverName: string | null;
+    latestRequestType: string | null;
+  };
+}
+
+interface JobControlsSummary {
+  totalJobs: number;
+  totalPlannedCost: number;
+  totalActualCost: number;
+  totalPlannedHours: number;
+  totalActualHours: number;
+  totalPendingApprovals: number;
+  jobsOverPlannedCost: number;
+  jobsOverPlannedHours: number;
+  jobsOverFeeCap: number;
+  jobsAwaitingPartner: number;
+  totalCostVariance: number;
+  totalHoursVariance: number;
+  totalCostVariancePct: number;
+  totalHoursVariancePct: number;
 }
 
 interface AllocationSummary {
@@ -131,6 +176,22 @@ interface ApprovalRequest {
   employee?: { firstName: string; lastName: string };
 }
 
+interface OverBudgetApprovalRequest {
+  id: number;
+  jobId: number;
+  jobName: string;
+  status: string;
+  requestedAdditional: number;
+  loggedHours: number;
+  allocatedHours: number;
+  totalAfterRequest: number;
+  estimatedCostImpact: number;
+  approvalNotes?: string | null;
+  rejectionReason?: string | null;
+  employeeName?: string;
+  createdAt?: string;
+}
+
 interface ApprovalAuditLog {
   id: number;
   action: string;
@@ -166,12 +227,14 @@ const ManagerDashboard = () => {
   const [jobData, setJobData] = useState<{
     portfolio: Job[];
     teamJobs: any[];
+    controls?: JobControlsSummary;
   } | null>(null);
   const [allocationSummaries, setAllocationSummaries] = useState<Record<number, AllocationSummary>>({});
   const [alerts, setAlerts] = useState<NotificationItem[]>([]);
   const [pendingAlertsCount, setPendingAlertsCount] = useState(0);
   const [pendingTimeEntries, setPendingTimeEntries] = useState<PendingTimeEntry[]>([]);
   const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([]);
+  const [overBudgetRequests, setOverBudgetRequests] = useState<OverBudgetApprovalRequest[]>([]);
   const [approvalAudit, setApprovalAudit] = useState<ApprovalAuditLog[]>([]);
   const [workloadMetrics, setWorkloadMetrics] = useState<WorkloadMetrics | null>(null);
   const [financialData, setFinancialData] = useState<any>(null);
@@ -341,14 +404,21 @@ const ManagerDashboard = () => {
 
   const loadApprovals = async () => {
     try {
-      const [pendingEntries, requests] = await Promise.all([
+      const [pendingEntries, requests, chainResponse] = await Promise.all([
         timeEntriesAPI.getPendingApprovals(),
         timeEntriesAPI.listApprovalRequests({ status: 'pending' }),
+        apiFetch('GET', '/manager-dashboard/approval-chain'),
       ]);
+      const chainPayload = chainResponse?.data ?? chainResponse ?? {};
+      const overBudget = Array.isArray(chainPayload.overBudgetRequests)
+        ? chainPayload.overBudgetRequests
+        : [];
       setPendingTimeEntries(Array.isArray(pendingEntries) ? pendingEntries.slice(0, 5) : []);
       setApprovalRequests(Array.isArray(requests) ? requests.slice(0, 5) : []);
+      setOverBudgetRequests(overBudget.slice(0, 5));
     } catch (error) {
       console.error('Error loading approvals:', error);
+      setOverBudgetRequests([]);
     }
   };
 
@@ -377,6 +447,26 @@ const ManagerDashboard = () => {
     await timeEntriesAPI.rejectApprovalRequest(id, notes);
     await loadApprovals();
     await loadApprovalAudit();
+  };
+
+  const handleApproveOverBudgetRequest = async (id: number) => {
+    const notes = window.prompt('Manager approval notes (optional):') || undefined;
+    await timeEntriesAPI.approveOverBudgetRequest(id, notes);
+    await loadApprovals();
+    await loadApprovalAudit();
+    if (activeTab === 'jobs') {
+      await loadTabData('jobs');
+    }
+  };
+
+  const handleRejectOverBudgetRequest = async (id: number) => {
+    const notes = window.prompt('Manager rejection reason (optional):') || undefined;
+    await timeEntriesAPI.rejectOverBudgetRequest(id, notes);
+    await loadApprovals();
+    await loadApprovalAudit();
+    if (activeTab === 'jobs') {
+      await loadTabData('jobs');
+    }
   };
 
   const loadApprovalAudit = async () => {
@@ -449,6 +539,16 @@ const ManagerDashboard = () => {
     const jobId = req.jobId;
     approvalCountsByJob[jobId] = (approvalCountsByJob[jobId] || 0) + 1;
   });
+  overBudgetRequests.forEach((req) => {
+    approvalCountsByJob[req.jobId] = (approvalCountsByJob[req.jobId] || 0) + 1;
+  });
+
+  (jobData?.portfolio || []).forEach((job) => {
+    const jobPending = Number(job.pendingApprovalTotal || 0);
+    if (jobPending > 0) {
+      approvalCountsByJob[job.jobId] = Math.max(approvalCountsByJob[job.jobId] || 0, jobPending);
+    }
+  });
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-KE', {
@@ -496,19 +596,6 @@ const ManagerDashboard = () => {
     
     const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.active;
     return <Badge variant={config.variant as any}>{config.label}</Badge>;
-  };
-
-  const getCostingBadge = (job: Job) => {
-    if (!job.costingStatus || job.costingStatus === 'missing') {
-      return <Badge variant="outline">Not costed</Badge>;
-    }
-
-    if (job.costingFee > 0 && job.costingEstimatedCost > job.costingFee) {
-      return <Badge variant="destructive">Over fee</Badge>;
-    }
-
-    const label = job.costingStatus.replace(/_/g, ' ');
-    return <Badge variant="secondary">{label}</Badge>;
   };
 
   if (loading && !overview) {
@@ -853,14 +940,19 @@ const ManagerDashboard = () => {
                     <Badge variant="secondary">
                       {approvalRequests.length} hour requests
                     </Badge>
+                    <Badge variant="secondary">
+                      {overBudgetRequests.length} over-budget
+                    </Badge>
                     <Badge variant="outline">
-                      {pendingTimeEntries.length + approvalRequests.length} total pending
+                      {pendingTimeEntries.length + approvalRequests.length + overBudgetRequests.length} total in chain
                     </Badge>
                     <Button variant="outline" size="sm" onClick={() => navigate('/timesheets')}>
                       Review queue
                     </Button>
                   </div>
-                  {pendingTimeEntries.length === 0 && approvalRequests.length === 0 && (
+                  {pendingTimeEntries.length === 0 &&
+                    approvalRequests.length === 0 &&
+                    overBudgetRequests.length === 0 && (
                     <div className="text-sm text-muted-foreground">
                       No pending approvals right now.
                     </div>
@@ -916,6 +1008,44 @@ const ManagerDashboard = () => {
                             >
                               Reject
                             </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {overBudgetRequests.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Over-budget approval chain</p>
+                      {overBudgetRequests.map((request) => (
+                        <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                          <div>
+                            <span className="font-medium">{request.employeeName || 'Team member'}</span>{' '}
+                            - {request.jobName || 'Job'} - +{Number(request.requestedAdditional || 0).toFixed(1)}h
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant={request.status === 'pending' ? 'secondary' : 'outline'}>
+                              {String(request.status).replace(/_/g, ' ')}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              Impact: {formatCurrency(Number(request.estimatedCostImpact || 0))}
+                            </span>
+                            {request.status === 'pending' && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveOverBudgetRequest(request.id)}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleRejectOverBudgetRequest(request.id)}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1217,6 +1347,54 @@ const ManagerDashboard = () => {
                       </Badge>
                     )}
                   </div>
+                  {jobData.controls && (
+                    <div className="grid gap-3 md:grid-cols-4 pb-4">
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Cost Variance</p>
+                        <p
+                          className={`text-sm font-semibold ${
+                            jobData.controls.totalCostVariance > 0 ? 'text-destructive' : 'text-foreground'
+                          }`}
+                        >
+                          {formatCurrency(jobData.controls.totalCostVariance)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {jobData.controls.totalCostVariancePct.toFixed(1)}%
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Hours Variance</p>
+                        <p
+                          className={`text-sm font-semibold ${
+                            jobData.controls.totalHoursVariance > 0 ? 'text-destructive' : 'text-foreground'
+                          }`}
+                        >
+                          {jobData.controls.totalHoursVariance.toFixed(1)}h
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {jobData.controls.totalHoursVariancePct.toFixed(1)}%
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Overrun Jobs</p>
+                        <p className="text-sm font-semibold">
+                          {jobData.controls.jobsOverPlannedCost} cost / {jobData.controls.jobsOverPlannedHours} hours
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Fee cap breaches: {jobData.controls.jobsOverFeeCap}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Approval Chain</p>
+                        <p className="text-sm font-semibold">
+                          Pending: {jobData.controls.totalPendingApprovals}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Awaiting partner: {jobData.controls.jobsAwaitingPartner}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -1226,8 +1404,8 @@ const ManagerDashboard = () => {
                         <TableHead>Budget</TableHead>
                         <TableHead>Actual</TableHead>
                         <TableHead>Remaining (Job)</TableHead>
-                        <TableHead>Approvals</TableHead>
-                        <TableHead>Costing</TableHead>
+                        <TableHead>Cost Control</TableHead>
+                        <TableHead>Approval Chain</TableHead>
                         <TableHead>Revenue</TableHead>
                         <TableHead>Progress</TableHead>
                       </TableRow>
@@ -1274,20 +1452,39 @@ const ManagerDashboard = () => {
                             })()}
                           </TableCell>
                           <TableCell>
-                            {approvalCountsByJob[job.jobId] ? (
-                              <Badge variant="outline">
-                                {approvalCountsByJob[job.jobId]} pending
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">None</span>
-                            )}
+                            <div className="flex flex-col gap-1 text-xs">
+                              <span
+                                className={`font-medium ${
+                                  job.isOverPlannedCost || job.isOverPlannedHours ? 'text-destructive' : 'text-foreground'
+                                }`}
+                              >
+                                {formatCurrency(job.actualCost)} / {formatCurrency(job.plannedCost)}
+                              </span>
+                              <span className={job.costVariance > 0 ? 'text-destructive' : 'text-muted-foreground'}>
+                                Var: {formatCurrency(job.costVariance)}
+                              </span>
+                              <span className="text-muted-foreground">
+                                Fee buffer: {formatCurrency(job.remainingFeeBuffer)}
+                              </span>
+                            </div>
                           </TableCell>
                           <TableCell>
-                            <div className="flex flex-col gap-1">
-                              {getCostingBadge(job)}
-                              {job.costingFee > 0 && (
-                                <span className="text-xs text-muted-foreground">
-                                  Fee: {formatCurrency(job.costingFee)}
+                            <div className="flex flex-col gap-1 text-xs">
+                              {approvalCountsByJob[job.jobId] ? (
+                                <Badge variant="outline">
+                                  {approvalCountsByJob[job.jobId]} pending
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground">None pending</span>
+                              )}
+                              {(job.approvalChain?.awaitingPartner || 0) > 0 && (
+                                <Badge variant="secondary">
+                                  Awaiting partner: {job.approvalChain.awaitingPartner}
+                                </Badge>
+                              )}
+                              {job.approvalChain?.latestStatus && (
+                                <span className="text-muted-foreground capitalize">
+                                  Latest: {String(job.approvalChain.latestStatus).replace(/_/g, ' ')}
                                 </span>
                               )}
                             </div>

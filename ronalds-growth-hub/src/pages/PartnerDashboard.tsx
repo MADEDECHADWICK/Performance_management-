@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { authAPI, apiFetch, surveysAPI, timeEntriesAPI } from '@/lib/api';
+import { apiFetch, surveysAPI, timeEntriesAPI } from '@/lib/api';
 import type { TimeEntryApprovalRequest } from '@/lib/api/types';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Card,
   CardContent,
@@ -37,6 +38,16 @@ interface PortfolioMetrics {
   averageEfficiency: number;
   averageMargin: number;
   totalTeamSize: number;
+  totalPlannedCost?: number;
+  totalPlannedHours?: number;
+  totalActualHours?: number;
+  totalCostVariance?: number;
+  totalHoursVariance?: number;
+  jobsOverPlannedCost?: number;
+  jobsOverPlannedHours?: number;
+  jobsOverFeeCap?: number;
+  jobsAwaitingPartner?: number;
+  totalPendingApprovalRequests?: number;
 }
 
 interface JobSummary {
@@ -54,6 +65,34 @@ interface JobSummary {
   profit: number;
   efficiencyRatio: number;
   marginPercentage: number;
+  plannedCost?: number;
+  plannedHours?: number;
+  actualCost?: number;
+  feeCap?: number;
+  costVariance?: number;
+  hoursVariance?: number;
+  costVariancePct?: number;
+  hoursVariancePct?: number;
+  remainingFeeBuffer?: number;
+  isOverPlannedCost?: boolean;
+  isOverPlannedHours?: boolean;
+  isOverFeeCap?: boolean;
+  pendingApprovalTotal?: number;
+  approvalChain?: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    cancelled: number;
+    overBudgetPending: number;
+    awaitingPartner: number;
+    partnerApproved: number;
+    partnerRejected: number;
+    latestStatus: string | null;
+    latestRequestedAt: string | null;
+    latestApprovedAt: string | null;
+    latestApproverName: string | null;
+    latestRequestType: string | null;
+  };
 }
 
 interface DashboardSummary {
@@ -139,6 +178,22 @@ interface PartnerApprovalRequest extends TimeEntryApprovalRequest {
   };
 }
 
+interface PartnerOverBudgetRequest {
+  id: number;
+  jobId: number;
+  jobName: string;
+  status: string;
+  employeeName?: string;
+  requestedAdditional: number;
+  allocatedHours: number;
+  loggedHours: number;
+  totalAfterRequest: number;
+  estimatedCostImpact: number;
+  approvalNotes?: string | null;
+  rejectionReason?: string | null;
+  createdAt?: string;
+}
+
 interface PartnerSurveyRow {
   id: number;
   jobId?: number;
@@ -151,12 +206,14 @@ interface PartnerSurveyRow {
 const PartnerDashboard = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user, isLoading: authLoading, isPartner: isPartnerRole } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [personalPerformance, setPersonalPerformance] = useState<PersonalPerformance | null>(null);
   const [allocationAudit, setAllocationAudit] = useState<AllocationAuditPayload | null>(null);
   const [alerts, setAlerts] = useState<NotificationItem[]>([]);
   const [pendingAlertsCount, setPendingAlertsCount] = useState(0);
   const [approvalRequests, setApprovalRequests] = useState<PartnerApprovalRequest[]>([]);
+  const [overBudgetRequests, setOverBudgetRequests] = useState<PartnerOverBudgetRequest[]>([]);
   const [recentApprovals, setRecentApprovals] = useState<PartnerApprovalRequest[]>([]);
   const [approvalsLoading, setApprovalsLoading] = useState(false);
   const [partnerSurveys, setPartnerSurveys] = useState<PartnerSurveyRow[]>([]);
@@ -169,8 +226,13 @@ const PartnerDashboard = () => {
   const tabsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate('/auth');
+      return;
+    }
     loadDashboardData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -184,14 +246,16 @@ const PartnerDashboard = () => {
       setLoading(true);
       setError(null);
 
-      // Get user from auth to get profile_id
-      const user = await authAPI.me();
       if (!user) {
         navigate('/auth');
         return;
       }
 
-      const isPartner = user.is_partner ?? user.isPartner;
+      const isPartner =
+        isPartnerRole ||
+        user.is_partner ||
+        (user as any).isPartner ||
+        user.profile?.isPartner;
       if (!isPartner) {
         navigate('/dashboard');
         return;
@@ -273,14 +337,24 @@ const PartnerDashboard = () => {
   const loadApprovalRequests = async () => {
     try {
       setApprovalsLoading(true);
-      const [pending, recent] = await Promise.all([
+      const [pending, recent, chainResponse] = await Promise.all([
         timeEntriesAPI.listApprovalRequests({ status: 'pending' }),
         timeEntriesAPI.listApprovalRequests({ status: 'approved' }),
+        apiFetch('GET', '/partners/approval-chain'),
       ]);
+      const chainPayload = chainResponse?.data ?? chainResponse ?? {};
+      const overBudget = Array.isArray(chainPayload.overBudgetRequests)
+        ? chainPayload.overBudgetRequests
+        : [];
+      const activeOverBudget = overBudget.filter((row: PartnerOverBudgetRequest) =>
+        ['pending', 'manager_approved'].includes(String(row.status || '').toLowerCase())
+      );
       setApprovalRequests(Array.isArray(pending) ? pending : []);
       setRecentApprovals(Array.isArray(recent) ? recent.slice(0, 5) : []);
+      setOverBudgetRequests(activeOverBudget.slice(0, 8));
     } catch (err) {
       console.error('Error loading approval requests:', err);
+      setOverBudgetRequests([]);
     } finally {
       setApprovalsLoading(false);
     }
@@ -322,6 +396,30 @@ const PartnerDashboard = () => {
     const approvalNotes = window.prompt('Rejection reason (optional):') || undefined;
     await timeEntriesAPI.rejectApprovalRequest(requestId, approvalNotes);
     await loadApprovalRequests();
+  };
+
+  const refreshSummaryOnly = async () => {
+    try {
+      const response = await apiFetch('GET', '/partners/dashboard-summary');
+      const data = response?.data ?? response;
+      setSummary(data);
+    } catch (err) {
+      console.error('Error refreshing partner summary:', err);
+    }
+  };
+
+  const handleApproveOverBudgetRequest = async (requestId: number) => {
+    const approvalNotes = window.prompt('Partner approval notes (optional):') || undefined;
+    await timeEntriesAPI.approveOverBudgetRequest(requestId, approvalNotes);
+    await loadApprovalRequests();
+    await refreshSummaryOnly();
+  };
+
+  const handleRejectOverBudgetRequest = async (requestId: number) => {
+    const approvalNotes = window.prompt('Partner rejection reason (optional):') || undefined;
+    await timeEntriesAPI.rejectOverBudgetRequest(requestId, approvalNotes);
+    await loadApprovalRequests();
+    await refreshSummaryOnly();
   };
 
   const formatCurrency = (amount: number) =>
@@ -498,6 +596,7 @@ const PartnerDashboard = () => {
           </div>
         )}
 
+
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -587,9 +686,44 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="metric-value">
-                {approvalRequests.length || pendingAlertsCount || summary?.pendingTimeEntriesCount || 0}
+                {approvalRequests.length +
+                  overBudgetRequests.length +
+                  Number(summary?.portfolio?.jobsAwaitingPartner || 0)}
               </div>
               <p className="text-xs text-muted-foreground">Awaiting action</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Cost Variance</CardTitle>
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div
+                className={`metric-value ${
+                  Number(portfolio?.totalCostVariance || 0) > 0 ? 'text-destructive' : ''
+                }`}
+                title={formatCurrency(Number(portfolio?.totalCostVariance || 0))}
+              >
+                {formatCompactCurrency(Number(portfolio?.totalCostVariance || 0))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Planned vs actual cost
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Awaiting Partner</CardTitle>
+              <AlertCircle className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="metric-value">{Number(portfolio?.jobsAwaitingPartner || 0)}</div>
+              <p className="text-xs text-muted-foreground">
+                Jobs with manager-approved overage
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -877,10 +1011,31 @@ const PartnerDashboard = () => {
                             </p>
                           </div>
                           <div className="text-right">
+                            <p className="text-muted-foreground text-xs">Cost Var</p>
+                            <p
+                              className={`font-medium ${
+                                Number(job.costVariance || 0) > 0 ? 'text-destructive' : ''
+                              }`}
+                            >
+                              {formatCurrency(Number(job.costVariance || 0))}
+                            </p>
+                          </div>
+                          <div className="text-right">
                             <p className="text-muted-foreground text-xs">Profit/Loss</p>
                             <p className={`font-medium ${job.profit < 0 ? 'text-destructive' : ''}`}>
                               {formatCurrency(job.profit)}
                             </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-muted-foreground text-xs">Approvals</p>
+                            <p className="font-medium">
+                              {Number(job.pendingApprovalTotal || 0)} pending
+                            </p>
+                            {(job.approvalChain?.awaitingPartner || 0) > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                {job.approvalChain?.awaitingPartner || 0} awaiting partner
+                              </p>
+                            )}
                           </div>
                           <Badge
                             variant={
@@ -944,6 +1099,22 @@ const PartnerDashboard = () => {
                     </p>
                   </div>
                   <div>
+                    <p className="text-sm text-muted-foreground">Planned Cost</p>
+                    <p className="text-2xl font-bold">
+                      {formatCurrency(Number(portfolio?.totalPlannedCost || 0))}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Cost Variance</p>
+                    <p
+                      className={`text-2xl font-bold ${
+                        Number(portfolio?.totalCostVariance || 0) > 0 ? 'text-destructive' : ''
+                      }`}
+                    >
+                      {formatCurrency(Number(portfolio?.totalCostVariance || 0))}
+                    </p>
+                  </div>
+                  <div>
                     <p className="text-sm text-muted-foreground">Total Profit</p>
                     <p className="text-2xl font-bold">
                       {formatCurrency(portfolio?.totalProfit || 0)}
@@ -969,6 +1140,14 @@ const PartnerDashboard = () => {
                     <p className="text-sm text-muted-foreground">At-Risk Jobs</p>
                     <p className="text-2xl font-bold">{atRiskJobsCount}</p>
                   </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Over Fee Cap Jobs</p>
+                    <p className="text-2xl font-bold">{Number(portfolio?.jobsOverFeeCap || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Awaiting Partner Decisions</p>
+                    <p className="text-2xl font-bold">{Number(portfolio?.jobsAwaitingPartner || 0)}</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -991,7 +1170,16 @@ const PartnerDashboard = () => {
                 {approvalsLoading && (
                   <div className="text-sm text-muted-foreground">Loading approvals…</div>
                 )}
-                {!approvalsLoading && approvalRequests.length === 0 && (
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">{approvalRequests.length} standard</Badge>
+                  <Badge variant="secondary">{overBudgetRequests.length} over-budget</Badge>
+                  <Badge variant="outline">
+                    {approvalRequests.length + overBudgetRequests.length} active in chain
+                  </Badge>
+                </div>
+                {!approvalsLoading &&
+                  approvalRequests.length === 0 &&
+                  overBudgetRequests.length === 0 && (
                   <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
                     No pending approval requests.
                   </div>
@@ -1028,6 +1216,53 @@ const PartnerDashboard = () => {
                     </p>
                   </div>
                 ))}
+                {overBudgetRequests.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Over-budget approval chain</p>
+                    {overBudgetRequests.map((request) => (
+                      <div key={`ob-${request.id}`} className="rounded-md border p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="font-medium">{request.jobName || 'Job'}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {request.employeeName || 'Team member'} · +{Number(request.requestedAdditional || 0).toFixed(1)}h
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <Badge variant={request.status === 'pending' ? 'secondary' : 'outline'}>
+                              {String(request.status).replace(/_/g, ' ')}
+                            </Badge>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Impact: {formatCurrency(Number(request.estimatedCostImpact || 0))}
+                            </p>
+                          </div>
+                        </div>
+                        {(request.status === 'pending' || request.status === 'manager_approved') && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => handleApproveOverBudgetRequest(request.id)}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRejectOverBudgetRequest(request.id)}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        )}
+                        {(request.approvalNotes || request.rejectionReason) && (
+                          <p className="text-xs text-muted-foreground mt-2">
+                            {request.approvalNotes || request.rejectionReason}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 

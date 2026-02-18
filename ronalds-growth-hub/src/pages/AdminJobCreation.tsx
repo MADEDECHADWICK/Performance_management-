@@ -78,6 +78,7 @@ export default function AdminJobCreation() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [queueItems, setQueueItems] = useState<ClientOnboarding[]>([]);
+  const [onboardingLookup, setOnboardingLookup] = useState<ClientOnboarding | null>(null);
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueError, setQueueError] = useState('');
   const [selectedQueueId, setSelectedQueueId] = useState<number | null>(null);
@@ -85,6 +86,37 @@ export default function AdminJobCreation() {
   const [queueStatus, setQueueStatus] = useState<QueueStatus>('all');
   const [selectionNotice, setSelectionNotice] = useState<{ title: string; description?: string } | null>(null);
   const assignmentsRef = useRef<HTMLDivElement | null>(null);
+
+  const handleSelectQueueItem = useCallback((item: ClientOnboarding) => {
+    const clientId = item.client?.id ?? item.clientId;
+    const engagementId = item.engagementLetter?.id ?? item.engagementLetterId;
+    const startDate = item.engagementLetter?.startDate?.slice(0, 10);
+    const endDate = item.engagementLetter?.endDate?.slice(0, 10);
+    const feeAmount = item.engagementLetter?.feeAmount;
+    const jobTitle = item.engagementLetter?.jobTitle;
+    const clientName = item.client?.clientName || item.clientName || '';
+
+    setSelectedQueueId(item.id);
+    setFormData((prev) => ({
+      ...prev,
+      clientId: clientId ? String(clientId) : prev.clientId,
+      engagementLetterId: engagementId ? String(engagementId) : prev.engagementLetterId,
+      jobName: jobTitle || prev.jobName || (clientName ? `${clientName} Engagement` : prev.jobName),
+      startDate: startDate || prev.startDate,
+      dueDate: endDate || prev.dueDate,
+      billingType: feeAmount ? 'fixed_fee' : prev.billingType,
+      fixedFeeAmount: feeAmount ? String(feeAmount) : prev.fixedFeeAmount,
+    }));
+
+    setSelectionNotice({
+      title: 'Onboarding selected',
+      description: 'Scroll down to assign staff and finalize job details.',
+    });
+
+    setTimeout(() => {
+      assignmentsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+  }, []);
 
   const selectedClientId = Number(formData.clientId || 0);
 
@@ -139,50 +171,6 @@ export default function AdminJobCreation() {
     loadQueue();
   }, []);
 
-  useEffect(() => {
-    const onboardingIdParam = searchParams.get('onboardingId');
-    if (!onboardingIdParam) return;
-    const onboardingId = Number(onboardingIdParam);
-    if (!Number.isFinite(onboardingId) || selectedQueueId) return;
-
-    const match = queueItems.find((item) => item.id === onboardingId);
-    if (match) {
-      handleSelectQueueItem(match);
-    }
-  }, [queueItems, searchParams, selectedQueueId]);
-
-  useEffect(() => {
-    if (!selectedClientId) {
-      setEngagementLetters([]);
-      return;
-    }
-
-    const loadEngagementLetters = async () => {
-      try {
-        const letters = await clientsAPI.getEngagementLetters(selectedClientId);
-        setEngagementLetters(letters);
-      } catch (error) {
-        console.error('Failed to load engagement letters:', error);
-      }
-    };
-
-    loadEngagementLetters();
-  }, [selectedClientId]);
-
-  useEffect(() => {
-    if (!formData.clientId) return;
-    const selectedClient = clients.find((client) => String(client.id) === formData.clientId);
-    if (!selectedClient) return;
-
-    setFormData((prev) => ({
-      ...prev,
-      partnerProfileId:
-        prev.partnerProfileId || (selectedClient.partnerProfileId ? String(selectedClient.partnerProfileId) : ''),
-      managerProfileId:
-        prev.managerProfileId || (selectedClient.managerProfileId ? String(selectedClient.managerProfileId) : ''),
-    }));
-  }, [clients, formData.clientId]);
-
   const loadInitialData = async () => {
     try {
       setIsLoading(true);
@@ -219,36 +207,122 @@ export default function AdminJobCreation() {
     }
   };
 
-  const handleSelectQueueItem = useCallback((item: ClientOnboarding) => {
-    const clientId = item.client?.id ?? item.clientId;
-    const engagementId = item.engagementLetter?.id ?? item.engagementLetterId;
-    const startDate = item.engagementLetter?.startDate?.slice(0, 10);
-    const endDate = item.engagementLetter?.endDate?.slice(0, 10);
-    const feeAmount = item.engagementLetter?.feeAmount;
-    const jobTitle = item.engagementLetter?.jobTitle;
-    const clientName = item.client?.clientName || item.clientName || '';
+  const buildOnboardingNotReadyMessage = (record?: ClientOnboarding | null) => {
+    if (!record) {
+      return 'Choose an onboarding item from the queue to create a job.';
+    }
+    const status = record.status;
+    if (status !== 'approved' && status !== 'client_created') {
+      return `Onboarding status is "${status}". It must be approved before job creation.`;
+    }
+    const engagementStatus = record.engagementLetter?.status;
+    if (engagementStatus !== 'approved') {
+      return `Engagement letter is "${engagementStatus || 'missing'}". Approve it before creating a job.`;
+    }
+    if (!record.engagementLetter?.feeAmount) {
+      return 'Engagement letter must include a fee amount before job creation.';
+    }
+    return 'Approved onboarding is not yet eligible. Refresh and try again.';
+  };
 
-    setSelectedQueueId(item.id);
+  useEffect(() => {
+    const onboardingIdParam =
+      searchParams.get('onboardingId') ||
+      searchParams.get('onboardingId'.toLowerCase()) ||
+      searchParams.get('onboardingid');
+    if (!onboardingIdParam) return;
+    const onboardingId = Number(onboardingIdParam);
+    if (!Number.isFinite(onboardingId) || selectedQueueId) return;
+
+    const match = queueItems.find((item) => item.id === onboardingId);
+    if (match) {
+      setOnboardingLookup(null);
+      handleSelectQueueItem(match);
+      return;
+    }
+
+    let cancelled = false;
+    clientOnboardingsAPI
+      .getById(onboardingId)
+      .then((record) => {
+        if (cancelled) return;
+        setOnboardingLookup(record);
+        setSelectionNotice({
+          title: 'Onboarding not ready',
+          description: buildOnboardingNotReadyMessage(record),
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setOnboardingLookup(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queueItems, searchParams, selectedQueueId, handleSelectQueueItem]);
+
+  useEffect(() => {
+    if (!selectedClientId) {
+      setEngagementLetters([]);
+      return;
+    }
+
+    const loadEngagementLetters = async () => {
+      try {
+        const letters = await clientsAPI.getEngagementLetters(selectedClientId);
+        setEngagementLetters(letters);
+      } catch (error) {
+        console.error('Failed to load engagement letters:', error);
+      }
+    };
+
+    loadEngagementLetters();
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    if (!formData.clientId) return;
+    const selectedClient = clients.find((client) => String(client.id) === formData.clientId);
+    if (!selectedClient) return;
+
     setFormData((prev) => ({
       ...prev,
-      clientId: clientId ? String(clientId) : prev.clientId,
-      engagementLetterId: engagementId ? String(engagementId) : prev.engagementLetterId,
-      jobName: jobTitle || prev.jobName || (clientName ? `${clientName} Engagement` : prev.jobName),
-      startDate: startDate || prev.startDate,
-      dueDate: endDate || prev.dueDate,
-      billingType: feeAmount ? 'fixed_fee' : prev.billingType,
-      fixedFeeAmount: feeAmount ? String(feeAmount) : prev.fixedFeeAmount,
+      partnerProfileId:
+        prev.partnerProfileId || (selectedClient.partnerProfileId ? String(selectedClient.partnerProfileId) : ''),
+      managerProfileId:
+        prev.managerProfileId || (selectedClient.managerProfileId ? String(selectedClient.managerProfileId) : ''),
     }));
+  }, [clients, formData.clientId]);
 
-    setSelectionNotice({
-      title: 'Onboarding selected',
-      description: 'Scroll down to assign staff and finalize job details.',
-    });
+  useEffect(() => {
+    if (selectedQueueId || queueItems.length === 0) return;
+    const selectedClientId = formData.clientId ? Number(formData.clientId) : undefined;
+    const selectedLetterId = formData.engagementLetterId
+      ? Number(formData.engagementLetterId)
+      : undefined;
 
-    setTimeout(() => {
-      assignmentsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 150);
-  }, []);
+    let matches = queueItems;
+    if (selectedClientId) {
+      matches = matches.filter(
+        (item) => (item.client?.id ?? item.clientId) === selectedClientId
+      );
+    }
+    if (selectedLetterId) {
+      matches = matches.filter(
+        (item) => (item.engagementLetter?.id ?? item.engagementLetterId) === selectedLetterId
+      );
+    }
+
+    if (matches.length === 1) {
+      handleSelectQueueItem(matches[0]);
+    }
+  }, [
+    queueItems,
+    formData.clientId,
+    formData.engagementLetterId,
+    selectedQueueId,
+    handleSelectQueueItem,
+  ]);
 
   const handleInputChange = (field: keyof JobFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -313,9 +387,19 @@ export default function AdminJobCreation() {
 
   const validateForm = () => {
     if (!selectedQueueId) {
+      const selectedClientId = formData.clientId ? Number(formData.clientId) : undefined;
+      const hasMatchingQueueItem = selectedClientId
+        ? queueItems.some((item) => (item.client?.id ?? item.clientId) === selectedClientId)
+        : false;
+      const description =
+        onboardingLookup
+          ? buildOnboardingNotReadyMessage(onboardingLookup)
+          : selectedClientId && !hasMatchingQueueItem
+            ? 'No approved onboarding found for this client. Approve the onboarding and engagement letter in the HR queue first.'
+            : 'Choose an onboarding item from the queue to create a job.';
       toast({
         title: 'Select from HR queue',
-        description: 'Choose an onboarding item from the queue to create a job.',
+        description,
         variant: 'destructive',
       });
       return false;

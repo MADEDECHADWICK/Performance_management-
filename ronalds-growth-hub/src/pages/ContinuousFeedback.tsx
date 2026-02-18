@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmptyState from "@/components/ui/empty-state";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   PAGE_STACK,
   SECTION_STACK,
@@ -43,6 +44,7 @@ interface Employee {
 const ContinuousFeedback = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -58,18 +60,18 @@ const ContinuousFeedback = () => {
   });
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadData = async () => {
     try {
-      const user = await authAPI.me();
-      if (!user) {
-        navigate("/auth");
-        return;
-      }
-
-      setCurrentProfileId(user.profileId ?? null);
+      const profileId = (user as any)?.profileId ?? user?.profile?.id ?? null;
+      setCurrentProfileId(profileId);
 
       // Load feedback (received and given)
       const feedbackResponse = await apiFetch("GET", "/feedback?page=1&pageSize=100");
@@ -82,7 +84,7 @@ const ContinuousFeedback = () => {
       const employeesItems =
         employeesResponse?.data?.items ?? employeesResponse?.data ?? employeesResponse ?? [];
       const filteredEmployees = Array.isArray(employeesItems)
-        ? employeesItems.filter((emp: any) => emp.id !== user.profileId)
+        ? employeesItems.filter((emp: any) => emp.id !== profileId)
         : [];
       setEmployees(filteredEmployees);
 
@@ -113,8 +115,10 @@ const ContinuousFeedback = () => {
     e.preventDefault();
     
     try {
-      const user = await authAPI.me();
-      if (!user) return;
+      if (!user) {
+        navigate("/auth");
+        return;
+      }
 
       const feedbackData = {
         recipient_profile_id: Number(formData.recipient_profile_id),

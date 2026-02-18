@@ -1,10 +1,46 @@
 import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware } from "../middleware/auth";
+import { loadProfile } from "../middleware/loadProfile";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { hrOrAdmin } from "../utils/middleware";
 
 const router = Router();
+const privilegedRoles = new Set([
+  "admin",
+  "super_admin",
+  "hr",
+  "hr_manager",
+  "gmp",
+  "group_managing_partner",
+]);
+
+const getRoleNames = (req: any) => {
+  const roles = [
+    ...(req.userRoles || []),
+    ...(req.user?.authRoles || []),
+    req.profile?.role?.name,
+  ]
+    .filter(Boolean)
+    .map((role: string) => String(role).toLowerCase());
+  return Array.from(new Set(roles));
+};
+
+const isPrivileged = (req: any) =>
+  getRoleNames(req).some((role: string) => privilegedRoles.has(role));
+
+const isManagerRole = (req: any) =>
+  getRoleNames(req).some(
+    (role: string) => role.includes("manager") || role.includes("team lead") || role === "partner"
+  );
+
+const hasMarketingRole = (req: any) =>
+  getRoleNames(req).some((role: string) => role.includes("marketing"));
+
+const canViewPartners = (req: any) => isPrivileged(req) || isManagerRole(req) || hasMarketingRole(req);
+
+const resolveRequesterProfileId = (req: any) =>
+  req.profile?.id ?? (req.user?.profileId ? Number(req.user.profileId) : undefined);
 
 const parseId = (value: string) => {
   const id = Number(value);
@@ -12,7 +48,7 @@ const parseId = (value: string) => {
 };
 
 // GET /employees - List employees with optional filters
-router.get("/", authMiddleware, async (req, res) => {
+router.get("/", authMiddleware, loadProfile, async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
     const pageSize = Number(req.query.pageSize) || 10;
@@ -26,20 +62,38 @@ router.get("/", authMiddleware, async (req, res) => {
     const onboardingStatus = typeof req.query.onboardingStatus === "string" ? req.query.onboardingStatus : undefined;
     const search = typeof req.query.search === "string" ? req.query.search : undefined;
 
-    const where: any = {};
-    if (status) where.status = status;
-    if (Number.isFinite(departmentId)) where.departmentId = departmentId;
-    if (Number.isFinite(roleId)) where.roleId = roleId;
-    if (Number.isFinite(managerId)) where.managerId = managerId;
-    if (typeof isPartner === "boolean") where.isPartner = isPartner;
-    if (onboardingStatus) where.onboardingStatus = onboardingStatus;
+    const filters: any[] = [];
+    if (status) filters.push({ status });
+    if (Number.isFinite(departmentId)) filters.push({ departmentId });
+    if (Number.isFinite(roleId)) filters.push({ roleId });
+    if (Number.isFinite(managerId)) filters.push({ managerId });
+    if (typeof isPartner === "boolean") filters.push({ isPartner });
+    if (onboardingStatus) filters.push({ onboardingStatus });
     if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: "insensitive" } },
-        { lastName: { contains: search, mode: "insensitive" } },
-        { user: { email: { contains: search, mode: "insensitive" } } },
-      ];
+      filters.push({
+        OR: [
+          { firstName: { contains: search, mode: "insensitive" } },
+          { lastName: { contains: search, mode: "insensitive" } },
+          { user: { email: { contains: search, mode: "insensitive" } } },
+        ],
+      });
     }
+
+    if (!isPrivileged(req)) {
+      const requesterId = resolveRequesterProfileId(req);
+      if (!requesterId) {
+        return res.status(401).json(errorResponse("Unauthorized", 401));
+      }
+      if (isManagerRole(req)) {
+        filters.push({
+          OR: [{ id: requesterId }, { managerId: requesterId }],
+        });
+      } else {
+        filters.push({ id: requesterId });
+      }
+    }
+
+    const where: any = filters.length ? { AND: filters } : {};
 
     const [employees, total] = await Promise.all([
       prisma.profile.findMany({
@@ -64,21 +118,29 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 // GET /employees/partners - Get partner profiles
-router.get("/partners/list", authMiddleware, async (_req, res) => {
+router.get("/partners/list", authMiddleware, loadProfile, async (req, res) => {
   try {
+    if (!canViewPartners(req)) {
+      return res.status(403).json(errorResponse("Access denied", 403));
+    }
+
     const partners = await prisma.profile.findMany({
       where: {
         status: "active",
         isPartner: true,
       },
-      include: {
-        user: { select: { id: true, email: true } },
-        role: { select: { id: true, name: true } },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        positionTitle: true,
         department: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
       },
       orderBy: { lastName: "asc" },
     });
 
+    
     res.json(successResponse(partners, "Partners retrieved"));
   } catch (error: any) {
     console.error("Error fetching partners:", error);
@@ -87,8 +149,12 @@ router.get("/partners/list", authMiddleware, async (_req, res) => {
 });
 
 // GET /employees/managers - Get manager profiles
-router.get("/managers/list", authMiddleware, async (_req, res) => {
+router.get("/managers/list", authMiddleware, loadProfile, async (req, res) => {
   try {
+    if (!isPrivileged(req) && !isManagerRole(req)) {
+      return res.status(403).json(errorResponse("Access denied", 403));
+    }
+
     const managers = await prisma.profile.findMany({
       where: {
         status: "active",
@@ -141,7 +207,7 @@ router.get("/missing-induction", ...hrOrAdmin(), async (_req, res) => {
 });
 
 // GET /employees/:employeeId - Get employee profile
-router.get("/:employeeId", authMiddleware, async (req, res) => {
+router.get("/:employeeId", authMiddleware, loadProfile, async (req, res) => {
   try {
     const employeeId = parseId(req.params.employeeId);
     if (!employeeId) {
@@ -162,6 +228,19 @@ router.get("/:employeeId", authMiddleware, async (req, res) => {
     if (!employee) {
       res.status(404).json(errorResponse("Employee not found", 404));
       return;
+    }
+
+    if (!isPrivileged(req)) {
+      const requesterId = resolveRequesterProfileId(req);
+      if (!requesterId) {
+        return res.status(401).json(errorResponse("Unauthorized", 401));
+      }
+      const canViewSelf = requesterId === employeeId;
+      const canViewDirectReport =
+        isManagerRole(req) && employee.managerId === requesterId;
+      if (!canViewSelf && !canViewDirectReport) {
+        return res.status(403).json(errorResponse("Access denied", 403));
+      }
     }
 
     res.json(successResponse(employee, "Employee retrieved"));

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import {
   SUMMARY_CARD_HEADER,
   SUMMARY_CARD_TITLE,
 } from "@/components/ui/cardStyles";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Recommendation {
   id: string;
@@ -34,17 +35,22 @@ interface Recommendation {
 const DevelopmentPlan = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [activeFilter, setActiveFilter] = useState("all");
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadRecommendations();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadRecommendations = async () => {
     try {
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;

@@ -580,7 +580,7 @@ export default function TimesheetsNew() {
       jobId: Number(additionalTimeRequest.jobId),
       additionalHours: Number(additionalTimeRequest.additionalHours),
       justification: additionalTimeRequest.justification.trim(),
-      requestType: additionalTimeRequest.billable ? 'billable' : 'non_billable',
+      requestType: additionalTimeRequest.billable ? 'additional_hours' : 'over_budget',
     });
   };
 

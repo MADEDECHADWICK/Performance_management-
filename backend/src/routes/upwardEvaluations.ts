@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
 import prisma from '../prisma';
 
 const router = Router();
 
 // GET /upward_evaluations?evaluatorId= or ?evaluateeId=
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     return res.json([]);
   } catch (err: any) {
@@ -14,7 +15,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /upward_evaluations/:id
-router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     return res.json({ id: Number(req.params.id), message: 'Upward evaluations are handled via evaluation assignments.' });
   } catch (err: any) {

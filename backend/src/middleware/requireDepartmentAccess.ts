@@ -3,9 +3,11 @@
  *
  * Rules:
  * - Admin/Super Admin: full access
- * - HR: full access (optional, common in HR systems)
- * - Department Head: access only to their department
- * - Others: access only to their own department (optional; you can tighten/relax)
+ * - HR/HR Manager: full access
+ * - Assigned Partner: access to departments they own
+ * - Department Head: access to their department
+ * - Managers: access to departments where they manage direct reports
+ * - Others: access only to their own department
  *
  * Expects department id from:
  * - req.params.departmentId OR req.query.departmentId
@@ -16,8 +18,13 @@ import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
 
-const isAdmin = (roles: string[]) => roles.includes("admin") || roles.includes("super_admin");
-const isHR = (roles: string[]) => roles.includes("hr");
+const normalizeRoles = (roles: string[]) =>
+  Array.from(new Set(roles.map((role) => String(role).toLowerCase())));
+
+const isAdmin = (roles: string[]) =>
+  roles.includes("admin") || roles.includes("super_admin");
+const isHR = (roles: string[]) =>
+  roles.includes("hr") || roles.includes("hr_manager");
 
 export const requireDepartmentAccess = async (
   req: AuthRequest,
@@ -31,7 +38,10 @@ export const requireDepartmentAccess = async (
       return;
     }
 
-    const roles: string[] = req.userRoles || [];
+    const roles: string[] = normalizeRoles([
+      ...(req.userRoles || []),
+      ...((req.user?.authRoles || []) as string[]),
+    ]);
 
     // Admin/HR can access any department
     if (isAdmin(roles) || isHR(roles)) {
@@ -53,7 +63,8 @@ export const requireDepartmentAccess = async (
       select: {
         id: true,
         departmentId: true,
-        departmentsHeaded: { select: { id: true } }
+        departmentsHeaded: { select: { id: true } },
+        departmentsAsPartner: { select: { id: true } },
       }
     });
 
@@ -64,9 +75,21 @@ export const requireDepartmentAccess = async (
 
     const headedDeptIds = profile.departmentsHeaded.map(d => d.id);
     const isDeptHead = headedDeptIds.includes(departmentId);
+    const partnerDeptIds = profile.departmentsAsPartner.map((department) => department.id);
+    const isAssignedPartner = partnerDeptIds.includes(departmentId);
 
-    // Allow department head access to their department
-    if (isDeptHead) {
+    // Allow department head / assigned partner access to their department
+    if (isDeptHead || isAssignedPartner) {
+      next();
+      return;
+    }
+
+    const directReportsInDepartment = await prisma.profile.count({
+      where: { managerId: profileId, departmentId },
+    });
+
+    // Allow managers who have direct reports in this department
+    if (directReportsInDepartment > 0) {
       next();
       return;
     }

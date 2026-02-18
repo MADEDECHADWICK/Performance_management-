@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
+import { useAuth } from "@/contexts/AuthContext";
 
 
 type Collection = {
@@ -33,6 +34,8 @@ type JobOption = { id: number; jobCode: string | null; jobName: string | null; c
 export default function FinanceCollections() {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { hasModuleAccess } = useAuth();
+  const canWriteCollections = hasModuleAccess("finance", "write");
   const [loading, setLoading] = useState(true);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -141,6 +144,15 @@ export default function FinanceCollections() {
 
   const handlePaymentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canWriteCollections) {
+      toast({
+        title: "Permission required",
+        description: "You need finance write access to record payments.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       await apiFetch("POST", "/finance-dashboard/collections", {
         clientId: paymentForm.clientId,
@@ -264,10 +276,15 @@ export default function FinanceCollections() {
           <Card>
             <CardHeader>
               <CardTitle>Record Collection</CardTitle>
-              <CardDescription>Log incoming payments by client and job.</CardDescription>
+              <CardDescription>
+                {canWriteCollections
+                  ? "Log incoming payments by client and job."
+                  : "Read-only: you need finance write access to record payments."}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={handlePaymentSubmit}>
+                <fieldset className="space-y-4" disabled={!canWriteCollections}>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="clientId">Client</Label>
@@ -399,7 +416,8 @@ export default function FinanceCollections() {
                     }
                   />
                 </div>
-                <Button type="submit">Save Payment</Button>
+                <Button type="submit" disabled={!canWriteCollections}>Save Payment</Button>
+                </fieldset>
               </form>
             </CardContent>
           </Card>

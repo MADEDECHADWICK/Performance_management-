@@ -3,6 +3,14 @@ import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/reqiureRole";
 import prisma from "../prisma";
 import { nonFinancialPerformanceService } from "../services/nonFinancialPerformance.service";
+import { normalizeWeights, resolveRoleConfig } from "../services/performanceRoleConfig";
+import {
+  getDashboardModuleCoverageSummary,
+  mergeWithDefaultScoringConfig,
+  normalizeOperationalBlend,
+  normalizePerformanceMix,
+  resolveDashboardModuleForContext,
+} from "../services/performanceFramework.service";
 import { errorResponse, successResponse } from "../utils/response";
 
 const router = Router();
@@ -20,6 +28,11 @@ const normalizeWeightValue = (value: number | undefined, fallback: number) => {
   if (value > 1) return value / 100;
   return value;
 };
+
+const normalizedWeight = (
+  weights: { total: number } & Record<string, number>,
+  key: string
+) => Number((weights as Record<string, number>)[key] || 0);
 
 const getScoringConfig = async (
   departmentId?: number | null,
@@ -115,6 +128,7 @@ const calculateAndStoreScore = async (
       financialTarget: true,
       utilizationTarget: true,
       departmentId: true,
+      role: { select: { name: true } },
     },
   });
 
@@ -122,9 +136,55 @@ const calculateAndStoreScore = async (
     throw new Error("Profile not found");
   }
 
+  const roleConfig = resolveRoleConfig(profile);
+  const isMarketingRole =
+    roleConfig.role === "marketing" || roleConfig.role === "business_development";
+  const financialWeights = normalizeWeights(roleConfig.financial) as {
+    total: number;
+  } & Record<string, number>;
+  const efficiencyWeights = normalizeWeights(roleConfig.efficiency) as {
+    total: number;
+  } & Record<string, number>;
+
+  const resolveJobScopeIds = async () => {
+    if (roleConfig.jobScope === "assigned") {
+      const assignments = await prisma.jobStaffAssignment.findMany({
+        where: {
+          employeeProfileId: profileId,
+          assignedAt: { lte: period.endDate },
+        },
+        select: { jobId: true },
+      });
+      return assignments.map((assignment) => assignment.jobId);
+    }
+
+    const jobWhere: Record<string, any> = {
+      createdAt: { lte: period.endDate },
+      OR: [{ completionDate: null }, { completionDate: { gte: period.startDate } }],
+    };
+    if (roleConfig.jobScope === "managed") {
+      jobWhere.managerProfileId = profileId;
+    }
+    if (roleConfig.jobScope === "partnered") {
+      jobWhere.partnerProfileId = profileId;
+    }
+
+    const jobs = await prisma.job.findMany({
+      where: jobWhere,
+      select: { id: true },
+    });
+    return jobs.map((job) => job.id);
+  };
+
+  const jobIds = Array.from(new Set(await resolveJobScopeIds()));
+  const inScopeJobFilter =
+    jobIds.length > 0 ? { jobId: { in: jobIds } } : { jobId: -1 };
+
   const allocations = await prisma.revenueAllocation.findMany({
     where: {
-      employeeProfileId: profileId,
+      ...(roleConfig.jobScope === "assigned"
+        ? { employeeProfileId: profileId }
+        : inScopeJobFilter),
       allocationMonth: { gte: period.startDate, lte: period.endDate },
     },
     select: {
@@ -148,19 +208,28 @@ const calculateAndStoreScore = async (
   );
   const netProfit = profit - loss;
 
-  const billableHoursAgg = await prisma.timeEntry.aggregate({
-    where: {
-      employeeProfileId: profileId,
-      billable: true,
-      dateWorked: { gte: period.startDate, lte: period.endDate },
-    },
-    _sum: { hours: true },
-  });
-
-  const allocatedHoursAgg = await prisma.jobTimeAllocation.aggregate({
-    where: { employeeProfileId: profileId },
-    _sum: { allocatedHours: true },
-  });
+  const [billableHoursAgg, allocatedHoursAgg] = await Promise.all([
+    prisma.timeEntry.aggregate({
+      where: {
+        ...(roleConfig.jobScope === "assigned"
+          ? { employeeProfileId: profileId }
+          : inScopeJobFilter),
+        billable: true,
+        status: "approved",
+        dateWorked: { gte: period.startDate, lte: period.endDate },
+      },
+      _sum: { hours: true },
+    }),
+    prisma.jobTimeAllocation.aggregate({
+      where: {
+        ...(roleConfig.jobScope === "assigned"
+          ? { employeeProfileId: profileId }
+          : { jobCosting: inScopeJobFilter }),
+        createdAt: { lte: period.endDate },
+      },
+      _sum: { allocatedHours: true },
+    }),
+  ]);
 
   const billableHours = Number(billableHoursAgg._sum.hours || 0);
   const allocatedHours = Number(allocatedHoursAgg._sum.allocatedHours || 0);
@@ -170,25 +239,165 @@ const calculateAndStoreScore = async (
   const utilizationTarget =
     utilizationTargetRaw > 1 ? utilizationTargetRaw / 100 : utilizationTargetRaw;
 
-  const revenueTarget = Number(profile.financialTarget || 0);
+  const [wonProposals, departmentTargetAgg, departmentHeadcount, scopedJobFees] = await Promise.all([
+    prisma.proposal.findMany({
+      where: {
+        status: "won",
+        wonAt: { gte: period.startDate, lte: period.endDate },
+        OR: [
+          { createdByProfileId: profileId },
+          { assignedPartnerProfileId: profileId },
+        ],
+      },
+      select: {
+        clientId: true,
+        proposedFee: true,
+      },
+    }),
+    profile.departmentId
+      ? prisma.revenueProjection.aggregate({
+          _sum: { projectedAmount: true },
+          where: {
+            departmentId: profile.departmentId,
+            monthYear: { gte: period.startDate, lte: period.endDate },
+          },
+        })
+      : Promise.resolve({ _sum: { projectedAmount: 0 } }),
+    profile.departmentId
+      ? prisma.profile.count({
+          where: { departmentId: profile.departmentId, status: "active" },
+        })
+      : Promise.resolve(0),
+    jobIds.length > 0
+      ? prisma.job.findMany({
+          where: { id: { in: jobIds } },
+          select: {
+            billingType: true,
+            fixedFeeAmount: true,
+            jobCosting: { select: { jobFee: true } },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
 
-  const revenueScore = revenueTarget > 0 ? clamp((revenue / revenueTarget) * 100) : 0;
-  const profitMargin = revenue > 0 ? netProfit / revenue : 0;
+  const wonProposalValue = wonProposals.reduce(
+    (sum, proposal) => sum + Number(proposal.proposedFee || 0),
+    0
+  );
+  const wonClientIds = Array.from(new Set(wonProposals.map((proposal) => proposal.clientId)));
+  const leadToCashCollected =
+    wonClientIds.length > 0
+      ? Number(
+          (
+            await prisma.clientPayment.aggregate({
+              _sum: { paymentAmount: true },
+              where: {
+                clientId: { in: wonClientIds },
+                paymentDate: { gte: period.startDate, lte: period.endDate },
+              },
+            })
+          )._sum.paymentAmount || 0
+        )
+      : 0;
+  const leadToCashRate =
+    wonProposalValue > 0 ? clamp((leadToCashCollected / wonProposalValue) * 100) : 0;
+  const bdRevenue = isMarketingRole ? leadToCashCollected : wonProposalValue;
+  const departmentTarget = Number(departmentTargetAgg._sum.projectedAmount || 0);
+  const scopedFeeTarget = scopedJobFees.reduce(
+    (sum, job) =>
+      sum +
+      Number(
+        job.jobCosting?.jobFee ||
+          (job.billingType === "fixed_fee" ? job.fixedFeeAmount : 0) ||
+          0
+      ),
+    0
+  );
+
+  const scoringRevenue = isMarketingRole ? leadToCashCollected : revenue;
+
+  let revenueTarget = Number(profile.financialTarget || 0);
+  if (revenueTarget <= 0 && departmentTarget > 0) {
+    if (roleConfig.jobScope === "assigned") {
+      revenueTarget = departmentHeadcount > 0 ? departmentTarget / departmentHeadcount : departmentTarget;
+    } else {
+      revenueTarget = departmentTarget;
+    }
+  }
+  if (revenueTarget <= 0 && roleConfig.jobScope === "partnered" && scopedFeeTarget > 0) {
+    revenueTarget = scopedFeeTarget;
+  }
+  if (revenueTarget <= 0) {
+    revenueTarget = Math.max(scoringRevenue, 1);
+  }
+
+  const revenueScore = revenueTarget > 0 ? clamp((scoringRevenue / revenueTarget) * 100) : 0;
+  const profitMargin = scoringRevenue > 0 ? netProfit / scoringRevenue : 0;
   const profitScore = clamp(profitMargin * 100);
   const utilizationScore =
     utilizationTarget > 0 ? clamp((utilizationRate / utilizationTarget) * 100) : 0;
 
-  let financialWeighted = clamp(
-    revenueScore * 0.5 + profitScore * 0.3 + utilizationScore * 0.2
-  );
+  const bdScore = isMarketingRole
+    ? revenueTarget > 0
+      ? clamp((bdRevenue / revenueTarget) * 100)
+      : leadToCashRate
+    : departmentTarget > 0
+      ? clamp((bdRevenue / departmentTarget) * 100)
+      : 0;
+  const assignedJobsCount = jobIds.length;
+
+  const completedJobs =
+    assignedJobsCount > 0
+      ? await prisma.job.findMany({
+          where: {
+            id: { in: jobIds },
+            completionDate: { gte: period.startDate, lte: period.endDate },
+          },
+          select: { completionDate: true, dueDate: true },
+        })
+      : [];
+
+  const completedJobsCount = completedJobs.length;
+  const jobCompletionScore =
+    assignedJobsCount > 0 ? clamp((completedJobsCount / assignedJobsCount) * 100) : 0;
+
+  const completedWithDueDate = completedJobs.filter((job) => job.dueDate);
+  const onTimeCount = completedWithDueDate.filter(
+    (job) =>
+      job.completionDate &&
+      job.dueDate &&
+      job.completionDate.getTime() <= job.dueDate.getTime()
+  ).length;
+  const timeToDeliveryScore =
+    completedWithDueDate.length > 0
+      ? clamp((onTimeCount / completedWithDueDate.length) * 100)
+      : 0;
+
+  let financialWeighted =
+    financialWeights.total > 0
+      ? clamp(
+          revenueScore * normalizedWeight(financialWeights, "revenue") +
+            profitScore * normalizedWeight(financialWeights, "profit") +
+            bdScore * normalizedWeight(financialWeights, "bd")
+        )
+      : 0;
+
+  const efficiencyWeighted =
+    efficiencyWeights.total > 0
+      ? clamp(
+          utilizationScore * normalizedWeight(efficiencyWeights, "utilization") +
+            jobCompletionScore * normalizedWeight(efficiencyWeights, "jobCompletion") +
+            timeToDeliveryScore * normalizedWeight(efficiencyWeights, "timeToDelivery")
+        )
+      : 100;
 
   const definition = await getScoringConfig(profile.departmentId, evaluationCycleId);
-  const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
-  const nonFinancialWeight = normalizeWeightValue(
-    scoringConfig.nonFinancialWeight,
-    0.3
+  const scoringConfig = mergeWithDefaultScoringConfig(
+    (definition?.scoringConfig ?? {}) as Record<string, any>,
+    profile
   );
-  const financialWeight = normalizeWeightValue(scoringConfig.financialWeight, 0.7);
+  const performanceMix = normalizePerformanceMix(scoringConfig?.performanceMix);
+  const operationalBlend = normalizeOperationalBlend(scoringConfig?.operationalBlend);
 
   const weightConfig = {
     learningGrowthWeight: normalizeWeightValue(
@@ -225,7 +434,12 @@ const calculateAndStoreScore = async (
     weightConfig
   );
 
-  const nonFinancialWeighted = clamp(nonFinancialScores.overallNonFinancialScore);
+  const coreNonFinancialScore = clamp(nonFinancialScores.overallNonFinancialScore);
+  const operationalEfficiencyScore = clamp(efficiencyWeighted);
+  const nonFinancialWeighted = clamp(
+    coreNonFinancialScore * operationalBlend.coreNonFinancial +
+      operationalEfficiencyScore * operationalBlend.operationalEfficiency
+  );
   const lossPenaltyPercent = normalizeWeightValue(
     scoringConfig?.lossPenaltyPercent,
     0
@@ -235,9 +449,98 @@ const calculateAndStoreScore = async (
     financialWeighted = clamp(financialWeighted * (1 - profitabilityPenaltyApplied));
   }
   const totalScore = clamp(
-    financialWeighted * financialWeight + nonFinancialWeighted * nonFinancialWeight
+    financialWeighted * performanceMix.financial +
+      nonFinancialWeighted * performanceMix.nonFinancial
   );
   const grade = gradeFromScore(totalScore);
+
+  const financialWeightMap = {
+    revenue: normalizedWeight(financialWeights, "revenue"),
+    profit: normalizedWeight(financialWeights, "profit"),
+    bd: normalizedWeight(financialWeights, "bd"),
+  };
+  const financialScoreMap = {
+    revenue: revenueScore,
+    profit: profitScore,
+    bd: bdScore,
+  };
+  const financialContributionMap = {
+    revenue: financialScoreMap.revenue * financialWeightMap.revenue,
+    profit: financialScoreMap.profit * financialWeightMap.profit,
+    bd: financialScoreMap.bd * financialWeightMap.bd,
+  };
+  const efficiencyWeightMap = {
+    utilization: normalizedWeight(efficiencyWeights, "utilization"),
+    jobCompletion: normalizedWeight(efficiencyWeights, "jobCompletion"),
+    timeToDelivery: normalizedWeight(efficiencyWeights, "timeToDelivery"),
+  };
+  const efficiencyScoreMap = {
+    utilization: utilizationScore,
+    jobCompletion: jobCompletionScore,
+    timeToDelivery: timeToDeliveryScore,
+  };
+  const efficiencyContributionMap = {
+    utilization: efficiencyScoreMap.utilization * efficiencyWeightMap.utilization,
+    jobCompletion: efficiencyScoreMap.jobCompletion * efficiencyWeightMap.jobCompletion,
+    timeToDelivery: efficiencyScoreMap.timeToDelivery * efficiencyWeightMap.timeToDelivery,
+  };
+
+  const roleFormula = {
+    role: roleConfig.role,
+    jobScope: roleConfig.jobScope,
+    overallWeights: {
+      financial: performanceMix.financial,
+      nonFinancial: performanceMix.nonFinancial,
+      // Backward-compatible field: efficiency is now a sub-signal inside non-financial.
+      efficiency: performanceMix.nonFinancial * operationalBlend.operationalEfficiency,
+    },
+    nonFinancialOperationalBlend: {
+      coreNonFinancial: operationalBlend.coreNonFinancial,
+      operationalEfficiency: operationalBlend.operationalEfficiency,
+    },
+    financial: {
+      weights: financialWeightMap,
+      scores: financialScoreMap,
+      contributions: financialContributionMap,
+      inputs: {
+        revenue: scoringRevenue,
+        allocationRevenue: revenue,
+        profit,
+        loss,
+        netProfit,
+        profitMargin,
+        bdRevenue,
+        wonProposalValue,
+        leadToCashCollected,
+        leadToCashRate,
+      },
+      targets: {
+        revenueTarget,
+      },
+    },
+    efficiency: {
+      weights: efficiencyWeightMap,
+      scores: efficiencyScoreMap,
+      contributions: efficiencyContributionMap,
+      inputs: {
+        billableHours,
+        allocatedHours,
+        utilizationRate,
+        assignedJobsCount,
+        completedJobsCount,
+        onTimeJobsCount: onTimeCount,
+      },
+      targets: {
+        utilizationTarget,
+      },
+    },
+  };
+
+  const frameworkModule = resolveDashboardModuleForContext({
+    roles: [profile.role?.name || roleConfig.role],
+    positionTitle: profile.positionTitle,
+  });
+  const frameworkCoverage = getDashboardModuleCoverageSummary(frameworkModule);
 
   const periodStart = new Date(period.startDate.getFullYear(), period.startDate.getMonth(), 1);
   const existing = await prisma.performanceScore.findFirst({
@@ -252,8 +555,12 @@ const calculateAndStoreScore = async (
   const scorePayload = {
     revenueScore,
     profitScore,
+    bdScore,
     utilizationScore,
+    jobCompletionScore,
+    timeToDeliveryScore,
     financialWeighted,
+    efficiencyWeighted,
     evaluationScore: 0,
     kpiScore: 0,
     clientRatingScore: nonFinancialScores.customerSatisfactionScore,
@@ -261,25 +568,50 @@ const calculateAndStoreScore = async (
     totalScore,
     grade,
     scoreBreakdown: {
-      revenue,
+      revenue: scoringRevenue,
+      allocationRevenue: revenue,
       profit,
       loss,
       netProfit,
       profitMargin,
+      bdRevenue,
+      bdScore,
+      wonProposalValue,
+      leadToCashCollected,
+      leadToCashRate,
+      departmentTarget,
       profitabilityPenaltyApplied,
       lossAlert: netProfit < 0,
       billableHours,
       allocatedHours,
       utilizationRate,
+      jobCompletionScore,
+      timeToDeliveryScore,
       revenueTarget,
       utilizationTarget,
+      assignedJobsCount,
+      completedJobsCount,
+      onTimeJobsCount: onTimeCount,
+      jobScope: roleConfig.jobScope,
+      role: roleConfig.role,
+      financialWeights,
+      efficiencyWeights,
+      roleFormula,
       okrScore: nonFinancialScores.okrScore,
       evaluationDefinitionId: definition?.id ?? null,
       scoringConfig,
-      financialWeight,
-      nonFinancialWeight,
+      performanceMix,
+      operationalBlend,
+      financialWeight: performanceMix.financial,
+      nonFinancialWeight: performanceMix.nonFinancial,
+      efficiencyWeight:
+        performanceMix.nonFinancial * operationalBlend.operationalEfficiency,
+      coreNonFinancialScore,
+      operationalEfficiencyScore,
       periodStart: period.startDate.toISOString(),
       periodEnd: period.endDate.toISOString(),
+      frameworkModule,
+      frameworkCoverage,
     },
   };
 
@@ -303,7 +635,7 @@ const calculateAndStoreScore = async (
     profile,
     period,
     financial: {
-      revenue,
+      revenue: scoringRevenue,
       profit,
       loss,
       netProfit,
@@ -312,16 +644,29 @@ const calculateAndStoreScore = async (
       utilizationRate,
       revenueScore,
       profitScore,
-      utilizationScore,
+      bdScore,
       financialWeighted,
     },
+    efficiency: {
+      utilizationRate,
+      utilizationScore,
+      jobCompletionScore,
+      timeToDeliveryScore,
+      efficiencyWeighted,
+    },
+    scoreBreakdown: scorePayload.scoreBreakdown,
+    formula: roleFormula,
+    frameworkModule,
+    frameworkCoverage,
     nonFinancial: {
       learningGrowthScore: nonFinancialScores.learningGrowthScore,
       customerSatisfactionScore: nonFinancialScores.customerSatisfactionScore,
       internalProcessesScore: nonFinancialScores.internalProcessesScore,
       okrScore: nonFinancialScores.okrScore,
       feedbackScore: nonFinancialScores.feedbackScore,
-      overallNonFinancialScore: nonFinancialScores.overallNonFinancialScore,
+      coreNonFinancialScore,
+      operationalEfficiencyScore,
+      overallNonFinancialScore: nonFinancialWeighted,
       weights: {
         learningGrowthWeight: weightConfig.learningGrowthWeight,
         customerWeight: weightConfig.customerWeight,
@@ -329,6 +674,7 @@ const calculateAndStoreScore = async (
         evaluationWeight: weightConfig.evaluationWeight,
         okrWeight: weightConfig.okrWeight,
         feedbackWeight: weightConfig.feedbackWeight,
+        operationalBlend,
       },
     },
     overall: {
@@ -421,5 +767,6 @@ router.post(
     }
   }
 );
+
 
 export default router;

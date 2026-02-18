@@ -78,6 +78,13 @@ export interface JobCostingInput {
   maxOveragePercent?: number;
 }
 
+const coerceDate = (value?: unknown): Date | undefined => {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
 export interface ListJobsOptions {
   page: number;
   pageSize: number;
@@ -183,10 +190,11 @@ class JobService {
         managerProfileId: input.managerProfileId,
         billingType,
         fixedFeeAmount,
+        currency: engagementLetter.currency || 'KES',
         budgetHours: input.budgetHours || 0,
         engagementLetterId: input.engagementLetterId,
-        startDate: input.startDate,
-        dueDate: input.dueDate,
+        startDate: coerceDate(input.startDate),
+        dueDate: coerceDate(input.dueDate),
         priority: input.priority || 'medium',
         status: 'planned',
       },
@@ -349,10 +357,11 @@ class JobService {
           managerProfileId: input.managerProfileId,
           billingType,
           fixedFeeAmount,
+          currency: engagementLetter.currency || 'KES',
           budgetHours: input.budgetHours || 0,
           engagementLetterId: engagementLetter.id,
-          startDate: input.startDate ?? engagementLetter.startDate ?? undefined,
-          dueDate: input.dueDate ?? engagementLetter.endDate ?? undefined,
+          startDate: coerceDate(input.startDate) ?? engagementLetter.startDate ?? undefined,
+          dueDate: coerceDate(input.dueDate) ?? engagementLetter.endDate ?? undefined,
           priority: input.priority || 'medium',
           status: 'planned',
         },
@@ -449,14 +458,27 @@ class JobService {
   async listJobs(options: ListJobsOptions, authContext: AuthContext) {
     const { page, pageSize, filters = {}, sort = {} } = options;
     const skip = (page - 1) * pageSize;
-    const isAdmin = authContext.roles?.includes('admin');
+    const normalizeRole = (role?: string) =>
+      String(role || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_');
+    const roleSet = new Set((authContext.roles || []).map((role) => normalizeRole(role)));
+    const isAdmin =
+      roleSet.has('admin') ||
+      roleSet.has('super_admin') ||
+      roleSet.has('hr') ||
+      roleSet.has('hr_manager') ||
+      roleSet.has('human_resources') ||
+      roleSet.has('gmp') ||
+      roleSet.has('group_managing_partner');
 
     // Build where clause based on access control
     let whereClause: any = {};
 
     if (!isAdmin) {
-      const isManager = authContext.roles?.includes('manager');
-      const isPartner = authContext.roles?.includes('partner');
+      const isManager = roleSet.has('manager');
+      const isPartner = roleSet.has('partner');
 
       if (isManager || isPartner) {
         // Manager/Partner sees jobs where they are manager or partner
@@ -797,6 +819,7 @@ class JobService {
       id: role.id,
       name: role.name,
       billingRate: Number(role.billingRate || 0),
+      costRate: Number(role.billingRate || 0),
       assignedHourlyRate,
     };
 
@@ -856,7 +879,14 @@ class JobService {
   ) {
     const job = await this.getJobById(jobId);
 
-    const isAdmin = authContext.roles?.includes('admin');
+    const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
+    const isAdmin =
+      roleSet.has('admin') ||
+      roleSet.has('super_admin') ||
+      roleSet.has('hr') ||
+      roleSet.has('hr_manager') ||
+      roleSet.has('gmp') ||
+      roleSet.has('group_managing_partner');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
 
@@ -871,13 +901,12 @@ class JobService {
     const roleIds = Array.from(new Set(input.allocations.map((alloc) => alloc.roleId)));
     const roles = await prisma.positionRole.findMany({
       where: { id: { in: roleIds } },
-      select: { id: true, billingRate: true },
+      select: { id: true, name: true, billingRate: true },
     });
 
     const roleRateMap = new Map<number, number>(
       roles.map((role) => [role.id, Number(role.billingRate)])
     );
-
     const allocationData = input.allocations.map((alloc) => {
       const rate = alloc.hourlyRate ?? roleRateMap.get(alloc.roleId) ?? 0;
       const hours = Number(alloc.allocatedHours);
@@ -898,13 +927,47 @@ class JobService {
       (sum, alloc) => sum + Number(alloc.allocatedHours),
       0
     );
+    const totalEstimatedBillable = allocationData.reduce(
+      (sum, alloc) => sum + Number(alloc.allocatedHours) * Number(alloc.hourlyRate),
+      0
+    );
     const totalEstimatedCost = allocationData.reduce(
       (sum, alloc) => sum + Number(alloc.estimatedCost),
       0
     );
 
+    const allocationEmployeeIds = Array.from(
+      new Set(allocationData.map((alloc) => alloc.employeeProfileId))
+    );
+    const existingAssignments = await prisma.jobStaffAssignment.findMany({
+      where: { jobId, employeeProfileId: { in: allocationEmployeeIds } },
+      select: { employeeProfileId: true },
+    });
+    const assignedSet = new Set(existingAssignments.map((item) => item.employeeProfileId));
+    const unassignedIds = allocationEmployeeIds.filter((id) => !assignedSet.has(id));
+    if (unassignedIds.length > 0) {
+      const unassignedProfiles = await prisma.profile.findMany({
+        where: { id: { in: unassignedIds } },
+        select: { id: true, firstName: true, lastName: true, positionTitle: true },
+      });
+      const unassignedLabels = unassignedProfiles.map((profile) => {
+        const name = `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim();
+        const role = profile.positionTitle ? ` (${profile.positionTitle})` : '';
+        return `${name || `Profile ${profile.id}`}${role}`;
+      });
+      throw new Error(
+        `Allocations include unassigned staff. Assign them to the job before costing: ${unassignedLabels.join(
+          ', '
+        )}`
+      );
+    }
+
+    const inputFee = Number(input.jobFee || 0);
     const baseJobFee =
-      job.billingType === 'fixed_fee' ? Number(job.fixedFeeAmount || 0) : Number(input.jobFee);
+      inputFee > 0
+        ? inputFee
+        : Number(job.jobCosting?.jobFee || 0) ||
+          (job.billingType === 'fixed_fee' ? Number(job.fixedFeeAmount || 0) : 0);
 
     if (!baseJobFee || baseJobFee <= 0) {
       throw new Error('Job fee is required before saving costing');
@@ -917,14 +980,14 @@ class JobService {
       ? baseJobFee * (1 + Math.max(0, maxOveragePercent))
       : baseJobFee;
 
-    if (totalEstimatedCost > maxAllowedCost) {
+    if (totalEstimatedBillable > maxAllowedCost) {
       if (job.managerProfileId) {
         await NotificationService.createNotification(
           {
             recipientProfileId: job.managerProfileId,
             type: 'warning',
             title: 'Job costing exceeds fee cap',
-            message: `Allocated cost (${totalEstimatedCost.toFixed(2)}) exceeds allowed budget (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
+            message: `Allocated budget (${totalEstimatedBillable.toFixed(2)}) exceeds allowed fee (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
             actionRequired: true,
             jobId: job.id,
             link: `/workload-management?jobId=${job.id}`,
@@ -942,7 +1005,7 @@ class JobService {
             recipientProfileId: job.partnerProfileId,
             type: 'warning',
             title: 'Job costing exceeds fee cap',
-            message: `Allocated cost (${totalEstimatedCost.toFixed(2)}) exceeds allowed budget (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
+            message: `Allocated budget (${totalEstimatedBillable.toFixed(2)}) exceeds allowed fee (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
             actionRequired: true,
             jobId: job.id,
             link: `/workload-management?jobId=${job.id}`,
@@ -955,12 +1018,12 @@ class JobService {
         );
       }
       throw new Error(
-        `Allocated cost exceeds job fee. Allowed: ${maxAllowedCost.toFixed(2)}, allocated: ${totalEstimatedCost.toFixed(2)}`
+        `Allocated budget exceeds job fee. Allowed: ${maxAllowedCost.toFixed(2)}, allocated: ${totalEstimatedBillable.toFixed(2)}`
       );
     }
 
     const jobFee = baseJobFee;
-    const remainingBudget = jobFee - totalEstimatedCost;
+    const remainingBudget = jobFee - totalEstimatedBillable;
 
     const result = await prisma.$transaction(async (tx) => {
       const costing = await tx.jobCosting.upsert({
@@ -969,7 +1032,8 @@ class JobService {
           jobId,
           managerProfileId: job.managerProfileId || authContext.profileId,
           jobFee,
-          allocatedCost: totalEstimatedCost,
+          currency: job.currency || 'KES',
+          allocatedCost: totalEstimatedBillable,
           remainingBudget,
           totalEstimatedHours,
           totalEstimatedCost,
@@ -978,7 +1042,8 @@ class JobService {
         },
         update: {
           jobFee,
-          allocatedCost: totalEstimatedCost,
+          currency: job.currency || 'KES',
+          allocatedCost: totalEstimatedBillable,
           remainingBudget,
           totalEstimatedHours,
           totalEstimatedCost,
@@ -1014,32 +1079,36 @@ class JobService {
 
       await tx.job.update({
         where: { id: jobId },
-        data: { costingCompleted: true, budgetHours: totalEstimatedHours },
-      });
-
-      return tx.jobCosting.findUnique({
-        where: { id: costing.id },
-        include: { allocations: true, budgetCap: true },
-      });
-    });
-
-      await createAudit({
-        action: `job_costing_updated:job_${jobId}`,
-        entity_type: 'job',
-        entity_id: jobId,
-        user_id: authContext.userId,
-        metadata: {
-          jobId,
-          totalEstimatedHours,
-          totalEstimatedCost,
-          jobFee,
-          allowOverage,
-          maxOveragePercent,
+        data: {
+          costingCompleted: true,
+          budgetHours: totalEstimatedHours,
         },
       });
 
-      return result;
-    }
+      const costingResult = await tx.jobCosting.findUnique({
+        where: { id: costing.id },
+        include: { allocations: true, budgetCap: true },
+      });
+      return { costingResult };
+    });
+
+    await createAudit({
+      action: `job_costing_updated:job_${jobId}`,
+      entity_type: 'job',
+      entity_id: jobId,
+      user_id: authContext.userId,
+      metadata: {
+        jobId,
+        totalEstimatedHours,
+        totalEstimatedCost,
+        jobFee,
+        allowOverage,
+        maxOveragePercent,
+      },
+    });
+
+    return result.costingResult;
+  }
 
   /**
    * Get job staff assignments

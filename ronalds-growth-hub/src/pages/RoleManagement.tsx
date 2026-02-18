@@ -9,7 +9,6 @@ interface Role {
   id: number;
   name: string;
   billingRate: number;
-  costRate: number;
   description?: string;
   permissions: string[];
   isActive: boolean;
@@ -26,7 +25,6 @@ export default function RoleManagement() {
   const [formData, setFormData] = useState({
     name: '',
     billingRate: 0,
-    costRate: 0,
     description: '',
     permissions: [] as string[],
     isActive: true,
@@ -59,7 +57,6 @@ export default function RoleManagement() {
     setFormData({
       name: '',
       billingRate: 0,
-      costRate: 0,
       description: '',
       permissions: [],
       isActive: true,
@@ -72,7 +69,6 @@ export default function RoleManagement() {
     setFormData({
       name: role.name,
       billingRate: role.billingRate,
-      costRate: role.costRate,
       description: role.description || '',
       permissions: role.permissions || [],
       isActive: role.isActive,
@@ -176,7 +172,6 @@ export default function RoleManagement() {
                 </td>
                 <td className="px-6 py-3">
                   <span className="font-mono font-semibold">{role.billingRate.toLocaleString()} KES/hr</span>
-                  <div className="text-xs text-gray-500">Cost {role.costRate.toLocaleString()} KES/hr</div>
                 </td>
                 <td className="px-6 py-3">
                   {role.isActive ? (
@@ -252,17 +247,6 @@ export default function RoleManagement() {
                   className="mt-1"
                 />
               </div>
-              <div>
-                <Label>Cost Rate (KES/hr)</Label>
-                <Input
-                  type="number"
-                  value={formData.costRate}
-                  onChange={(e) => setFormData({ ...formData, costRate: parseFloat(e.target.value) })}
-                  placeholder="e.g., 7500"
-                  className="mt-1"
-                />
-              </div>
-
               <div>
                 <Label>Description</Label>
                 <textarea

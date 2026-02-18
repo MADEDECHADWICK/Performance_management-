@@ -1,260 +1,829 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { apiFetch, authAPI } from "@/lib/api";
-import { DollarSign, TrendingUp, Users, Loader2, AlertCircle, Building2 } from "lucide-react";
-import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { AlertCircle, DollarSign, Loader2 } from "lucide-react";
 
-interface AnalyticsData {
-  userRole: string;
-  isAdmin: boolean;
-  isPartner: boolean;
-  isEmployee: boolean;
-  financial: any;
+type RoleView = "employee" | "manager" | "partner" | "hr" | "gmp";
+type CardTone = "neutral" | "positive" | "warning" | "negative";
+
+interface SummaryCardItem {
+  label: string;
+  value: string;
+  hint: string;
+  tone?: CardTone;
 }
 
-interface EmployeeJobRow {
-  jobId: number;
-  jobName: string;
-  status: string;
-  lastWorkedAt: string | null;
-  totalHours: number;
-  billableHours: number;
-  nonBillableHours: number;
-  billableAmount: number;
-  nonBillableAmount: number;
-  profitLoss: number;
-  allocatedRevenue?: number;
-  profit?: number;
-  loss?: number;
+interface SummaryStatItem {
+  label: string;
+  value: string;
+  hint?: string;
 }
 
-const COLORS = ['hsl(var(--primary))', 'hsl(var(--secondary))', 'hsl(var(--accent))', 'hsl(var(--muted))', 'hsl(var(--destructive))'];
+interface SummarySectionTable {
+  type: "table";
+  title: string;
+  description?: string;
+  columns: string[];
+  rows: string[][];
+}
+
+interface SummarySectionStats {
+  type: "stats";
+  title: string;
+  description?: string;
+  items: SummaryStatItem[];
+}
+
+type SummarySection = SummarySectionTable | SummarySectionStats;
+
+interface FinancialSummaryPayload {
+  role: RoleView;
+  title: string;
+  subtitle: string;
+  cards: SummaryCardItem[];
+  sections: SummarySection[];
+}
+
+const asNumber = (value: unknown): number => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+
+const formatKES = (value: unknown): string => `KES ${asNumber(value).toLocaleString()}`;
+const formatPct = (value: unknown, digits = 1): string => `${asNumber(value).toFixed(digits)}%`;
+const formatHours = (value: unknown): string => `${asNumber(value).toFixed(1)} hrs`;
+const formatDate = (value: unknown): string => {
+  if (!value) return "-";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString();
+};
+
+const toneClasses: Record<CardTone, string> = {
+  neutral: "border-border",
+  positive: "border-emerald-300/60 bg-emerald-50/30",
+  warning: "border-amber-300/60 bg-amber-50/30",
+  negative: "border-rose-300/60 bg-rose-50/30",
+};
+
+function buildEmployeeSummary(dashboardData: any, scoreData: any): FinancialSummaryPayload {
+  const financial = dashboardData?.financial ?? {};
+  const scoreFinancial = scoreData?.financial ?? {};
+  const formula = scoreData?.formula ?? {};
+  const scoreBreakdown = scoreData?.scoreBreakdown ?? {};
+
+  const totalHours = asNumber(financial.totalHours);
+  const billableHours = asNumber(financial.billableHours);
+  const nonBillableHours = asNumber(financial.nonBillableHours || totalHours - billableHours);
+  const utilization = totalHours > 0 ? (billableHours / totalHours) * 100 : 0;
+
+  const jobBreakdown = asArray<any>(financial.jobBreakdown);
+  const rows = jobBreakdown.map((job) => [
+    String(job.jobTitle || `Job #${job.jobId || "-"}`),
+    String(job.status || "in_progress").replace(/_/g, " "),
+    formatHours(job.totalHours),
+    formatHours(job.billableHours),
+    formatHours(job.nonBillableHours),
+    formatKES(job.allocatedRevenue),
+    formatKES(job.profit),
+    formatKES(job.loss),
+    formatDate(job.lastWorkedAt),
+  ]);
+
+  const formulaRole = String(formula.role || "employee");
+  const formulaScope = String(formula.jobScope || "assigned");
+  const financialScore = asNumber(scoreFinancial.financialWeighted);
+
+  return {
+    role: "employee",
+    title: "Employee Financial Summary",
+    subtitle:
+      "Personal cash allocations, profitability impact, time utilization, and score-driven financial inputs.",
+    cards: [
+      {
+        label: "Allocated Revenue",
+        value: formatKES(financial.allocatedRevenueTotal),
+        hint: "Cash collected and allocated to you",
+      },
+      {
+        label: "Billable Hours",
+        value: formatHours(billableHours),
+        hint: `Out of ${formatHours(totalHours)} total approved hours`,
+      },
+      {
+        label: "Utilization",
+        value: formatPct(utilization),
+        hint: "Billable hours / total approved hours",
+        tone: utilization >= 75 ? "positive" : utilization >= 50 ? "warning" : "negative",
+      },
+      {
+        label: "Profit Impact",
+        value: formatKES(financial.profitTotal),
+        hint: `Loss impact ${formatKES(financial.lossTotal)}`,
+        tone: asNumber(financial.profitTotal) >= asNumber(financial.lossTotal) ? "positive" : "warning",
+      },
+      {
+        label: "Financial Score",
+        value: `${financialScore.toFixed(1)}/100`,
+        hint: `Formula role: ${formulaRole} (${formulaScope})`,
+      },
+      {
+        label: "Revenue Signal",
+        value: `${asNumber(formula?.financial?.scores?.revenue).toFixed(1)}%`,
+        hint: `Profit signal ${asNumber(formula?.financial?.scores?.profit).toFixed(1)}%`,
+      },
+    ],
+    sections: [
+      {
+        type: "stats",
+        title: "Role Formula Inputs",
+        description: "Finalized financial inputs used in your role-specific formula.",
+        items: [
+          {
+            label: "Allocation Revenue",
+            value: formatKES(scoreBreakdown.allocationRevenue),
+            hint: "From revenue allocations linked to client collections",
+          },
+          {
+            label: "Profit Impact",
+            value: formatKES(scoreBreakdown.profitImpact),
+            hint: "Positive allocation-based profitability signal",
+          },
+          {
+            label: "Loss Impact",
+            value: formatKES(scoreBreakdown.lossImpact),
+            hint: "Negative profitability signal",
+          },
+          {
+            label: "Financial Weight",
+            value: formatPct(asNumber(formula?.overallWeights?.financial) * 100, 0),
+            hint: "Weight in total score",
+          },
+        ],
+      },
+      {
+        type: "table",
+        title: "Job-Level Financial Breakdown",
+        description: "Approved work, allocations, and profitability by job.",
+        columns: [
+          "Job",
+          "Status",
+          "Total Hours",
+          "Billable",
+          "Non-Billable",
+          "Allocated Revenue",
+          "Profit",
+          "Loss",
+          "Last Worked",
+        ],
+        rows,
+      },
+    ],
+  };
+}
+
+function buildManagerSummary(
+  overviewData: any,
+  financialData: any,
+  jobsData: any,
+  approvalData: any
+): FinancialSummaryPayload {
+  const controls = jobsData?.controls ?? {};
+  const chainSummary = approvalData?.summary ?? {};
+  const monthlyFinancials = asArray<any>(financialData?.monthlyFinancials);
+  const jobProfitability = asArray<any>(financialData?.jobProfitability);
+  const teamContributions = asArray<any>(financialData?.teamContributions);
+  const overBudgetRequests = asArray<any>(approvalData?.overBudgetRequests);
+
+  const pendingChainTotal =
+    asNumber(chainSummary.pending) +
+    asNumber(chainSummary.overBudgetPending) +
+    asNumber(chainSummary.awaitingPartner);
+
+  return {
+    role: "manager",
+    title: "Manager Financial Summary",
+    subtitle:
+      "Team profitability, planned-vs-actual controls, and approval-chain accountability for your portfolio.",
+    cards: [
+      {
+        label: "Monthly Revenue",
+        value: formatKES(overviewData?.monthlyRevenue),
+        hint: "Current month allocation revenue for your team",
+      },
+      {
+        label: "Monthly Profit",
+        value: formatKES(overviewData?.monthlyProfit),
+        hint: "Current month net (profit-loss) signal",
+      },
+      {
+        label: "Utilization",
+        value: formatPct(overviewData?.utilizationRate, 0),
+        hint: "Team billable utilization this month",
+      },
+      {
+        label: "Active Jobs",
+        value: `${asNumber(overviewData?.activeJobs).toLocaleString()}`,
+        hint: "Planned + in-progress + on-hold",
+      },
+      {
+        label: "Pending Approvals",
+        value: `${pendingChainTotal.toLocaleString()}`,
+        hint: `${asNumber(chainSummary.awaitingPartner)} awaiting partner`,
+        tone: pendingChainTotal > 0 ? "warning" : "positive",
+      },
+      {
+        label: "Jobs Over Fee Cap",
+        value: `${asNumber(controls.jobsOverFeeCap).toLocaleString()}`,
+        hint: "Actual cost above fee cap",
+        tone: asNumber(controls.jobsOverFeeCap) > 0 ? "negative" : "positive",
+      },
+    ],
+    sections: [
+      {
+        type: "stats",
+        title: "Planned vs Actual Cost Controls",
+        description: "Cost and hours governance for manager-owned jobs.",
+        items: [
+          {
+            label: "Total Planned Cost",
+            value: formatKES(controls.totalPlannedCost),
+          },
+          {
+            label: "Total Actual Cost",
+            value: formatKES(controls.totalActualCost),
+          },
+          {
+            label: "Cost Variance",
+            value: formatKES(controls.totalCostVariance),
+            hint: "Actual - planned",
+          },
+          {
+            label: "Hours Variance",
+            value: formatHours(controls.totalHoursVariance),
+            hint: "Actual - planned",
+          },
+          {
+            label: "Jobs Over Planned Cost",
+            value: `${asNumber(controls.jobsOverPlannedCost).toLocaleString()}`,
+          },
+          {
+            label: "Jobs Over Planned Hours",
+            value: `${asNumber(controls.jobsOverPlannedHours).toLocaleString()}`,
+          },
+        ],
+      },
+      {
+        type: "table",
+        title: "Job Profitability",
+        columns: ["Job", "Client", "Revenue", "Cost", "Profit"],
+        rows: jobProfitability.map((job) => [
+          String(job.jobName || job.jobCode || "-"),
+          String(job.clientName || "-"),
+          formatKES(job.revenue),
+          formatKES(job.cost),
+          formatKES(job.profit),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Approval Chain (Over-Budget Requests)",
+        description: "Visibility of over-budget requests and decision status.",
+        columns: ["Job", "Employee", "Status", "Requested Additional", "Cost Impact", "Created"],
+        rows: overBudgetRequests.slice(0, 30).map((request) => [
+          String(request.jobName || request.jobCode || "-"),
+          String(request.employeeName || "-"),
+          String(request.status || "-").replace(/_/g, " "),
+          formatHours(request.requestedAdditional),
+          formatKES(request.estimatedCostImpact),
+          formatDate(request.createdAt),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Team Financial Contributions",
+        columns: ["Employee", "Role", "Revenue Contribution", "Total Hours", "Billable Hours"],
+        rows: teamContributions.map((member) => [
+          String(member.employeeName || "-"),
+          String(member.roleName || "-"),
+          formatKES(member.revenueContribution),
+          formatHours(member.totalHours),
+          formatHours(member.billableHours),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Monthly Financial Trend (12 Months)",
+        columns: ["Month", "Revenue", "Cost", "Total Hours", "Billable Hours"],
+        rows: monthlyFinancials.map((month) => [
+          formatDate(month.month),
+          formatKES(month.revenue),
+          formatKES(month.cost),
+          formatHours(month.totalHours),
+          formatHours(month.billableHours),
+        ]),
+      },
+    ],
+  };
+}
+
+function buildPartnerSummary(
+  summaryData: any,
+  approvalData: any,
+  allocationData: any
+): FinancialSummaryPayload {
+  const portfolio = summaryData?.portfolio ?? {};
+  const topJobs = asArray<any>(summaryData?.topJobs);
+  const chainSummary = approvalData?.summary ?? {};
+  const overBudgetRequests = asArray<any>(approvalData?.overBudgetRequests);
+  const jobBalances = asArray<any>(allocationData?.jobBalances);
+  const allocationTotals = allocationData?.totals ?? {};
+
+  const collectionRate =
+    asNumber(portfolio.totalFee) > 0
+      ? (asNumber(portfolio.totalRevenueCollected) / asNumber(portfolio.totalFee)) * 100
+      : 0;
+
+  return {
+    role: "partner",
+    title: "Partner Financial Summary",
+    subtitle:
+      "Portfolio profitability, cost control governance, collections-vs-allocations, and approval-chain status.",
+    cards: [
+      {
+        label: "Portfolio Revenue",
+        value: formatKES(portfolio.totalRevenueCollected),
+        hint: "Collected revenue across portfolio jobs",
+      },
+      {
+        label: "Portfolio Profit",
+        value: formatKES(portfolio.totalProfit),
+        hint: `Cost ${formatKES(portfolio.totalCost)}`,
+      },
+      {
+        label: "Collection Rate",
+        value: formatPct(collectionRate),
+        hint: `Collected ${formatKES(portfolio.totalRevenueCollected)} / Fees ${formatKES(portfolio.totalFee)}`,
+      },
+      {
+        label: "Pending Approval Requests",
+        value: `${asNumber(portfolio.totalPendingApprovalRequests).toLocaleString()}`,
+        hint: `${asNumber(portfolio.jobsAwaitingPartner)} jobs awaiting partner`,
+        tone:
+          asNumber(portfolio.jobsAwaitingPartner) > 0 || asNumber(portfolio.totalPendingApprovalRequests) > 0
+            ? "warning"
+            : "positive",
+      },
+      {
+        label: "Jobs Over Planned Cost",
+        value: `${asNumber(portfolio.jobsOverPlannedCost).toLocaleString()}`,
+        hint: "Portfolio governance breach count",
+        tone: asNumber(portfolio.jobsOverPlannedCost) > 0 ? "negative" : "positive",
+      },
+      {
+        label: "Jobs Over Fee Cap",
+        value: `${asNumber(portfolio.jobsOverFeeCap).toLocaleString()}`,
+        hint: "Actual cost exceeded fee cap",
+        tone: asNumber(portfolio.jobsOverFeeCap) > 0 ? "negative" : "positive",
+      },
+    ],
+    sections: [
+      {
+        type: "stats",
+        title: "Planned vs Actual Controls",
+        description: "Control totals for partner-owned jobs.",
+        items: [
+          { label: "Planned Cost", value: formatKES(portfolio.totalPlannedCost) },
+          { label: "Actual Cost", value: formatKES(portfolio.totalCost) },
+          { label: "Cost Variance", value: formatKES(portfolio.totalCostVariance) },
+          { label: "Planned Hours", value: formatHours(portfolio.totalPlannedHours) },
+          { label: "Actual Hours", value: formatHours(portfolio.totalActualHours) },
+          { label: "Hours Variance", value: formatHours(portfolio.totalHoursVariance) },
+        ],
+      },
+      {
+        type: "table",
+        title: "Top Jobs: Cost and Margin Controls",
+        columns: [
+          "Job",
+          "Status",
+          "Fee Cap",
+          "Collected",
+          "Actual Cost",
+          "Profit",
+          "Margin",
+          "Pending Approvals",
+        ],
+        rows: topJobs.map((job) => [
+          String(job.jobName || job.jobCode || "-"),
+          String(job.status || "-").replace(/_/g, " "),
+          formatKES(job.feeCap || job.feeAmount),
+          formatKES(job.amountCollected),
+          formatKES(job.actualCost || job.costAmount),
+          formatKES(job.profit),
+          formatPct(job.marginPercentage),
+          `${asNumber(job.pendingApprovalTotal).toLocaleString()}`,
+        ]),
+      },
+      {
+        type: "stats",
+        title: "Approval Chain Summary",
+        description: "Standard and over-budget request states.",
+        items: [
+          { label: "Standard Pending", value: `${asNumber(chainSummary.pending).toLocaleString()}` },
+          { label: "Standard Approved", value: `${asNumber(chainSummary.approved).toLocaleString()}` },
+          { label: "Over-Budget Pending", value: `${asNumber(chainSummary.overBudgetPending).toLocaleString()}` },
+          { label: "Awaiting Partner", value: `${asNumber(chainSummary.awaitingPartner).toLocaleString()}` },
+          { label: "Partner Approved", value: `${asNumber(chainSummary.partnerApproved).toLocaleString()}` },
+          { label: "Partner Rejected", value: `${asNumber(chainSummary.partnerRejected).toLocaleString()}` },
+        ],
+      },
+      {
+        type: "table",
+        title: "Over-Budget Requests",
+        columns: ["Job", "Employee", "Status", "Requested Additional", "Cost Impact", "Created"],
+        rows: overBudgetRequests.slice(0, 30).map((request) => [
+          String(request.jobName || request.jobCode || "-"),
+          String(request.employeeName || "-"),
+          String(request.status || "-").replace(/_/g, " "),
+          formatHours(request.requestedAdditional),
+          formatKES(request.estimatedCostImpact),
+          formatDate(request.createdAt),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Collections vs Allocations",
+        description: `Portfolio totals: Collected ${formatKES(
+          allocationTotals.collectedAmount
+        )} / Allocated ${formatKES(allocationTotals.allocatedAmount)}`,
+        columns: ["Job", "Client", "Collected", "Allocated", "Unallocated", "Profit", "Loss"],
+        rows: jobBalances.map((job) => [
+          String(job.jobName || job.jobCode || "-"),
+          String(job.clientName || "-"),
+          formatKES(job.collectedAmount),
+          formatKES(job.allocatedAmount),
+          formatKES(job.unallocatedAmount),
+          formatKES(job.totalProfit),
+          formatKES(job.totalLoss),
+        ]),
+      },
+    ],
+  };
+}
+
+function buildHrSummary(metricsData: any, controlsData: any): FinancialSummaryPayload {
+  const controls = controlsData?.controls ?? {};
+  const approvals = controlsData?.approvals ?? {};
+  const recentJobs = asArray<any>(controlsData?.recentJobs);
+
+  return {
+    role: "hr",
+    title: "Admin Financial Summary",
+    subtitle:
+      "Firm-wide financial oversight across collections, profitability, utilization, and control/approval compliance.",
+    cards: [
+      { label: "Projected (Month)", value: formatKES(metricsData?.projectedMonth), hint: "Current month projection" },
+      { label: "Collected (Month)", value: formatKES(metricsData?.collectedMonth), hint: "Current month collections" },
+      { label: "Variance (Month)", value: formatKES(metricsData?.varianceMonth), hint: "Collected - projected" },
+      {
+        label: "Outstanding",
+        value: formatKES(metricsData?.totalOutstanding),
+        hint: `Across fee base ${formatKES(metricsData?.totalFees)}`,
+        tone: asNumber(metricsData?.totalOutstanding) > 0 ? "warning" : "positive",
+      },
+      { label: "Collection Rate", value: formatPct(metricsData?.collectionRate), hint: "Collected vs total fees" },
+      { label: "Firm Profit", value: formatKES(metricsData?.firmProfit), hint: "Allocations net profit-loss" },
+      { label: "Utilization", value: formatPct(metricsData?.utilizationRate), hint: "Billable utilization" },
+      {
+        label: "Overdue Jobs",
+        value: `${asNumber(metricsData?.overdueJobs).toLocaleString()}`,
+        hint: "Due date passed and not completed",
+        tone: asNumber(metricsData?.overdueJobs) > 0 ? "warning" : "positive",
+      },
+    ],
+    sections: [
+      {
+        type: "stats",
+        title: "Cost Control Summary",
+        description: "Planned-vs-actual exposure across all jobs.",
+        items: [
+          { label: "Total Jobs", value: `${asNumber(controls.totalJobs).toLocaleString()}` },
+          { label: "Planned Cost", value: formatKES(controls.totalPlannedCost) },
+          { label: "Actual Cost", value: formatKES(controls.totalActualCost) },
+          { label: "Cost Variance", value: formatKES(controls.totalCostVariance) },
+          { label: "Jobs Over Planned Cost", value: `${asNumber(controls.jobsOverPlannedCost).toLocaleString()}` },
+          { label: "Jobs Over Fee Cap", value: `${asNumber(controls.jobsOverFeeCap).toLocaleString()}` },
+        ],
+      },
+      {
+        type: "stats",
+        title: "Approval Chain Summary",
+        items: [
+          { label: "Standard Pending", value: `${asNumber(approvals?.standard?.pending).toLocaleString()}` },
+          { label: "Standard Rejected", value: `${asNumber(approvals?.standard?.rejected).toLocaleString()}` },
+          { label: "Over-Budget Pending", value: `${asNumber(approvals?.overBudget?.pending).toLocaleString()}` },
+          { label: "Awaiting Partner", value: `${asNumber(approvals?.overBudget?.awaitingPartner).toLocaleString()}` },
+          { label: "Partner Rejected", value: `${asNumber(approvals?.overBudget?.partnerRejected).toLocaleString()}` },
+          { label: "Auto Rejected", value: `${asNumber(approvals?.overBudget?.autoRejected).toLocaleString()}` },
+        ],
+      },
+      {
+        type: "table",
+        title: "Recent Job Controls",
+        columns: [
+          "Job",
+          "Client",
+          "Manager",
+          "Partner",
+          "Planned Cost",
+          "Actual Cost",
+          "Cost Variance",
+          "Fee Buffer",
+        ],
+        rows: recentJobs.map((job) => [
+          String(job.jobName || job.jobCode || "-"),
+          String(job.clientName || "-"),
+          String(job.managerName || "-"),
+          String(job.partnerName || "-"),
+          formatKES(job.plannedCost),
+          formatKES(job.actualCost),
+          formatKES(job.costVariance),
+          formatKES(job.feeBuffer),
+        ]),
+      },
+    ],
+  };
+}
+
+function buildGmpSummary(overviewData: any, personalData: any): FinancialSummaryPayload {
+  const firmMetrics = overviewData?.firmMetrics ?? {};
+  const financials = overviewData?.financials ?? {};
+  const departmentBreakdown = asArray<any>(overviewData?.departmentBreakdown);
+  const partnerRankings = asArray<any>(overviewData?.partnerRankings);
+  const projectionTrend = asArray<any>(overviewData?.projectionTrend);
+  const alertsSummary = overviewData?.alertsSummary ?? {};
+  const personalMetrics = personalData?.personalMetrics ?? {};
+
+  return {
+    role: "gmp",
+    title: "Group Managing Partner Financial Summary",
+    subtitle:
+      "Firm-level financial health, partner ranking, department performance, and pipeline-to-collection execution.",
+    cards: [
+      { label: "Total Revenue", value: formatKES(financials.totalRevenue), hint: "All-time collections" },
+      { label: "Projected Revenue", value: formatKES(financials.projectedRevenue), hint: "Open projection baseline" },
+      { label: "Collected Amount", value: formatKES(financials.collectedAmount), hint: "Projection actual + payments" },
+      { label: "Collection Rate", value: formatPct(financials.collectionRate), hint: "Collected vs fee baseline" },
+      { label: "Total Profit", value: formatKES(financials.totalProfit), hint: `Total cost ${formatKES(financials.totalCost)}` },
+      { label: "Active Jobs", value: `${asNumber(firmMetrics.activeJobs).toLocaleString()}`, hint: "Firm-wide active engagements" },
+      {
+        label: "Pending Over-Budget",
+        value: `${asNumber(alertsSummary.pendingOverBudget).toLocaleString()}`,
+        hint: "Requests needing control decisions",
+        tone: asNumber(alertsSummary.pendingOverBudget) > 0 ? "warning" : "positive",
+      },
+      { label: "Firm Utilization", value: formatPct(firmMetrics.utilizationRate), hint: "Billable utilization ratio" },
+    ],
+    sections: [
+      {
+        type: "table",
+        title: "Department Financial Breakdown",
+        columns: ["Department", "Revenue", "Fees", "Collection Rate", "Team Size", "Active Jobs"],
+        rows: departmentBreakdown.map((department) => [
+          String(department.departmentName || "-"),
+          formatKES(department.departmentRevenue),
+          formatKES(department.departmentFees),
+          formatPct(department.collectionRate),
+          `${asNumber(department.teamSize).toLocaleString()}`,
+          `${asNumber(department.activeJobs).toLocaleString()}`,
+        ]),
+      },
+      {
+        type: "table",
+        title: "Partner Rankings",
+        columns: ["Partner", "Revenue", "Fees", "Collection Rate", "Profit", "Utilization"],
+        rows: partnerRankings.map((partner) => [
+          String(partner.partnerName || "-"),
+          formatKES(partner.portfolioRevenue),
+          formatKES(partner.portfolioFees),
+          formatPct(partner.collectionRate),
+          formatKES(partner.portfolioProfit),
+          formatPct(partner.utilizationRate),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Projection vs Collection Trend",
+        columns: ["Month", "Projected", "Collected", "Variance"],
+        rows: projectionTrend.map((month) => [
+          formatDate(month.month),
+          formatKES(month.projected),
+          formatKES(month.collected),
+          formatKES(asNumber(month.collected) - asNumber(month.projected)),
+        ]),
+      },
+      {
+        type: "stats",
+        title: "GMP Personal Portfolio",
+        description: "Direct personal portfolio metrics for partner/manager responsibilities.",
+        items: [
+          { label: "Active Jobs", value: `${asNumber(personalMetrics.activeJobs).toLocaleString()}` },
+          { label: "Total Revenue", value: formatKES(personalMetrics.totalRevenue) },
+          { label: "Total Fees", value: formatKES(personalMetrics.totalFees) },
+          { label: "Direct Reports", value: `${asNumber(personalMetrics.directReports).toLocaleString()}` },
+          {
+            label: "Overall Performance",
+            value: `${asNumber(personalMetrics.overallScore).toFixed(1)}`,
+            hint: "Latest available score",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function SummaryCards({ cards }: { cards: SummaryCardItem[] }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {cards.map((card) => (
+        <Card key={card.label} className={toneClasses[card.tone || "neutral"]}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">{card.label}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold leading-tight break-words">{card.value}</div>
+            <p className="text-xs text-muted-foreground">{card.hint}</p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function SummarySectionView({ section }: { section: SummarySection }) {
+  if (section.type === "stats") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{section.title}</CardTitle>
+          {section.description && <CardDescription>{section.description}</CardDescription>}
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {section.items.map((item) => (
+            <div key={item.label} className="rounded-md border border-border p-3">
+              <p className="text-xs text-muted-foreground">{item.label}</p>
+              <p className="text-xl font-semibold">{item.value}</p>
+              {item.hint && <p className="text-xs text-muted-foreground">{item.hint}</p>}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{section.title}</CardTitle>
+        {section.description && <CardDescription>{section.description}</CardDescription>}
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {section.columns.map((column) => (
+                  <TableHead key={column}>{column}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {section.rows.length > 0 ? (
+                section.rows.map((row, idx) => (
+                  <TableRow key={`${section.title}-${idx}`}>
+                    {row.map((cell, cellIdx) => (
+                      <TableCell key={`${idx}-${cellIdx}`}>{cell}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={section.columns.length} className="text-center text-muted-foreground">
+                    No records found.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function FinancialSummary() {
   const navigate = useNavigate();
+  const {
+    user,
+    isLoading: authLoading,
+    isAdmin,
+    isHR,
+    isGMP,
+    isPartner,
+    isManager,
+  } = useAuth();
+
   const [loading, setLoading] = useState(true);
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [employeeJobs, setEmployeeJobs] = useState<EmployeeJobRow[]>([]);
-  const [employeeTotals, setEmployeeTotals] = useState({
-    totalHours: 0,
-    billableHours: 0,
-    nonBillableHours: 0,
-    billableAmount: 0,
-    nonBillableAmount: 0,
-    profitLoss: 0,
-    profitAmount: 0,
-    lossAmount: 0,
-    overtimeHours: 0,
-    allocatedRevenue: 0,
-  });
-  const [employeeDateFrom, setEmployeeDateFrom] = useState("");
-  const [employeeDateTo, setEmployeeDateTo] = useState("");
-  const [employeeSearch, setEmployeeSearch] = useState("");
-  const [employeeStatusFilter, setEmployeeStatusFilter] = useState("");
+  const [payload, setPayload] = useState<FinancialSummaryPayload | null>(null);
 
-  useEffect(() => {
-    loadAnalytics();
-  }, []);
+  const roleView = useMemo<RoleView>(() => {
+    if (isGMP) return "gmp";
+    if (isAdmin || isHR) return "hr";
+    if (isPartner) return "partner";
+    if (isManager) return "manager";
+    return "employee";
+  }, [isGMP, isAdmin, isHR, isPartner, isManager]);
 
-  const loadAnalytics = async () => {
+  const loadSummary = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage(null);
+
     try {
-      setLoading(true);
-      setErrorMessage(null);
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
 
-      // Use the new role-aware analytics endpoint
-      const data = await apiFetch("GET", "/analytics/financial");
-      setAnalyticsData(data);
-
-      if (data?.isEmployee) {
-        await loadEmployeeBreakdown();
-      }
-    } catch (error: any) {
-      if (error?.status === 401) {
-        navigate("/auth");
+      if (roleView === "employee") {
+        const [dashboardData, scoreData] = await Promise.all([
+          apiFetch<any>("GET", "/analytics/dashboard"),
+          apiFetch<any>("GET", "/performance-scores/me").catch(() => ({})),
+        ]);
+        setPayload(buildEmployeeSummary(dashboardData, scoreData));
         return;
       }
-      if (error?.status === 404) {
-        setErrorMessage(null);
-      } else {
-        console.error("Error loading analytics:", error);
-        setErrorMessage(error?.error || "Failed to load financial analytics");
+
+      if (roleView === "manager") {
+        const [overviewData, financialData, jobsData, approvalData] = await Promise.all([
+          apiFetch<any>("GET", "/manager-dashboard/overview"),
+          apiFetch<any>("GET", "/manager-dashboard/financials"),
+          apiFetch<any>("GET", "/manager-dashboard/jobs"),
+          apiFetch<any>("GET", "/manager-dashboard/approval-chain"),
+        ]);
+        setPayload(buildManagerSummary(overviewData, financialData, jobsData, approvalData));
+        return;
       }
-      // Provide safe fallback so the dashboard still renders
-      const fallbackUser = await authAPI.me().catch(() => null);
-      setAnalyticsData({
-        userRole: fallbackUser?.role ?? "employee",
-        isAdmin: !!fallbackUser?.is_admin || !!fallbackUser?.isAdmin,
-        isPartner: !!fallbackUser?.is_partner || !!fallbackUser?.isPartner,
-        isEmployee: !(fallbackUser?.is_admin || fallbackUser?.isAdmin || fallbackUser?.is_partner || fallbackUser?.isPartner),
-        financial: {},
-      });
-      await loadEmployeeBreakdown();
+
+      if (roleView === "partner") {
+        const [summaryData, approvalData, allocationData] = await Promise.all([
+          apiFetch<any>("GET", "/partners/dashboard-summary"),
+          apiFetch<any>("GET", "/partners/approval-chain"),
+          apiFetch<any>("GET", "/partners/allocations"),
+        ]);
+        setPayload(buildPartnerSummary(summaryData, approvalData, allocationData));
+        return;
+      }
+
+      if (roleView === "hr") {
+        const [metricsData, controlsData] = await Promise.all([
+          apiFetch<any>("GET", "/hr-dashboard/company-metrics"),
+          apiFetch<any>("GET", "/hr-dashboard/approval-controls"),
+        ]);
+        setPayload(buildHrSummary(metricsData, controlsData));
+        return;
+      }
+
+      const [overviewData, personalData] = await Promise.all([
+        apiFetch<any>("GET", "/gmp-dashboard/overview"),
+        apiFetch<any>("GET", "/gmp-dashboard/personal").catch(() => ({})),
+      ]);
+      setPayload(buildGmpSummary(overviewData, personalData));
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to load financial summary.";
+      setErrorMessage(message);
+      setPayload(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, [navigate, roleView, user]);
 
   useEffect(() => {
-    if (analyticsData?.isEmployee) {
-      loadEmployeeBreakdown();
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
     }
-  }, [analyticsData?.isEmployee, employeeDateFrom, employeeDateTo]);
-
-  const loadEmployeeBreakdown = async () => {
-    try {
-      const [entriesResponse, approvalsResponse] = await Promise.all([
-        apiFetch("GET", "/time-entries?status=approved&page=1&pageSize=500"),
-        apiFetch("GET", "/time-entries/approval-requests?status=approved"),
-      ]);
-
-      const entriesPayload = entriesResponse?.data ?? entriesResponse ?? {};
-      const entries = Array.isArray(entriesPayload.items)
-        ? entriesPayload.items
-        : entriesPayload.items?.items ?? [];
-
-      const approvalsPayload = approvalsResponse?.data ?? approvalsResponse ?? {};
-      const approvals = Array.isArray(approvalsPayload.data)
-        ? approvalsPayload.data
-        : approvalsPayload.items ?? approvalsPayload ?? [];
-
-      const totals = {
-        totalHours: 0,
-        billableHours: 0,
-        nonBillableHours: 0,
-        billableAmount: 0,
-        nonBillableAmount: 0,
-        profitLoss: 0,
-        profitAmount: 0,
-        lossAmount: 0,
-        overtimeHours: 0,
-        allocatedRevenue: 0,
-      };
-
-      const byJob = new Map<number, EmployeeJobRow>();
-      const allocationBreakdown = Array.isArray(analyticsData?.financial?.jobBreakdown)
-        ? analyticsData?.financial?.jobBreakdown
-        : [];
-      const allocationMap = new Map<number, any>(
-        allocationBreakdown.map((row: any) => [row.jobId, row])
-      );
-
-      const filteredEntries = entries.filter((entry: any) => {
-        const rawDate = entry.workDate ?? entry.date ?? entry.createdAt;
-        if (!rawDate) {
-          return true;
-        }
-        const entryDate = new Date(rawDate);
-        if (employeeDateFrom) {
-          const fromDate = new Date(employeeDateFrom);
-          if (entryDate < fromDate) return false;
-        }
-        if (employeeDateTo) {
-          const toDate = new Date(employeeDateTo);
-          toDate.setHours(23, 59, 59, 999);
-          if (entryDate > toDate) return false;
-        }
-        return true;
-      });
-
-      filteredEntries.forEach((entry: any) => {
-        const jobId = entry.job?.id ?? entry.jobId;
-        const jobName = entry.job?.jobName ?? `Job #${jobId}`;
-        const status = entry.job?.status ?? entry.jobStatus ?? "in_progress";
-        const workDate = entry.workDate ?? entry.date ?? entry.createdAt ?? null;
-        const hours = Number(entry.hours || 0);
-        const billable = Boolean(entry.billable);
-        const billableAmount = Number(entry.billableAmount || 0);
-        const costAmount = Number(entry.costAmount || 0);
-        const profitLoss = Number(entry.profitLoss || 0);
-
-        totals.totalHours += hours;
-        totals.profitLoss += profitLoss;
-        if (profitLoss >= 0) {
-          totals.profitAmount += profitLoss;
-        } else {
-          totals.lossAmount += Math.abs(profitLoss);
-        }
-        if (billable) {
-          totals.billableHours += hours;
-          totals.billableAmount += billableAmount;
-        } else {
-          totals.nonBillableHours += hours;
-          totals.nonBillableAmount += costAmount;
-        }
-
-        if (!byJob.has(jobId)) {
-          const allocation = allocationMap.get(jobId);
-          byJob.set(jobId, {
-            jobId,
-            jobName,
-            status,
-            lastWorkedAt: workDate,
-            totalHours: 0,
-            billableHours: 0,
-            nonBillableHours: 0,
-            billableAmount: 0,
-            nonBillableAmount: 0,
-            profitLoss: 0,
-            allocatedRevenue: allocation?.allocatedRevenue || 0,
-            profit: allocation?.profit || 0,
-            loss: allocation?.loss || 0,
-          });
-        }
-
-        const row = byJob.get(jobId)!;
-        row.totalHours += hours;
-        row.profitLoss += profitLoss;
-        if (!row.lastWorkedAt || (workDate && new Date(workDate) > new Date(row.lastWorkedAt))) {
-          row.lastWorkedAt = workDate;
-        }
-        if (billable) {
-          row.billableHours += hours;
-          row.billableAmount += billableAmount;
-        } else {
-          row.nonBillableHours += hours;
-          row.nonBillableAmount += costAmount;
-        }
-      });
-
-      approvals.forEach((request: any) => {
-        totals.overtimeHours += Number(request.additionalHoursRequested || 0);
-      });
-
-      const allocationTotal = Number(analyticsData?.financial?.allocatedRevenueTotal || 0);
-      totals.allocatedRevenue = allocationTotal;
-
-      const jobRows = Array.from(byJob.values()).sort((a, b) => {
-        const aTime = a.lastWorkedAt ? new Date(a.lastWorkedAt).getTime() : 0;
-        const bTime = b.lastWorkedAt ? new Date(b.lastWorkedAt).getTime() : 0;
-        return bTime - aTime;
-      });
-
-      const filteredRows = jobRows.filter((job) => {
-        if (employeeStatusFilter && job.status !== employeeStatusFilter) return false;
-        if (employeeSearch.trim()) {
-          const query = employeeSearch.toLowerCase();
-          const haystack = [job.jobName, job.status].filter(Boolean).join(" ").toLowerCase();
-          if (!haystack.includes(query)) return false;
-        }
-        return true;
-      });
-
-      setEmployeeTotals(totals);
-      setEmployeeJobs(filteredRows);
-    } catch (error) {
-      console.error("Failed to load employee financial breakdown", error);
-    }
-  };
-
+    void loadSummary();
+  }, [authLoading, user, navigate, loadSummary]);
 
   if (loading) {
     return (
@@ -266,524 +835,52 @@ export default function FinancialSummary() {
     );
   }
 
-  const roleLabel = analyticsData?.isAdmin 
-    ? "Company-Wide" 
-    : analyticsData?.isPartner 
-    ? "Partner Portfolio" 
-    : "Personal";
-
-  const f = analyticsData?.financial || {};
-
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">
-            {roleLabel} Financial Performance
-          </h2>
-          <p className="text-muted-foreground">
-            Your financial metrics {analyticsData.isAdmin && "(Company-wide aggregates)"}
-            {analyticsData.isPartner && "(Portfolio metrics)"}
-            {analyticsData.isEmployee && "(Personal contribution)"}
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground">{payload?.title || "Financial Summary"}</h2>
+            <p className="text-muted-foreground">{payload?.subtitle || "Role-based financial overview."}</p>
+          </div>
+          {payload?.role && (
+            <Badge variant="outline" className="capitalize">
+              {payload.role} view
+            </Badge>
+          )}
         </div>
 
-        {errorMessage && !analyticsData?.isEmployee && (
-          <Card className="border-destructive/30 bg-destructive/5">
+        {errorMessage && (
+          <Card className="border-destructive/40 bg-destructive/5">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-destructive">
                 <AlertCircle className="h-5 w-5" />
-                Limited financial data
+                Unable to load complete financial data
               </CardTitle>
+              <CardDescription>{errorMessage}</CardDescription>
             </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                {errorMessage || "Financial data is not yet available. Showing placeholders for now."}
-              </p>
-            </CardContent>
           </Card>
         )}
 
-        {analyticsData?.isEmployee && errorMessage && (
-          <Card className="border-muted/40 bg-muted/30">
+        {payload ? (
+          <>
+            <SummaryCards cards={payload.cards} />
+            {payload.sections.map((section, index) => (
+              <SummarySectionView key={`${section.title}-${index}`} section={section} />
+            ))}
+          </>
+        ) : (
+          <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Showing your approved job time</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5" />
+                No Financial Data Available
+              </CardTitle>
               <CardDescription>
-                System analytics are limited right now, but your job totals below are accurate based on approved time.
+                Financial data will appear once jobs, time entries, collections, and allocations are posted.
               </CardDescription>
             </CardHeader>
           </Card>
-        )}
-
-        {/* Role-based visibility notice */}
-        {analyticsData?.isEmployee && (
-          <Card className="border-primary/30 bg-primary/5">
-            <CardHeader>
-              <CardTitle className="text-sm">Personal Job Financials</CardTitle>
-              <CardDescription>Billable vs non-billable, profit/loss, and overtime.</CardDescription>
-            </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Billable Amount</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="text-2xl font-bold text-primary leading-tight break-words"
-                  title={`KES ${employeeTotals.billableAmount.toLocaleString()}`}
-                >
-                  KES {employeeTotals.billableAmount.toLocaleString()}
-                  </div>
-                  <p className="text-xs text-muted-foreground">{employeeTotals.billableHours.toFixed(1)} billable hours</p>
-                </CardContent>
-              </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Allocated Revenue</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="text-2xl font-bold text-primary leading-tight break-words"
-                  title={`KES ${employeeTotals.allocatedRevenue.toLocaleString()}`}
-                >
-                  KES {employeeTotals.allocatedRevenue.toLocaleString()}
-                </div>
-                <p className="text-xs text-muted-foreground">Cash collected and allocated</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Non-billable Amount</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="text-2xl font-bold text-primary leading-tight break-words"
-                  title={`KES ${employeeTotals.nonBillableAmount.toLocaleString()}`}
-                >
-                  KES {employeeTotals.nonBillableAmount.toLocaleString()}
-                </div>
-                <p className="text-xs text-muted-foreground">{employeeTotals.nonBillableHours.toFixed(1)} non-billable hours</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Profit</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="text-2xl font-bold text-primary leading-tight break-words"
-                  title={`KES ${employeeTotals.profitAmount.toLocaleString()}`}
-                >
-                  KES {employeeTotals.profitAmount.toLocaleString()}
-                </div>
-                <p className="text-xs text-muted-foreground">Positive variance</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Loss</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className="text-2xl font-bold text-primary leading-tight break-words"
-                  title={`KES ${employeeTotals.lossAmount.toLocaleString()}`}
-                >
-                  KES {employeeTotals.lossAmount.toLocaleString()}
-                </div>
-                <p className="text-xs text-muted-foreground">Negative variance</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Approved Overtime</CardTitle>
-              </CardHeader>
-              <CardContent>
-                  <div className="text-2xl font-bold text-primary leading-tight break-words">
-                    {employeeTotals.overtimeHours.toFixed(1)} hrs
-                  </div>
-                  <p className="text-xs text-muted-foreground">Additional approved hours</p>
-                </CardContent>
-              </Card>
-            </CardContent>
-          </Card>
-        )}
-
-        {analyticsData && (
-          <>
-            {/* Key Metrics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {/* Total Revenue - Admin only */}
-              {analyticsData.isAdmin && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                    <DollarSign className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div
-                      className="text-2xl font-bold text-primary leading-tight break-words"
-                      title={`KES ${(f.totalRevenue || 0).toLocaleString()}`}
-                    >
-                      KES {(f.totalRevenue || 0).toLocaleString()}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Company-wide revenue</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Portfolio Revenue - Partner */}
-              {analyticsData.isPartner && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Portfolio Revenue</CardTitle>
-                    <DollarSign className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div
-                      className="text-2xl font-bold text-primary leading-tight break-words"
-                      title={`KES ${(f.portfolioRevenue || 0).toLocaleString()}`}
-                    >
-                      KES {(f.portfolioRevenue || 0).toLocaleString()}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Your team's revenue</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Total Cost - Admin only */}
-              {analyticsData.isAdmin && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Total Cost</CardTitle>
-                    <TrendingUp className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div
-                      className="text-2xl font-bold text-primary leading-tight break-words"
-                      title={`KES ${(f.totalCost || 0).toLocaleString()}`}
-                    >
-                      KES {(f.totalCost || 0).toLocaleString()}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Total operating cost</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Profit Margin - Admin only */}
-              {analyticsData.isAdmin && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Profit Margin</CardTitle>
-                    <TrendingUp className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-primary leading-tight break-words">
-                      {f.totalRevenue > 0 ? (((f.totalRevenue - f.totalCost) / f.totalRevenue) * 100).toFixed(1) : 0}%
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      KES {((f.totalRevenue || 0) - (f.totalCost || 0)).toLocaleString()} profit
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Total Hours - Employee/Partner */}
-              {!analyticsData.isAdmin && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">
-                      {analyticsData.isPartner ? "Team Hours" : "Total Hours"}
-                    </CardTitle>
-                    <TrendingUp className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-primary leading-tight break-words">
-                      {(f.totalHours || 0).toFixed(1)}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Hours worked</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Billable Hours - Employee/Partner */}
-              {!analyticsData.isAdmin && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Billable Hours</CardTitle>
-                    <Users className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-primary leading-tight break-words">
-                      {(f.billableHours || 0).toFixed(1)}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Hours on billable projects</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {analyticsData.isEmployee && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Jobs Completed</CardTitle>
-                    <Users className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-primary leading-tight break-words">
-                      {employeeJobs.length}
-                    </div>
-                    <p className="text-xs text-muted-foreground">With approved time</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Active Jobs/Departments */}
-              {analyticsData.isAdmin && f.activeDepartments && (
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Departments</CardTitle>
-                    <Building2 className="h-4 w-4 text-accent" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-primary leading-tight break-words">
-                      {f.activeDepartments}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Active departments</p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-
-            {/* Admin-only: Job Profitability Breakdown */}
-            {analyticsData.isAdmin && f.jobProfitability && f.jobProfitability.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Job Profitability Analysis</CardTitle>
-                  <CardDescription>Revenue and profit by job</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Job Code</TableHead>
-                          <TableHead>Client</TableHead>
-                          <TableHead className="text-right">Revenue</TableHead>
-                          <TableHead className="text-right">Cost</TableHead>
-                          <TableHead className="text-right">Profit</TableHead>
-                          <TableHead className="text-right">Margin %</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {f.jobProfitability.map((job: any) => (
-                          <TableRow key={job.jobId}>
-                            <TableCell className="font-medium">{job.jobCode}</TableCell>
-                            <TableCell>{job.clientName}</TableCell>
-                            <TableCell className="text-right">KES {(job.revenue || 0).toLocaleString()}</TableCell>
-                            <TableCell className="text-right">KES {(job.cost || 0).toLocaleString()}</TableCell>
-                            <TableCell className="text-right font-medium">KES {((job.revenue || 0) - (job.cost || 0)).toLocaleString()}</TableCell>
-                            <TableCell className="text-right">
-                              {job.revenue > 0 ? (((job.revenue - (job.cost || 0)) / job.revenue) * 100).toFixed(1) : 0}%
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Admin-only: Department Revenue Distribution */}
-            {analyticsData.isAdmin && f.departmentRevenue && f.departmentRevenue.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Revenue by Department</CardTitle>
-                  <CardDescription>Distribution across departments</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={f.departmentRevenue}
-                        dataKey="revenue"
-                        nameKey="department"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={100}
-                        label={(entry) => `${entry.department}: KES ${(entry.revenue).toLocaleString()}`}
-                      >
-                        {f.departmentRevenue.map((_: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => `KES ${Number(value).toLocaleString()}`} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Partner: Portfolio Breakdown */}
-            {analyticsData.isPartner && f.portfolioJobs && f.portfolioJobs.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Portfolio Jobs</CardTitle>
-                  <CardDescription>Your team's active engagements</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Job</TableHead>
-                          <TableHead>Client</TableHead>
-                          <TableHead className="text-right">Team Hours</TableHead>
-                          <TableHead className="text-right">Revenue</TableHead>
-                          <TableHead className="text-right">Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {f.portfolioJobs.map((job: any) => (
-                          <TableRow key={job.jobId}>
-                            <TableCell className="font-medium">{job.jobCode}</TableCell>
-                            <TableCell>{job.clientName}</TableCell>
-                            <TableCell className="text-right">{(job.hours || 0).toFixed(1)}</TableCell>
-                            <TableCell className="text-right">KES {(job.revenue || 0).toLocaleString()}</TableCell>
-                            <TableCell>{job.status || 'Active'}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Employee: Job Financial Breakdown */}
-            {analyticsData.isEmployee && employeeJobs.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Your Jobs & Earnings</CardTitle>
-                  <CardDescription>Billable vs non-billable, profit/loss, and hours by job</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-end md:justify-between">
-                    <div className="flex flex-1 flex-wrap gap-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium text-muted-foreground">From</span>
-                        <input
-                          type="date"
-                          value={employeeDateFrom}
-                          onChange={(event) => setEmployeeDateFrom(event.target.value)}
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium text-muted-foreground">To</span>
-                        <input
-                          type="date"
-                          value={employeeDateTo}
-                          onChange={(event) => setEmployeeDateTo(event.target.value)}
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium text-muted-foreground">Status</span>
-                        <select
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                          value={employeeStatusFilter}
-                          onChange={(event) => setEmployeeStatusFilter(event.target.value)}
-                        >
-                          <option value="">All statuses</option>
-                          <option value="planned">Planned</option>
-                          <option value="in_progress">In progress</option>
-                          <option value="on_hold">On hold</option>
-                          <option value="completed">Completed</option>
-                        </select>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium text-muted-foreground">Search</span>
-                        <input
-                          type="text"
-                          placeholder="Job or status"
-                          value={employeeSearch}
-                          onChange={(event) => setEmployeeSearch(event.target.value)}
-                          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEmployeeDateFrom("");
-                          setEmployeeDateTo("");
-                          setEmployeeSearch("");
-                          setEmployeeStatusFilter("");
-                        }}
-                        className="h-9 rounded-md border border-input px-3 text-sm text-muted-foreground hover:text-foreground"
-                      >
-                        Clear dates
-                      </button>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Showing {employeeJobs.length} job{employeeJobs.length === 1 ? "" : "s"}
-                    </div>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Job</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Last Worked</TableHead>
-                          <TableHead className="text-right">Total Hours</TableHead>
-                        <TableHead className="text-right">Billable</TableHead>
-                        <TableHead className="text-right">Non-billable</TableHead>
-                        <TableHead className="text-right">Non-billable Amount</TableHead>
-                        <TableHead className="text-right">Allocated Revenue</TableHead>
-                        <TableHead className="text-right">Billable Amount</TableHead>
-                        <TableHead className="text-right">Profit / Loss</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {employeeJobs.map((job) => (
-                          <TableRow key={job.jobId}>
-                            <TableCell className="font-medium">{job.jobName}</TableCell>
-                            <TableCell className="capitalize">{job.status.replace(/_/g, " ")}</TableCell>
-                            <TableCell>
-                              {job.lastWorkedAt ? new Date(job.lastWorkedAt).toLocaleDateString() : "—"}
-                            </TableCell>
-                            <TableCell className="text-right">{job.totalHours.toFixed(1)}</TableCell>
-                            <TableCell className="text-right">{job.billableHours.toFixed(1)}</TableCell>
-                            <TableCell className="text-right">{job.nonBillableHours.toFixed(1)}</TableCell>
-                            <TableCell className="text-right">KES {job.nonBillableAmount.toLocaleString()}</TableCell>
-                            <TableCell className="text-right">
-                              KES {(job.allocatedRevenue || 0).toLocaleString()}
-                            </TableCell>
-                            <TableCell className="text-right">KES {job.billableAmount.toLocaleString()}</TableCell>
-                            <TableCell className="text-right">
-                              KES {job.profitLoss.toLocaleString()}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {analyticsData.isEmployee && employeeJobs.length === 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Your Jobs & Earnings</CardTitle>
-                  <CardDescription>Once time entries are approved, your job financials will appear here.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">No approved job time found yet.</p>
-                </CardContent>
-              </Card>
-            )}
-          </>
         )}
       </div>
     </DashboardLayout>

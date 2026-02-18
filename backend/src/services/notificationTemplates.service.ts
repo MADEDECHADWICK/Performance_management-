@@ -1,5 +1,9 @@
 import { NotificationType } from "@prisma/client";
 import { prisma } from "../prisma";
+import {
+  DEFAULT_EVALUATION_NOTIFICATION_TEMPLATES,
+  DefaultNotificationTemplate,
+} from "./notificationTemplateDefaults";
 
 interface AuthContext {
   userId: number;
@@ -75,5 +79,45 @@ export class NotificationTemplateService {
   static async deleteTemplate(id: number) {
     await prisma.notificationTemplate.delete({ where: { id } });
     return true;
+  }
+
+  static async upsertDefaults(
+    createdByProfileId?: number | null,
+    templates: DefaultNotificationTemplate[] = DEFAULT_EVALUATION_NOTIFICATION_TEMPLATES
+  ) {
+    const results = await Promise.all(
+      templates.map(async (template) => {
+        const existing = await prisma.notificationTemplate.findFirst({
+          where: { label: template.label },
+        });
+
+        if (existing) {
+          return prisma.notificationTemplate.update({
+            where: { id: existing.id },
+            data: {
+              title: template.title,
+              message: template.message,
+              type: template.type,
+              actionRequired: template.actionRequired ?? false,
+              isActive: true,
+            },
+          });
+        }
+
+        return prisma.notificationTemplate.create({
+          data: {
+            label: template.label,
+            title: template.title,
+            message: template.message,
+            type: template.type,
+            actionRequired: template.actionRequired ?? false,
+            isActive: true,
+            createdByProfileId: createdByProfileId ?? null,
+          },
+        });
+      })
+    );
+
+    return results;
   }
 }

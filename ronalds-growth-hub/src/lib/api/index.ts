@@ -26,6 +26,8 @@ export { default as engagementLettersAPI } from './engagementLetters';
 export { default as rolesAPI } from './roles';
 export { default as recruitmentCandidatesAPI } from './recruitmentCandidates';
 export { default as notificationTemplatesAPI } from './notificationTemplates';
+export { default as performanceFrameworkAPI } from './performanceFramework';
+export { default as moduleAccessAPI } from './moduleAccess';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -45,6 +47,8 @@ import engagementLettersAPI from './engagementLetters';
 import rolesAPI from './roles';
 import recruitmentCandidatesAPI from './recruitmentCandidates';
 import notificationTemplatesAPI from './notificationTemplates';
+import performanceFrameworkAPI from './performanceFramework';
+import moduleAccessAPI from './moduleAccess';
 
 const API = {
   auth: authAPI,
@@ -64,6 +68,8 @@ const API = {
   roles: rolesAPI,
   recruitmentCandidates: recruitmentCandidatesAPI,
   notificationTemplates: notificationTemplatesAPI,
+  performanceFramework: performanceFrameworkAPI,
+  moduleAccess: moduleAccessAPI,
 };
 
 export default API;

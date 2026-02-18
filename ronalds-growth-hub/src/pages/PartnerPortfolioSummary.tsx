@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Search } from "lucide-react";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface PartnerRanking {
   partner_id: number;
@@ -28,41 +29,31 @@ interface DashboardData {
 
 export default function PartnerPortfolioSummary() {
   const navigate = useNavigate();
+  const { user, isLoading: authLoading, isPartner } = useAuth();
   const [loading, setLoading] = useState(true);
   const [partnerRankings, setPartnerRankings] = useState<PartnerRanking[]>([]);
   const [search, setSearch] = useState("");
   const [viewerIsPartner, setViewerIsPartner] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const response = await authAPI.me();
-      const user = (response as any)?.data ?? response;
       if (!user) {
         navigate("/auth");
         return;
       }
-      const roleNames: string[] = [];
-      if (Array.isArray((user as any)?.authRoles)) {
-        roleNames.push(...((user as any).authRoles as string[]));
-      }
-      if (Array.isArray(user?.roles)) {
-        roleNames.push(
-          ...user.roles
-            .map((role: any) => role?.role?.name ?? role?.name ?? "")
-            .filter(Boolean)
-        );
-      }
-      const normalizedRoles = roleNames.map((role) => String(role).toLowerCase());
       const positionTitle = String(user?.profile?.positionTitle ?? "").toLowerCase();
       setViewerIsPartner(
-        Boolean(user?.profile?.isPartner) ||
-          normalizedRoles.includes("partner") ||
-          positionTitle.includes("partner")
+        Boolean(user?.profile?.isPartner) || isPartner || positionTitle.includes("partner")
       );
       const data = await apiFetch("GET", "/gmp-dashboard/overview");
       const payload = ((data as any)?.data ?? data) as DashboardData;

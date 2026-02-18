@@ -1,29 +1,14 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireRole } from '../middleware/reqiureRole';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
-
-// Middleware: Check if user is HR/Admin/SuperAdmin
-const requireHROrAdmin = (req: AuthRequest, res: any, next: any) => {
-  const userRoles = req.user?.authRoles || (req.user as any)?.roles || [];
-  const isHROrAdmin = 
-    userRoles.includes('super_admin') || 
-    userRoles.includes('hr_manager') || 
-    userRoles.includes('hr') ||
-    userRoles.includes('admin');
-  
-  if (!isHROrAdmin) {
-    return res.status(403).json({ 
-      error: 'Access denied. Only HR, HR Manager, and Super Admin can manage employee roles' 
-    });
-  }
-  next();
-};
+const canManageEmployeeRoles = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
 
 // GET /employees - List all employees with their current roles
-router.get('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.get('/', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
   try {
     const employees = await prisma.profile.findMany({
       include: {
@@ -43,7 +28,7 @@ router.get('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) 
 });
 
 // GET /employees/:employeeId - Get single employee with role
-router.get('/:employeeId', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.get('/:employeeId', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
   try {
     const { employeeId } = req.params;
     
@@ -69,7 +54,7 @@ router.get('/:employeeId', authMiddleware, requireHROrAdmin, async (req: AuthReq
 });
 
 // PUT /employees/:employeeId/role - Assign/update employee role
-router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.put('/:employeeId/role', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
   try {
     const { employeeId } = req.params;
     const roleId = req.body.roleId ?? req.body.role_id;
@@ -132,7 +117,7 @@ router.put('/:employeeId/role', authMiddleware, requireHROrAdmin, async (req: Au
 });
 
 // GET /employees/:employeeId/role-history - Get role change history (optional, for audit trail)
-router.get('/:employeeId/role-history', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.get('/:employeeId/role-history', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
   try {
     const { employeeId } = req.params;
     

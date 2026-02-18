@@ -27,8 +27,9 @@ import {
   RefreshCw
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/api";
+import { timeEntriesAPI } from "@/lib/api/timeEntries";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -85,14 +86,59 @@ interface NotificationCard {
   link?: string;
 }
 
+interface HrApprovalControls {
+  controls: {
+    totalJobs: number;
+    totalPlannedCost: number;
+    totalActualCost: number;
+    totalPlannedHours: number;
+    totalActualHours: number;
+    totalCostVariance: number;
+    totalHoursVariance: number;
+    jobsOverPlannedCost: number;
+    jobsOverPlannedHours: number;
+    jobsOverFeeCap: number;
+  };
+  approvals: {
+    standard: {
+      pending: number;
+      approved: number;
+      rejected: number;
+      cancelled: number;
+    };
+    overBudget: {
+      pending: number;
+      awaitingPartner: number;
+      managerRejected: number;
+      partnerApproved: number;
+      partnerRejected: number;
+      autoRejected: number;
+    };
+  };
+  overBudgetRequests: Array<{
+    id: number;
+    jobId: number;
+    jobName: string;
+    clientName?: string | null;
+    employeeName?: string;
+    status: string;
+    requestedAdditional: number;
+    estimatedCostImpact: number;
+    createdAt?: string;
+    approvalNotes?: string | null;
+    rejectionReason?: string | null;
+  }>;
+}
+
 const HRDashboard = () => {
-  const { isAdmin } = useAuth();
+  const { user, isLoading: authLoading, isAdmin, hasModuleAccess } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [pendingTasks, setPendingTasks] = useState(0);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
   const [companyMetrics, setCompanyMetrics] = useState<CompanyMetrics | null>(null);
   const [subordinates, setSubordinates] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<NotificationCard[]>([]);
+  const [approvalControls, setApprovalControls] = useState<HrApprovalControls | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [missingChecklistCount, setMissingChecklistCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -100,8 +146,10 @@ const HRDashboard = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
     loadAllData();
-  }, []);
+  }, [authLoading, user]);
 
   const mapProfile = (user: any) => {
     const profile = user?.profile;
@@ -118,7 +166,6 @@ const HRDashboard = () => {
 
   const loadAllData = async () => {
     try {
-      const user = await authAPI.me();
       if (!user) return;
 
       await Promise.all([
@@ -126,6 +173,7 @@ const HRDashboard = () => {
         loadNotifications(),
         loadPersonalPerformance(user.id),
         loadCompanyMetrics(),
+        loadApprovalControls(),
         loadSubordinates(user.id),
         loadMissingChecklists()
       ]);
@@ -289,7 +337,6 @@ const HRDashboard = () => {
         title: "Scores refreshed",
         description: "Performance scores have been recalculated.",
       });
-      const user = await authAPI.me();
       if (user?.id) {
         await loadPersonalPerformance(user.id);
       }
@@ -312,6 +359,55 @@ const HRDashboard = () => {
       setCompanyMetrics(metrics);
     } catch (error) {
       console.error("Error loading company metrics:", error);
+    }
+  };
+
+  const loadApprovalControls = async () => {
+    try {
+      const response = await apiFetch('GET', '/hr-dashboard/approval-controls');
+      const payload = response?.data ?? response ?? null;
+      setApprovalControls(payload);
+    } catch (error) {
+      console.error("Error loading HR approval controls:", error);
+      setApprovalControls(null);
+    }
+  };
+
+  const handleApproveOverBudget = async (requestId: number) => {
+    try {
+      const notes = window.prompt('Approval notes (optional):') || undefined;
+      await timeEntriesAPI.approveOverBudgetRequest(requestId, notes);
+      await loadApprovalControls();
+      await loadCompanyMetrics();
+      toast({
+        title: "Approved",
+        description: "Over-budget request has been approved.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Approval failed",
+        description: error?.message || "Unable to approve over-budget request.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleRejectOverBudget = async (requestId: number) => {
+    try {
+      const notes = window.prompt('Rejection reason (optional):') || undefined;
+      await timeEntriesAPI.rejectOverBudgetRequest(requestId, notes);
+      await loadApprovalControls();
+      await loadCompanyMetrics();
+      toast({
+        title: "Rejected",
+        description: "Over-budget request has been rejected.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Rejection failed",
+        description: error?.message || "Unable to reject over-budget request.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -342,12 +438,54 @@ const HRDashboard = () => {
     }
   };
 
+  const canViewPersonalTab = hasModuleAccess("dashboard", "read");
+  const canViewCompanyTab = hasModuleAccess("reports", "read") || hasModuleAccess("dashboard", "read");
+  const canViewRoleTab = hasModuleAccess("access_control", "read") || hasModuleAccess("users", "read");
+  const canViewManagementTab =
+    hasModuleAccess("users", "read") ||
+    hasModuleAccess("jobs", "read") ||
+    hasModuleAccess("kpis", "read") ||
+    hasModuleAccess("finance", "read");
+  const canRecomputeScores = hasModuleAccess("reports", "write");
+
+  const enabledTabs = useMemo(() => {
+    const tabs: string[] = [];
+    if (canViewPersonalTab) tabs.push("personal");
+    if (canViewCompanyTab) tabs.push("company");
+    if (canViewRoleTab) tabs.push("roles");
+    if (canViewManagementTab) tabs.push("management");
+    return tabs;
+  }, [canViewCompanyTab, canViewManagementTab, canViewPersonalTab, canViewRoleTab]);
+
+  const defaultTab = enabledTabs[0] || "personal";
+  const canUseDepartmentTools = hasModuleAccess("dashboard", "read");
+  const canManageEmployees = hasModuleAccess("users", "read");
+  const canManageEvaluations = hasModuleAccess("evaluations", "read");
+  const canManageKpis = hasModuleAccess("kpis", "read");
+  const canViewFinanceTools = hasModuleAccess("finance", "read");
+  const canViewAuditLogs = hasModuleAccess("reports", "read");
+
   if (isLoading) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (enabledTabs.length === 0) {
+    return (
+      <DashboardLayout>
+        <Card>
+          <CardHeader>
+            <CardTitle>Access Restricted</CardTitle>
+            <CardDescription>
+              Your account does not currently have module permissions for this dashboard.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       </DashboardLayout>
     );
   }
@@ -364,42 +502,53 @@ const HRDashboard = () => {
               View your personal performance and manage company-wide operations
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleRecomputeScores}
-            disabled={isRecomputeLoading}
-          >
-            {isRecomputeLoading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            Recompute scores
-          </Button>
+          {canRecomputeScores && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRecomputeScores}
+              disabled={isRecomputeLoading}
+            >
+              {isRecomputeLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Recompute scores
+            </Button>
+          )}
         </div>
 
-        <Tabs defaultValue="personal" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-6">
-            <TabsTrigger value="personal">
-              <User className="h-4 w-4 mr-2" />
-              My Performance
-            </TabsTrigger>
-            <TabsTrigger value="company">
-              <Building2 className="h-4 w-4 mr-2" />
-              Company Overview
-            </TabsTrigger>
-            <TabsTrigger value="roles">
-              <Shield className="h-4 w-4 mr-2" />
-              Role Management
-            </TabsTrigger>
-            <TabsTrigger value="management">
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Management Tools
-            </TabsTrigger>
+        <Tabs key={defaultTab} defaultValue={defaultTab} className="w-full min-w-0">
+          <TabsList className="mb-6 grid h-auto w-full min-w-0 grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-4">
+            {canViewPersonalTab && (
+              <TabsTrigger value="personal" className="min-w-0 px-2 py-2">
+                <User className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">My Performance</span>
+              </TabsTrigger>
+            )}
+            {canViewCompanyTab && (
+              <TabsTrigger value="company" className="min-w-0 px-2 py-2">
+                <Building2 className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">Company Overview</span>
+              </TabsTrigger>
+            )}
+            {canViewRoleTab && (
+              <TabsTrigger value="roles" className="min-w-0 px-2 py-2">
+                <Shield className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">Role Management</span>
+              </TabsTrigger>
+            )}
+            {canViewManagementTab && (
+              <TabsTrigger value="management" className="min-w-0 px-2 py-2">
+                <BarChart3 className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">Management Tools</span>
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* My Performance Tab - Personal Data Only */}
+          {canViewPersonalTab && (
           <TabsContent value="personal" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
               <Card className="hover:shadow-lg transition-shadow">
@@ -476,6 +625,7 @@ const HRDashboard = () => {
                 </CardContent>
               </Card>
             </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
@@ -628,10 +778,12 @@ const HRDashboard = () => {
               </Card>
             </div>
           </TabsContent>
+          )}
 
           {/* Company Overview Tab - Analytics for HR/Admin */}
+          {canViewCompanyTab && (
           <TabsContent value="company" className="space-y-6">
-            {isAdmin && (
+            {isAdmin && canRecomputeScores && (
               <div className="flex items-center justify-end">
                 <Button
                   size="sm"
@@ -754,6 +906,139 @@ const HRDashboard = () => {
               </Card>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Planned Cost</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-xl font-bold">
+                    {formatCurrency(approvalControls?.controls?.totalPlannedCost || 0)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Across {approvalControls?.controls?.totalJobs || 0} jobs
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Actual Cost</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-xl font-bold">
+                    {formatCurrency(approvalControls?.controls?.totalActualCost || 0)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Approved time entries only
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Cost Variance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div
+                    className={`text-xl font-bold ${
+                      Number(approvalControls?.controls?.totalCostVariance || 0) > 0
+                        ? 'text-destructive'
+                        : 'text-foreground'
+                    }`}
+                  >
+                    {formatCurrency(approvalControls?.controls?.totalCostVariance || 0)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Planned vs actual
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Approval Chain</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-xl font-bold">
+                    {Number(approvalControls?.approvals?.standard?.pending || 0) +
+                      Number(approvalControls?.approvals?.overBudget?.pending || 0) +
+                      Number(approvalControls?.approvals?.overBudget?.awaitingPartner || 0)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Pending + awaiting partner
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-primary" />
+                  Over-Budget Approval Chain
+                </CardTitle>
+                <CardDescription>
+                  HR/Admin visibility into cost-control approvals and escalations.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">
+                    Pending: {approvalControls?.approvals?.overBudget?.pending || 0}
+                  </Badge>
+                  <Badge variant="secondary">
+                    Awaiting partner: {approvalControls?.approvals?.overBudget?.awaitingPartner || 0}
+                  </Badge>
+                  <Badge variant="outline">
+                    Over fee-cap jobs: {approvalControls?.controls?.jobsOverFeeCap || 0}
+                  </Badge>
+                </div>
+                {(!approvalControls?.overBudgetRequests ||
+                  approvalControls.overBudgetRequests.length === 0) && (
+                  <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    No over-budget requests in the chain right now.
+                  </div>
+                )}
+                {approvalControls?.overBudgetRequests?.slice(0, 8).map((request) => (
+                  <div key={request.id} className="rounded-md border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium">{request.jobName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {request.clientName || 'Client'} · {request.employeeName || 'Team member'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          +{Number(request.requestedAdditional || 0).toFixed(1)}h ·
+                          {' '}Impact {formatCurrency(Number(request.estimatedCostImpact || 0))}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <Badge variant={request.status === 'pending' ? 'secondary' : 'outline'}>
+                          {String(request.status).replace(/_/g, ' ')}
+                        </Badge>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {request.createdAt ? new Date(request.createdAt).toLocaleDateString() : ''}
+                        </p>
+                      </div>
+                    </div>
+                    {isAdmin &&
+                      (request.status === 'pending' || request.status === 'manager_approved') && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <Button size="sm" onClick={() => handleApproveOverBudget(request.id)}>
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleRejectOverBudget(request.id)}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
@@ -764,24 +1049,30 @@ const HRDashboard = () => {
                   <CardDescription>Navigate to key management areas</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  <Link to="/department-dashboard">
-                    <Button className="w-full" variant="outline">
-                      <Building2 className="h-4 w-4 mr-2" />
-                      Department Analytics
-                    </Button>
-                  </Link>
-                  <Link to="/employee-management">
-                    <Button className="w-full" variant="outline">
-                      <Users className="h-4 w-4 mr-2" />
-                      Employee Overview
-                    </Button>
-                  </Link>
-                  <Link to="/financial-summary">
-                    <Button className="w-full" variant="outline">
-                      <DollarSign className="h-4 w-4 mr-2" />
-                      Financial Reports
-                    </Button>
-                  </Link>
+                  {canUseDepartmentTools && (
+                    <Link to="/department-dashboard">
+                      <Button className="w-full" variant="outline">
+                        <Building2 className="h-4 w-4 mr-2" />
+                        Department Analytics
+                      </Button>
+                    </Link>
+                  )}
+                  {canManageEmployees && (
+                    <Link to="/employee-management">
+                      <Button className="w-full" variant="outline">
+                        <Users className="h-4 w-4 mr-2" />
+                        Employee Overview
+                      </Button>
+                    </Link>
+                  )}
+                  {canViewFinanceTools && (
+                    <Link to="/financial-summary">
+                      <Button className="w-full" variant="outline">
+                        <DollarSign className="h-4 w-4 mr-2" />
+                        Financial Reports
+                      </Button>
+                    </Link>
+                  )}
                 </CardContent>
               </Card>
 
@@ -893,15 +1184,20 @@ const HRDashboard = () => {
               </Card>
             </div>
           </TabsContent>
+          )}
 
           {/* Role Management Tab - Admin Only */}
+          {canViewRoleTab && (
           <TabsContent value="roles" className="space-y-6">
             <UserRoleManagement />
           </TabsContent>
+          )}
 
           {/* Management Tools Tab */}
+          {canViewManagementTab && (
           <TabsContent value="management" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {canUseDepartmentTools && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -919,7 +1215,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canManageEmployees && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -937,7 +1235,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canManageEvaluations && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -955,7 +1255,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canManageKpis && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -973,7 +1275,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canViewFinanceTools && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -991,7 +1295,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canManageEmployees && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -1009,7 +1315,9 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
 
+              {canViewAuditLogs && (
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -1027,8 +1335,10 @@ const HRDashboard = () => {
                   </Link>
                 </CardContent>
               </Card>
+              )}
             </div>
           </TabsContent>
+          )}
         </Tabs>
       </div>
     </DashboardLayout>

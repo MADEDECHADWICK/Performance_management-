@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,6 +11,7 @@ import { CheckCircle2, Star, User, ClipboardCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useAuth } from "@/contexts/AuthContext";
 
 const competencies = [
   { key: "technical_expertise", label: "Technical Expertise" },
@@ -24,6 +25,7 @@ const competencies = [
 const ManagerEvaluation = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { user, profile, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [evaluations, setEvaluations] = useState<any[]>([]);
   const [selectedEval, setSelectedEval] = useState<any>(null);
@@ -38,20 +40,52 @@ const ManagerEvaluation = () => {
   });
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadTeamEvaluations();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadTeamEvaluations = async () => {
     try {
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
 
-      // Load evaluations for team members where current user is the manager
-      const evalsData = await apiFetch('GET', `/employee_evaluations?manager_id=${user.id}`);
-      setEvaluations(evalsData || []);
+      // Load assignments where current user is the manager evaluator.
+      const managerProfileId = Number(
+        (user as any)?.profileId ?? (user as any)?.profile_id ?? profile?.id ?? 0
+      );
+      const assignmentsData = await apiFetch<any[]>(
+        'GET',
+        `/evaluation-assignments?evaluatorProfileId=${managerProfileId}&evaluatorType=manager&include=definition,evaluatee`
+      );
+      const evalsData = (assignmentsData || []).map((assignment: any) => {
+        const responses =
+          assignment?.responses && typeof assignment.responses === "object"
+            ? assignment.responses
+            : {};
+        const evaluatee = assignment?.evaluatee || {};
+        return {
+          ...assignment,
+          ...responses,
+          status: assignment?.status === "submitted" ? "completed" : assignment?.status,
+          employee: {
+            id: evaluatee?.id,
+            first_name: evaluatee?.first_name ?? evaluatee?.firstName ?? "",
+            last_name: evaluatee?.last_name ?? evaluatee?.lastName ?? "",
+            email: evaluatee?.email ?? evaluatee?.user?.email ?? "",
+          },
+          cycle: {
+            name: assignment?.definition?.name || "Evaluation",
+          },
+        };
+      });
+
+      setEvaluations(evalsData);
 
       if (evalsData && evalsData.length > 0) {
         selectEvaluation(evalsData[0]);
@@ -126,9 +160,10 @@ const ManagerEvaluation = () => {
         manager_submitted_at: new Date().toISOString(),
       };
 
-      await apiFetch(`/employee_evaluations/${selectedEval.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(updateData)
+      await apiFetch('PATCH', `/evaluation-assignments/${selectedEval.id}`, {
+        responses: updateData,
+        evaluatorComments: formData.comments,
+        status: "submitted",
       });
 
       toast({

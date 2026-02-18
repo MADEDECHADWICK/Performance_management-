@@ -35,8 +35,9 @@ import {
   Settings,
   Target,
 } from "lucide-react";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface FirmMetrics {
   total_employees: number;
@@ -144,6 +145,7 @@ interface AlertsData {
 export default function GMPDashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading, isGMP } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [personalData, setPersonalData] = useState<PersonalData | null>(null);
@@ -153,33 +155,31 @@ export default function GMPDashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
+    if (!isGMP) {
+      toast({
+        title: "Access Denied",
+        description: "Group Managing Partner privileges required. Redirecting...",
+        variant: "destructive",
+      });
+      setTimeout(() => navigate("/dashboard"), 2000);
+      return;
+    }
     verifyGMPAccessAndLoadData();
-  }, []);
+  }, [authLoading, user, isGMP, navigate, toast]);
 
   const verifyGMPAccessAndLoadData = async () => {
     try {
       setIsLoading(true);
 
-      const user = await authAPI.me();
-      if (!user) {
-        navigate("/auth");
-        return;
-      }
-
       await Promise.all([loadDashboardData(), loadPersonalData(), loadAlertsData(), loadPipelineMetrics()]);
       setLastUpdated(new Date());
     } catch (error) {
       console.error("Error loading GMP dashboard:", error);
-
-      if (error?.status === 403) {
-        toast({
-          title: "Access Denied",
-          description: "Group Managing Partner privileges required. Redirecting...",
-          variant: "destructive",
-        });
-        setTimeout(() => navigate("/dashboard"), 2000);
-        return;
-      }
 
       toast({
         title: "Error",
@@ -490,6 +490,7 @@ export default function GMPDashboard() {
             </CardContent>
           </Card>
         </div>
+
 
         <Card>
           <CardHeader>

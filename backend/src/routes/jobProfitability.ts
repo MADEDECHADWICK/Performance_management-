@@ -24,6 +24,7 @@ const router = Router();
 async function calculateJobProfitability(jobId: number) {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
+    include: { jobCosting: true },
   });
 
   if (!job) {
@@ -43,8 +44,8 @@ async function calculateJobProfitability(jobId: number) {
   let total_cost = 0;
 
   if (job.billingType === 'fixed_fee') {
-    // For fixed fee jobs, revenue is the fixed fee amount
-    total_revenue = Number(job.fixedFeeAmount || 0);
+    // For fixed fee jobs, prefer jobCosting fee (source of truth) when available
+    total_revenue = Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
   } else {
     // For hourly and retainer, aggregate billable amounts from time entries
     total_revenue = timeEntries.reduce((sum, entry) => {

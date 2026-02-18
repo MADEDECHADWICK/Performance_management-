@@ -9,6 +9,12 @@ const prisma = new PrismaClient();
 // JWT secret (in production, use environment variables)
 const JWT_SECRET = process.env.JWT_SECRET || 'ronalds-gmp-secure-key-2024';
 
+const isUserBlockedFromLogin = (user: any) => {
+  if (!user?.isActive) return true;
+  const profileStatus = String(user?.profile?.status || '').toLowerCase();
+  return profileStatus === 'inactive' || profileStatus === 'separated';
+};
+
 // Enhanced login endpoint for GMP with comprehensive security
 router.post('/gmp-login', async (req, res) => {
   try {
@@ -43,6 +49,13 @@ router.post('/gmp-login', async (req, res) => {
       return res.status(401).json({ 
         message: 'Invalid credentials',
         success: false 
+      });
+    }
+
+    if (isUserBlockedFromLogin(user)) {
+      return res.status(403).json({
+        message: 'Account is inactive. Contact HR to reactivate your account.',
+        success: false
       });
     }
 
@@ -192,6 +205,13 @@ router.post('/gmp-reset-password', async (req, res) => {
       });
     }
 
+    if (isUserBlockedFromLogin(user)) {
+      return res.status(403).json({
+        message: 'Account is inactive. Contact HR to reactivate your account.',
+        success: false
+      });
+    }
+
     // Verify current password
     if (!user.password) {
       return res.status(401).json({
@@ -285,6 +305,13 @@ export const validateGMPToken = async (req: any, res: any, next: any) => {
       return res.status(401).json({ 
         message: 'User not found',
         success: false 
+      });
+    }
+
+    if (isUserBlockedFromLogin(user)) {
+      return res.status(403).json({
+        message: 'Account is inactive. Contact HR to reactivate your account.',
+        success: false
       });
     }
 

@@ -1,32 +1,16 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireRole } from '../middleware/reqiureRole';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
-
-// Middleware: Check if user is HR/Admin/SuperAdmin
-const requireHROrAdmin = (req: AuthRequest, res: any, next: any) => {
-  const userRoles = req.user?.authRoles || (req.user as any)?.roles || [];
-  const isHROrAdmin =
-    userRoles.includes('super_admin') ||
-    userRoles.includes('admin') ||
-    userRoles.includes('hr_manager') ||
-    userRoles.includes('hr');
-
-  if (!isHROrAdmin) {
-    return res.status(403).json({
-      error: 'Access denied. Only HR/Admin can manage position rates',
-    });
-  }
-  next();
-};
+const canManagePositionRates = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
 
 const mapRate = (role: any) => ({
   id: role.id,
   position_level: role.name,
   billing_rate: Number(role.billingRate ?? 0),
-  cost_rate: Number(role.costRate ?? 0),
   is_active: role.isActive,
   effective_from: role.createdAt,
   created_at: role.createdAt,
@@ -70,11 +54,10 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /position-rates - Create new position rate
-router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.post('/', authMiddleware, canManagePositionRates, async (req: AuthRequest, res) => {
   try {
     const positionLevel = req.body.position_level ?? req.body.name;
     const billingRate = req.body.billing_rate ?? req.body.billingRate;
-    const costRate = req.body.cost_rate ?? req.body.costRate ?? 0;
 
     if (!positionLevel || typeof positionLevel !== 'string') {
       return res.status(400).json({ error: 'position_level is required' });
@@ -82,10 +65,6 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
 
     if (typeof billingRate !== 'number' || Number.isNaN(billingRate) || billingRate < 0) {
       return res.status(400).json({ error: 'Billing rate must be a positive number' });
-    }
-
-    if (typeof costRate !== 'number' || Number.isNaN(costRate) || costRate < 0) {
-      return res.status(400).json({ error: 'Cost rate must be a positive number' });
     }
 
     const existing = await prisma.positionRole.findUnique({
@@ -99,7 +78,8 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
       data: {
         name: positionLevel,
         billingRate,
-        costRate,
+        // Keep legacy DB field aligned to billing to avoid dual-rate behavior.
+        costRate: billingRate,
         isActive: true,
       },
     });
@@ -118,7 +98,7 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
 });
 
 // PATCH /position-rates/:id - Update position rate
-router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.patch('/:id', authMiddleware, canManagePositionRates, async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -126,7 +106,6 @@ router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, 
     }
 
     const billingRate = req.body.billing_rate ?? req.body.billingRate;
-    const costRate = req.body.cost_rate ?? req.body.costRate;
     const isActive = req.body.is_active ?? req.body.isActive;
 
     const existing = await prisma.positionRole.findUnique({ where: { id } });
@@ -135,8 +114,11 @@ router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, 
     }
 
     const data: any = {};
-    if (typeof billingRate === 'number') data.billingRate = billingRate;
-    if (typeof costRate === 'number') data.costRate = costRate;
+    if (typeof billingRate === 'number') {
+      data.billingRate = billingRate;
+      // Keep legacy DB field aligned to billing to avoid dual-rate behavior.
+      data.costRate = billingRate;
+    }
     if (typeof isActive === 'boolean') data.isActive = isActive;
 
     const updated = await prisma.positionRole.update({ where: { id }, data });
@@ -155,7 +137,7 @@ router.patch('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, 
 });
 
 // DELETE /position-rates/:id - Deactivate position rate (soft delete)
-router.delete('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.delete('/:id', authMiddleware, canManagePositionRates, async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {

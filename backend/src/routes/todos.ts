@@ -41,6 +41,12 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
             status: true,
             budgetHours: true,
             fixedFeeAmount: true,
+            jobCosting: {
+              select: {
+                totalEstimatedHours: true,
+                budgetCap: { select: { totalAllocatedHours: true } },
+              },
+            },
             department: { select: { name: true } },
             client: { select: { clientName: true } },
           },
@@ -49,7 +55,25 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       orderBy: { updatedAt: 'desc' },
     });
 
-    return res.json(tasks || []);
+    const normalized = (tasks || []).map((task: any) => {
+      const job = task.job;
+      if (!job) return task;
+      const budgetHours =
+        Number(job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.jobCosting?.totalEstimatedHours ??
+          job.budgetHours ??
+          0);
+      return {
+        ...task,
+        job: {
+          ...job,
+          budgetHours,
+          jobCosting: undefined,
+        },
+      };
+    });
+
+    return res.json(normalized);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

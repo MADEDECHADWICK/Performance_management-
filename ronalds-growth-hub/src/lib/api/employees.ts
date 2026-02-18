@@ -77,6 +77,13 @@ export const employeesAPI = {
   },
 
   /**
+   * List partner profiles (lightweight)
+   */
+  listPartners: async (): Promise<Profile[]> => {
+    return api.get('/employees/partners/list');
+  },
+
+  /**
    * Get employee by ID with full profile
    */
   getById: async (id: number): Promise<Profile> => {

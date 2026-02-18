@@ -11,7 +11,17 @@ export function requireJobAccess(action: string = 'view') {
     try {
       const jobId = Number(req.params.jobId);
       const requesterProfileId = req.profile?.id;
-      const requesterRole = req.profile?.role?.name;
+      const normalizeRole = (role?: string | null) =>
+        String(role || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, '_');
+      const roleCandidates = [
+        req.profile?.role?.name,
+        ...(req.userRoles || []),
+        ...(req.user?.authRoles || []),
+      ].filter(Boolean) as string[];
+      const roleSet = new Set(roleCandidates.map((role) => normalizeRole(role)));
 
       if (!requesterProfileId) {
         return res.status(401).json({
@@ -37,13 +47,15 @@ export function requireJobAccess(action: string = 'view') {
       }
 
       // ✅ ACCESS CONTROL LOGIC
-      const isAdmin = requesterRole === 'admin';
-      const isManager = requesterRole === 'manager';
-      const isHr = requesterRole === 'hr' || requesterRole === 'hr_manager';
-      const isPartner = requesterRole === 'partner' && job.partnerProfileId === requesterProfileId;
+      const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
+      const isManager = roleSet.has('manager');
+      const isHr =
+        roleSet.has('hr') || roleSet.has('hr_manager') || roleSet.has('human_resources');
+      const isGmp = roleSet.has('gmp') || roleSet.has('group_managing_partner');
+      const isPartner = roleSet.has('partner') && job.partnerProfileId === requesterProfileId;
       const isStaffAssigned = job.staffing.length > 0;
 
-      const hasAccess = isAdmin || isManager || isHr || isPartner || isStaffAssigned;
+      const hasAccess = isAdmin || isHr || isGmp || isManager || isPartner || isStaffAssigned;
 
       if (!hasAccess) {
         return res.status(403).json({

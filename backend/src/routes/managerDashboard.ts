@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
 
@@ -211,6 +212,7 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
             totalEstimatedCost: true,
             totalEstimatedHours: true,
             costingStatus: true,
+            budgetCap: { select: { totalAllocatedHours: true } },
           },
         },
         timeEntries: {
@@ -222,15 +224,110 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     const jobIds = jobs.map((job) => job.id);
-    const allocations = await prisma.revenueAllocation.findMany({
-      where: { jobId: { in: jobIds } },
-      select: { jobId: true, allocatedAmount: true },
-    });
+    const [allocations, approvalGroups, overBudgetGroups, latestApprovalRows] = await Promise.all([
+      prisma.revenueAllocation.findMany({
+        where: { jobId: { in: jobIds } },
+        select: { jobId: true, allocatedAmount: true },
+      }),
+      prisma.timeEntryApprovalRequest.groupBy({
+        by: ['jobId', 'status'],
+        where: { jobId: { in: jobIds } },
+        _count: { _all: true },
+      }),
+      prisma.timeOverBudgetRequest.groupBy({
+        by: ['jobId', 'status'],
+        where: { jobId: { in: jobIds } },
+        _count: { _all: true },
+      }),
+      prisma.timeEntryApprovalRequest.findMany({
+        where: { jobId: { in: jobIds } },
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          requestType: true,
+          requestedAt: true,
+          approvedAt: true,
+          approver: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
+        take: 300,
+      }),
+    ]);
 
     const revenueByJob = new Map<number, number>();
     allocations.forEach((allocation) => {
       const current = revenueByJob.get(allocation.jobId) || 0;
       revenueByJob.set(allocation.jobId, current + Number(allocation.allocatedAmount || 0));
+    });
+
+    type ApprovalChainCounter = {
+      pending: number;
+      approved: number;
+      rejected: number;
+      cancelled: number;
+      overBudgetPending: number;
+      awaitingPartner: number;
+      overBudgetPartnerApproved: number;
+      overBudgetPartnerRejected: number;
+      latestStatus: string | null;
+      latestRequestedAt: Date | null;
+      latestApprovedAt: Date | null;
+      latestApproverName: string | null;
+      latestRequestType: string | null;
+    };
+
+    const approvalChainByJob = new Map<number, ApprovalChainCounter>();
+    const ensureApprovalCounter = (jobId: number) => {
+      const existing = approvalChainByJob.get(jobId);
+      if (existing) return existing;
+      const seeded: ApprovalChainCounter = {
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        cancelled: 0,
+        overBudgetPending: 0,
+        awaitingPartner: 0,
+        overBudgetPartnerApproved: 0,
+        overBudgetPartnerRejected: 0,
+        latestStatus: null,
+        latestRequestedAt: null,
+        latestApprovedAt: null,
+        latestApproverName: null,
+        latestRequestType: null,
+      };
+      approvalChainByJob.set(jobId, seeded);
+      return seeded;
+    };
+
+    approvalGroups.forEach((group) => {
+      const counter = ensureApprovalCounter(group.jobId);
+      const count = Number(group._count?._all || 0);
+      if (group.status === 'pending') counter.pending += count;
+      if (group.status === 'approved') counter.approved += count;
+      if (group.status === 'rejected') counter.rejected += count;
+      if (group.status === 'cancelled') counter.cancelled += count;
+    });
+
+    overBudgetGroups.forEach((group) => {
+      const counter = ensureApprovalCounter(group.jobId);
+      const count = Number(group._count?._all || 0);
+      if (group.status === 'pending') counter.overBudgetPending += count;
+      if (group.status === 'manager_approved') counter.awaitingPartner += count;
+      if (group.status === 'partner_approved') counter.overBudgetPartnerApproved += count;
+      if (group.status === 'partner_rejected') counter.overBudgetPartnerRejected += count;
+    });
+
+    latestApprovalRows.forEach((row) => {
+      const counter = ensureApprovalCounter(row.jobId);
+      if (counter.latestRequestedAt) return;
+      counter.latestStatus = row.status;
+      counter.latestRequestedAt = row.requestedAt;
+      counter.latestApprovedAt = row.approvedAt;
+      counter.latestRequestType = row.requestType;
+      counter.latestApproverName = row.approver
+        ? `${row.approver.firstName} ${row.approver.lastName}`.trim()
+        : null;
     });
 
     const portfolio = jobs.map((job) => {
@@ -244,8 +341,29 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
         (sum, entry) => sum + Number(entry.costAmount || 0),
         0
       );
-      const budgetHours = Number(job.budgetHours || 0);
+      const budgetHours = Number(
+        job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.jobCosting?.totalEstimatedHours ??
+          job.budgetHours ??
+          0
+      );
       const budgetUtilization = budgetHours > 0 ? Math.round((actualHours / budgetHours) * 100) : 0;
+      const approvalChain = approvalChainByJob.get(job.id) || ensureApprovalCounter(job.id);
+      const plannedCost = Number(job.jobCosting?.totalEstimatedCost || 0);
+      const plannedHours = Number(
+        job.jobCosting?.totalEstimatedHours ??
+          job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.budgetHours ??
+          0
+      );
+      const feeCap = Number(job.jobCosting?.jobFee || (job.billingType === 'fixed_fee' ? job.fixedFeeAmount : 0) || 0);
+      const costVariance = cost - plannedCost;
+      const hoursVariance = actualHours - plannedHours;
+      const costVariancePct = plannedCost > 0 ? (costVariance / plannedCost) * 100 : 0;
+      const hoursVariancePct = plannedHours > 0 ? (hoursVariance / plannedHours) * 100 : 0;
+      const remainingFeeBuffer = feeCap > 0 ? feeCap - cost : 0;
+      const pendingApprovalTotal =
+        approvalChain.pending + approvalChain.overBudgetPending + approvalChain.awaitingPartner;
 
       return {
         jobId: job.id,
@@ -267,15 +385,242 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
         startDate: job.startDate,
         dueDate: job.dueDate,
         completionPercentage: job.status === 'completed' ? 100 : budgetUtilization,
+        plannedCost,
+        plannedHours,
+        actualCost: cost,
+        costVariance,
+        hoursVariance,
+        costVariancePct,
+        hoursVariancePct,
+        feeCap,
+        remainingFeeBuffer,
+        isOverPlannedCost: plannedCost > 0 ? cost > plannedCost : false,
+        isOverPlannedHours: plannedHours > 0 ? actualHours > plannedHours : false,
+        isOverFeeCap: feeCap > 0 ? cost > feeCap : false,
+        pendingApprovalTotal,
+        approvalChain: {
+          pending: approvalChain.pending,
+          approved: approvalChain.approved,
+          rejected: approvalChain.rejected,
+          cancelled: approvalChain.cancelled,
+          overBudgetPending: approvalChain.overBudgetPending,
+          awaitingPartner: approvalChain.awaitingPartner,
+          partnerApproved: approvalChain.overBudgetPartnerApproved,
+          partnerRejected: approvalChain.overBudgetPartnerRejected,
+          latestStatus: approvalChain.latestStatus,
+          latestRequestedAt: approvalChain.latestRequestedAt,
+          latestApprovedAt: approvalChain.latestApprovedAt,
+          latestApproverName: approvalChain.latestApproverName,
+          latestRequestType: approvalChain.latestRequestType,
+        },
       };
     });
+
+    const controls = portfolio.reduce(
+      (acc, job) => {
+        acc.totalJobs += 1;
+        acc.totalPlannedCost += Number(job.plannedCost || 0);
+        acc.totalActualCost += Number(job.actualCost || 0);
+        acc.totalPlannedHours += Number(job.plannedHours || 0);
+        acc.totalActualHours += Number(job.actualHours || 0);
+        acc.totalPendingApprovals += Number(job.pendingApprovalTotal || 0);
+        if (job.isOverPlannedCost) acc.jobsOverPlannedCost += 1;
+        if (job.isOverPlannedHours) acc.jobsOverPlannedHours += 1;
+        if (job.isOverFeeCap) acc.jobsOverFeeCap += 1;
+        if ((job.approvalChain?.awaitingPartner || 0) > 0) acc.jobsAwaitingPartner += 1;
+        return acc;
+      },
+      {
+        totalJobs: 0,
+        totalPlannedCost: 0,
+        totalActualCost: 0,
+        totalPlannedHours: 0,
+        totalActualHours: 0,
+        totalPendingApprovals: 0,
+        jobsOverPlannedCost: 0,
+        jobsOverPlannedHours: 0,
+        jobsOverFeeCap: 0,
+        jobsAwaitingPartner: 0,
+      }
+    );
+    const costVariance = controls.totalActualCost - controls.totalPlannedCost;
+    const hoursVariance = controls.totalActualHours - controls.totalPlannedHours;
 
     return res.json({
       portfolio,
       teamJobs: [],
+      controls: {
+        ...controls,
+        totalCostVariance: costVariance,
+        totalHoursVariance: hoursVariance,
+        totalCostVariancePct:
+          controls.totalPlannedCost > 0 ? (costVariance / controls.totalPlannedCost) * 100 : 0,
+        totalHoursVariancePct:
+          controls.totalPlannedHours > 0 ? (hoursVariance / controls.totalPlannedHours) * 100 : 0,
+      },
     });
   } catch (error: any) {
     console.error('Error fetching job data:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /manager-dashboard/approval-chain
+// Detailed approval chain visibility for manager-owned jobs
+router.get('/approval-chain', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const context = await getManagerContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const profileId = context.profile.id;
+    const requestedJobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+    const jobFilter = Number.isFinite(requestedJobId) && requestedJobId! > 0 ? { id: requestedJobId } : {};
+
+    const managedJobs = await prisma.job.findMany({
+      where: { managerProfileId: profileId, ...jobFilter },
+      select: {
+        id: true,
+        jobName: true,
+        jobCode: true,
+        client: { select: { id: true, clientName: true } },
+        partner: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { jobName: 'asc' },
+    });
+
+    if (requestedJobId && managedJobs.length === 0) {
+      return res.status(404).json({ error: 'Job not found in manager portfolio' });
+    }
+
+    const jobIds = managedJobs.map((job) => job.id);
+    if (jobIds.length === 0) {
+      return res.json({
+        jobs: [],
+        summary: {
+          pending: 0,
+          approved: 0,
+          rejected: 0,
+          cancelled: 0,
+          overBudgetPending: 0,
+          awaitingPartner: 0,
+          managerRejected: 0,
+          partnerApproved: 0,
+          partnerRejected: 0,
+          autoRejected: 0,
+        },
+        standardRequests: [],
+        overBudgetRequests: [],
+      });
+    }
+
+    const [standardRequests, overBudgetRequests] = await Promise.all([
+      prisma.timeEntryApprovalRequest.findMany({
+        where: { jobId: { in: jobIds } },
+        orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
+        include: {
+          job: { select: { id: true, jobName: true, jobCode: true, client: { select: { id: true, clientName: true } } } },
+          employee: { select: { id: true, firstName: true, lastName: true } },
+          approver: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.timeOverBudgetRequest.findMany({
+        where: { jobId: { in: jobIds } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: {
+          job: { select: { id: true, jobName: true, jobCode: true, client: { select: { id: true, clientName: true } } } },
+          employee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+
+    const summary = {
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      cancelled: 0,
+      overBudgetPending: 0,
+      awaitingPartner: 0,
+      managerRejected: 0,
+      partnerApproved: 0,
+      partnerRejected: 0,
+      autoRejected: 0,
+    };
+
+    standardRequests.forEach((item) => {
+      if (item.status === 'pending') summary.pending += 1;
+      if (item.status === 'approved') summary.approved += 1;
+      if (item.status === 'rejected') summary.rejected += 1;
+      if (item.status === 'cancelled') summary.cancelled += 1;
+    });
+
+    overBudgetRequests.forEach((item) => {
+      if (item.status === 'pending') summary.overBudgetPending += 1;
+      if (item.status === 'manager_approved') summary.awaitingPartner += 1;
+      if (item.status === 'manager_rejected') summary.managerRejected += 1;
+      if (item.status === 'partner_approved') summary.partnerApproved += 1;
+      if (item.status === 'partner_rejected') summary.partnerRejected += 1;
+      if (item.status === 'auto_rejected') summary.autoRejected += 1;
+    });
+
+    return res.json({
+      jobs: managedJobs.map((job) => ({
+        jobId: job.id,
+        jobName: job.jobName,
+        jobCode: job.jobCode,
+        clientName: job.client?.clientName ?? null,
+        partnerName: job.partner
+          ? `${job.partner.firstName} ${job.partner.lastName}`.trim()
+          : null,
+      })),
+      summary,
+      standardRequests: standardRequests.map((item) => ({
+        id: item.id,
+        jobId: item.jobId,
+        jobName: item.job.jobName,
+        jobCode: item.job.jobCode,
+        clientName: item.job.client?.clientName ?? null,
+        employeeName: `${item.employee.firstName} ${item.employee.lastName}`.trim(),
+        status: item.status,
+        requestType: item.requestType,
+        currentAllocatedHours: Number(item.currentAllocatedHours || 0),
+        currentLoggedHours: Number(item.currentLoggedHours || 0),
+        additionalHoursRequested: Number(item.additionalHoursRequested || 0),
+        justification: item.justification,
+        approvalNotes: item.approvalNotes,
+        requestedAt: item.requestedAt,
+        approvedAt: item.approvedAt,
+        approverName: item.approver
+          ? `${item.approver.firstName} ${item.approver.lastName}`.trim()
+          : null,
+      })),
+      overBudgetRequests: overBudgetRequests.map((item) => ({
+        id: item.id,
+        jobId: item.jobId,
+        jobName: item.job.jobName,
+        jobCode: item.job.jobCode,
+        clientName: item.job.client?.clientName ?? null,
+        employeeName: `${item.employee.firstName} ${item.employee.lastName}`.trim(),
+        status: item.status,
+        billableType: item.billableType,
+        allocatedHours: Number(item.allocatedHours || 0),
+        loggedHours: Number(item.loggedHours || 0),
+        requestedAdditional: Number(item.requestedAdditional || 0),
+        totalAfterRequest: Number(item.totalAfterRequest || 0),
+        requiresPartnerApproval: Boolean(item.requiresPartnerApproval),
+        managerApproved: Boolean(item.managerApproved),
+        partnerApproved: Boolean(item.partnerApproved),
+        wouldExceedBudget: Boolean(item.wouldExceedBudget),
+        estimatedCostImpact: Number(item.estimatedCostImpact || 0),
+        approvalNotes: item.approvalNotes,
+        rejectionReason: item.rejectionReason,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+    });
+  } catch (error: any) {
+    console.error('Error fetching manager approval chain:', error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -592,6 +937,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       monthlyProfit,
       utilizationRate,
       pendingReviews,
+      framework: getDashboardModuleCoverageSummary("manager"),
     });
   } catch (error: any) {
     console.error('Error fetching overview data:', error);

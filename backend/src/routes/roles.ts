@@ -1,25 +1,17 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireRole } from '../middleware/reqiureRole';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
+const canManageRoles = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
 
-// Middleware: Check if user is HR/Admin/SuperAdmin
-const requireHROrAdmin = (req: AuthRequest, res: any, next: any) => {
-  const userRoles = req.user?.authRoles || (req.user as any)?.roles || [];
-  const isHROrAdmin = 
-    userRoles.includes('super_admin') || 
-    userRoles.includes('hr_manager') || 
-    userRoles.includes('hr') ||
-    userRoles.includes('admin');
-  
-  if (!isHROrAdmin) {
-    return res.status(403).json({ 
-      error: 'Access denied. Only HR, HR Manager, and Super Admin can manage roles' 
-    });
-  }
-  next();
+const parseOptionalRate = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed;
 };
 
 const normalizePermissions = (value: unknown) => {
@@ -75,11 +67,13 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /roles - Create new role
-router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.post('/', authMiddleware, canManageRoles, async (req: AuthRequest, res) => {
   try {
     const { name, description } = req.body;
-    const billingRate = req.body.billingRate ?? req.body.billing_rate;
-    const costRate = req.body.costRate ?? req.body.cost_rate ?? 0;
+    const billingRateRaw = req.body.billingRate ?? req.body.billing_rate;
+    const costRateRaw = req.body.costRate ?? req.body.cost_rate;
+    const billingRate = parseOptionalRate(billingRateRaw);
+    const costRate = parseOptionalRate(costRateRaw);
     const permissions = req.body.permissions ?? req.body.defaultAccess ?? [];
     const isActive = req.body.isActive ?? req.body.is_active ?? true;
     
@@ -88,10 +82,10 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
       return res.status(400).json({ error: 'Role name is required' });
     }
     
-    if (typeof billingRate !== 'number' || Number.isNaN(billingRate) || billingRate < 0) {
+    if (billingRateRaw !== undefined && (billingRate === undefined || billingRate < 0)) {
       return res.status(400).json({ error: 'Billing rate must be a positive number' });
     }
-    if (typeof costRate !== 'number' || Number.isNaN(costRate) || costRate < 0) {
+    if (costRateRaw !== undefined && (costRate === undefined || costRate < 0)) {
       return res.status(400).json({ error: 'Cost rate must be a positive number' });
     }
     
@@ -104,8 +98,8 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
     const role = await prisma.positionRole.create({
       data: {
         name,
-        billingRate,
-        costRate,
+        billingRate: billingRate ?? 0,
+        costRate: costRate ?? 0,
         defaultAccess: normalizePermissions(permissions),
         description: description || null,
         isActive,
@@ -127,12 +121,14 @@ router.post('/', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res)
 });
 
 // PUT /roles/:id - Update role
-router.put('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.put('/:id', authMiddleware, canManageRoles, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { name, description } = req.body;
-    const billingRate = req.body.billingRate ?? req.body.billing_rate;
-    const costRate = req.body.costRate ?? req.body.cost_rate;
+    const billingRateRaw = req.body.billingRate ?? req.body.billing_rate;
+    const costRateRaw = req.body.costRate ?? req.body.cost_rate;
+    const billingRate = parseOptionalRate(billingRateRaw);
+    const costRate = parseOptionalRate(costRateRaw);
     const permissions = req.body.permissions ?? req.body.defaultAccess;
     const isActive = req.body.isActive ?? req.body.is_active;
     
@@ -145,11 +141,18 @@ router.put('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, re
       return res.status(404).json({ error: 'Role not found' });
     }
     
+    if (billingRateRaw !== undefined && (billingRate === undefined || billingRate < 0)) {
+      return res.status(400).json({ error: 'Billing rate must be a positive number' });
+    }
+    if (costRateRaw !== undefined && (costRate === undefined || costRate < 0)) {
+      return res.status(400).json({ error: 'Cost rate must be a positive number' });
+    }
+
     // Prepare update data
     const updateData: any = {};
     if (name) updateData.name = name;
-    if (typeof billingRate === 'number') updateData.billingRate = billingRate;
-    if (typeof costRate === 'number') updateData.costRate = costRate;
+    if (billingRateRaw !== undefined && billingRate !== undefined) updateData.billingRate = billingRate;
+    if (costRateRaw !== undefined && costRate !== undefined) updateData.costRate = costRate;
     if (permissions !== undefined) updateData.defaultAccess = normalizePermissions(permissions);
     if (description) updateData.description = description;
     if (typeof isActive === 'boolean') updateData.isActive = isActive;
@@ -174,7 +177,7 @@ router.put('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, re
 });
 
 // DELETE /roles/:id - Deactivate role (soft delete)
-router.delete('/:id', authMiddleware, requireHROrAdmin, async (req: AuthRequest, res) => {
+router.delete('/:id', authMiddleware, canManageRoles, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     

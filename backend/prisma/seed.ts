@@ -1,5 +1,8 @@
 import bcrypt from 'bcryptjs';
 import prisma from '../src/prisma';
+import { NotificationTemplateService } from '../src/services/notificationTemplates.service';
+import { buildModuleAccessMatrix, matrixToPermissionKeys } from '../src/services/moduleAccess.service';
+import type { ModuleAction } from '../src/services/moduleAccess.service';
 
 type SeedUser = {
   email: string;
@@ -47,6 +50,85 @@ export async function seedDatabase() {
   );
 
   const authRoleMap = new Map(authRoles.map((role) => [role.name, role]));
+
+  // Seed explicit module policies for finance-phase roles so strict mode
+  // has deterministic defaults aligned to expected finance capabilities.
+  const defaultFinanceActionsByRole: Record<string, ModuleAction[]> = {
+    finance: ['admin'],
+    hr: ['read'],
+    hr_manager: ['read'],
+    gmp: ['read'],
+    group_managing_partner: ['read'],
+    partner: ['read'],
+    manager: ['read'],
+  };
+
+  const financePolicyRoles = [
+    'finance',
+    'hr',
+    'hr_manager',
+    'gmp',
+    'group_managing_partner',
+    'partner',
+    'manager',
+  ];
+
+  const seedRoleModulePolicy = async (roleName: string) => {
+    const normalizedRoleName = roleName.toLowerCase().trim();
+    const role =
+      authRoleMap.get(normalizedRoleName) ||
+      (await prisma.authRole.findUnique({ where: { name: normalizedRoleName } }));
+
+    if (!role) return;
+
+    const matrix = buildModuleAccessMatrix({ roles: [normalizedRoleName] });
+    const financeActions = defaultFinanceActionsByRole[normalizedRoleName];
+    if (financeActions && financeActions.length > 0) {
+      matrix.finance = Array.from(new Set(financeActions));
+    }
+
+    const permissionKeys = matrixToPermissionKeys(matrix);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.authRolePermission.deleteMany({
+        where: {
+          roleId: role.id,
+          permission: {
+            key: {
+              startsWith: 'module.',
+            },
+          },
+        },
+      });
+
+      if (permissionKeys.length === 0) return;
+
+      const permissions = await Promise.all(
+        permissionKeys.map((key) =>
+          tx.permission.upsert({
+            where: { key },
+            update: {},
+            create: {
+              key,
+              description: `Module permission: ${key}`,
+            },
+          })
+        )
+      );
+
+      await tx.authRolePermission.createMany({
+        data: permissions.map((permission) => ({
+          roleId: role.id,
+          permissionId: permission.id,
+        })),
+        skipDuplicates: true,
+      });
+    });
+  };
+
+  for (const roleName of financePolicyRoles) {
+    await seedRoleModulePolicy(roleName);
+  }
 
   const positionRoles = await Promise.all(
     [
@@ -381,6 +463,7 @@ export async function seedDatabase() {
     });
   };
 
+
   await Promise.all([
     ensureTemplate({
       name: 'Competency Review',
@@ -419,6 +502,8 @@ export async function seedDatabase() {
       ],
     }),
   ]);
+
+  await NotificationTemplateService.upsertDefaults(hrProfile.id);
 
   return {
     departmentId: department.id,

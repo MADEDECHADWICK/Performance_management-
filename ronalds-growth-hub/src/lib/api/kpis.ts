@@ -1,35 +1,57 @@
 /**
- * KPIs API - Key Performance Indicators Management
- * Supports financial/non-financial KPIs with targets and frequencies
+ * KPIs API - Key Performance Indicators + assignments tracking
  */
-import { api } from './client';
-import type { 
-  Kpi, 
-  EmployeeKpiAssignment,
-  PaginatedResponse 
-} from './types';
+import { api } from "./client";
+import type { EmployeeKpiAssignment, Kpi } from "./types";
 
-interface CreateKpiPayload {
+export interface CreateKpiPayload {
   name: string;
   description?: string;
-  category: string;
-  isFinancial: boolean;
+  category?: string;
+  kpiType?: string;
+  measurementUnit?: string;
+  targetValue?: number;
+  targetFrequency?: string;
+  targetType?: string;
+  targetText?: string;
+  weight?: number;
+  isActive?: boolean;
+  assignmentScope?: "individual" | "department";
+  ownerProfileId?: number;
   departmentId?: number;
   roleId?: number;
-  targetValue?: number;
-  targetCurrency?: string;
-  frequency?: 'monthly' | 'quarterly' | 'annually' | 'other';
-  weight?: number;
+  reviewOwnerProfileId?: number;
+  reviewFrequency?: string;
+  approvalRequired?: boolean;
+  evidenceRequired?: boolean;
+  commentaryRequired?: boolean;
+  initiatives?: Array<
+    | string
+    | {
+        title: string;
+        description?: string;
+        weight?: number;
+        targetValue?: number;
+        unit?: string;
+        keyResults?: Array<{
+          title: string;
+          targetValue?: number;
+          unit?: string;
+          weight?: number;
+        }>;
+      }
+  >;
 }
 
-interface KpiFilters {
-  page?: number;
-  pageSize?: number;
-  category?: string;
-  isFinancial?: boolean;
-  departmentId?: number;
-  roleId?: number;
+export interface KpiFilters {
   isActive?: boolean;
+}
+
+export interface AssignmentFilters {
+  employeeProfileId?: number;
+  kpiId?: number;
+  status?: "active" | "paused" | "closed" | string;
+  includeTracking?: boolean;
 }
 
 interface AssignKpiPayload {
@@ -38,224 +60,99 @@ interface AssignKpiPayload {
   targetValue?: number;
   periodStart?: string;
   periodEnd?: string;
+  status?: "active" | "paused" | "closed" | string;
 }
 
+const buildQuery = (params: Record<string, unknown>) => {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    search.append(key, String(value));
+  });
+  const query = search.toString();
+  return query ? `?${query}` : "";
+};
+
 export const kpisAPI = {
-  /**
-   * List all KPIs with pagination and filters
-   */
-  list: async (filters?: KpiFilters): Promise<PaginatedResponse<Kpi>> => {
-    const params = new URLSearchParams();
-    if (filters?.page) params.append('page', String(filters.page));
-    if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
-    if (filters?.category) params.append('category', filters.category);
-    if (filters?.isFinancial !== undefined) params.append('isFinancial', String(filters.isFinancial));
-    if (filters?.departmentId) params.append('departmentId', String(filters.departmentId));
-    if (filters?.roleId) params.append('roleId', String(filters.roleId));
-    if (filters?.isActive !== undefined) params.append('isActive', String(filters.isActive));
-    
-    const query = params.toString();
-    return api.get(`/kpis${query ? `?${query}` : ''}`);
-  },
+  // KPI catalog
+  list: async (filters?: KpiFilters): Promise<Kpi[]> =>
+    api.get(`/kpis${buildQuery({ isActive: filters?.isActive })}`),
 
-  /**
-   * Get KPI by ID
-   */
-  getById: async (id: number): Promise<Kpi> => {
-    return api.get(`/kpis/${id}`);
-  },
+  getById: async (id: number): Promise<Kpi> => api.get(`/kpis/${id}`),
 
-  /**
-   * Create a new KPI
-   */
-  create: async (data: CreateKpiPayload): Promise<Kpi> => {
-    return api.post('/kpis', data);
-  },
+  create: async (data: CreateKpiPayload): Promise<Kpi> => api.post("/kpis", data),
 
-  /**
-   * Update KPI
-   */
-  update: async (id: number, data: Partial<CreateKpiPayload & { isActive: boolean }>): Promise<Kpi> => {
-    return api.put(`/kpis/${id}`, data);
-  },
+  update: async (id: number, data: Partial<CreateKpiPayload>): Promise<Kpi> =>
+    api.patch(`/kpis/${id}`, data),
 
-  /**
-   * Delete KPI (only if no assignments)
-   */
-  delete: async (id: number): Promise<void> => {
-    return api.delete(`/kpis/${id}`);
-  },
+  delete: async (id: number): Promise<void> => api.delete(`/kpis/${id}`),
 
-  /**
-   * Activate KPI
-   */
-  activate: async (id: number): Promise<Kpi> => {
-    return api.post(`/kpis/${id}/activate`);
-  },
+  activate: async (id: number): Promise<Kpi> => api.patch(`/kpis/${id}`, { isActive: true }),
 
-  /**
-   * Deactivate KPI
-   */
-  deactivate: async (id: number): Promise<Kpi> => {
-    return api.post(`/kpis/${id}/deactivate`);
-  },
+  deactivate: async (id: number): Promise<Kpi> =>
+    api.patch(`/kpis/${id}`, { isActive: false }),
 
-  // ==================
-  // KPI CATEGORIES
-  // ==================
-
-  /**
-   * Get KPI categories
-   */
   getCategories: async (): Promise<string[]> => {
-    return api.get('/kpis/categories');
+    const rows = await api.get<Kpi[]>("/kpis");
+    return Array.from(
+      new Set(
+        (rows || [])
+          .map((kpi) => String(kpi?.category || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
   },
 
-  /**
-   * Get financial KPIs
-   */
-  getFinancial: async (): Promise<Kpi[]> => {
-    return api.get('/kpis?isFinancial=true');
-  },
+  // KPI assignments + tracking
+  getAssignments: async (filters?: AssignmentFilters): Promise<EmployeeKpiAssignment[]> =>
+    api.get(
+      `/employee-kpi-assignments${buildQuery({
+        employeeProfileId: filters?.employeeProfileId,
+        kpiId: filters?.kpiId,
+        status: filters?.status,
+        includeTracking: filters?.includeTracking,
+      })}`
+    ),
 
-  /**
-   * Get non-financial KPIs
-   */
-  getNonFinancial: async (): Promise<Kpi[]> => {
-    return api.get('/kpis?isFinancial=false');
-  },
+  getMyAssignments: async (filters?: Omit<AssignmentFilters, "employeeProfileId">) =>
+    api.get<EmployeeKpiAssignment[]>(
+      `/employee-kpi-assignments/my${buildQuery({
+        kpiId: filters?.kpiId,
+        status: filters?.status,
+        includeTracking: filters?.includeTracking ?? true,
+      })}`
+    ),
 
-  // ==================
-  // EMPLOYEE KPI ASSIGNMENTS
-  // ==================
+  assignToEmployee: async (data: AssignKpiPayload): Promise<EmployeeKpiAssignment> =>
+    api.post("/employee-kpi-assignments", data),
 
-  /**
-   * List employee KPI assignments
-   */
-  getAssignments: async (filters?: {
-    employeeProfileId?: number;
-    kpiId?: number;
-    status?: string;
-  }): Promise<EmployeeKpiAssignment[]> => {
-    const params = new URLSearchParams();
-    if (filters?.employeeProfileId) params.append('employeeProfileId', String(filters.employeeProfileId));
-    if (filters?.kpiId) params.append('kpiId', String(filters.kpiId));
-    if (filters?.status) params.append('status', filters.status);
-    
-    const query = params.toString();
-    return api.get(`/employee-kpi-assignments${query ? `?${query}` : ''}`);
-  },
+  assignToDepartment: async (
+    departmentId: number,
+    kpiIds: number[]
+  ): Promise<{ assigned: number }> =>
+    api.post("/employee-kpi-assignments/bulk-department", { departmentId, kpiIds }),
 
-  /**
-   * Get my KPI assignments
-   */
-  getMyAssignments: async (): Promise<EmployeeKpiAssignment[]> => {
-    return api.get('/employee-kpi-assignments/my');
-  },
+  updateAssignment: async (
+    assignmentId: number,
+    data: Partial<{
+      targetValue: number;
+      weight: number;
+      periodStart: string;
+      periodEnd: string;
+      status: string;
+    }>
+  ): Promise<EmployeeKpiAssignment> =>
+    api.patch(`/employee-kpi-assignments/${assignmentId}`, data),
 
-  /**
-   * Assign KPI to employee
-   */
-  assignToEmployee: async (data: AssignKpiPayload): Promise<EmployeeKpiAssignment> => {
-    return api.post('/employee-kpi-assignments', data);
-  },
+  recordProgress: async (
+    assignmentId: number,
+    value: number,
+    notes?: string
+  ): Promise<EmployeeKpiAssignment> =>
+    api.post(`/employee-kpi-assignments/${assignmentId}/progress`, { value, notes }),
 
-  /**
-   * Bulk assign KPIs to department
-   */
-  assignToDepartment: async (departmentId: number, kpiIds: number[]): Promise<{ assigned: number }> => {
-    return api.post('/employee-kpi-assignments/bulk-department', { departmentId, kpiIds });
-  },
-
-  /**
-   * Update employee KPI assignment
-   */
-  updateAssignment: async (assignmentId: number, data: Partial<{
-    targetValue: number;
-    currentValue: number;
-    status: string;
-  }>): Promise<EmployeeKpiAssignment> => {
-    return api.put(`/employee-kpi-assignments/${assignmentId}`, data);
-  },
-
-  /**
-   * Record KPI achievement/progress
-   */
-  recordProgress: async (assignmentId: number, value: number, notes?: string): Promise<EmployeeKpiAssignment> => {
-    return api.post(`/employee-kpi-assignments/${assignmentId}/progress`, { value, notes });
-  },
-
-  /**
-   * Close KPI assignment
-   */
-  closeAssignment: async (assignmentId: number): Promise<EmployeeKpiAssignment> => {
-    return api.post(`/employee-kpi-assignments/${assignmentId}/close`);
-  },
-
-  // ==================
-  // KPI SCORES & SUMMARIES
-  // ==================
-
-  /**
-   * Get employee KPI score summary
-   */
-  getEmployeeScoreSummary: async (employeeId: number, period?: {
-    startDate: string;
-    endDate: string;
-  }): Promise<{
-    totalKpis: number;
-    financialScore: number;
-    nonFinancialScore: number;
-    overallScore: number;
-    byCategory: Record<string, { score: number; count: number }>;
-  }> => {
-    const params = new URLSearchParams();
-    if (period?.startDate) params.append('startDate', period.startDate);
-    if (period?.endDate) params.append('endDate', period.endDate);
-    
-    const query = params.toString();
-    return api.get(`/employees/${employeeId}/kpi-summary${query ? `?${query}` : ''}`);
-  },
-
-  /**
-   * Get department KPI summary
-   */
-  getDepartmentKpiSummary: async (departmentId: number): Promise<{
-    averageScore: number;
-    totalAssignments: number;
-    completedAssignments: number;
-    topPerformers: Array<{
-      employeeId: number;
-      employeeName: string;
-      score: number;
-    }>;
-  }> => {
-    return api.get(`/departments/${departmentId}/kpi-summary`);
-  },
-
-  // ==================
-  // BSC (Balanced Scorecard) PILLARS
-  // ==================
-
-  /**
-   * Get KPIs by BSC pillar
-   */
-  getByPillar: async (pillar: 'financial' | 'customer' | 'process' | 'learning'): Promise<Kpi[]> => {
-    return api.get(`/kpis/pillar/${pillar}`);
-  },
-
-  /**
-   * Get employee BSC summary
-   */
-  getEmployeeBscSummary: async (employeeId: number): Promise<{
-    financial: { score: number; weight: number };
-    customer: { score: number; weight: number };
-    process: { score: number; weight: number };
-    learning: { score: number; weight: number };
-    overall: number;
-  }> => {
-    return api.get(`/employees/${employeeId}/bsc-summary`);
-  },
+  closeAssignment: async (assignmentId: number): Promise<EmployeeKpiAssignment> =>
+    api.post(`/employee-kpi-assignments/${assignmentId}/close`),
 };
 
 export default kpisAPI;

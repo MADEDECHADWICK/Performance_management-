@@ -1,17 +1,39 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
 
+const resolveRoles = (req: AuthRequest) => {
+  const roles = new Set<string>();
+  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
+  return Array.from(roles);
+};
+
+const isPrivileged = (roles: string[]) =>
+  roles.includes('admin') ||
+  roles.includes('super_admin') ||
+  roles.includes('hr') ||
+  roles.includes('hr_manager');
+
 // GET /evaluation_templates?is_active=true
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { is_active } = req.query;
-    
+    const roles = resolveRoles(req);
+    const privileged = isPrivileged(roles);
+
     const templates = await prisma.evaluationTemplate.findMany({
-      where: is_active === 'true' ? { isActive: true } : undefined,
+      where: privileged
+        ? is_active === 'true'
+          ? { isActive: true }
+          : undefined
+        : { isActive: true },
       orderBy: { createdAt: 'desc' },
     });
     
@@ -22,15 +44,22 @@ router.get('/', async (req, res) => {
 });
 
 // GET /evaluation_templates/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const roles = resolveRoles(req);
+    const privileged = isPrivileged(roles);
+
     const template = await prisma.evaluationTemplate.findUnique({
       where: { id: parseInt(id) },
     });
     
     if (!template) {
       return res.status(404).json({ error: 'Template not found' });
+    }
+
+    if (!privileged && !template.isActive) {
+      return res.status(403).json({ error: 'Access denied' });
     }
     
     return res.json(template);
@@ -40,7 +69,12 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /evaluation_templates
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req: AuthRequest, res) => {
   try {
     const {
       name,
@@ -89,7 +123,12 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // PATCH /evaluation_templates/:id
-router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.patch(
+  '/:id',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const {
@@ -138,7 +177,12 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // DELETE /evaluation_templates/:id
-router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.delete(
+  '/:id',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;

@@ -1,13 +1,47 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
 
 const router = Router();
 
+const resolveRoles = (req: AuthRequest) => {
+  const roles = new Set<string>();
+  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
+  return Array.from(roles);
+};
+
+const isPrivileged = (roles: string[]) =>
+  roles.includes('admin') ||
+  roles.includes('super_admin') ||
+  roles.includes('hr') ||
+  roles.includes('hr_manager') ||
+  roles.includes('partner') ||
+  roles.includes('manager');
+
 // GET /client_evaluations?employee_ids=1,2&fields=overall_rating,submitted_at,would_recommend
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const ids = (req.query.employee_ids as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean) || [];
+    if (!req.profile?.id) {
+      return res.status(401).json({ error: 'Profile not found' });
+    }
+
+    const roles = resolveRoles(req);
+    const privileged = isPrivileged(roles);
+
+    let ids =
+      (req.query.employee_ids as string | undefined)
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean) || [];
+
+    if (!privileged) {
+      ids = [String(req.profile.id)];
+    }
+
     const fieldsRequested = (req.query.fields as string | undefined) || '';
 
     const allowedFields = ['overall_rating','submitted_at','would_recommend','employee_id'];

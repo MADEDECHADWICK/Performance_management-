@@ -1,13 +1,29 @@
 import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { loadProfile } from "../middleware/loadProfile";
 import { requireRole } from "../middleware/reqiureRole";
+import { mergeWithDefaultScoringConfig } from "../services/performanceFramework.service";
 import { errorResponse, successResponse } from "../utils/response";
 
 const router = Router();
 
+const resolveRoles = (req: AuthRequest) => {
+  const roles = new Set<string>();
+  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
+  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
+  return Array.from(roles);
+};
+
+const isPrivileged = (roles: string[]) =>
+  roles.includes("admin") ||
+  roles.includes("super_admin") ||
+  roles.includes("hr") ||
+  roles.includes("hr_manager");
+
 // GET /evaluation-definitions?status=published&cycleId=1&departmentId=2
-router.get("/", authMiddleware, async (req: AuthRequest, res) => {
+router.get("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const status = req.query.status as string | undefined;
     const cycleId = req.query.cycleId ? Number(req.query.cycleId) : undefined;
@@ -15,8 +31,16 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
       ? Number(req.query.departmentId)
       : undefined;
 
+    const roles = resolveRoles(req);
+    const privileged = isPrivileged(roles);
+
     const where: any = {};
-    if (status) where.status = status;
+    if (privileged) {
+      if (status) where.status = status;
+    } else {
+      where.status = "published";
+      where.hideFromDashboard = false;
+    }
     if (cycleId !== undefined) where.cycleId = cycleId;
     if (departmentId !== undefined) where.departmentId = departmentId;
 
@@ -29,7 +53,16 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
-    return res.json(successResponse(definitions, "Evaluation definitions loaded"));
+    const normalizedDefinitions = definitions.map((definition) => ({
+      ...definition,
+      scoringConfig: mergeWithDefaultScoringConfig(
+        (definition.scoringConfig ?? {}) as Record<string, any>
+      ),
+    }));
+
+    return res.json(
+      successResponse(normalizedDefinitions, "Evaluation definitions loaded")
+    );
   } catch (error: any) {
     console.error("Error loading evaluation definitions:", error);
     return res.status(500).json(errorResponse("Failed to load evaluation definitions", 500));
@@ -65,7 +98,7 @@ router.post(
           status: payload.status ?? "draft",
           publishedAt: payload.status === "published" ? new Date() : null,
           createdByProfileId: req.user?.profileId ?? null,
-          scoringConfig: payload.scoringConfig ?? {},
+          scoringConfig: mergeWithDefaultScoringConfig(payload.scoringConfig ?? {}),
           questions: payload.questions ?? [],
         },
       });
@@ -106,7 +139,10 @@ router.patch(
         excludeFromScore: payload.excludeFromScore,
         requireEvaluatorSignature: payload.requireEvaluatorSignature,
         requireEvaluateeSignature: payload.requireEvaluateeSignature,
-        scoringConfig: payload.scoringConfig,
+        scoringConfig:
+          payload.scoringConfig === undefined
+            ? undefined
+            : mergeWithDefaultScoringConfig(payload.scoringConfig),
         questions: payload.questions,
       };
 

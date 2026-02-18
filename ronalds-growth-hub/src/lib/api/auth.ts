@@ -4,16 +4,35 @@
 import { api, setToken, setUser, clearAuth } from './client';
 import type { User, Profile } from './types';
 
-interface LoginResponse {
+export interface LoginSuccessResponse {
   token: string;
   user: User & { profile?: Profile };
 }
 
+export interface PasswordSetupRequiredResponse {
+  requiresPasswordChange: true;
+  setupToken: string;
+  user: {
+    id: number;
+    email: string;
+    name?: string;
+  };
+}
+
+export type LoginResponse = LoginSuccessResponse | PasswordSetupRequiredResponse;
+
 interface RegisterPayload {
   email: string;
-  password: string;
   firstName: string;
   lastName: string;
+  authRole?: string;
+  roleId?: number;
+  phone?: string;
+  position?: string;
+  departmentId?: number;
+  managerId?: number;
+  hireDate?: string;
+  status?: string;
 }
 
 export const authAPI = {
@@ -22,7 +41,7 @@ export const authAPI = {
    */
   login: async (email: string, password: string): Promise<LoginResponse> => {
     const response = await api.post<LoginResponse>('/auth/login', { email, password });
-    if (response.token) {
+    if ('token' in response && response.token) {
       setToken(response.token);
       setUser(response.user);
     }
@@ -30,17 +49,42 @@ export const authAPI = {
   },
 
   /**
-   * Register a new user
+   * Onboard a new user (HR/Admin only)
    */
   register: async (payload: RegisterPayload): Promise<any> => {
-    // Backend expects name or first_name/last_name in snake_case
-    const response = await api.post('/auth/register', {
+    const response = await api.post('/auth/onboard-user', {
       email: payload.email,
-      password: payload.password,
-      name: `${payload.firstName} ${payload.lastName}`.trim(),
       first_name: payload.firstName,
       last_name: payload.lastName,
+      authRole: payload.authRole || 'employee',
+      roleId: payload.roleId,
+      phone: payload.phone,
+      position: payload.position,
+      department_id: payload.departmentId,
+      manager_id: payload.managerId,
+      hire_date: payload.hireDate,
+      status: payload.status,
     });
+    return response;
+  },
+
+  /**
+   * Complete first-login password setup
+   */
+  completePasswordSetup: async (
+    setupToken: string,
+    newPassword: string
+  ): Promise<LoginSuccessResponse> => {
+    const response = await api.post<LoginSuccessResponse>('/auth/set-password', {
+      setupToken,
+      newPassword,
+    });
+
+    if (response.token) {
+      setToken(response.token);
+      setUser(response.user);
+    }
+
     return response;
   },
 

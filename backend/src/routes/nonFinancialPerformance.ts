@@ -1,10 +1,50 @@
 import express, { Request, Response, Router } from 'express';
 import prisma from '../prisma';
 import { nonFinancialPerformanceService } from '../services/nonFinancialPerformance.service';
+import { mergeWithDefaultScoringConfig } from '../services/performanceFramework.service';
 import { authMiddleware } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
 import { Decimal } from '@prisma/client/runtime/library';
 
 const router = Router();
+
+const resolveRoles = (req: any) => {
+  const roles = new Set<string>();
+  (req.userRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
+  (req.user?.authRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
+  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
+  return Array.from(roles);
+};
+
+const isPrivileged = (roles: string[]) =>
+  roles.includes('admin') ||
+  roles.includes('super_admin') ||
+  roles.includes('hr') ||
+  roles.includes('hr_manager');
+
+const isManagerRole = (roles: string[]) => roles.includes('manager');
+
+const canAccessEmployee = async (req: any, employeeId: number) => {
+  if (!req.profile?.id) return false;
+  const roles = resolveRoles(req);
+  if (isPrivileged(roles)) return true;
+  if (employeeId === req.profile.id) return true;
+  if (isManagerRole(roles)) {
+    const report = await prisma.profile.findFirst({
+      where: { id: employeeId, managerId: req.profile.id, status: 'active' },
+      select: { id: true },
+    });
+    return !!report;
+  }
+  return false;
+};
+
+const canAccessTeam = (req: any, managerId: number) => {
+  if (!req.profile?.id) return false;
+  const roles = resolveRoles(req);
+  if (isPrivileged(roles)) return true;
+  return isManagerRole(roles) && req.profile.id === managerId;
+};
 
 const normalizeWeightValue = (value: number | undefined, fallback: number) => {
   if (typeof value !== "number" || Number.isNaN(value)) return fallback;
@@ -12,32 +52,35 @@ const normalizeWeightValue = (value: number | undefined, fallback: number) => {
   return value;
 };
 
-const buildWeightConfig = (scoringConfig: Record<string, any>) => ({
-  learningGrowthWeight: normalizeWeightValue(
-    scoringConfig?.nonFinancialBreakdown?.learningGrowth,
-    0.35
-  ),
-  customerWeight: normalizeWeightValue(
-    scoringConfig?.nonFinancialBreakdown?.customer,
-    0.35
-  ),
-  internalWeight: normalizeWeightValue(
-    scoringConfig?.nonFinancialBreakdown?.internal,
-    0.3
-  ),
-  evaluationWeight: normalizeWeightValue(
-    scoringConfig?.learningGrowthBreakdown?.evaluation,
-    0.5
-  ),
-  okrWeight: normalizeWeightValue(
-    scoringConfig?.learningGrowthBreakdown?.okr,
-    0.3
-  ),
-  feedbackWeight: normalizeWeightValue(
-    scoringConfig?.learningGrowthBreakdown?.feedback,
-    0.2
-  ),
-});
+const buildWeightConfig = (scoringConfig: Record<string, any>) => {
+  const resolved = mergeWithDefaultScoringConfig(scoringConfig ?? {});
+  return {
+    learningGrowthWeight: normalizeWeightValue(
+      resolved?.nonFinancialBreakdown?.learningGrowth,
+      0.35
+    ),
+    customerWeight: normalizeWeightValue(
+      resolved?.nonFinancialBreakdown?.customer,
+      0.35
+    ),
+    internalWeight: normalizeWeightValue(
+      resolved?.nonFinancialBreakdown?.internal,
+      0.3
+    ),
+    evaluationWeight: normalizeWeightValue(
+      resolved?.learningGrowthBreakdown?.evaluation,
+      0.5
+    ),
+    okrWeight: normalizeWeightValue(
+      resolved?.learningGrowthBreakdown?.okr,
+      0.3
+    ),
+    feedbackWeight: normalizeWeightValue(
+      resolved?.learningGrowthBreakdown?.feedback,
+      0.2
+    ),
+  };
+};
 
 const getScoringConfigForEmployee = async (
   employeeId: number,
@@ -361,10 +404,15 @@ router.put('/improvement-ideas/:id', authMiddleware, async (req: Request, res: R
 /**
  * GET /non-financial-scores/:employeeId - Calculate and retrieve non-financial scores
  */
-router.get('/non-financial-scores/:employeeId', authMiddleware, async (req: Request, res: Response) => {
+router.get('/non-financial-scores/:employeeId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.params;
     const { periodStart, periodEnd, evaluationCycleId } = req.query;
+
+    const employeeIdNumber = parseInt(employeeId);
+    if (!(await canAccessEmployee(req, employeeIdNumber))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     // Default to current year
     const startDate = periodStart ? new Date(periodStart as string) : new Date(new Date().getFullYear(), 0, 1);
@@ -378,7 +426,7 @@ router.get('/non-financial-scores/:employeeId', authMiddleware, async (req: Requ
     const weightConfig = buildWeightConfig(scoringConfig);
 
     const scores = await nonFinancialPerformanceService.calculateNonFinancialScores(
-      parseInt(employeeId),
+      employeeIdNumber,
       evaluationCycleId ? parseInt(evaluationCycleId as string) : undefined,
       startDate,
       endDate,
@@ -406,20 +454,25 @@ router.get('/non-financial-scores/:employeeId', authMiddleware, async (req: Requ
 /**
  * GET /non-financial-breakdown/:employeeId - Get detailed BSC breakdown with all KPIs
  */
-router.get('/non-financial-breakdown/:employeeId', authMiddleware, async (req: Request, res: Response) => {
+router.get('/non-financial-breakdown/:employeeId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.params;
     const { periodStart, periodEnd } = req.query;
 
+    const employeeIdNumber = parseInt(employeeId);
+    if (!(await canAccessEmployee(req, employeeIdNumber))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const startDate = periodStart ? new Date(periodStart as string) : new Date(new Date().getFullYear(), 0, 1);
     const endDate = periodEnd ? new Date(periodEnd as string) : new Date();
 
-    const definition = await getScoringConfigForEmployee(parseInt(employeeId));
+    const definition = await getScoringConfigForEmployee(employeeIdNumber);
     const scoringConfig = (definition?.scoringConfig ?? {}) as Record<string, any>;
     const weightConfig = buildWeightConfig(scoringConfig);
 
     const breakdown = await nonFinancialPerformanceService.getBSCBreakdown(
-      parseInt(employeeId),
+      employeeIdNumber,
       startDate,
       endDate,
       weightConfig
@@ -446,11 +499,16 @@ router.get('/non-financial-breakdown/:employeeId', authMiddleware, async (req: R
 /**
  * POST /non-financial-scores/:evaluationId/update - Update employee evaluation with calculated BSC scores
  */
-router.post('/non-financial-scores/:evaluationId/update', authMiddleware, async (req: Request, res: Response) => {
+router.post('/non-financial-scores/:evaluationId/update', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
     const { evaluationId } = req.params;
+    const employeeIdNumber = Number(req.body?.employeeId ?? 0);
+    if (!(await canAccessEmployee(req, employeeIdNumber))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const scores = await nonFinancialPerformanceService.calculateNonFinancialScores(
-      Number(req.body?.employeeId ?? 0),
+      employeeIdNumber,
       req.body?.evaluationCycleId ? Number(req.body.evaluationCycleId) : undefined,
       new Date(new Date().getFullYear(), 0, 1),
       new Date(),
@@ -473,14 +531,19 @@ router.post('/non-financial-scores/:evaluationId/update', authMiddleware, async 
 /**
  * GET /kpi-scores/:employeeId - Get stored KPI scores from employee_kpi_scores table
  */
-router.get('/kpi-scores/:employeeId', authMiddleware, async (req: Request, res: Response) => {
+router.get('/kpi-scores/:employeeId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.params;
     const { evaluationCycleId } = req.query;
 
+    const employeeIdNumber = parseInt(employeeId);
+    if (!(await canAccessEmployee(req, employeeIdNumber))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const kpiScores = await prisma.employeeKpiScore.findMany({
       where: {
-        employeeProfileId: parseInt(employeeId),
+        employeeProfileId: employeeIdNumber,
       },
       orderBy: { calculatedAt: 'desc' }
     });
@@ -495,10 +558,15 @@ router.get('/kpi-scores/:employeeId', authMiddleware, async (req: Request, res: 
 /**
  * GET /team-non-financial-scores/:managerId - Get non-financial scores for entire team
  */
-router.get('/team-non-financial-scores/:managerId', authMiddleware, async (req: Request, res: Response) => {
+router.get('/team-non-financial-scores/:managerId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
     const { managerId } = req.params;
     const { periodStart, periodEnd } = req.query;
+
+    const managerIdNumber = parseInt(managerId);
+    if (!canAccessTeam(req, managerIdNumber)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     const startDate = periodStart ? new Date(periodStart as string) : new Date(new Date().getFullYear(), 0, 1);
     const endDate = periodEnd ? new Date(periodEnd as string) : new Date();
@@ -506,7 +574,7 @@ router.get('/team-non-financial-scores/:managerId', authMiddleware, async (req: 
     // Get all subordinates
     const subordinates = await prisma.profile.findMany({
       where: {
-        managerId: parseInt(managerId),
+        managerId: managerIdNumber,
         status: 'active'
       },
       select: { id: true }

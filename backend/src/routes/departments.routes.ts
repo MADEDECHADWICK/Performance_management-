@@ -5,7 +5,7 @@
 
 import { Router } from "express";
 import { DepartmentController } from "../controllers/department.controller";
-import { authenticated, withRoles } from "../utils/middleware";
+import { authenticated, withDepartmentAccess, withRoles } from "../utils/middleware";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 import {
   createDepartmentValidators,
@@ -40,7 +40,7 @@ router.post(
  * GET /departments/:departmentId
  * Get department details
  */
-router.get("/:departmentId", ...authenticated(), DepartmentController.getDepartment);
+router.get("/:departmentId", ...withDepartmentAccess(), DepartmentController.getDepartment);
 
 /**
  * PATCH /departments/:departmentId
@@ -49,7 +49,7 @@ router.get("/:departmentId", ...authenticated(), DepartmentController.getDepartm
  */
 router.patch(
   "/:departmentId",
-  ...authenticated(),
+  ...withRoles("admin", "hr", "hr_manager"),
   validateRequest(updateDepartmentValidators),
   handleValidationErrors,
   DepartmentController.updateDepartment
@@ -62,7 +62,7 @@ router.patch(
  */
 router.get(
   "/:departmentId/employees",
-  ...authenticated(),
+  ...withDepartmentAccess(),
   DepartmentController.getDepartmentEmployees
 );
 
@@ -72,8 +72,18 @@ router.get(
  */
 router.get(
   "/:departmentId/manager",
-  ...authenticated(),
+  ...withDepartmentAccess(),
   DepartmentController.getDepartmentManager
+);
+
+/**
+ * GET /departments/:departmentId/managers
+ * Get all managers in a department
+ */
+router.get(
+  "/:departmentId/managers",
+  ...withDepartmentAccess(),
+  DepartmentController.getDepartmentManagers
 );
 
 /**
@@ -83,7 +93,7 @@ router.get(
  */
 router.get(
   "/:departmentId/team-kpis",
-  ...authenticated(),
+  ...withDepartmentAccess(),
   DepartmentController.getDepartmentTeamKpis
 );
 

@@ -285,8 +285,8 @@ export const createApprovalRequestValidators = [
     .optional()
     .isString()
     .trim()
-    .isLength({ max: 100 })
-    .withMessage("requestType must be <= 100 characters"),
+    .isIn(["additional_hours", "over_budget"])
+    .withMessage("requestType must be one of: additional_hours, over_budget"),
 ];
 
 /**

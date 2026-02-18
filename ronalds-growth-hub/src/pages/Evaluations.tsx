@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +21,7 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface EvaluationSummary {
   overallScore: number;
@@ -60,6 +61,7 @@ export default function Evaluations() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [mainTab, setMainTab] = useState(searchParams.get("tab") || "performance");
@@ -70,9 +72,14 @@ export default function Evaluations() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadAllData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authLoading, user, navigate]);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -142,12 +149,13 @@ export default function Evaluations() {
   const loadAllData = async () => {
     try {
       setLoading(true);
-
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
+      const actorProfileId = Number(
+        (user as any)?.profileId ?? (user as any)?.profile_id ?? user?.profile?.id ?? user?.id ?? 0
+      );
 
       // Load active cycle
       const cycles = await apiFetch<any[]>('GET', "/evaluation-cycles?status=active&limit=1");
@@ -173,21 +181,21 @@ export default function Evaluations() {
 
       // Load self evaluation
       const selfEval = await apiFetch<any>(
-        'GET', `/employee_evaluations?employee_id=${user.id}&cycle_id=${cycle.id}&single=true`
+        'GET', `/employee-evaluations?employee_id=${actorProfileId}&cycle_id=${cycle.id}&single=true`
       );
 
       // Load peer evaluations (as evaluator)
-      const peerEvals = await apiFetch<any[]>('GET', `/peer_evaluations?evaluator_id=${user.id}&cycle_id=${cycle.id}`);
+      const peerEvals = await apiFetch<any[]>('GET', `/peer-evaluations?evaluator_id=${actorProfileId}&cycle_id=${cycle.id}`);
 
       // Load upward evaluation
       const upwardEval = await apiFetch<any>(
-        'GET', `/upward_evaluations?evaluator_id=${user.id}&cycle_id=${cycle.id}&single=true`
+        'GET', `/upward-evaluations?evaluator_id=${actorProfileId}&cycle_id=${cycle.id}&single=true`
       );
 
       // Load ad-hoc assignments (if your backend doesn't support this yet, it may 404 — that's OK for now)
       // Load assignments with full details (may require backend work)
       const assignmentsData = await apiFetch<any[]>(
-        'GET', `/evaluation_assignments?evaluatorProfileId=${user.id}&include=definition,evaluatee`
+        'GET', `/evaluation-assignments?evaluatorProfileId=${actorProfileId}&include=definition,evaluatee`
       );
 
       setAssignments(assignmentsData || []);
@@ -207,13 +215,17 @@ export default function Evaluations() {
           score: upwardEval ? calculateUpwardScore(upwardEval) : undefined,
         },
         manager: {
-          completed: selfEval?.status === "completed",
+          completed: selfEval?.status === "completed" || selfEval?.status === "submitted",
           score: selfEval ? calculateManagerScore(selfEval) : undefined,
         },
         adHoc: {
-          completed: (assignmentsData || []).every((a: any) => a.status === "completed"),
+          completed: (assignmentsData || []).every(
+            (a: any) => a.status === "completed" || a.status === "submitted"
+          ),
           count: assignmentsData?.length || 0,
-          pending: (assignmentsData || []).filter((a: any) => a.status !== "completed").length,
+          pending: (assignmentsData || []).filter(
+            (a: any) => a.status !== "completed" && a.status !== "submitted"
+          ).length,
         },
       };
 

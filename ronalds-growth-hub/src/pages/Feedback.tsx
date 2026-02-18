@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { MessageSquare, Plus, Star, User } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Profile {
   id: string;
@@ -30,12 +32,14 @@ interface Feedback {
 }
 
 const Feedback = () => {
+  const navigate = useNavigate();
   const [colleagues, setColleagues] = useState<Profile[]>([]);
   const [receivedFeedback, setReceivedFeedback] = useState<Feedback[]>([]);
   const [givenFeedback, setGivenFeedback] = useState<Feedback[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [formData, setFormData] = useState({
     subject_id: "",
@@ -46,13 +50,20 @@ const Feedback = () => {
   });
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadData = async () => {
     try {
-      const user = await authAPI.me();
-      if (!user) return;
+      if (!user) {
+        navigate("/auth");
+        return;
+      }
 
       // Load colleagues
       const profilesData = await apiFetch(`/profiles?exclude_id=${user.id}&limit=50`);
@@ -80,8 +91,10 @@ const Feedback = () => {
     e.preventDefault();
 
     try {
-      const user = await authAPI.me();
-      if (!user) return;
+      if (!user) {
+        navigate("/auth");
+        return;
+      }
 
       await apiFetch('/feedback', {
         method: 'POST',

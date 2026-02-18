@@ -2,6 +2,10 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
 import RoleAwareAnalyticsService, { AnalyticsContext } from '../services/roleAwareAnalytics.service';
+import {
+  getDashboardModuleCoverageSummary,
+  resolveDashboardModuleForContext,
+} from '../services/performanceFramework.service';
 
 const router = Router();
 
@@ -162,6 +166,12 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
       where: { userId },
     });
 
+    const frameworkModule = resolveDashboardModuleForContext({
+      roles: context.roles,
+      positionTitle: profile?.positionTitle,
+    });
+    const frameworkCoverage = getDashboardModuleCoverageSummary(frameworkModule);
+
     return res.json({
       userRole: context.roles[0] || "employee",
       roles: context.roles,
@@ -173,6 +183,8 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
       isMarketing: context.isMarketing,
       isGmp: context.isGmp,
       isEmployee: context.isEmployee,
+      frameworkModule,
+      frameworkCoverage,
       userProfile: profile,
       nonFinancial:
         nonFinancial ||

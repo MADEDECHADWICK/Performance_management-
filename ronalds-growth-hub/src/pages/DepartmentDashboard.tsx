@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { Building2, Users, TrendingUp, TrendingDown, Award, Download, FileText, Plus, Trash2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import * as XLSX from "xlsx";
 
 const DepartmentDashboard = () => {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [departments, setDepartments] = useState<any[]>([]);
   const [selectedDept, setSelectedDept] = useState<string>("");
   const [deptStats, setDeptStats] = useState<any>(null);
@@ -302,7 +304,6 @@ const DepartmentDashboard = () => {
         return;
       }
 
-      const user = await authAPI.me();
       if (editingTeam) {
         // Update existing team
         await apiFetch('PATCH', `/evaluation_teams/${editingTeam.id}`, {
@@ -318,10 +319,14 @@ const DepartmentDashboard = () => {
         toast({ title: 'Team updated successfully' });
       } else {
         // Create new team
+        if (!user) {
+          toast({ title: "Please sign in again to create teams", variant: "destructive" });
+          return;
+        }
         const team = await apiFetch<any>('POST', '/evaluation_teams', {
           ...teamFormData,
           department_id: selectedDept,
-          created_by: user?.id || null,
+          created_by: user.id,
         });
 
         const members = selectedEmployees.map(emp_id => ({ team_id: team.id, employee_id: emp_id }));

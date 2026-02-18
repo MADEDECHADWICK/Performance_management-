@@ -1,18 +1,33 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { notifyProfile, notifyProfilesByRoles } from '../services/notificationRecipients';
+import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
+const canReadFinance = requireModuleAccess('finance', 'read');
+const canWriteFinance = requireModuleAccess('finance', 'write');
+const canApproveFinance = requireModuleAccess('finance', 'approve');
+const canAdminFinance = requireModuleAccess('finance', 'admin');
 
-const financeRoles = new Set([
-  'finance',
-  'admin',
-  'super_admin',
-  'hr',
-  'hr_manager',
-  'gmp',
-  'group_managing_partner',
+const jobCollectionStages = new Set([
+  'not_ready',
+  'ready_for_collection',
+  'partial_collection',
+  'fully_collected',
+  'overdue',
+]);
+
+const receivableActionTypes = new Set([
+  'call',
+  'email',
+  'meeting',
+  'reminder',
+  'escalation',
+  'promise_to_pay',
+  'dispute',
+  'note',
 ]);
 
 const getFinanceContext = async (req: AuthRequest) => {
@@ -20,30 +35,10 @@ const getFinanceContext = async (req: AuthRequest) => {
   if (!userId) {
     return { error: { status: 401, message: 'Unauthorized' } };
   }
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      roles: { include: { role: true } },
-      profile: true,
-    },
-  });
-
-  if (!user) {
-    return { error: { status: 404, message: 'User not found' } };
-  }
-
-  const roleNames = user.roles.map((r) => r.role.name.toLowerCase());
-  const positionTitle = user.profile?.positionTitle?.toLowerCase() || '';
-  const isFinance =
-    roleNames.some((role) => financeRoles.has(role)) ||
-    positionTitle.includes('finance');
-
-  if (!isFinance) {
-    return { error: { status: 403, message: 'Access denied. Finance role required.' } };
-  }
-
-  return { user };
+  return {
+    userId,
+    profileId: req.user?.profileId ? Number(req.user.profileId) : null,
+  };
 };
 
 const resolveJobFee = (job: {
@@ -57,8 +52,118 @@ const resolveJobFee = (job: {
   return 0;
 };
 
+const resolveReceivableAnchorDate = (job: {
+  readyForCollectionAt: Date | null;
+  completionDate: Date | null;
+  dueDate: Date | null;
+  startDate: Date | null;
+  createdAt: Date;
+}) => {
+  return (
+    job.readyForCollectionAt ||
+    job.completionDate ||
+    job.dueDate ||
+    job.startDate ||
+    job.createdAt
+  );
+};
+
+const toAgingDays = (anchorDate: Date, nowDate = new Date()) => {
+  const diffMs = nowDate.getTime() - anchorDate.getTime();
+  if (diffMs <= 0) return 0;
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+};
+
+const toAgingBucket = (daysOutstanding: number) => {
+  if (daysOutstanding <= 30) return 'current_0_30';
+  if (daysOutstanding <= 60) return 'bucket_31_60';
+  if (daysOutstanding <= 90) return 'bucket_61_90';
+  return 'bucket_over_90';
+};
+
+const followUpCadenceDaysByBucket: Record<string, number> = {
+  current_0_30: 14,
+  bucket_31_60: 7,
+  bucket_61_90: 5,
+  bucket_over_90: 3,
+};
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const normalizeToDayStart = (date: Date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const resolveReceivableSlaState = ({
+  balance,
+  agingBucket,
+  anchorDate,
+  latestFollowUp,
+  nowDate = new Date(),
+}: {
+  balance: number;
+  agingBucket: string;
+  anchorDate: Date;
+  latestFollowUp:
+    | {
+        actionDate: Date;
+        nextFollowUpDate: Date | null;
+        isResolved: boolean;
+      }
+    | null
+    | undefined;
+  nowDate?: Date;
+}) => {
+  if (balance <= 0) {
+    return {
+      slaStatus: 'ok',
+      slaBreached: false,
+      slaDueSoon: false,
+      slaBreachDays: 0,
+      expectedFollowUpDate: null as Date | null,
+    };
+  }
+
+  if (latestFollowUp?.isResolved) {
+    return {
+      slaStatus: 'ok',
+      slaBreached: false,
+      slaDueSoon: false,
+      slaBreachDays: 0,
+      expectedFollowUpDate: latestFollowUp.nextFollowUpDate ?? null,
+    };
+  }
+
+  const cadenceDays = followUpCadenceDaysByBucket[agingBucket] ?? 7;
+  const expectedFollowUpDate =
+    latestFollowUp?.nextFollowUpDate ||
+    (latestFollowUp?.actionDate
+      ? addDays(latestFollowUp.actionDate, cadenceDays)
+      : addDays(anchorDate, cadenceDays));
+
+  const nowStart = normalizeToDayStart(nowDate);
+  const expectedStart = normalizeToDayStart(expectedFollowUpDate);
+  const diffDays = Math.floor(
+    (nowStart.getTime() - expectedStart.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  const slaBreached = diffDays > 0;
+  const slaDueSoon = diffDays === 0 || diffDays === -1;
+
+  return {
+    slaStatus: slaBreached ? 'breached' : slaDueSoon ? 'due_soon' : 'ok',
+    slaBreached,
+    slaDueSoon,
+    slaBreachDays: slaBreached ? diffDays : 0,
+    expectedFollowUpDate,
+  };
+};
+
 // GET /finance-dashboard/overview
-router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/overview', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -120,6 +225,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       totalOutstanding,
       totalFees,
       collectionRate,
+      framework: getDashboardModuleCoverageSummary("finance"),
     });
   } catch (error: any) {
     console.error('Finance overview error:', error);
@@ -128,7 +234,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /finance-dashboard/collections
-router.get('/collections', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/collections', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -168,7 +274,7 @@ router.get('/collections', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /finance-dashboard/collections
-router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/collections', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -203,7 +309,7 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
         referenceNumber: referenceNumber || null,
         notes: notes || null,
         invoiceNumber: invoiceNumber || null,
-        recordedByProfileId: context.user.profile?.id ?? null,
+        recordedByProfileId: context.profileId,
       },
     });
 
@@ -216,9 +322,19 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
           departmentId: true,
           partnerProfileId: true,
           managerProfileId: true,
+          billingType: true,
+          fixedFeeAmount: true,
+          jobCosting: {
+            include: { allocations: true },
+          },
           timeEntries: {
             where: { status: 'approved' },
-            select: { employeeProfileId: true, billableAmount: true, profitLoss: true },
+            select: {
+              employeeProfileId: true,
+              hours: true,
+              billableAmount: true,
+              billable: true,
+            },
           },
         },
       });
@@ -228,8 +344,34 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
 
         const employeeTotals = new Map<
           number,
-          { billable: number; profit: number; loss: number; base: number }
+          {
+            billable: number;
+            profit: number;
+            loss: number;
+            base: number;
+            allocatedHours: number;
+            allocatedCost: number;
+            actualHours: number;
+          }
         >();
+
+        const allocations = job.jobCosting?.allocations || [];
+        allocations.forEach((alloc) => {
+          const current = employeeTotals.get(alloc.employeeProfileId) || {
+            billable: 0,
+            profit: 0,
+            loss: 0,
+            base: 0,
+            allocatedHours: 0,
+            allocatedCost: 0,
+            actualHours: 0,
+          };
+          const allocHours = Number(alloc.allocatedHours || 0);
+          const allocRate = Number(alloc.hourlyRate || 0);
+          current.allocatedHours += allocHours;
+          current.allocatedCost += allocHours * allocRate;
+          employeeTotals.set(alloc.employeeProfileId, current);
+        });
 
         job.timeEntries.forEach((entry) => {
           const current = employeeTotals.get(entry.employeeProfileId) || {
@@ -237,13 +379,27 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
             profit: 0,
             loss: 0,
             base: 0,
+            allocatedHours: 0,
+            allocatedCost: 0,
+            actualHours: 0,
           };
-          const billable = Number(entry.billableAmount || 0);
-          const profitLoss = Number(entry.profitLoss || 0);
-          current.billable += billable;
-          if (profitLoss >= 0) current.profit += profitLoss;
-          if (profitLoss < 0) current.loss += Math.abs(profitLoss);
+          current.actualHours += Number(entry.hours || 0);
+          current.billable += Number(entry.billableAmount || 0);
           employeeTotals.set(entry.employeeProfileId, current);
+        });
+
+        employeeTotals.forEach((value) => {
+          if (value.actualHours <= 0 || value.allocatedHours <= 0) {
+            return;
+          }
+          const effectiveRate =
+            value.allocatedHours > 0 ? value.allocatedCost / value.allocatedHours : 0;
+          const varianceHours = value.allocatedHours - value.actualHours;
+          if (varianceHours >= 0) {
+            value.profit = varianceHours * effectiveRate;
+          } else {
+            value.loss = Math.abs(varianceHours) * effectiveRate;
+          }
         });
 
         let totalJobBillable = 0;
@@ -252,8 +408,12 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
         });
 
         const paymentAmountNumber = Number(payment.paymentAmount || 0);
+        const billableBasis =
+          totalJobBillable > 0 ? totalJobBillable : resolveJobFee(job);
         const paymentRatio =
-          totalJobBillable > 0 ? Math.min(1, paymentAmountNumber / totalJobBillable) : 0;
+          billableBasis > 0 ? Math.min(1, paymentAmountNumber / billableBasis) : 0;
+
+        totalJobBillable = billableBasis;
 
         let totalBaseScaled = 0;
         employeeTotals.forEach((value) => {
@@ -287,6 +447,7 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
                   allocatedAmount:
                     allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
                   allocationMonth,
+                  currency: payment.currency || 'KES',
                 },
                 create: {
                   jobId: job.id,
@@ -300,6 +461,7 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
                   allocatedAmount:
                     allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
                   allocationMonth,
+                  currency: payment.currency || 'KES',
                 },
               })
             )
@@ -381,7 +543,7 @@ router.post('/collections', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /finance-dashboard/projections
-router.get('/projections', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/projections', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -420,7 +582,7 @@ router.get('/projections', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /finance-dashboard/projections
-router.post('/projections', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/projections', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -453,7 +615,7 @@ router.post('/projections', authMiddleware, async (req: AuthRequest, res) => {
         monthYear: new Date(monthYear),
         projectedAmount,
         currency: currency || 'KES',
-        createdByProfileId: context.user.profile?.id ?? null,
+        createdByProfileId: context.profileId,
       },
     });
 
@@ -465,7 +627,7 @@ router.post('/projections', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /finance-dashboard/client-balances
-router.get('/client-balances', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/client-balances', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -513,7 +675,7 @@ router.get('/client-balances', authMiddleware, async (req: AuthRequest, res) => 
 });
 
 // GET /finance-dashboard/job-balances
-router.get('/job-balances', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/job-balances', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -525,16 +687,48 @@ router.get('/job-balances', authMiddleware, async (req: AuthRequest, res) => {
         client: { select: { clientName: true } },
         jobCosting: true,
         payments: true,
+        receivableOwner: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            positionTitle: true,
+          },
+        },
+        receivableFollowUps: {
+          orderBy: { actionDate: 'desc' },
+          take: 1,
+          select: {
+            actionDate: true,
+            nextFollowUpDate: true,
+            actionType: true,
+            isResolved: true,
+          },
+        },
       },
       orderBy: { jobName: 'asc' },
     });
 
+    const nowDate = new Date();
     const balances = jobs.map((job) => {
       const fee = resolveJobFee(job);
       const collected = job.payments.reduce(
         (sum, payment) => sum + Number(payment.paymentAmount || 0),
         0
       );
+      const balance = Math.max(0, fee - collected);
+      const anchorDate = resolveReceivableAnchorDate(job);
+      const daysOutstanding = balance > 0 ? toAgingDays(anchorDate) : 0;
+      const agingBucket = toAgingBucket(daysOutstanding);
+      const latestFollowUp = job.receivableFollowUps[0] ?? null;
+      const slaState = resolveReceivableSlaState({
+        balance,
+        agingBucket,
+        anchorDate,
+        latestFollowUp,
+        nowDate,
+      });
+
       return {
         jobId: job.id,
         jobCode: job.jobCode,
@@ -542,8 +736,26 @@ router.get('/job-balances', authMiddleware, async (req: AuthRequest, res) => {
         clientName: job.client?.clientName ?? 'Unassigned',
         fee,
         collected,
-        balance: Math.max(0, fee - collected),
+        balance,
         status: job.status,
+        collectionStage: job.collectionStage,
+        readyForCollectionAt: job.readyForCollectionAt,
+        receivableOwnerProfileId: job.receivableOwnerProfileId,
+        receivableOwnerName: job.receivableOwner
+          ? `${job.receivableOwner.firstName} ${job.receivableOwner.lastName}`.trim()
+          : null,
+        receivableOwnerPosition: job.receivableOwner?.positionTitle ?? null,
+        daysOutstanding,
+        agingBucket,
+        lastFollowUpAt: latestFollowUp?.actionDate ?? null,
+        nextFollowUpDate: latestFollowUp?.nextFollowUpDate ?? null,
+        lastFollowUpActionType: latestFollowUp?.actionType ?? null,
+        followUpResolved: latestFollowUp?.isResolved ?? false,
+        expectedFollowUpDate: slaState.expectedFollowUpDate,
+        slaStatus: slaState.slaStatus,
+        slaBreached: slaState.slaBreached,
+        slaDueSoon: slaState.slaDueSoon,
+        slaBreachDays: slaState.slaBreachDays,
       };
     });
 
@@ -554,8 +766,811 @@ router.get('/job-balances', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+// GET /finance-dashboard/receivable-owners
+router.get('/receivable-owners', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const owners = await prisma.profile.findMany({
+      where: {
+        status: 'active',
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        positionTitle: true,
+        department: { select: { name: true } },
+      },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+      take: 500,
+    });
+
+    res.json(
+      owners.map((owner) => ({
+        profileId: owner.id,
+        name: `${owner.firstName} ${owner.lastName}`.trim(),
+        positionTitle: owner.positionTitle,
+        departmentName: owner.department?.name ?? null,
+      }))
+    );
+  } catch (error: any) {
+    console.error('Finance receivable owners error:', error);
+    res.status(500).json({ error: 'Failed to load receivable owners' });
+  }
+});
+
+// PATCH /finance-dashboard/job-balances/:jobId/owner
+router.patch('/job-balances/:jobId/owner', authMiddleware, canAdminFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const jobId = Number(req.params.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
+    const requestedOwnerRaw = req.body?.ownerProfileId;
+    let ownerProfileId: number | null = null;
+
+    if (requestedOwnerRaw !== undefined && requestedOwnerRaw !== null && requestedOwnerRaw !== '') {
+      const parsedOwner = Number(requestedOwnerRaw);
+      if (!Number.isFinite(parsedOwner) || parsedOwner <= 0) {
+        return res.status(400).json({ error: 'Invalid ownerProfileId' });
+      }
+
+      const owner = await prisma.profile.findUnique({
+        where: { id: parsedOwner },
+        select: { id: true, status: true, firstName: true, lastName: true },
+      });
+      if (!owner || owner.status !== 'active') {
+        return res.status(400).json({ error: 'Owner profile not found or inactive' });
+      }
+      ownerProfileId = owner.id;
+    }
+
+    const existingJob = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        jobName: true,
+        receivableOwnerProfileId: true,
+      },
+    });
+
+    if (!existingJob) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const updated = await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        receivableOwnerProfileId: ownerProfileId,
+        receivableOwnerAssignedAt: ownerProfileId ? new Date() : null,
+      },
+      select: {
+        id: true,
+        jobCode: true,
+        jobName: true,
+        receivableOwnerProfileId: true,
+        receivableOwnerAssignedAt: true,
+        receivableOwner: {
+          select: {
+            firstName: true,
+            lastName: true,
+            positionTitle: true,
+          },
+        },
+      },
+    });
+
+    if (
+      ownerProfileId &&
+      ownerProfileId !== existingJob.receivableOwnerProfileId &&
+      ownerProfileId !== context.profileId
+    ) {
+      await notifyProfile(
+        ownerProfileId,
+        {
+          title: 'Receivable owner assigned',
+          message: `You were assigned as receivable owner for "${existingJob.jobName}".`,
+          link: '/finance-balances',
+          relatedEntityId: existingJob.id,
+          actionRequired: true,
+        },
+        req
+      );
+    }
+
+    res.json({
+      jobId: updated.id,
+      jobCode: updated.jobCode,
+      jobName: updated.jobName,
+      receivableOwnerProfileId: updated.receivableOwnerProfileId,
+      receivableOwnerName: updated.receivableOwner
+        ? `${updated.receivableOwner.firstName} ${updated.receivableOwner.lastName}`.trim()
+        : null,
+      receivableOwnerPosition: updated.receivableOwner?.positionTitle ?? null,
+      receivableOwnerAssignedAt: updated.receivableOwnerAssignedAt,
+    });
+  } catch (error: any) {
+    console.error('Finance receivable owner update error:', error);
+    res.status(500).json({ error: 'Failed to assign receivable owner' });
+  }
+});
+
+// GET /finance-dashboard/job-balances/:jobId/follow-ups
+router.get('/job-balances/:jobId/follow-ups', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const jobId = Number(req.params.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 30));
+    const logs = await prisma.receivableFollowUpAction.findMany({
+      where: { jobId },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            positionTitle: true,
+          },
+        },
+        actionBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            positionTitle: true,
+          },
+        },
+      },
+      orderBy: [{ actionDate: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+
+    res.json(
+      logs.map((log) => ({
+        id: log.id,
+        jobId: log.jobId,
+        actionType: log.actionType,
+        actionDate: log.actionDate,
+        notes: log.notes,
+        nextFollowUpDate: log.nextFollowUpDate,
+        promisedPaymentDate: log.promisedPaymentDate,
+        promisedPaymentAmount: Number(log.promisedPaymentAmount || 0),
+        isResolved: log.isResolved,
+        ownerProfileId: log.ownerProfileId,
+        ownerName: log.owner ? `${log.owner.firstName} ${log.owner.lastName}`.trim() : null,
+        actionByProfileId: log.actionByProfileId,
+        actionByName: `${log.actionBy.firstName} ${log.actionBy.lastName}`.trim(),
+      }))
+    );
+  } catch (error: any) {
+    console.error('Finance follow-up logs error:', error);
+    res.status(500).json({ error: 'Failed to load receivable follow-up logs' });
+  }
+});
+
+// POST /finance-dashboard/job-balances/:jobId/follow-ups
+router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const actorProfileId = context.profileId;
+    if (!actorProfileId) {
+      return res.status(400).json({ error: 'Current user profile is required to log follow-up actions' });
+    }
+
+    const jobId = Number(req.params.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
+    const requestedActionType = String(req.body?.actionType || 'note').trim();
+    if (!receivableActionTypes.has(requestedActionType)) {
+      return res.status(400).json({
+        error: 'Invalid actionType. Allowed: call, email, meeting, reminder, escalation, promise_to_pay, dispute, note',
+      });
+    }
+
+    const notes = String(req.body?.notes || '').trim();
+    if (!notes) {
+      return res.status(400).json({ error: 'notes are required' });
+    }
+
+    const nextFollowUpDate = req.body?.nextFollowUpDate ? new Date(req.body.nextFollowUpDate) : null;
+    if (nextFollowUpDate && Number.isNaN(nextFollowUpDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid nextFollowUpDate' });
+    }
+
+    const promisedPaymentDate = req.body?.promisedPaymentDate ? new Date(req.body.promisedPaymentDate) : null;
+    if (promisedPaymentDate && Number.isNaN(promisedPaymentDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid promisedPaymentDate' });
+    }
+
+    const promisedPaymentAmountRaw = req.body?.promisedPaymentAmount;
+    const promisedPaymentAmount =
+      promisedPaymentAmountRaw === undefined || promisedPaymentAmountRaw === null || promisedPaymentAmountRaw === ''
+        ? null
+        : Number(promisedPaymentAmountRaw);
+
+    if (promisedPaymentAmount !== null && (!Number.isFinite(promisedPaymentAmount) || promisedPaymentAmount < 0)) {
+      return res.status(400).json({ error: 'Invalid promisedPaymentAmount' });
+    }
+
+    const existingJob = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        clientId: true,
+        jobName: true,
+        receivableOwnerProfileId: true,
+      },
+    });
+
+    if (!existingJob) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    let ownerProfileId: number | null = existingJob.receivableOwnerProfileId;
+    const requestedOwnerRaw = req.body?.ownerProfileId;
+    if (requestedOwnerRaw !== undefined && requestedOwnerRaw !== null && requestedOwnerRaw !== '') {
+      const parsedOwner = Number(requestedOwnerRaw);
+      if (!Number.isFinite(parsedOwner) || parsedOwner <= 0) {
+        return res.status(400).json({ error: 'Invalid ownerProfileId' });
+      }
+      const owner = await prisma.profile.findUnique({
+        where: { id: parsedOwner },
+        select: { id: true, status: true },
+      });
+      if (!owner || owner.status !== 'active') {
+        return res.status(400).json({ error: 'Owner profile not found or inactive' });
+      }
+      ownerProfileId = owner.id;
+    }
+
+    const isResolved = Boolean(req.body?.isResolved);
+
+    const followUp = await prisma.$transaction(async (tx) => {
+      if (ownerProfileId !== existingJob.receivableOwnerProfileId) {
+        await tx.job.update({
+          where: { id: existingJob.id },
+          data: {
+            receivableOwnerProfileId: ownerProfileId,
+            receivableOwnerAssignedAt: ownerProfileId ? new Date() : null,
+          },
+        });
+      }
+
+      return tx.receivableFollowUpAction.create({
+        data: {
+          jobId: existingJob.id,
+          clientId: existingJob.clientId ?? null,
+          ownerProfileId,
+          actionByProfileId: actorProfileId,
+          actionType: requestedActionType as any,
+          notes,
+          nextFollowUpDate,
+          promisedPaymentDate,
+          promisedPaymentAmount,
+          isResolved,
+        },
+        include: {
+          owner: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              positionTitle: true,
+            },
+          },
+          actionBy: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              positionTitle: true,
+            },
+          },
+        },
+      });
+    });
+
+    if (followUp.ownerProfileId && followUp.ownerProfileId !== actorProfileId) {
+      await notifyProfile(
+        followUp.ownerProfileId,
+        {
+          title: 'Receivable follow-up logged',
+          message: `A follow-up action was logged for "${existingJob.jobName}".`,
+          link: '/finance-balances',
+          relatedEntityId: existingJob.id,
+          actionRequired: !followUp.isResolved,
+        },
+        req
+      );
+    }
+
+    res.status(201).json({
+      id: followUp.id,
+      jobId: followUp.jobId,
+      actionType: followUp.actionType,
+      actionDate: followUp.actionDate,
+      notes: followUp.notes,
+      nextFollowUpDate: followUp.nextFollowUpDate,
+      promisedPaymentDate: followUp.promisedPaymentDate,
+      promisedPaymentAmount: Number(followUp.promisedPaymentAmount || 0),
+      isResolved: followUp.isResolved,
+      ownerProfileId: followUp.ownerProfileId,
+      ownerName: followUp.owner ? `${followUp.owner.firstName} ${followUp.owner.lastName}`.trim() : null,
+      actionByProfileId: followUp.actionByProfileId,
+      actionByName: `${followUp.actionBy.firstName} ${followUp.actionBy.lastName}`.trim(),
+    });
+  } catch (error: any) {
+    console.error('Finance follow-up create error:', error);
+    res.status(500).json({ error: 'Failed to log receivable follow-up action' });
+  }
+});
+
+// POST /finance-dashboard/job-balances/:jobId/escalate
+router.post('/job-balances/:jobId/escalate', authMiddleware, canApproveFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const actorProfileId = context.profileId;
+    if (!actorProfileId) {
+      return res.status(400).json({ error: 'Current user profile is required to escalate receivables' });
+    }
+
+    const jobId = Number(req.params.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
+    const escalationLevel = String(req.body?.escalationLevel || 'partner').trim().toLowerCase();
+    const allowedEscalationLevels = new Set(['manager', 'partner', 'hr', 'gmp']);
+    if (!allowedEscalationLevels.has(escalationLevel)) {
+      return res.status(400).json({ error: 'Invalid escalationLevel. Allowed: manager, partner, hr, gmp' });
+    }
+
+    const notes = String(req.body?.notes || '').trim();
+    if (!notes) {
+      return res.status(400).json({ error: 'Escalation notes are required' });
+    }
+
+    const nextFollowUpDate = req.body?.nextFollowUpDate ? new Date(req.body.nextFollowUpDate) : null;
+    if (nextFollowUpDate && Number.isNaN(nextFollowUpDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid nextFollowUpDate' });
+    }
+
+    const existingJob = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        client: { select: { id: true, clientName: true } },
+        jobCosting: { select: { jobFee: true } },
+        payments: { select: { paymentAmount: true } },
+      },
+    });
+
+    if (!existingJob) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const fee = resolveJobFee(existingJob);
+    const collected = existingJob.payments.reduce(
+      (sum, payment) => sum + Number(payment.paymentAmount || 0),
+      0
+    );
+    const balance = Math.max(0, fee - collected);
+
+    if (balance <= 0) {
+      return res.status(409).json({ error: 'Receivable is already fully collected' });
+    }
+
+    let ownerProfileId: number | null = existingJob.receivableOwnerProfileId;
+    const requestedOwnerRaw = req.body?.ownerProfileId;
+    if (requestedOwnerRaw !== undefined && requestedOwnerRaw !== null && requestedOwnerRaw !== '') {
+      const parsedOwner = Number(requestedOwnerRaw);
+      if (!Number.isFinite(parsedOwner) || parsedOwner <= 0) {
+        return res.status(400).json({ error: 'Invalid ownerProfileId' });
+      }
+      const owner = await prisma.profile.findUnique({
+        where: { id: parsedOwner },
+        select: { id: true, status: true },
+      });
+      if (!owner || owner.status !== 'active') {
+        return res.status(400).json({ error: 'Owner profile not found or inactive' });
+      }
+      ownerProfileId = owner.id;
+    }
+
+    const actionNotes = `[Escalation:${escalationLevel}] ${notes}`;
+
+    const followUp = await prisma.$transaction(async (tx) => {
+      if (ownerProfileId !== existingJob.receivableOwnerProfileId) {
+        await tx.job.update({
+          where: { id: existingJob.id },
+          data: {
+            receivableOwnerProfileId: ownerProfileId,
+            receivableOwnerAssignedAt: ownerProfileId ? new Date() : null,
+          },
+        });
+      }
+
+      return tx.receivableFollowUpAction.create({
+        data: {
+          jobId: existingJob.id,
+          clientId: existingJob.clientId ?? null,
+          ownerProfileId,
+          actionByProfileId: actorProfileId,
+          actionType: 'escalation',
+          notes: actionNotes,
+          nextFollowUpDate,
+          isResolved: false,
+        },
+        include: {
+          owner: {
+            select: { id: true, firstName: true, lastName: true, positionTitle: true },
+          },
+          actionBy: {
+            select: { id: true, firstName: true, lastName: true, positionTitle: true },
+          },
+        },
+      });
+    });
+
+    const notificationTitle = `Receivable escalation: ${existingJob.jobName}`;
+    const notificationMessage = `Escalation (${escalationLevel}) logged for "${existingJob.jobName}" with outstanding balance KES ${balance.toLocaleString()}.`;
+    const notificationPayload = {
+      title: notificationTitle,
+      message: notificationMessage,
+      link: '/finance-balances',
+      relatedEntityId: existingJob.id,
+      actionRequired: true,
+    };
+
+    const notifyTasks: Promise<any>[] = [];
+    if (ownerProfileId && ownerProfileId !== actorProfileId) {
+      notifyTasks.push(notifyProfile(ownerProfileId, notificationPayload, req));
+    }
+    if (escalationLevel === 'manager' && existingJob.managerProfileId) {
+      notifyTasks.push(notifyProfile(existingJob.managerProfileId, notificationPayload, req));
+    }
+    if (escalationLevel === 'partner' && existingJob.partnerProfileId) {
+      notifyTasks.push(notifyProfile(existingJob.partnerProfileId, notificationPayload, req));
+    }
+    if (escalationLevel === 'hr') {
+      notifyTasks.push(notifyProfilesByRoles(['hr', 'hr_manager'], notificationPayload, req));
+    }
+    if (escalationLevel === 'gmp') {
+      notifyTasks.push(notifyProfilesByRoles(['gmp', 'group_managing_partner'], notificationPayload, req));
+    }
+
+    await Promise.all(notifyTasks);
+
+    res.status(201).json({
+      id: followUp.id,
+      jobId: followUp.jobId,
+      actionType: followUp.actionType,
+      actionDate: followUp.actionDate,
+      notes: followUp.notes,
+      nextFollowUpDate: followUp.nextFollowUpDate,
+      ownerProfileId: followUp.ownerProfileId,
+      ownerName: followUp.owner ? `${followUp.owner.firstName} ${followUp.owner.lastName}`.trim() : null,
+      actionByProfileId: followUp.actionByProfileId,
+      actionByName: `${followUp.actionBy.firstName} ${followUp.actionBy.lastName}`.trim(),
+      escalationLevel,
+      balance,
+      clientName: existingJob.client?.clientName ?? null,
+    });
+  } catch (error: any) {
+    console.error('Finance escalation error:', error);
+    res.status(500).json({ error: 'Failed to escalate receivable' });
+  }
+});
+
+// GET /finance-dashboard/receivables-aging
+router.get('/receivables-aging', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const jobs = await prisma.job.findMany({
+      include: {
+        client: { select: { clientName: true } },
+        jobCosting: true,
+        payments: true,
+        receivableOwner: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        receivableFollowUps: {
+          orderBy: { actionDate: 'desc' },
+          take: 1,
+          select: {
+            actionDate: true,
+            nextFollowUpDate: true,
+            actionType: true,
+            isResolved: true,
+          },
+        },
+      },
+    });
+
+    const buckets = {
+      current_0_30: { label: '0-30 days', amount: 0, jobs: 0 },
+      bucket_31_60: { label: '31-60 days', amount: 0, jobs: 0 },
+      bucket_61_90: { label: '61-90 days', amount: 0, jobs: 0 },
+      bucket_over_90: { label: '90+ days', amount: 0, jobs: 0 },
+    };
+
+    let totalOutstanding = 0;
+    let unownedJobs = 0;
+    let slaBreachedJobs = 0;
+    let slaDueSoonJobs = 0;
+    const nowDate = new Date();
+    const ownerMap = new Map<
+      string,
+      {
+        ownerProfileId: number | null;
+        ownerName: string;
+        amount: number;
+        jobs: number;
+        over90Amount: number;
+        slaBreachedJobs: number;
+        slaDueSoonJobs: number;
+      }
+    >();
+
+    type ReceivableAgingRecord = {
+      jobId: number;
+      jobCode: string | null;
+      jobName: string;
+      clientName: string;
+      balance: number;
+      daysOutstanding: number;
+      agingBucket: keyof typeof buckets;
+      receivableOwnerProfileId: number | null;
+      receivableOwnerName: string | null;
+      lastFollowUpAt: Date | null;
+      nextFollowUpDate: Date | null;
+      expectedFollowUpDate: Date | null;
+      lastFollowUpActionType: string | null;
+      followUpResolved: boolean;
+      slaStatus: 'ok' | 'due_soon' | 'breached';
+      slaBreached: boolean;
+      slaDueSoon: boolean;
+      slaBreachDays: number;
+    };
+
+    const records: ReceivableAgingRecord[] = [];
+    for (const job of jobs) {
+      const fee = resolveJobFee(job);
+      const collected = job.payments.reduce(
+        (sum, payment) => sum + Number(payment.paymentAmount || 0),
+        0
+      );
+      const balance = Math.max(0, fee - collected);
+      if (balance <= 0) {
+        continue;
+      }
+
+      const anchorDate = resolveReceivableAnchorDate(job);
+      const daysOutstanding = toAgingDays(anchorDate);
+      const agingBucket = toAgingBucket(daysOutstanding) as keyof typeof buckets;
+      const latestFollowUp = job.receivableFollowUps[0] ?? null;
+      const slaState = resolveReceivableSlaState({
+        balance,
+        agingBucket,
+        anchorDate,
+        latestFollowUp,
+        nowDate,
+      });
+      const ownerName = job.receivableOwner
+        ? `${job.receivableOwner.firstName} ${job.receivableOwner.lastName}`.trim()
+        : 'Unassigned';
+      const ownerKey = String(job.receivableOwner?.id ?? 'unassigned');
+
+      totalOutstanding += balance;
+      buckets[agingBucket].amount += balance;
+      buckets[agingBucket].jobs += 1;
+      if (!job.receivableOwnerProfileId) {
+        unownedJobs += 1;
+      }
+      if (slaState.slaBreached) {
+        slaBreachedJobs += 1;
+      }
+      if (slaState.slaDueSoon) {
+        slaDueSoonJobs += 1;
+      }
+
+      const currentOwner = ownerMap.get(ownerKey) || {
+        ownerProfileId: job.receivableOwner?.id ?? null,
+        ownerName,
+        amount: 0,
+        jobs: 0,
+        over90Amount: 0,
+        slaBreachedJobs: 0,
+        slaDueSoonJobs: 0,
+      };
+      currentOwner.amount += balance;
+      currentOwner.jobs += 1;
+      if (daysOutstanding > 90) {
+        currentOwner.over90Amount += balance;
+      }
+      if (slaState.slaBreached) {
+        currentOwner.slaBreachedJobs += 1;
+      }
+      if (slaState.slaDueSoon) {
+        currentOwner.slaDueSoonJobs += 1;
+      }
+      ownerMap.set(ownerKey, currentOwner);
+
+      records.push({
+        jobId: job.id,
+        jobCode: job.jobCode,
+        jobName: job.jobName,
+        clientName: job.client?.clientName ?? 'Unassigned',
+        balance,
+        daysOutstanding,
+        agingBucket,
+        receivableOwnerProfileId: job.receivableOwnerProfileId,
+        receivableOwnerName: job.receivableOwner
+          ? `${job.receivableOwner.firstName} ${job.receivableOwner.lastName}`.trim()
+          : null,
+        lastFollowUpAt: latestFollowUp?.actionDate ?? null,
+        nextFollowUpDate: latestFollowUp?.nextFollowUpDate ?? null,
+        expectedFollowUpDate: slaState.expectedFollowUpDate,
+        lastFollowUpActionType: latestFollowUp?.actionType ?? null,
+        followUpResolved: latestFollowUp?.isResolved ?? false,
+        slaStatus: slaState.slaStatus as 'ok' | 'due_soon' | 'breached',
+        slaBreached: slaState.slaBreached,
+        slaDueSoon: slaState.slaDueSoon,
+        slaBreachDays: slaState.slaBreachDays,
+      });
+    }
+    records.sort((a, b) => b.daysOutstanding - a.daysOutstanding);
+
+    const ownerBreakdown = Array.from(ownerMap.values()).sort((a, b) => b.amount - a.amount);
+
+    res.json({
+      asOf: new Date().toISOString(),
+      summary: {
+        totalOutstanding,
+        jobsWithOutstanding: records.length,
+        unownedJobs,
+        over90Jobs: buckets.bucket_over_90.jobs,
+        slaBreachedJobs,
+        slaDueSoonJobs,
+      },
+      buckets: Object.entries(buckets).map(([key, value]) => ({
+        key,
+        label: value.label,
+        amount: value.amount,
+        jobs: value.jobs,
+      })),
+      ownerBreakdown,
+      jobs: records,
+    });
+  } catch (error: any) {
+    console.error('Finance receivables aging error:', error);
+    res.status(500).json({ error: 'Failed to load receivables aging buckets' });
+  }
+});
+
+// PATCH /finance-dashboard/job-balances/:jobId/collection-stage
+router.patch('/job-balances/:jobId/collection-stage', authMiddleware, canApproveFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const jobId = Number(req.params.jobId);
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
+    const requestedStage = String(req.body?.collectionStage || '').trim();
+    if (!jobCollectionStages.has(requestedStage)) {
+      return res.status(400).json({
+        error: 'Invalid collection stage. Allowed: not_ready, ready_for_collection, partial_collection, fully_collected, overdue',
+      });
+    }
+
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        jobName: true,
+        collectionStage: true,
+        readyForCollectionAt: true,
+        partnerProfileId: true,
+        managerProfileId: true,
+      },
+    });
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    let readyForCollectionAt = job.readyForCollectionAt;
+    if (requestedStage === 'not_ready') {
+      readyForCollectionAt = null;
+    } else if (requestedStage === 'ready_for_collection') {
+      readyForCollectionAt = job.readyForCollectionAt ?? new Date();
+    }
+
+    const updated = await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        collectionStage: requestedStage as any,
+        readyForCollectionAt,
+      },
+      select: {
+        id: true,
+        jobCode: true,
+        jobName: true,
+        collectionStage: true,
+        readyForCollectionAt: true,
+      },
+    });
+
+    if (requestedStage === 'ready_for_collection' && job.collectionStage !== 'ready_for_collection') {
+      const notifyTargets = [job.partnerProfileId, job.managerProfileId].filter(
+        (profileId): profileId is number => Number.isFinite(profileId as number)
+      );
+      await Promise.all(
+        notifyTargets.map((profileId) =>
+          notifyProfile(
+            profileId,
+            {
+              title: 'Job ready for collection',
+              message: `Finance marked "${job.jobName}" as ready for collection.`,
+              link: `/finance-balances`,
+              relatedEntityId: job.id,
+              actionRequired: true,
+            },
+            req
+          )
+        )
+      );
+    }
+
+    res.json(updated);
+  } catch (error: any) {
+    console.error('Finance job collection stage update error:', error);
+    res.status(500).json({ error: 'Failed to update collection stage' });
+  }
+});
+
 // GET /finance-dashboard/job-profitability
-router.get('/job-profitability', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/job-profitability', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -607,7 +1622,7 @@ router.get('/job-profitability', authMiddleware, async (req: AuthRequest, res) =
 });
 
 // GET /finance-dashboard/revenue-allocations
-router.get('/revenue-allocations', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/revenue-allocations', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {

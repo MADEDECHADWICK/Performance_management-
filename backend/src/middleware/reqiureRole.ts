@@ -4,6 +4,77 @@
 import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
+import {
+  ModuleAction,
+  ModuleKey,
+  hasModuleAccess,
+  isModuleKey,
+  methodToModuleAction,
+} from "../services/moduleAccess.service";
+
+const ADMIN_ROLES = new Set(["admin", "super_admin", "hr", "hr_manager"]);
+const SUPERVISORY_ROLES = new Set(["manager", "partner", "gmp", "group_managing_partner"]);
+const OPERATIONAL_ROLES = new Set(["employee", "associate", "intern", "marketing", "finance"]);
+
+const inferModuleAction = (
+  allowedRoles: string[],
+  fallbackMethodAction: ModuleAction
+): ModuleAction => {
+  const normalizedRoles = allowedRoles.map((role) => role.toLowerCase());
+
+  const adminOnly =
+    normalizedRoles.length > 0 &&
+    normalizedRoles.every((role) => ADMIN_ROLES.has(role));
+  if (adminOnly) return "admin";
+
+  const hasSupervisoryRole = normalizedRoles.some((role) => SUPERVISORY_ROLES.has(role));
+  const hasOperationalRole = normalizedRoles.some((role) => OPERATIONAL_ROLES.has(role));
+  if (hasSupervisoryRole && !hasOperationalRole) return "approve";
+
+  return fallbackMethodAction;
+};
+
+const ensureRolePolicies = async (req: AuthRequest) => {
+  if (req.userRolePolicies) {
+    return req.userRolePolicies;
+  }
+  if (!req.user?.userId) return [];
+
+  const rows = await prisma.userAuthRole.findMany({
+    where: { userId: req.user.userId },
+    include: {
+      role: {
+        select: {
+          name: true,
+          isActive: true,
+          permissions: {
+            select: {
+              permission: { select: { key: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const rolePolicies = rows
+    .filter((row) => row.role.isActive)
+    .map((row) => ({
+      roleName: row.role.name.toLowerCase(),
+      permissionKeys: row.role.permissions.map((permissionRow) => permissionRow.permission.key),
+    }));
+
+  req.userRolePolicies = rolePolicies;
+  req.userRoles = rolePolicies.map((rolePolicy) => rolePolicy.roleName);
+
+  const permissionSet = new Set<string>();
+  rolePolicies.forEach((rolePolicy) => {
+    rolePolicy.permissionKeys.forEach((permissionKey) => permissionSet.add(permissionKey));
+  });
+  req.userPermissions = Array.from(permissionSet);
+
+  return rolePolicies;
+};
 
 export const requireRole = (...allowedRoles: string[]) => {
   const allowed = allowedRoles.map(r => r.toLowerCase());
@@ -12,6 +83,31 @@ export const requireRole = (...allowedRoles: string[]) => {
     try {
       if (!req.user?.userId) {
         res.status(401).json({ error: "User not authenticated" });
+        return;
+      }
+
+      const currentModuleKey = req.currentModuleAccess?.moduleKey;
+      if (currentModuleKey && isModuleKey(currentModuleKey)) {
+        const rolePolicies = await ensureRolePolicies(req);
+        const requiredAction = inferModuleAction(allowedRoles, methodToModuleAction(req.method));
+        const allowedByModule = hasModuleAccess({
+          moduleKey: currentModuleKey as ModuleKey,
+          action: requiredAction,
+          rolePolicies,
+          roles: req.userRoles,
+          permissionKeys: req.userPermissions,
+        });
+
+        if (!allowedByModule) {
+          res.status(403).json({
+            error: "Forbidden - insufficient module access",
+            module: currentModuleKey,
+            action: requiredAction,
+          });
+          return;
+        }
+
+        next();
         return;
       }
 
@@ -27,16 +123,8 @@ export const requireRole = (...allowedRoles: string[]) => {
         return;
       }
 
-      const userRoles = await prisma.userAuthRole.findMany({
-        where: { userId: req.user.userId },
-        select: {
-          role: { select: { name: true, isActive: true } }
-        }
-      });
-
-      const activeRoles = userRoles
-        .filter(ur => ur.role.isActive)
-        .map(ur => ur.role.name);
+      const rolePolicies = await ensureRolePolicies(req);
+      const activeRoles = rolePolicies.map((rolePolicy) => rolePolicy.roleName);
 
       const activeNormalized = activeRoles.map(r => r.toLowerCase());
       const hasRequiredRole = activeNormalized.some(r => allowed.includes(r));

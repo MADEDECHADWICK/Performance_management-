@@ -28,6 +28,16 @@ router.get(
 );
 
 /**
+ * GET /partners/approval-chain
+ * Partner approval chain (standard + over-budget visibility)
+ */
+router.get(
+  "/approval-chain",
+  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  PartnerController.getPartnerApprovalChain
+);
+
+/**
  * GET /partners/allocations
  * Partner allocations audit (collections vs allocations)
  */

@@ -236,6 +236,7 @@ export default function FinanceDashboard() {
           </p>
         </div>
 
+
         {overviewError && (
           <Card className="border-dashed bg-muted/30">
             <CardHeader>

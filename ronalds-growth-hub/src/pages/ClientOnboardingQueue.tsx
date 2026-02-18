@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
-import { clientOnboardingsAPI } from "@/lib/api";
+import { clientOnboardingsAPI, clientsAPI } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Search, ClipboardCheck } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_LABELS: Record<string, string> = {
   pending_hr_review: "Pending HR Review",
@@ -27,9 +29,27 @@ const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | 
   job_created: "outline",
 };
 
+const LETTER_STATUS_LABELS: Record<string, string> = {
+  uploaded: "Uploaded",
+  pending_review: "Pending Letter Review",
+  approved: "Letter Approved",
+  rejected: "Letter Rejected",
+};
+
+const LETTER_STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  uploaded: "outline",
+  pending_review: "secondary",
+  approved: "default",
+  rejected: "destructive",
+};
+
 export default function ClientOnboardingQueue() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const { isHR, isAdmin } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const canReview = isHR || isAdmin;
 
   const { data: onboardingsData, isLoading } = useQuery({
     queryKey: ["client-onboardings", filterStatus],
@@ -63,6 +83,60 @@ export default function ClientOnboardingQueue() {
         .some((value: string) => value.toLowerCase().includes(term))
     );
   }, [onboardings, searchTerm]);
+
+  const handleReview = async (item: any, decision: "approve" | "reject") => {
+    try {
+      if (decision === "reject") {
+        const reason = window.prompt("Reason for rejection (optional):") || undefined;
+        await clientOnboardingsAPI.reject(item.id, reason);
+      } else {
+        await clientOnboardingsAPI.approve(item.id);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["client-onboardings"] });
+      toast({
+        title: "Onboarding updated",
+        description:
+          decision === "approve"
+            ? "Onboarding approved and ready for job creation."
+            : "Onboarding rejected.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Update failed",
+        description: error?.message || "Unable to update onboarding.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleLetterReview = async (item: any, decision: "approve" | "reject") => {
+    try {
+      const letterId = item.engagementLetter?.id;
+      if (!letterId) {
+        throw new Error("Engagement letter not found on this onboarding record.");
+      }
+      if (decision === "reject") {
+        const reason = window.prompt("Reason for rejection (optional):") || undefined;
+        await clientsAPI.rejectEngagementLetter(letterId, reason);
+      } else {
+        await clientsAPI.approveEngagementLetter(letterId);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["client-onboardings"] });
+      toast({
+        title: "Engagement letter updated",
+        description:
+          decision === "approve"
+            ? "Engagement letter approved."
+            : "Engagement letter rejected.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Update failed",
+        description: error?.message || "Unable to update engagement letter.",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -183,6 +257,13 @@ export default function ClientOnboardingQueue() {
                         <div className="text-xs text-muted-foreground">
                           {item.engagementLetter?.engagementType || ""}
                         </div>
+                        {item.engagementLetter?.status && (
+                          <div className="mt-2">
+                            <Badge variant={LETTER_STATUS_VARIANTS[item.engagementLetter.status] || "outline"}>
+                              {LETTER_STATUS_LABELS[item.engagementLetter.status] || item.engagementLetter.status}
+                            </Badge>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={STATUS_VARIANTS[item.status] || "outline"}>
@@ -198,7 +279,35 @@ export default function ClientOnboardingQueue() {
                           : "N/A"}
                       </TableCell>
                       <TableCell>
-                        {["approved", "client_created"].includes(item.status) && !item.jobId ? (
+                        {item.engagementLetter?.status === "pending_review" && canReview ? (
+                          <div className="flex flex-col gap-2">
+                            <Button size="sm" onClick={() => handleLetterReview(item, "approve")}>
+                              Approve Letter
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleLetterReview(item, "reject")}
+                            >
+                              Reject Letter
+                            </Button>
+                          </div>
+                        ) : item.status === "pending_hr_review" && canReview ? (
+                          <div className="flex flex-col gap-2">
+                            <Button size="sm" onClick={() => handleReview(item, "approve")}>
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleReview(item, "reject")}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        ) : ["approved", "client_created"].includes(item.status) &&
+                          item.engagementLetter?.status === "approved" &&
+                          !item.jobId ? (
                           <Button asChild size="sm">
                             <Link to={`/admin-job-creation?onboardingId=${item.id}`}>
                               Create Job
@@ -206,7 +315,12 @@ export default function ClientOnboardingQueue() {
                           </Button>
                         ) : (
                           <Badge variant="outline">
-                            {item.jobId ? "Job created" : "Not ready"}
+                            {item.jobId
+                              ? "Job created"
+                              : item.engagementLetter?.status &&
+                                item.engagementLetter.status !== "approved"
+                              ? "Letter pending"
+                              : "Not ready"}
                           </Badge>
                         )}
                       </TableCell>

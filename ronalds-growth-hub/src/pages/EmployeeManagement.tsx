@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,7 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/hooks/use-toast";
 import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { rolesAPI, employeeRolesAPI } from "@/lib/api";
+import { rolesAPI } from "@/lib/api";
 import documentsAPI from "@/lib/api/documents";
 
 interface Employee {
@@ -25,8 +25,11 @@ interface Employee {
   email: string;
   position: string;
   status: string;
-  hire_date: string;
+  hire_date: string | null;
+  hireDate?: string | null;
   department_id: string;
+  manager_id?: string | null;
+  managerId?: string | null;
   department?: {
     name: string;
   };
@@ -53,10 +56,11 @@ interface DepartmentFormData {
 interface Role {
   id: number;
   name: string;
-  billing_rate: number;
+  billingRate?: number;
+  costRate?: number;
   description?: string;
   permissions: string[];
-  is_active: boolean;
+  isActive: boolean;
   createdAt: string;
 }
 
@@ -67,6 +71,11 @@ interface OnboardingCase {
   status: string;
   startDate?: string;
   dueDate?: string;
+  hrOwner?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+  };
   employee?: {
     id: number;
     firstName: string;
@@ -83,6 +92,23 @@ interface OnboardingCase {
     status: string;
     completionPercent: number;
   };
+  stages?: OnboardingStage[];
+}
+
+interface OnboardingStage {
+  id: number;
+  stageKey: string;
+  title: string;
+  description?: string | null;
+  orderIndex: number;
+  status: string;
+  dueDate?: string | null;
+  completedAt?: string | null;
+  owner?: {
+    id: number;
+    firstName: string;
+    lastName: string;
+  } | null;
 }
 
 interface ChecklistDocument {
@@ -131,6 +157,19 @@ interface OffboardingCase {
     items?: number;
   };
 }
+
+const DEFAULT_ACCESS_ROLES = [
+  "employee",
+  "manager",
+  "partner",
+  "finance",
+  "marketing",
+  "hr",
+  "hr_manager",
+  "admin",
+  "super_admin",
+  "gmp",
+];
 
 const formatShortDate = (value?: string) => {
   if (!value) return "--";
@@ -188,7 +227,8 @@ const EmployeeManagement = () => {
   const [departmentDialogOpen, setDepartmentDialogOpen] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [deletingDepartmentId, setDeletingDepartmentId] = useState<string | null>(null);
-  const [departmentMemberIds, setDepartmentMemberIds] = useState<string[]>([]);
+  const [departmentManagerIds, setDepartmentManagerIds] = useState<string[]>([]);
+  const [managerAssignments, setManagerAssignments] = useState<Record<string, string[]>>({});
   const [departmentForm, setDepartmentForm] = useState<DepartmentFormData>({
     name: "",
     description: "",
@@ -199,29 +239,128 @@ const EmployeeManagement = () => {
   const safeDepartments = Array.isArray(departments) ? departments : [];
   const partnerEmployees = employees.filter((emp: any) => isPartnerEmployee(emp));
   const managerEmployees = employees.filter((emp: any) => isManagerEmployee(emp));
+  const assignableEmployees = employees.filter(
+    (emp: any) => !isManagerEmployee(emp) && !isPartnerEmployee(emp)
+  );
+  const selectedDepartmentManagerIds = Array.from(
+    new Set(
+      [departmentForm.department_head_id, ...departmentManagerIds]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    )
+  );
+  const managerLoadSummary = selectedDepartmentManagerIds.map((managerId) => {
+    const manager = managerEmployees.find((emp: any) => String(emp.id) === String(managerId));
+    const assignedCount = (managerAssignments[managerId] || []).length;
+    return {
+      managerId,
+      managerName: manager
+        ? `${manager.first_name} ${manager.last_name}`
+        : `Manager ${managerId}`,
+      assignedCount,
+    };
+  });
+  const totalAssignedEmployees = managerLoadSummary.reduce(
+    (sum, row) => sum + row.assignedCount,
+    0
+  );
+  const averageLoad =
+    managerLoadSummary.length > 0 ? totalAssignedEmployees / managerLoadSummary.length : 0;
+  const maxLoad =
+    managerLoadSummary.length > 0
+      ? Math.max(...managerLoadSummary.map((row) => row.assignedCount))
+      : 0;
+  const minLoad =
+    managerLoadSummary.length > 0
+      ? Math.min(...managerLoadSummary.map((row) => row.assignedCount))
+      : 0;
+  const loadSpread = maxLoad - minLoad;
 
-  const toggleDepartmentMember = (employeeId: string) => {
-    setDepartmentMemberIds((prev) =>
-      prev.includes(employeeId)
-        ? prev.filter((id) => id !== employeeId)
-        : [...prev, employeeId]
-    );
+  const handleDepartmentHeadChange = (nextHeadId: string) => {
+    const prevHeadId = String(departmentForm.department_head_id || "");
+    const normalizedHeadId = String(nextHeadId || "").trim();
+
+    setDepartmentForm((prev) => ({
+      ...prev,
+      department_head_id: normalizedHeadId,
+    }));
+
+    setDepartmentManagerIds((prev) => {
+      let next = prev.filter((id) => id !== normalizedHeadId);
+      if (prevHeadId && prevHeadId !== normalizedHeadId) {
+        const stillManager = managerEmployees.some((emp: any) => String(emp.id) === prevHeadId);
+        if (stillManager) {
+          next = Array.from(new Set([...next, prevHeadId]));
+        }
+      }
+      return next;
+    });
+
+    setManagerAssignments((prev) => ({
+      ...prev,
+      ...(normalizedHeadId ? { [normalizedHeadId]: prev[normalizedHeadId] || [] } : {}),
+    }));
+  };
+
+  const toggleAdditionalDepartmentManager = (managerId: string) => {
+    if (!managerId) return;
+    if (managerId === departmentForm.department_head_id) return;
+
+    setDepartmentManagerIds((prev) => {
+      const exists = prev.includes(managerId);
+      if (exists) {
+        const next = prev.filter((id) => id !== managerId);
+        setManagerAssignments((current) => {
+          const updated = { ...current };
+          delete updated[managerId];
+          return updated;
+        });
+        return next;
+      }
+
+      setManagerAssignments((current) => ({
+        ...current,
+        [managerId]: current[managerId] || [],
+      }));
+      return [...prev, managerId];
+    });
+  };
+
+  const toggleManagerEmployeeAssignment = (managerId: string, employeeId: string) => {
+    if (!managerId || !employeeId) return;
+    setManagerAssignments((prev) => {
+      const activeManagers = new Set(selectedDepartmentManagerIds);
+      activeManagers.add(managerId);
+
+      const next: Record<string, string[]> = {};
+      activeManagers.forEach((id) => {
+        next[id] = (prev[id] || []).filter((memberId) => memberId !== employeeId);
+      });
+
+      const wasAssignedToManager = (prev[managerId] || []).includes(employeeId);
+      if (!wasAssignedToManager) {
+        next[managerId] = Array.from(new Set([...(next[managerId] || []), employeeId]));
+      }
+
+      return next;
+    });
   };
   const [employeeDialogOpen, setEmployeeDialogOpen] = useState(false);
   const [employeeForm, setEmployeeForm] = useState({
     email: "",
-    password: "",
     first_name: "",
     last_name: "",
     phone: "",
     position: "",
     role_id: "",
+    access_role: "employee",
     department_id: "",
     manager_id: "",
     hire_date: "",
     status: "active",
     hourly_rate: "",
   });
+  const [accessRoles, setAccessRoles] = useState<string[]>(DEFAULT_ACCESS_ROLES);
   
   // Role management state
   const [roles, setRoles] = useState<Role[]>([]);
@@ -229,10 +368,9 @@ const EmployeeManagement = () => {
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [roleForm, setRoleForm] = useState({
     name: "",
-    billing_rate: 0,
     description: "",
     permissions: [] as string[],
-    is_active: true,
+    isActive: true,
   });
 
   const [onboardingCases, setOnboardingCases] = useState<OnboardingCase[]>([]);
@@ -261,6 +399,11 @@ const EmployeeManagement = () => {
   const [newOffboardingTaskName, setNewOffboardingTaskName] = useState("");
   const [newOffboardingTaskDescription, setNewOffboardingTaskDescription] = useState("");
   const [newOffboardingTaskRequiresDoc, setNewOffboardingTaskRequiresDoc] = useState(false);
+  const [onboardingStagesDialogOpen, setOnboardingStagesDialogOpen] = useState(false);
+  const [activeOnboardingCase, setActiveOnboardingCase] = useState<OnboardingCase | null>(null);
+  const [stageEdits, setStageEdits] = useState<Record<number, { status?: string; dueDate?: string }>>({});
+  const [savingStageId, setSavingStageId] = useState<number | null>(null);
+  const [initializingStagesCaseId, setInitializingStagesCaseId] = useState<number | null>(null);
   const [attachDocDialogOpen, setAttachDocDialogOpen] = useState(false);
   const [attachTaskId, setAttachTaskId] = useState<number | null>(null);
   const [attachFileName, setAttachFileName] = useState("");
@@ -281,7 +424,7 @@ const EmployeeManagement = () => {
       setLoading(true);
 
       // Load employees with department info
-      const employeesResponse = await apiFetch('GET', "/profiles?include_department=true&page=1&pageSize=100");
+      const employeesResponse = await apiFetch('GET', "/profiles?include_department=true&page=1&pageSize=100&status=active");
       const employeesData = extractItems(employeesResponse);
 
       // Load departments
@@ -296,6 +439,7 @@ const EmployeeManagement = () => {
         const firstName = emp.first_name ?? emp.firstName ?? "";
         const lastName = emp.last_name ?? emp.lastName ?? "";
         const email = emp.email ?? emp.user?.email ?? "";
+        const hireDate = emp.hire_date ?? emp.hireDate ?? null;
         const position =
           emp.position ??
           emp.positionTitle ??
@@ -304,13 +448,18 @@ const EmployeeManagement = () => {
           "";
         const departmentId =
           emp.department_id ?? emp.departmentId ?? emp.department?.id ?? "";
+        const managerId = emp.manager_id ?? emp.managerId ?? emp.manager?.id ?? null;
         return {
           ...emp,
           first_name: firstName,
           last_name: lastName,
           email,
+          hire_date: hireDate,
+          hireDate,
           position,
           department_id: departmentId,
+          manager_id: managerId ? String(managerId) : null,
+          managerId: managerId ? String(managerId) : null,
         };
       });
 
@@ -355,6 +504,24 @@ const EmployeeManagement = () => {
         console.warn("Failed to load roles:", roleError);
       }
 
+      try {
+        const accessRoleResponse = await apiFetch("GET", "/module-access/roles");
+        const accessRoleRows = Array.isArray((accessRoleResponse as any)?.roles)
+          ? (accessRoleResponse as any).roles
+          : [];
+        const names = accessRoleRows
+          .map((row: any) => String(row?.name || "").toLowerCase().trim())
+          .filter(Boolean);
+        if (names.length > 0) {
+          setAccessRoles(Array.from(new Set(names)));
+        } else {
+          setAccessRoles(DEFAULT_ACCESS_ROLES);
+        }
+      } catch (accessRoleError) {
+        console.warn("Failed to load access roles:", accessRoleError);
+        setAccessRoles(DEFAULT_ACCESS_ROLES);
+      }
+
       await loadLifecycleData();
     } catch (error: any) {
       if (error?.status === 401) {
@@ -376,7 +543,7 @@ const EmployeeManagement = () => {
     }
   };
 
-  const loadLifecycleData = async () => {
+  const loadLifecycleData = async (): Promise<OnboardingCase[]> => {
     try {
       setLifecycleLoading(true);
       const [onboardingData, offboardingData] = await Promise.all([
@@ -385,10 +552,14 @@ const EmployeeManagement = () => {
       ]);
       const safeOnboardingCases = extractItems(onboardingData);
       const safeOffboardingCases = extractItems(offboardingData);
-      setOnboardingCases(Array.isArray(safeOnboardingCases) ? safeOnboardingCases : []);
-      setOffboardingCases(Array.isArray(safeOffboardingCases) ? safeOffboardingCases : []);
+      const onboardingList = Array.isArray(safeOnboardingCases) ? safeOnboardingCases : [];
+      const offboardingList = Array.isArray(safeOffboardingCases) ? safeOffboardingCases : [];
+      setOnboardingCases(onboardingList);
+      setOffboardingCases(offboardingList);
+      return onboardingList;
     } catch (error: any) {
       console.warn("Failed to load lifecycle data:", error);
+      return [];
     } finally {
       setLifecycleLoading(false);
     }
@@ -407,6 +578,88 @@ const EmployeeManagement = () => {
     }
     return true;
   });
+
+  const getOnboardingDisplayName = (caseItem: OnboardingCase) => {
+    if (caseItem.employee) {
+      return `${caseItem.employee.firstName} ${caseItem.employee.lastName}`.trim();
+    }
+    return caseItem.candidate?.fullName || "Unknown";
+  };
+
+  const getStageProgress = (caseItem: OnboardingCase) => {
+    const stages = caseItem.stages || [];
+    const completed = stages.filter((stage) => stage.status === "completed").length;
+    return { total: stages.length, completed };
+  };
+
+  const getNextStage = (caseItem: OnboardingCase) => {
+    const stages = caseItem.stages || [];
+    return stages.find((stage) => stage.status !== "completed");
+  };
+
+  const openOnboardingStagesDialog = (caseItem: OnboardingCase) => {
+    setActiveOnboardingCase(caseItem);
+    setStageEdits({});
+    setOnboardingStagesDialogOpen(true);
+  };
+
+  const updateStageEdit = (stageId: number, updates: { status?: string; dueDate?: string }) => {
+    setStageEdits((prev) => ({
+      ...prev,
+      [stageId]: { ...prev[stageId], ...updates },
+    }));
+  };
+
+  const saveOnboardingStage = async (stage: OnboardingStage) => {
+    try {
+      setSavingStageId(stage.id);
+      const edits = stageEdits[stage.id] || {};
+      const payload: any = {};
+      if (edits.status !== undefined && edits.status !== stage.status) payload.status = edits.status;
+      if (edits.dueDate !== undefined) payload.dueDate = edits.dueDate || null;
+
+      await apiFetch("PATCH", `/onboarding/stages/${stage.id}`, payload);
+      toast({ title: "Onboarding stage updated" });
+      const refreshed = await loadLifecycleData();
+      if (activeOnboardingCase) {
+        const updatedCase = refreshed.find((caseItem) => caseItem.id === activeOnboardingCase.id);
+        if (updatedCase) {
+          setActiveOnboardingCase(updatedCase);
+        }
+      }
+    } catch (error: any) {
+      toast({
+        title: "Failed to update stage",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingStageId(null);
+    }
+  };
+
+  const initializeOnboardingStages = async (caseId: number) => {
+    try {
+      setInitializingStagesCaseId(caseId);
+      await apiFetch("POST", `/onboarding/${caseId}/initialize-stages`);
+      toast({ title: "Onboarding stages initialized" });
+      const refreshed = await loadLifecycleData();
+      if (activeOnboardingCase?.id === caseId) {
+        const updatedCase = refreshed.find((caseItem) => caseItem.id === caseId);
+        if (updatedCase) {
+          setActiveOnboardingCase(updatedCase);
+        }
+      }
+    } catch (error: any) {
+      toast({
+        title: "Failed to initialize stages",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setInitializingStagesCaseId(null);
+    }
+  };
 
   const handleUpdateDueDate = async (caseId: number) => {
     const dueDate = dueDateEdits[caseId];
@@ -615,29 +868,58 @@ const EmployeeManagement = () => {
       department_head_id: "",
       partner_profile_id: "",
     });
-    setDepartmentMemberIds([]);
+    setDepartmentManagerIds([]);
+    setManagerAssignments({});
     setDepartmentDialogOpen(true);
   };
 
   const handleEditDepartment = (department: Department) => {
     setEditingDepartment(department);
+    const headId = department.department_head_id
+      ? String(department.department_head_id)
+      : "";
     setDepartmentForm({
       name: department.name,
       description: department.description || "",
-      department_head_id: department.department_head_id
-        ? String(department.department_head_id)
-        : "",
+      department_head_id: headId,
       partner_profile_id: department.partner_profile_id
         ? String(department.partner_profile_id)
         : "",
     });
-    const selectedMembers = employees
-      .filter((emp: any) => {
-        const deptId = emp.departmentId || emp.department_id;
-        return String(deptId || "") === String(department.id);
-      })
+
+    const deptEmployees = employees.filter((emp: any) => {
+      const deptId = emp.departmentId || emp.department_id;
+      return String(deptId || "") === String(department.id);
+    });
+
+    const deptManagerIds = deptEmployees
+      .filter((emp: any) => isManagerEmployee(emp))
       .map((emp: any) => String(emp.id));
-    setDepartmentMemberIds(selectedMembers);
+
+    const additionalManagers = deptManagerIds.filter((id) => id !== headId);
+    setDepartmentManagerIds(additionalManagers);
+
+    const selectedManagers = Array.from(
+      new Set([headId, ...additionalManagers].filter(Boolean))
+    );
+
+    const assignments: Record<string, string[]> = {};
+    selectedManagers.forEach((managerId) => {
+      assignments[managerId] = [];
+    });
+
+    deptEmployees
+      .filter((emp: any) => !isManagerEmployee(emp) && !isPartnerEmployee(emp))
+      .forEach((emp: any) => {
+        const managerId = String(emp.manager_id ?? emp.managerId ?? "");
+        if (managerId && selectedManagers.includes(managerId)) {
+          assignments[managerId] = Array.from(
+            new Set([...(assignments[managerId] || []), String(emp.id)])
+          );
+        }
+      });
+
+    setManagerAssignments(assignments);
     setDepartmentDialogOpen(true);
   };
 
@@ -667,10 +949,26 @@ const EmployeeManagement = () => {
       return;
     }
     const managerIds = new Set(managerEmployees.map((emp: any) => String(emp.id)));
+    const selectedManagers = Array.from(
+      new Set(
+        [departmentForm.department_head_id, ...departmentManagerIds]
+          .map((id) => String(id || "").trim())
+          .filter(Boolean)
+      )
+    );
+
     if (!managerIds.has(String(departmentForm.department_head_id))) {
       toast({
         title: "Invalid department head",
         description: "Department head must be a manager.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (selectedManagers.some((managerId) => !managerIds.has(managerId))) {
+      toast({
+        title: "Invalid manager selection",
+        description: "All selected department managers must be manager profiles.",
         variant: "destructive",
       });
       return;
@@ -717,14 +1015,32 @@ const EmployeeManagement = () => {
         });
       }
 
-      if (departmentId && departmentMemberIds.length > 0) {
-        await Promise.all(
-          departmentMemberIds.map((empId) =>
-            apiFetch("PATCH", `/profiles/${empId}`, {
-              department_id: departmentId,
+      if (departmentId) {
+        const normalizedDepartmentId = Number(departmentId);
+
+        const managerAssignmentEntries = selectedManagers.map((managerId) => ({
+          managerId,
+          employeeIds: (managerAssignments[managerId] || []).map((id) => String(id)),
+        }));
+
+        const managerUpdates = selectedManagers.map((managerId) =>
+          apiFetch("PATCH", `/profiles/${managerId}`, {
+            department_id: normalizedDepartmentId,
+          })
+        );
+
+        const employeeUpdates = managerAssignmentEntries.flatMap(({ managerId, employeeIds }) =>
+          employeeIds.map((employeeId) =>
+            apiFetch("PATCH", `/profiles/${employeeId}`, {
+              department_id: normalizedDepartmentId,
+              manager_id: Number(managerId),
             })
           )
         );
+
+        if (managerUpdates.length > 0 || employeeUpdates.length > 0) {
+          await Promise.all([...managerUpdates, ...employeeUpdates]);
+        }
       }
 
       setDepartmentDialogOpen(false);
@@ -777,12 +1093,12 @@ const EmployeeManagement = () => {
   const handleCreateEmployee = () => {
     setEmployeeForm({
       email: "",
-      password: Math.random().toString(36).slice(-8) + "Aa1!", // Auto-generate password
       first_name: "",
       last_name: "",
       phone: "",
       position: "",
       role_id: "",
+      access_role: "employee",
       department_id: "",
       manager_id: "",
       hire_date: new Date().toISOString().split("T")[0],
@@ -1030,16 +1346,25 @@ const EmployeeManagement = () => {
       });
       return;
     }
+    if (!employeeForm.access_role) {
+      toast({
+        title: "Access role required",
+        description: "Select a system access role for this employee.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       setLoading(true);
 
-      await apiFetch("POST", "/auth/register", {
+      const onboardingResponse = await apiFetch("POST", "/auth/onboard-user", {
         email: employeeForm.email.trim(),
-        password: employeeForm.password,
         first_name: employeeForm.first_name.trim(),
         last_name: employeeForm.last_name.trim(),
         phone: employeeForm.phone.trim() || null,
         position: employeeForm.position.trim() || null,
+        authRole: employeeForm.access_role,
+        roleId: Number(employeeForm.role_id),
         department_id: employeeForm.department_id || null,
         manager_id: employeeForm.manager_id || null,
         hire_date: employeeForm.hire_date || null,
@@ -1047,21 +1372,20 @@ const EmployeeManagement = () => {
         hourly_rate: employeeForm.hourly_rate ? parseFloat(employeeForm.hourly_rate) : null,
       });
 
-      const profileResponse = await apiFetch(
-        "GET",
-        `/profiles/email/${encodeURIComponent(employeeForm.email.trim())}`
-      );
-      const profile = (profileResponse as any)?.data ?? profileResponse;
-      const profileId = profile?.id;
-      if (profileId && employeeForm.role_id) {
-        await apiFetch("PUT", `/employees/${profileId}/role`, {
-          roleId: Number(employeeForm.role_id),
-        });
-      }
+      const emailDelivery = (onboardingResponse as any)?.emailDelivery;
+      const emailDeliveryReason = (onboardingResponse as any)?.emailDeliveryReason;
+      const fallbackPassword = (onboardingResponse as any)?.temporaryPasswordPreview;
 
       toast({
         title: "Success",
-        description: "Employee created successfully",
+        description:
+          emailDelivery === "sent"
+            ? "Employee onboarded and temporary password sent by email."
+            : fallbackPassword
+              ? emailDeliveryReason === "dummy_mode"
+                ? `Employee onboarded in dummy email mode; temporary password: ${fallbackPassword}`
+                : `Employee onboarded. SMTP is not configured; temporary password: ${fallbackPassword}`
+              : "Employee onboarded. Email delivery failed; configure SMTP and resend invite.",
       });
 
       setEmployeeDialogOpen(false);
@@ -1082,10 +1406,9 @@ const EmployeeManagement = () => {
     setEditingRole(null);
     setRoleForm({
       name: "",
-      billing_rate: 0,
       description: "",
       permissions: [],
-      is_active: true,
+      isActive: true,
     });
     setRoleDialogOpen(true);
   };
@@ -1094,10 +1417,9 @@ const EmployeeManagement = () => {
     setEditingRole(role);
     setRoleForm({
       name: role.name,
-      billing_rate: role.billing_rate,
       description: role.description || "",
       permissions: role.permissions || [],
-      is_active: role.is_active,
+      isActive: role.isActive,
     });
     setRoleDialogOpen(true);
   };
@@ -1114,14 +1436,20 @@ const EmployeeManagement = () => {
 
     try {
       setLoading(true);
+      const rolePayload = {
+        name: roleForm.name.trim(),
+        description: roleForm.description.trim() || undefined,
+        permissions: roleForm.permissions,
+        isActive: roleForm.isActive,
+      };
       if (editingRole) {
-        await rolesAPI.update(editingRole.id, roleForm);
+        await rolesAPI.update(editingRole.id, rolePayload);
         toast({
           title: "Success",
           description: `Role "${roleForm.name}" updated successfully`,
         });
       } else {
-        await rolesAPI.create(roleForm);
+        await rolesAPI.create(rolePayload);
         toast({
           title: "Success",
           description: `Role "${roleForm.name}" created successfully`,
@@ -1404,8 +1732,10 @@ const EmployeeManagement = () => {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle>All Roles</CardTitle>
-                    <CardDescription>Manage job roles and billing rates</CardDescription>
+                    <CardTitle>System Access Roles</CardTitle>
+                    <CardDescription>
+                      Manage access roles only. Billing rates are maintained under Positions &amp; Rates.
+                    </CardDescription>
                   </div>
                   <Button onClick={handleCreateRole}>
                     <Plus className="h-4 w-4 mr-2" />
@@ -1418,7 +1748,6 @@ const EmployeeManagement = () => {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Role Name</TableHead>
-                      <TableHead>Billing Rate</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Permissions</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
@@ -1436,10 +1765,7 @@ const EmployeeManagement = () => {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className="font-mono font-semibold">{role.billing_rate.toLocaleString()} KES/hr</span>
-                        </TableCell>
-                        <TableCell>
-                          {role.is_active ? (
+                          {role.isActive ? (
                             <Badge variant="default" className="bg-green-600">Active</Badge>
                           ) : (
                             <Badge variant="secondary">Inactive</Badge>
@@ -1497,6 +1823,129 @@ const EmployeeManagement = () => {
           </TabsContent>
 
           <TabsContent value="lifecycle" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle>Onboarding Process</CardTitle>
+                    <CardDescription>Track onboarding stages from offer to probation.</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {lifecycleLoading ? (
+                  <div className="text-center py-6 text-muted-foreground">Loading onboarding cases...</div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>Total: {safeOnboardingCases.length}</span>
+                      <span>
+                        Pending: {safeOnboardingCases.filter((c) => c.status === "pending").length}
+                      </span>
+                      <span>
+                        In Progress: {safeOnboardingCases.filter((c) => c.status === "in_progress").length}
+                      </span>
+                      <span>
+                        Completed: {safeOnboardingCases.filter((c) => c.status === "completed").length}
+                      </span>
+                    </div>
+                    <div className="rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Employee/Candidate</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Progress</TableHead>
+                            <TableHead>Next Stage</TableHead>
+                            <TableHead>Due</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {safeOnboardingCases.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
+                                No onboarding cases yet.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            safeOnboardingCases.map((oc) => {
+                              const progress = getStageProgress(oc);
+                              const nextStage = getNextStage(oc);
+                              const hasStages = Boolean(oc.stages && oc.stages.length > 0);
+                              return (
+                                <TableRow key={oc.id}>
+                                  <TableCell>
+                                    {getOnboardingDisplayName(oc)}
+                                    {oc.candidate?.stage && (
+                                      <div className="text-xs text-muted-foreground">
+                                        Stage: {oc.candidate.stage.replace("_", " ")}
+                                      </div>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant={statusBadgeVariant(oc.status)}>
+                                      {oc.status.replace("_", " ")}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">
+                                    {progress.total > 0
+                                      ? `${progress.completed}/${progress.total} completed`
+                                      : "Not initialized"}
+                                  </TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">
+                                    {nextStage ? (
+                                      <div>
+                                        <div className="font-medium text-foreground">{nextStage.title}</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          {nextStage.status.replace("_", " ")}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span>--</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">
+                                    {nextStage?.dueDate
+                                      ? nextStage.dueDate.split("T")[0]
+                                      : oc.dueDate
+                                        ? oc.dueDate.split("T")[0]
+                                        : "--"}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      {hasStages ? (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => openOnboardingStagesDialog(oc)}
+                                        >
+                                          View stages
+                                        </Button>
+                                      ) : (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          disabled={initializingStagesCaseId === oc.id}
+                                          onClick={() => initializeOnboardingStages(oc.id)}
+                                        >
+                                          {initializingStagesCaseId === oc.id ? "Initializing..." : "Initialize stages"}
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
@@ -1833,12 +2282,7 @@ const EmployeeManagement = () => {
                 <Label htmlFor="head">Department Head (Manager) *</Label>
                 <Select
                   value={departmentForm.department_head_id || ""}
-                  onValueChange={(value) =>
-                    setDepartmentForm({
-                      ...departmentForm,
-                      department_head_id: value,
-                    })
-                  }
+                  onValueChange={handleDepartmentHeadChange}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select department head" />
@@ -1886,37 +2330,130 @@ const EmployeeManagement = () => {
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="grid gap-2">
-                <Label>Assign Employees (Optional)</Label>
-                <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
-                  {employees.length === 0 && (
+                <Label>Additional Managers (Optional)</Label>
+                <div className="max-h-36 overflow-y-auto rounded-md border p-3 space-y-2">
+                  {managerEmployees
+                    .filter((emp: any) => String(emp.id) !== String(departmentForm.department_head_id || ""))
+                    .map((emp: any) => {
+                      const managerId = String(emp.id);
+                      return (
+                        <label key={managerId} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={departmentManagerIds.includes(managerId)}
+                            onChange={() => toggleAdditionalDepartmentManager(managerId)}
+                          />
+                          <span>
+                            {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Manager"}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  {managerEmployees.filter((emp: any) => String(emp.id) !== String(departmentForm.department_head_id || "")).length === 0 && (
                     <p className="text-sm text-muted-foreground">
-                      No employees available for assignment.
+                      No additional managers available.
                     </p>
                   )}
-                  {employees.map((emp: any) => (
-                    <label key={emp.id} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={departmentMemberIds.includes(String(emp.id))}
-                        onChange={() => toggleDepartmentMember(String(emp.id))}
-                      />
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span>
-                          {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Employee"}
-                        </span>
-                        {isManagerEmployee(emp) && (
-                          <Badge variant="outline" className="text-[10px]">Manager</Badge>
-                        )}
-                        {isPartnerEmployee(emp) && (
-                          <Badge variant="outline" className="text-[10px]">Partner</Badge>
-                        )}
-                      </span>
-                    </label>
-                  ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Selected employees will be assigned to this department.
+                  Add as many managers as needed for this department.
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Assign Employees Under Managers (Optional)</Label>
+                <div className="rounded-md border p-3 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    Manager load balancing
+                  </div>
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    <span>Managers: {managerLoadSummary.length}</span>
+                    <span>Assigned: {totalAssignedEmployees}</span>
+                    <span>Avg/Manager: {averageLoad.toFixed(1)}</span>
+                    <span>Spread: {loadSpread}</span>
+                  </div>
+                  {managerLoadSummary.length > 0 ? (
+                    <div className="space-y-1">
+                      {managerLoadSummary.map((row) => {
+                        const delta = row.assignedCount - averageLoad;
+                        return (
+                          <div
+                            key={`load-${row.managerId}`}
+                            className="flex items-center justify-between text-xs"
+                          >
+                            <span className="truncate pr-3">{row.managerName}</span>
+                            <span className="flex items-center gap-2">
+                              <Badge variant="outline" className="h-5 text-[10px]">
+                                {row.assignedCount}
+                              </Badge>
+                              <span className="text-muted-foreground">
+                                {delta >= 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} vs avg
+                              </span>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No managers selected yet.
+                    </p>
+                  )}
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-md border p-3 space-y-3">
+                  {selectedDepartmentManagerIds.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Select a department head or managers first.
+                    </p>
+                  )}
+
+                  {selectedDepartmentManagerIds.map((managerId) => {
+                    const manager = managerEmployees.find(
+                      (emp: any) => String(emp.id) === String(managerId)
+                    );
+                    const assignedIds = managerAssignments[managerId] || [];
+                    return (
+                      <div key={managerId} className="rounded-md border p-2">
+                        <div className="mb-2 text-sm font-medium">
+                          {manager
+                            ? `${manager.first_name} ${manager.last_name}`
+                            : `Manager ${managerId}`}{" "}
+                          <span className="text-xs text-muted-foreground">
+                            ({assignedIds.length} assigned)
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          {assignableEmployees.length === 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              No employees available.
+                            </p>
+                          )}
+                          {assignableEmployees.map((emp: any) => {
+                            const employeeId = String(emp.id);
+                            return (
+                              <label key={`${managerId}-${employeeId}`} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={assignedIds.includes(employeeId)}
+                                  onChange={() =>
+                                    toggleManagerEmployeeAssignment(managerId, employeeId)
+                                  }
+                                />
+                                <span>
+                                  {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Employee"}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Each employee can be assigned to only one manager in this department.
                 </p>
               </div>
             </div>
@@ -1963,7 +2500,7 @@ const EmployeeManagement = () => {
             <DialogHeader>
               <DialogTitle>Add New Employee</DialogTitle>
               <DialogDescription>
-                Create a new employee account with login credentials
+                Create a new employee account. A temporary password will be emailed automatically.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -2002,21 +2539,6 @@ const EmployeeManagement = () => {
                 />
               </div>
 
-              <div className="grid gap-2">
-                <Label htmlFor="emp-password">Temporary Password *</Label>
-                <Input
-                  id="emp-password"
-                  type="text"
-                  value={employeeForm.password}
-                  onChange={(e) =>
-                    setEmployeeForm({ ...employeeForm, password: e.target.value })
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Employee will use this to login. They should change it after first login.
-                </p>
-              </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="emp-phone">Phone</Label>
@@ -2030,35 +2552,20 @@ const EmployeeManagement = () => {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="emp-position">Position</Label>
+                  <Label htmlFor="emp-access-role">System Access Role *</Label>
                   <Select
-                    value={employeeForm.role_id || ""}
-                    onValueChange={(value) => {
-                      const selectedRole = roles.find(
-                        (role) => String(role.id) === value
-                      );
-                      setEmployeeForm({
-                        ...employeeForm,
-                        role_id: value,
-                        position: selectedRole?.name || "",
-                        hourly_rate: selectedRole?.billing_rate
-                          ? String(selectedRole.billing_rate)
-                          : "",
-                      });
-                    }}
+                    value={employeeForm.access_role}
+                    onValueChange={(value) =>
+                      setEmployeeForm({ ...employeeForm, access_role: value })
+                    }
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select position" />
+                      <SelectValue placeholder="Select access role" />
                     </SelectTrigger>
                     <SelectContent>
-                      {roles.length === 0 && (
-                        <SelectItem value="none" disabled>
-                          No roles available
-                        </SelectItem>
-                      )}
-                      {roles.map((role) => (
-                        <SelectItem key={role.id} value={String(role.id)}>
-                          {role.name}
+                      {accessRoles.map((roleName) => (
+                        <SelectItem key={roleName} value={roleName}>
+                          {roleName}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -2066,7 +2573,57 @@ const EmployeeManagement = () => {
                 </div>
               </div>
 
+              <div className="grid gap-2">
+                <Label htmlFor="emp-billing-position">Billing Position *</Label>
+                <Select
+                  value={employeeForm.role_id || ""}
+                  onValueChange={(value) => {
+                    const selectedRole = roles.find(
+                      (role) => String(role.id) === value
+                    );
+                    setEmployeeForm({
+                      ...employeeForm,
+                      role_id: value,
+                      position: selectedRole?.name || "",
+                      hourly_rate: selectedRole?.billingRate
+                        ? String(selectedRole.billingRate)
+                        : "",
+                    });
+                  }}
+                >
+                  <SelectTrigger id="emp-billing-position">
+                    <SelectValue placeholder="Select position" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {roles.length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No roles available
+                      </SelectItem>
+                    )}
+                    {roles.map((role) => (
+                      <SelectItem key={role.id} value={String(role.id)}>
+                        {role.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Billing rate is derived from this position.
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="emp-position">Position</Label>
+                  <Input
+                    id="emp-position"
+                    value={employeeForm.position}
+                    onChange={(e) =>
+                      setEmployeeForm({ ...employeeForm, position: e.target.value })
+                    }
+                    placeholder="Optional title override"
+                  />
+                </div>
                 <div className="grid gap-2">
                   <Label htmlFor="emp-department">Department</Label>
                   <Select
@@ -2184,8 +2741,8 @@ const EmployeeManagement = () => {
               </DialogTitle>
               <DialogDescription>
                 {editingRole
-                  ? "Update the role details below."
-                  : "Add a new job role with billing rate and permissions."}
+                  ? "Update the system access role details below."
+                  : "Add a new system access role. Billing rates are configured in Positions & Rates."}
               </DialogDescription>
             </DialogHeader>
 
@@ -2199,22 +2756,6 @@ const EmployeeManagement = () => {
                     setRoleForm({ ...roleForm, name: e.target.value })
                   }
                   placeholder="e.g., Senior Manager"
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="billing-rate">Billing Rate (KES/hr) *</Label>
-                <Input
-                  id="billing-rate"
-                  type="number"
-                  value={roleForm.billing_rate}
-                  onChange={(e) =>
-                    setRoleForm({
-                      ...roleForm,
-                      billing_rate: parseFloat(e.target.value) || 0,
-                    })
-                  }
-                  placeholder="e.g., 10000"
                 />
               </div>
 
@@ -2235,9 +2776,9 @@ const EmployeeManagement = () => {
                 <input
                   type="checkbox"
                   id="is-active"
-                  checked={roleForm.is_active}
+                  checked={roleForm.isActive}
                   onChange={(e) =>
-                    setRoleForm({ ...roleForm, is_active: e.target.checked })
+                    setRoleForm({ ...roleForm, isActive: e.target.checked })
                   }
                 />
                 <Label htmlFor="is-active" className="font-normal cursor-pointer">
@@ -2453,6 +2994,108 @@ const EmployeeManagement = () => {
                 </div>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Onboarding Stages Dialog */}
+        <Dialog open={onboardingStagesDialogOpen} onOpenChange={setOnboardingStagesDialogOpen}>
+          <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Onboarding Stages</DialogTitle>
+              <DialogDescription>Track stage status, due dates, and ownership.</DialogDescription>
+            </DialogHeader>
+            {activeOnboardingCase ? (
+              <div className="space-y-4">
+                <div className="text-sm text-muted-foreground">
+                  {getOnboardingDisplayName(activeOnboardingCase)} -{" "}
+                  <span className="capitalize">{activeOnboardingCase.status.replace("_", " ")}</span>
+                </div>
+                {activeOnboardingCase.stages && activeOnboardingCase.stages.length > 0 ? (
+                  <div className="space-y-3">
+                    {activeOnboardingCase.stages.map((stage) => {
+                      const edits = stageEdits[stage.id] || {};
+                      const statusValue = edits.status ?? stage.status;
+                      const dueValue =
+                        edits.dueDate ?? (stage.dueDate ? stage.dueDate.split("T")[0] : "");
+                      const ownerName = stage.owner
+                        ? `${stage.owner.firstName} ${stage.owner.lastName}`.trim()
+                        : "Unassigned";
+                      return (
+                        <div key={stage.id} className="rounded-md border p-3 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="font-medium">{stage.title}</div>
+                              {stage.description && (
+                                <div className="text-xs text-muted-foreground">{stage.description}</div>
+                              )}
+                              <div className="text-xs text-muted-foreground">Owner: {ownerName}</div>
+                            </div>
+                            <Badge variant={statusBadgeVariant(statusValue)}>
+                              {statusValue.replace("_", " ")}
+                            </Badge>
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-3">
+                            <div className="space-y-1">
+                              <Label>Status</Label>
+                              <Select
+                                value={statusValue}
+                                onValueChange={(value) => updateStageEdit(stage.id, { status: value })}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select status" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="pending">Pending</SelectItem>
+                                  <SelectItem value="in_progress">In progress</SelectItem>
+                                  <SelectItem value="completed">Completed</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-1">
+                              <Label>Due date</Label>
+                              <Input
+                                type="date"
+                                value={dueValue}
+                                onChange={(e) => updateStageEdit(stage.id, { dueDate: e.target.value })}
+                              />
+                            </div>
+                            <div className="flex items-end justify-end">
+                              <Button
+                                variant="outline"
+                                onClick={() => saveOnboardingStage(stage)}
+                                disabled={savingStageId === stage.id}
+                              >
+                                {savingStageId === stage.id ? "Saving..." : "Save"}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-sm text-muted-foreground">
+                      No stages have been initialized for this onboarding case yet.
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => initializeOnboardingStages(activeOnboardingCase.id)}
+                      disabled={initializingStagesCaseId === activeOnboardingCase.id}
+                    >
+                      {initializingStagesCaseId === activeOnboardingCase.id ? "Initializing..." : "Initialize stages"}
+                    </Button>
+                  </div>
+                )}
+            </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">Select an onboarding case to view stages.</div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOnboardingStagesDialogOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

@@ -25,6 +25,13 @@ export interface UpdateOnboardingCaseInput {
   notes?: string | null;
 }
 
+export interface UpdateOnboardingStageInput {
+  status?: OnboardingStatus;
+  ownerProfileId?: number | null;
+  dueDate?: Date | null;
+  notes?: string | null;
+}
+
 export interface ListOnboardingCasesOptions {
   page: number;
   pageSize: number;
@@ -37,6 +44,44 @@ export interface ListOnboardingCasesOptions {
 }
 
 class EmployeeOnboardingCaseServiceImpl {
+  private defaultStages = [
+    {
+      key: "offer_contract",
+      title: "Offer & Contract",
+      description: "Offer issued, accepted, and contract signed.",
+      order: 1,
+    },
+    {
+      key: "documentation",
+      title: "Documentation & Compliance",
+      description: "ID, tax forms, and compliance documents collected.",
+      order: 2,
+    },
+    {
+      key: "induction",
+      title: "Induction & Checklist",
+      description: "Complete induction checklist and policy briefing.",
+      order: 3,
+    },
+    {
+      key: "access_setup",
+      title: "Tools & Access",
+      description: "Systems access, devices, and email setup.",
+      order: 4,
+    },
+    {
+      key: "role_training",
+      title: "Role Training",
+      description: "Role-specific training and shadowing.",
+      order: 5,
+    },
+    {
+      key: "probation_review",
+      title: "Probation Review",
+      description: "Probation check-in and confirmation.",
+      order: 6,
+    },
+  ];
   private isPrivileged(auth: AuthContext) {
     const roles = auth.roles ?? [];
     return (
@@ -131,22 +176,44 @@ class EmployeeOnboardingCaseServiceImpl {
       }
     }
 
-    const created = await prisma.employeeOnboardingCase.create({
-      data: {
-        candidateId: input.candidateId,
-        profileId: input.profileId,
-        hrOwnerProfileId: input.hrOwnerProfileId,
-        startDate: input.startDate,
-        dueDate: input.dueDate,
-        notes: input.notes,
-        status: OnboardingStatus.pending,
-      },
-      include: {
-        candidate: { select: { id: true, fullName: true, email: true, stage: true } },
-        employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
-        hrOwner: { select: { id: true, firstName: true, lastName: true } },
-        inductionChecklist: { select: { id: true, status: true, completionPercent: true } },
-      },
+    const created = await prisma.$transaction(async (tx) => {
+      const onboardingCase = await tx.employeeOnboardingCase.create({
+        data: {
+          candidateId: input.candidateId,
+          profileId: input.profileId,
+          hrOwnerProfileId: input.hrOwnerProfileId,
+          startDate: input.startDate,
+          dueDate: input.dueDate,
+          notes: input.notes,
+          status: OnboardingStatus.pending,
+        },
+      });
+
+      await tx.employeeOnboardingStage.createMany({
+        data: this.defaultStages.map((stage) => ({
+          onboardingCaseId: onboardingCase.id,
+          stageKey: stage.key,
+          title: stage.title,
+          description: stage.description,
+          orderIndex: stage.order,
+          status: OnboardingStatus.pending,
+          ownerProfileId: input.hrOwnerProfileId ?? undefined,
+        })),
+      });
+
+      return tx.employeeOnboardingCase.findUnique({
+        where: { id: onboardingCase.id },
+        include: {
+          candidate: { select: { id: true, fullName: true, email: true, stage: true } },
+          employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
+          hrOwner: { select: { id: true, firstName: true, lastName: true } },
+          inductionChecklist: { select: { id: true, status: true, completionPercent: true } },
+          stages: {
+            orderBy: { orderIndex: "asc" },
+            include: { owner: { select: { id: true, firstName: true, lastName: true } } },
+          },
+        },
+      });
     });
 
     await createAudit({
@@ -169,6 +236,10 @@ class EmployeeOnboardingCaseServiceImpl {
         hrOwner: { select: { id: true, firstName: true, lastName: true } },
         inductionChecklist: {
           include: { items: { orderBy: { orderIndex: "asc" } } },
+        },
+        stages: {
+          orderBy: { orderIndex: "asc" },
+          include: { owner: { select: { id: true, firstName: true, lastName: true } } },
         },
       },
     });
@@ -209,6 +280,10 @@ class EmployeeOnboardingCaseServiceImpl {
           employee: { select: { id: true, firstName: true, lastName: true } },
           hrOwner: { select: { id: true, firstName: true, lastName: true } },
           inductionChecklist: { select: { id: true, status: true, completionPercent: true } },
+          stages: {
+            orderBy: { orderIndex: "asc" },
+            include: { owner: { select: { id: true, firstName: true, lastName: true } } },
+          },
         },
       }),
       prisma.employeeOnboardingCase.count({ where }),
@@ -251,6 +326,100 @@ class EmployeeOnboardingCaseServiceImpl {
     }).catch(() => null);
 
     return updated;
+  }
+
+  async updateStage(stageId: number, input: UpdateOnboardingStageInput, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const stage = await prisma.employeeOnboardingStage.findUnique({
+      where: { id: stageId },
+      select: { id: true, onboardingCaseId: true },
+    });
+
+    if (!stage) {
+      const err = new Error("Onboarding stage not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const updated = await prisma.employeeOnboardingStage.update({
+      where: { id: stageId },
+      data: {
+        status: input.status,
+        ownerProfileId: input.ownerProfileId,
+        dueDate: input.dueDate,
+        notes: input.notes,
+        completedAt:
+          input.status === OnboardingStatus.completed ? new Date() : undefined,
+      },
+      include: {
+        owner: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    const stages = await prisma.employeeOnboardingStage.findMany({
+      where: { onboardingCaseId: stage.onboardingCaseId },
+      select: { status: true },
+    });
+
+    let caseStatus: OnboardingStatus = OnboardingStatus.pending;
+    if (stages.every((s) => s.status === OnboardingStatus.completed)) {
+      caseStatus = OnboardingStatus.completed;
+    } else if (stages.some((s) => s.status === OnboardingStatus.in_progress || s.status === OnboardingStatus.completed)) {
+      caseStatus = OnboardingStatus.in_progress;
+    }
+
+    await prisma.employeeOnboardingCase.update({
+      where: { id: stage.onboardingCaseId },
+      data: { status: caseStatus },
+    });
+
+    return updated;
+  }
+
+  async initializeStages(caseId: number, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      select: { id: true, hrOwnerProfileId: true },
+    });
+
+    if (!onboardingCase) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const existingCount = await prisma.employeeOnboardingStage.count({
+      where: { onboardingCaseId: onboardingCase.id },
+    });
+
+    if (existingCount > 0) {
+      return { created: 0 };
+    }
+
+    await prisma.employeeOnboardingStage.createMany({
+      data: this.defaultStages.map((stage) => ({
+        onboardingCaseId: onboardingCase.id,
+        stageKey: stage.key,
+        title: stage.title,
+        description: stage.description,
+        orderIndex: stage.order,
+        status: OnboardingStatus.pending,
+        ownerProfileId: onboardingCase.hrOwnerProfileId ?? undefined,
+      })),
+    });
+
+    return { created: this.defaultStages.length };
   }
 }
 

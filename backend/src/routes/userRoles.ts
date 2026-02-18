@@ -211,6 +211,10 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Invalid role provided' });
     }
 
+    if (oldRoleRecord.id === newRoleRecord.id) {
+      return res.status(400).json({ error: 'Old role and new role cannot be the same' });
+    }
+
     const existingRole = await prisma.userAuthRole.findFirst({
       where: {
         userId: Number(userId),
@@ -227,20 +231,33 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     const newHierarchy = ROLE_HIERARCHY[newRole] || 0;
     const isEscalation = newHierarchy > oldHierarchy;
 
-    // Remove old role
-    await prisma.userAuthRole.deleteMany({
-      where: {
-        userId: Number(userId),
-        roleId: oldRoleRecord.id,
-      },
-    });
+    // Transactional replace:
+    // 1) Ensure target role exists for user (create if missing)
+    // 2) Remove old role
+    const userIdNum = Number(userId);
+    await prisma.$transaction(async (tx) => {
+      const alreadyHasNewRole = await tx.userAuthRole.findFirst({
+        where: {
+          userId: userIdNum,
+          roleId: newRoleRecord.id,
+        },
+      });
 
-    // Add new role
-    const newUserRole = await prisma.userAuthRole.create({
-      data: {
-        userId: Number(userId),
-        roleId: newRoleRecord.id,
-      },
+      if (!alreadyHasNewRole) {
+        await tx.userAuthRole.create({
+          data: {
+            userId: userIdNum,
+            roleId: newRoleRecord.id,
+          },
+        });
+      }
+
+      await tx.userAuthRole.deleteMany({
+        where: {
+          userId: userIdNum,
+          roleId: oldRoleRecord.id,
+        },
+      });
     });
 
     // Comprehensive audit logging
@@ -256,8 +273,8 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     return res.json({
-      userId: newUserRole.userId,
-      roleId: newUserRole.roleId,
+      userId: userIdNum,
+      roleId: newRoleRecord.id,
       message: `Role changed from '${oldRole}' to '${newRole}' for user ${targetUser?.email || userId}`,
       escalation: isEscalation,
       oldRole,

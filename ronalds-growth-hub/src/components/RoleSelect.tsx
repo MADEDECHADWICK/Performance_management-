@@ -4,7 +4,7 @@ import { rolesAPI } from '@/lib/api';
 interface Role {
   id: number;
   name: string;
-  billing_rate: number;
+  billingRate?: number;
 }
 
 interface RoleSelectProps {
@@ -58,13 +58,13 @@ export function RoleSelect({ value, onChange, disabled, label = "Select Role" }:
         <option value="">-- Select Role --</option>
         {roles.map(role => (
           <option key={role.id} value={role.id}>
-            {role.name} ({role.billing_rate.toLocaleString()} KES/hr)
+            {role.name} ({Number(role.billingRate ?? 0).toLocaleString()} KES/hr)
           </option>
         ))}
       </select>
       {selectedRole && (
         <div className="text-xs text-gray-600">
-          Rate: {selectedRole.billing_rate.toLocaleString()} KES/hr
+          Rate: {Number(selectedRole.billingRate ?? 0).toLocaleString()} KES/hr
         </div>
       )}
     </div>

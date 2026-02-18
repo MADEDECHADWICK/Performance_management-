@@ -9,6 +9,7 @@
 
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 
 // Import all route modules
 import authRoutes from './auth';
@@ -65,6 +66,7 @@ import rolesRoutes from './roles';
 import subordinatesRoutes from './subordinates';
 import engagementLettersRoutes from './engagementLetters';
 import performanceScoresRoutes from './performanceScores';
+import performanceFrameworkRoutes from './performanceFramework';
 import projectEvaluationsRoutes from './projectEvaluations';
 import calibrationRoutes from './calibration';
 import surveysRoutes from './surveys';
@@ -75,6 +77,7 @@ import userRolesRoutes from './userRoles';
 import workLogsRoutes from './workLogs';
 import adHocEvaluationsRoutes from './adHocEvaluations';
 import recruitmentCandidatesRoutes from './recruitmentCandidates.routes';
+import moduleAccessRoutes from './moduleAccess';
 
 const router = Router();
 
@@ -91,82 +94,84 @@ router.use('/auth', authRoutes);
 /**
  * Core CRUD Domains (all require authentication)
  */
-router.use('/departments', authMiddleware, departmentRoutes);
-router.use('/documents', authMiddleware, documentsRoutes);
-router.use('/onboarding', authMiddleware, employeeOnboardingRoutes);
-router.use('/offboarding', authMiddleware, employeeOffboardingRoutes);
-router.use('/evaluations', authMiddleware, evaluationRoutes);
-router.use('/induction-checklist', authMiddleware, inductionChecklistRoutes);
-router.use('/partners', authMiddleware, partnerRoutes);
-router.use('/jobs', authMiddleware, jobsRoutes);
+router.use('/departments', authMiddleware, requireModuleAccess('users'), departmentRoutes);
+router.use('/documents', authMiddleware, requireModuleAccess('documents'), documentsRoutes);
+router.use('/onboarding', authMiddleware, requireModuleAccess('users'), employeeOnboardingRoutes);
+router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
+router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
+router.use('/induction-checklist', authMiddleware, requireModuleAccess('users'), inductionChecklistRoutes);
+router.use('/partners', authMiddleware, requireModuleAccess('users'), partnerRoutes);
+router.use('/jobs', authMiddleware, requireModuleAccess('jobs'), jobsRoutes);
 
 /**
  * ⏱️  TIME ENTRIES - PHASE 2 COMPLETE
  */
-router.use('/time-entries', authMiddleware, timeEntriesRoutes);
+router.use('/time-entries', authMiddleware, requireModuleAccess('time_entries'), timeEntriesRoutes);
 
 // ============================================
 // 📊 SECONDARY DOMAINS (Dashboard & Workflows)
 // ============================================
 
-router.use('/analytics', authMiddleware, analyticRoutes);
-router.use('/audit-logs', authMiddleware, auditLogsRoutes);
+router.use('/analytics', authMiddleware, requireModuleAccess('reports'), analyticRoutes);
+router.use('/audit-logs', authMiddleware, requireModuleAccess('reports'), auditLogsRoutes);
 // Backward-compatible alias for older clients
-router.use('/audit_logs', authMiddleware, auditLogsRoutes);
-router.use('/financial-summary', authMiddleware, financialSummaryRoutes);
+router.use('/audit_logs', authMiddleware, requireModuleAccess('reports'), auditLogsRoutes);
+router.use('/financial-summary', financialSummaryRoutes);
 router.use('/finance-dashboard', authMiddleware, financeDashboardRoutes);
-router.use('/job-profitability', authMiddleware, jobProfitabilityRoutes);
-router.use('/evaluation-assignments', authMiddleware, evaluationAssignmentsRoutes);
-router.use('/evaluation-cycles', authMiddleware, evaluationCyclesRoutes);
-router.use('/evaluation-result-areas', authMiddleware, evaluationResultAreasRoutes);
-router.use('/evaluation-templates', authMiddleware, evaluationTemplatesRoutes);
+router.use('/job-profitability', authMiddleware, requireModuleAccess('finance'), jobProfitabilityRoutes);
+router.use('/evaluation-assignments', authMiddleware, requireModuleAccess('evaluations'), evaluationAssignmentsRoutes);
+router.use('/evaluation-cycles', authMiddleware, requireModuleAccess('evaluations'), evaluationCyclesRoutes);
+router.use('/evaluation-result-areas', authMiddleware, requireModuleAccess('evaluations'), evaluationResultAreasRoutes);
+router.use('/evaluation-templates', authMiddleware, requireModuleAccess('evaluations'), evaluationTemplatesRoutes);
 // Backward-compat alias used by older frontend paths
-router.use('/evaluation_templates', authMiddleware, evaluationTemplatesRoutes);
-router.use('/evaluation-definitions', authMiddleware, evaluationDefinitionsRoutes);
-router.use('/employee-evaluations', authMiddleware, employeeEvaluationsRoutes);
-router.use('/client-evaluations', authMiddleware, clientEvaluationsRoutes);
-router.use('/peer-evaluations', authMiddleware, peerEvaluationsRoutes);
-router.use('/upward-evaluations', authMiddleware, upwardEvaluationsRoutes);
-router.use('/ad-hoc-evaluations', authMiddleware, adHocEvaluationsRoutes);
-router.use('/continuous-feedback', authMiddleware, continuousFeedbackRoutes);
-router.use('/create-cycle-evaluations', authMiddleware, createCycleEvaluationsRoutes);
-router.use('/performance-reviews', authMiddleware, performanceReviewsRoutes);
-router.use('/non-financial-performance', authMiddleware, nonFinancialPerformanceRoutes);
-router.use('/development-recommendations', authMiddleware, developmentRecommendationsRoutes);
-router.use('/kpis', authMiddleware, kpisRoutes);
-router.use('/okrs', authMiddleware, okrRoutes);
-router.use('/employee-goals', authMiddleware, employeeGoalsRoutes);
-router.use('/employee-kpi-assignments', authMiddleware, employeeKpiAssignmentsRoutes);
-router.use('/employees', authMiddleware, employeesRoutes);
-router.use('/profiles', authMiddleware, profilesRoutes);
-router.use('/employee-roles', authMiddleware, employeeRolesRoutes);
-router.use('/employee-project-allocations', authMiddleware, employeeProjectAllocationsRoutes);
-router.use('/subordinates', authMiddleware, subordinatesRoutes);
-router.use('/team-management', authMiddleware, teamManagementRoutes);
+router.use('/evaluation_templates', authMiddleware, requireModuleAccess('evaluations'), evaluationTemplatesRoutes);
+router.use('/evaluation-definitions', authMiddleware, requireModuleAccess('evaluations'), evaluationDefinitionsRoutes);
+router.use('/employee-evaluations', authMiddleware, requireModuleAccess('evaluations'), employeeEvaluationsRoutes);
+router.use('/client-evaluations', authMiddleware, requireModuleAccess('evaluations'), clientEvaluationsRoutes);
+router.use('/peer-evaluations', authMiddleware, requireModuleAccess('evaluations'), peerEvaluationsRoutes);
+router.use('/upward-evaluations', authMiddleware, requireModuleAccess('evaluations'), upwardEvaluationsRoutes);
+router.use('/ad-hoc-evaluations', authMiddleware, requireModuleAccess('evaluations'), adHocEvaluationsRoutes);
+router.use('/continuous-feedback', authMiddleware, requireModuleAccess('evaluations'), continuousFeedbackRoutes);
+router.use('/create-cycle-evaluations', authMiddleware, requireModuleAccess('evaluations'), createCycleEvaluationsRoutes);
+router.use('/performance-reviews', authMiddleware, requireModuleAccess('evaluations'), performanceReviewsRoutes);
+router.use('/non-financial-performance', authMiddleware, requireModuleAccess('evaluations'), nonFinancialPerformanceRoutes);
+router.use('/development-recommendations', authMiddleware, requireModuleAccess('evaluations'), developmentRecommendationsRoutes);
+router.use('/kpis', authMiddleware, requireModuleAccess('kpis'), kpisRoutes);
+router.use('/okrs', authMiddleware, requireModuleAccess('kpis'), okrRoutes);
+router.use('/employee-goals', authMiddleware, requireModuleAccess('kpis'), employeeGoalsRoutes);
+router.use('/employee-kpi-assignments', authMiddleware, requireModuleAccess('kpis'), employeeKpiAssignmentsRoutes);
+router.use('/employees', authMiddleware, requireModuleAccess('users'), employeesRoutes);
+router.use('/profiles', authMiddleware, requireModuleAccess('users'), profilesRoutes);
+router.use('/employee-roles', authMiddleware, requireModuleAccess('users'), employeeRolesRoutes);
+router.use('/employee-project-allocations', authMiddleware, requireModuleAccess('users'), employeeProjectAllocationsRoutes);
+router.use('/subordinates', authMiddleware, requireModuleAccess('users'), subordinatesRoutes);
+router.use('/team-management', authMiddleware, requireModuleAccess('jobs'), teamManagementRoutes);
 // Backward-compatible alias for manager workload endpoints
-router.use('/manager', authMiddleware, teamManagementRoutes);
-router.use('/clients', authMiddleware, clientsRoutes);
-router.use('/engagement-letters', authMiddleware, engagementLettersRoutes);
-router.use('/client-onboardings', authMiddleware, clientOnboardingsRoutes);
-router.use('/performance-scores', authMiddleware, performanceScoresRoutes);
-router.use('/project-evaluations', authMiddleware, projectEvaluationsRoutes);
-router.use('/calibration', authMiddleware, calibrationRoutes);
-router.use('/proposals', authMiddleware, proposalsRoutes);
+router.use('/manager', authMiddleware, requireModuleAccess('jobs'), teamManagementRoutes);
+router.use('/clients', authMiddleware, requireModuleAccess('clients'), clientsRoutes);
+router.use('/engagement-letters', authMiddleware, requireModuleAccess('clients'), engagementLettersRoutes);
+router.use('/client-onboardings', authMiddleware, requireModuleAccess('clients'), clientOnboardingsRoutes);
+router.use('/performance-scores', authMiddleware, requireModuleAccess('reports'), performanceScoresRoutes);
+router.use('/performance-framework', authMiddleware, requireModuleAccess('dashboard'), performanceFrameworkRoutes);
+router.use('/project-evaluations', authMiddleware, requireModuleAccess('evaluations'), projectEvaluationsRoutes);
+router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), calibrationRoutes);
+router.use('/proposals', authMiddleware, requireModuleAccess('proposals'), proposalsRoutes);
 router.use('/surveys', surveysRoutes);
-router.use('/feedback', authMiddleware, feedbackRoutes);
-router.use('/notifications', authMiddleware, notificationsRoutes);
-router.use('/notification-templates', authMiddleware, notificationTemplatesRoutes);
-router.use('/manager-dashboard', authMiddleware, managerDashboardRoutes);
-router.use('/gmp-dashboard', authMiddleware, gmpDashboardRoutes);
-router.use('/hr-dashboard', authMiddleware, hrDashboardRoutes);
+router.use('/feedback', authMiddleware, requireModuleAccess('evaluations'), feedbackRoutes);
+router.use('/notifications', authMiddleware, requireModuleAccess('notifications'), notificationsRoutes);
+router.use('/notification-templates', authMiddleware, requireModuleAccess('notifications'), notificationTemplatesRoutes);
+router.use('/manager-dashboard', authMiddleware, requireModuleAccess('dashboard'), managerDashboardRoutes);
+router.use('/gmp-dashboard', authMiddleware, requireModuleAccess('dashboard'), gmpDashboardRoutes);
+router.use('/hr-dashboard', authMiddleware, requireModuleAccess('dashboard'), hrDashboardRoutes);
 router.use('/gmp-auth', gmpAuthRoutes);
-router.use('/roles', authMiddleware, rolesRoutes);
-router.use('/user-roles', authMiddleware, userRolesRoutes);
-router.use('/position-rates', authMiddleware, positionRatesRoutes);
-router.use('/projects', authMiddleware, projectsRoutes);
-router.use('/todos', authMiddleware, todosRoutes);
-router.use('/work-logs', authMiddleware, workLogsRoutes);
-router.use('/recruitment-candidates', authMiddleware, recruitmentCandidatesRoutes);
+router.use('/roles', authMiddleware, requireModuleAccess('users'), rolesRoutes);
+router.use('/user-roles', authMiddleware, requireModuleAccess('users'), userRolesRoutes);
+router.use('/position-rates', authMiddleware, requireModuleAccess('users'), positionRatesRoutes);
+router.use('/projects', authMiddleware, requireModuleAccess('jobs'), projectsRoutes);
+router.use('/todos', authMiddleware, requireModuleAccess('dashboard'), todosRoutes);
+router.use('/work-logs', authMiddleware, requireModuleAccess('time_entries'), workLogsRoutes);
+router.use('/recruitment-candidates', authMiddleware, requireModuleAccess('users'), recruitmentCandidatesRoutes);
+router.use('/module-access', authMiddleware, requireModuleAccess('access_control'), moduleAccessRoutes);
 
 // Health check
 router.get('/health', (req, res) => {

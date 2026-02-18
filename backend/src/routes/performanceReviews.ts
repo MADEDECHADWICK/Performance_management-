@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
 import prisma from '../prisma';
 
 const router = Router();
 
 // GET /performance_reviews?employee_ids=1,2&status=completed
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     return res.json([]);
   } catch (err: any) {
@@ -15,7 +17,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /performance_reviews/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     return res.json({ id: Number(id), message: 'Performance review not yet available.' });
@@ -26,7 +28,12 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /performance_reviews
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin', 'manager'),
+  async (req: AuthRequest, res) => {
   try {
     const { employee_id, reviewer_id, overall_rating, financial_score, non_financial_score, strengths, areas_for_improvement, goals_next_period, reviewer_comments, employee_comments, status } = req.body;
 
@@ -55,7 +62,12 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // PATCH /performance_reviews/:id
-router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.patch(
+  '/:id',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin', 'manager'),
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const { overall_rating, financial_score, non_financial_score, strengths, areas_for_improvement, goals_next_period, reviewer_comments, employee_comments, status } = req.body;

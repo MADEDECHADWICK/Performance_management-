@@ -14,6 +14,10 @@ export class TimeEntryController {
       const pageSize = Number(req.query.pageSize) || 10;
       const status = (req.query.status as string) || undefined;
       const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const billableOnly =
+        typeof req.query.billableOnly === 'string'
+          ? req.query.billableOnly.toLowerCase() === 'true'
+          : undefined;
       const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
       const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
 
@@ -31,6 +35,7 @@ export class TimeEntryController {
           jobId,
           dateFrom,
           dateTo,
+          billableOnly,
         },
         auth
       );
@@ -145,6 +150,62 @@ export class TimeEntryController {
       );
 
       res.json(successResponse(request, "Approval request rejected"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * PATCH /time-entries/over-budget-requests/:requestId/approve
+   */
+  static async approveOverBudgetRequest(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const requestId = Number(req.params.requestId);
+      const { approvalNotes } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const request = await TimeEntryService.approveOverBudgetRequest(
+        requestId,
+        approvalNotes,
+        auth
+      );
+
+      res.json(successResponse(request, "Over-budget request approved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * PATCH /time-entries/over-budget-requests/:requestId/reject
+   */
+  static async rejectOverBudgetRequest(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const requestId = Number(req.params.requestId);
+      const { approvalNotes } = req.body;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const request = await TimeEntryService.rejectOverBudgetRequest(
+        requestId,
+        approvalNotes,
+        auth
+      );
+
+      res.json(successResponse(request, "Over-budget request rejected"));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
         errorResponse(error.message, error.statusCode || 400)

@@ -35,6 +35,15 @@ export interface ProposalMetrics {
     lost: number;
     created: number;
   }[];
+  leadToCash?: {
+    periodStart: string;
+    periodEnd: string;
+    wonClients: number;
+    wonProposalValue: number;
+    collectedFromWonClients: number;
+    conversionRate: number;
+    outstandingGap: number;
+  };
 }
 
 interface ProposalFilters {
@@ -69,8 +78,12 @@ export const proposalsAPI = {
     return api.patch(`/proposals/${id}`, data);
   },
 
-  metrics: async (): Promise<ProposalMetrics> => {
-    return api.get('/proposals/metrics');
+  metrics: async (params?: { startDate?: string; endDate?: string }): Promise<ProposalMetrics> => {
+    const query = new URLSearchParams();
+    if (params?.startDate) query.append("startDate", params.startDate);
+    if (params?.endDate) query.append("endDate", params.endDate);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return api.get(`/proposals/metrics${suffix}`);
   },
 };
 

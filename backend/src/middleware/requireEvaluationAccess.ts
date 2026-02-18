@@ -24,6 +24,11 @@ const isHR = (roles: string[]) => {
   return r.includes("hr") || r.includes("hr_manager");
 };
 
+const isManager = (roles: string[]) => {
+  const r = roles.map(normalize);
+  return r.includes("manager");
+};
+
 async function loadRolesIfMissing(req: AuthRequest): Promise<string[]> {
   if (req.userRoles?.length) return req.userRoles;
 
@@ -129,6 +134,19 @@ export const requireEvaluationAccess = (mode: EvalAccessMode = "view") => {
 
       const isEvaluator = assignment.evaluatorProfileId === profileId;
       const isEvaluatee = assignment.evaluateeProfileId === profileId;
+
+      if (mode === "view" && isManager(roles) && !isEvaluator && !isEvaluatee) {
+        const evaluatee = await prisma.profile.findUnique({
+          where: { id: assignment.evaluateeProfileId },
+          select: { managerId: true },
+        });
+
+        if (evaluatee?.managerId === profileId) {
+          req.evaluationAssignment = assignment;
+          next();
+          return;
+        }
+      }
 
       // SUBMIT MODE: only evaluator (admins already handled)
       if (mode === "submit") {

@@ -90,4 +90,38 @@ export class EmployeeOnboardingCaseController {
       res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to update onboarding case", e.statusCode ?? 400));
     }
   }
+
+  static async updateStage(req: AuthRequest, res: Response) {
+    try {
+      const stageId = Number(req.params.stageId);
+      const { status, ownerProfileId, dueDate, notes } = req.body;
+
+      const updated = await EmployeeOnboardingCaseService.updateStage(
+        stageId,
+        {
+          status: status as OnboardingStatus | undefined,
+          ownerProfileId: ownerProfileId === undefined ? undefined : ownerProfileId === null ? null : Number(ownerProfileId),
+          dueDate: dueDate === undefined ? undefined : dueDate === null ? null : new Date(dueDate),
+          notes: notes === undefined ? undefined : notes,
+        },
+        authFromReq(req)
+      );
+
+      res.json(successResponse(updated, "Onboarding stage updated"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.updateStage error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to update onboarding stage", e.statusCode ?? 400));
+    }
+  }
+
+  static async initializeStages(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOnboardingCaseService.initializeStages(caseId, authFromReq(req));
+      res.json(successResponse(result, "Onboarding stages initialized"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.initializeStages error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to initialize onboarding stages", e.statusCode ?? 400));
+    }
+  }
 }

@@ -45,6 +45,8 @@ export interface AuthRequest extends Request {
   // Use these directly instead of casting to 'any'
   userRoles?: string[]; // Set by requireRole - array of role names
   userPermissions?: string[]; // Set by requirePermission - array of permission strings
+  userRolePolicies?: Array<{ roleName: string; permissionKeys: string[] }>; // Set by module access middleware
+  currentModuleAccess?: { moduleKey: string; action: string }; // Set by requireModuleAccess for downstream action checks
   job?: any; // Set by requireJobAccess - Job entity with access checks done
   timeEntry?: any; // Set by requireTimeEntryAccess - TimeEntry entity with access checks done
   evaluation?: any; // Set by requireEvaluationAccess - EvaluationAssignment with access checks done
@@ -123,8 +125,10 @@ export async function authMiddleware(
       });
     }
 
-    // Verify user is active
-    if (!user.isActive || user.profile?.status === "inactive") {
+    // Verify user account and employment status allow access
+    const profileStatus = String(user.profile?.status || "").toLowerCase();
+    const profileBlocked = profileStatus === "inactive" || profileStatus === "separated";
+    if (!user.isActive || profileBlocked) {
       return res.status(403).json({
         success: false,
         message: "User account is inactive",

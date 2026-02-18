@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,11 +13,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { User, Briefcase, Award, Calendar, Phone, Mail, ClipboardCheck, CheckCircle2, Upload, FileText } from "lucide-react";
 import documentsAPI from "@/lib/api/documents";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function EmployeeProfile() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
+  const { user, isLoading: authLoading, isHR, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<any>(null);
@@ -29,26 +31,29 @@ export default function EmployeeProfile() {
   const [checklistLoading, setChecklistLoading] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadProfile();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadProfile = async () => {
     try {
       setLoading(true);
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
 
       // Check if user is HR/Admin
-      const roles = await apiFetch('GET', `/user-roles?userId=${user.id}`);
-      const hasHRAdminRole = roles?.some((r: any) => r.role === "hr_manager" || r.role === "super_admin");
-      setIsHRAdmin(hasHRAdminRole || false);
+      const hasHRAdminRole = isHR || isAdmin;
+      setIsHRAdmin(hasHRAdminRole);
 
       // Check if viewing another employee's profile
       const viewingProfileId = searchParams.get("id");
-      const currentProfileId = user.profile_id ?? user.profileId;
+      const currentProfileId = (user as any).profile_id ?? (user as any).profileId ?? user.profile?.id;
       setIsViewingOther(
         !!viewingProfileId && Number(viewingProfileId) !== Number(currentProfileId)
       );

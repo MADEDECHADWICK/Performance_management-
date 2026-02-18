@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { authAPI } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/DashboardLayout';
 import {
   Card,
@@ -73,6 +73,7 @@ interface TimeEntry {
 const PartnerJobDetail = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
+  const { user, isLoading: authLoading } = useAuth();
   const [job, setJob] = useState<any>(null);
   const [clientName, setClientName] = useState<string>('');
   const [metrics, setMetrics] = useState<JobMetrics | null>(null);
@@ -85,16 +86,21 @@ const PartnerJobDetail = () => {
   const [approvingEntries, setApprovingEntries] = useState<Set<number>>(new Set());
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setError('Missing user information');
+      setLoading(false);
+      return;
+    }
     loadJobDetails();
-  }, [jobId]);
+  }, [jobId, authLoading, user]);
 
   const loadJobDetails = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const user = await authAPI.me();
-      const profileId = user?.profile_id ?? user?.profileId;
+      const profileId = (user as any)?.profile_id ?? (user as any)?.profileId ?? user?.profile?.id;
       if (!user || !profileId) {
         throw new Error('Missing user information');
       }

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { PartnerService } from '../services/partners.service';
+import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
 export class PartnerController {
@@ -172,7 +173,48 @@ export class PartnerController {
 
       const summary = await PartnerService.getPartnerDashboardSummary(partnerId);
 
-      res.json(successResponse(summary, 'Partner dashboard summary retrieved'));
+      res.json(
+        successResponse(
+          {
+            ...summary,
+            framework: getDashboardModuleCoverageSummary("partner"),
+          },
+          'Partner dashboard summary retrieved'
+        )
+      );
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * GET /partners/approval-chain
+   * Partner approval chain visibility (standard + over-budget requests)
+   */
+  static async getPartnerApprovalChain(
+    req: AuthRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const partnerId =
+        auth.roleName === 'partner' ? auth.profileId : Number(req.query.partnerId) || auth.profileId;
+      const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+
+      if (!partnerId) {
+        res.status(400).json(errorResponse('Partner id is required', 400));
+        return;
+      }
+
+      const chain = await PartnerService.getPartnerApprovalChain(partnerId, auth, { jobId });
+      res.json(successResponse(chain, 'Partner approval chain retrieved'));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
         errorResponse(error.message, error.statusCode || 500)

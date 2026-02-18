@@ -1,11 +1,18 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
+import { requireRole } from '../middleware/reqiureRole';
 
 const router = Router();
 
 // POST /create-cycle-evaluations
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  '/',
+  authMiddleware,
+  loadProfile,
+  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  async (req: AuthRequest, res) => {
   try {
     console.log('Creating cycle evaluations with body:', req.body);
     const { cycleId } = req.body;
@@ -29,8 +36,12 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Evaluation cycle not found' });
     }
 
+    if (cycle.status !== 'active') {
+      return res.status(409).json({ error: 'Evaluation cycle must be active to create assignments' });
+    }
+
     const definitions = await prisma.evaluationDefinition.findMany({
-      where: { cycleId: cycle.id },
+      where: { cycleId: cycle.id, status: 'published' },
       select: {
         id: true,
         enableSelfEvaluation: true,
@@ -45,7 +56,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     if (definitions.length === 0) {
       return res.json({
         success: true,
-        message: "No evaluation definitions linked to this cycle.",
+        message: "No published evaluation definitions linked to this cycle.",
         created: 0,
         skipped: 0,
       });

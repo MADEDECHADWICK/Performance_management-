@@ -16,8 +16,13 @@ export class DepartmentController {
     try {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
+      };
 
-      const result = await departmentService.listDepartments({ page, pageSize });
+      const result = await departmentService.listDepartments({ page, pageSize }, auth);
 
       res.json(paginatedResponse(result.departments, result.total, page, pageSize));
     } catch (error: any) {
@@ -58,8 +63,13 @@ export class DepartmentController {
   static async getDepartment(req: AuthRequest, res: Response): Promise<void> {
     try {
       const departmentId = Number(req.params.departmentId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
+      };
 
-      const department = await departmentService.getDepartment(departmentId);
+      const department = await departmentService.getDepartment(departmentId, auth);
 
       res.json(successResponse(department, 'Department retrieved'));
     } catch (error: any) {
@@ -176,6 +186,33 @@ export class DepartmentController {
   }
 
   /**
+   * GET /departments/:departmentId/managers
+   * Get department managers (can be multiple)
+   */
+  static async getDepartmentManagers(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const departmentId = Number(req.params.departmentId);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
+      };
+
+      const managers = await departmentService.getDepartmentManagers(
+        departmentId,
+        auth
+      );
+
+      res.json(successResponse(managers, "Department managers retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
    * GET /departments/:departmentId/team-kpis
    * Get team KPI breakdown for department
    */
@@ -183,10 +220,15 @@ export class DepartmentController {
     try {
       const departmentId = Number(req.params.departmentId);
       const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roles: req.userRoles ?? req.user?.authRoles ?? [],
+      };
 
       const data = await departmentService.getDepartmentTeamKpis(departmentId, {
         status: status as any,
-      });
+      }, auth);
 
       res.json(successResponse(data, "Department team KPIs retrieved"));
     } catch (error: any) {

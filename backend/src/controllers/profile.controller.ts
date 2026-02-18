@@ -7,6 +7,25 @@ import { AuthRequest } from '../middleware/auth';
 import { ProfileService } from '../services/profiles.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
+const resolveRoles = (req: AuthRequest) => {
+  const roles = [
+    ...(req.user?.authRoles || []),
+    ...(req.userRoles || []),
+    req.profile?.role?.name,
+  ]
+    .filter(Boolean)
+    .map((role) => String(role));
+  return Array.from(new Set(roles));
+};
+
+const buildAuthContext = (req: AuthRequest) => ({
+  userId: req.user!.userId,
+  profileId: req.profile!.id,
+  roleName: req.profile?.role?.name,
+  roles: resolveRoles(req),
+  isPartner: req.profile?.isPartner,
+});
+
 export class ProfileController {
   /**
    * GET /profiles
@@ -20,11 +39,7 @@ export class ProfileController {
       const status = (req.query.status as string) || undefined;
       const search = (req.query.search as string) || undefined;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await ProfileService.listProfiles(
         { page, pageSize, roleId, status, search },
@@ -47,11 +62,7 @@ export class ProfileController {
     try {
       const profileId = Number(req.params.profileId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const profile = await ProfileService.getProfile(profileId, auth);
 
@@ -71,11 +82,7 @@ export class ProfileController {
     try {
       const profileId = Number(req.params.profileId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const profile = await ProfileService.updateProfile(profileId, req.body, auth);
 
@@ -88,6 +95,29 @@ export class ProfileController {
   }
 
   /**
+   * DELETE /profiles/:profileId
+   * Delete profile (or archive when hard delete is blocked)
+   */
+  static async deleteProfile(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const profileId = Number(req.params.profileId);
+      const auth = buildAuthContext(req);
+
+      const result = await ProfileService.deleteProfile(profileId, auth);
+      const message =
+        result.mode === 'deleted'
+          ? 'Profile deleted successfully'
+          : 'Profile archived because it has linked historical records';
+
+      res.json(successResponse(result, message));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
    * GET /profiles/email/:email
    * Get profile by email
    */
@@ -95,7 +125,8 @@ export class ProfileController {
     try {
       const email = req.params.email;
 
-      const profile = await ProfileService.getProfileByEmail(email);
+      const auth = buildAuthContext(req);
+      const profile = await ProfileService.getProfileByEmail(email, auth);
 
       res.json(successResponse(profile, 'Profile retrieved'));
     } catch (error: any) {
@@ -113,11 +144,7 @@ export class ProfileController {
     try {
       const profileId = Number(req.params.profileId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const stats = await ProfileService.getProfileStats(profileId, auth);
 
@@ -137,11 +164,7 @@ export class ProfileController {
     try {
       const profileId = Number(req.params.profileId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const team = await ProfileService.getTeamMembers(profileId, auth);
 
@@ -169,7 +192,8 @@ export class ProfileController {
         return;
       }
 
-      const profiles = await ProfileService.searchProfiles(query, limit);
+      const auth = buildAuthContext(req);
+      const profiles = await ProfileService.searchProfiles(query, limit, auth);
 
       res.json(successResponse(profiles, 'Search results'));
     } catch (error: any) {

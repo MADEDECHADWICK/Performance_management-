@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Loader2, TrendingUp, Users, Target, Award, AlertCircle } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
 import { PAGE_STACK, SECTION_TITLE, SECTION_SUBTITLE } from "@/components/ui/cardStyles";
 import EmptyState from "@/components/ui/empty-state";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface AnalyticsData {
   userRole: string;
@@ -29,15 +29,20 @@ const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3
 
 const NonFinancialAnalytics = () => {
   const navigate = useNavigate();
-  const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [roleMetrics, setRoleMetrics] = useState<Record<string, any>>({});
   const [activeTab, setActiveTab] = useState("performance");
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadAnalytics();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   useEffect(() => {
     if (analyticsData) {
@@ -48,7 +53,6 @@ const NonFinancialAnalytics = () => {
   const loadAnalytics = async () => {
     try {
       setLoading(true);
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;

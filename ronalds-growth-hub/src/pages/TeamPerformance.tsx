@@ -1,95 +1,189 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  Clock, 
-  Target, 
-  Award,
-  AlertCircle,
-  CheckCircle,
-  BarChart3,
-  Calendar,
-  Filter,
-  Download,
-  Eye
-} from "lucide-react";
-import DashboardLayout from "@/components/DashboardLayout";
+import React, { useEffect, useMemo, useState } from 'react';
+import DashboardLayout from '@/components/DashboardLayout';
+import { apiFetch } from '@/lib/api';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Progress } from '@/components/ui/progress';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { TrendingUp, TrendingDown, Users, Clock, Award, BarChart3, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
-interface TeamMember {
+type TeamMemberApi = {
+  employeeId: number;
+  firstName: string;
+  lastName: string;
+  jobPosition: string;
+  departmentName: string | null;
+  status: string;
+};
+
+type TeamPerformanceApi = {
+  employeeId: number;
+  employeeName: string;
+  jobPosition: string;
+  avgFinancialScore: number;
+  avgNonFinancialScore: number;
+  avgOverallRating: number;
+  totalHoursThisMonth: number;
+  billableHoursThisMonth: number;
+  utilizationRate: number;
+  lastReviewDate: string | null;
+};
+
+type TeamResponse = {
+  teamMembers: TeamMemberApi[];
+  financials: {
+    activeTeamMembers: number;
+    totalTeamHours: number;
+    billableHours: number;
+    totalRevenue: number;
+    totalCost: number;
+  };
+  performance: TeamPerformanceApi[];
+};
+
+type OverviewResponse = {
+  activeJobs: number;
+  pendingReviews: number;
+};
+
+type EvaluationsResponse = {
+  pendingReviews?: unknown[];
+  recentPerformance?: unknown[];
+};
+
+type TeamMemberView = {
   id: number;
   name: string;
   role: string;
-  position_level: string;
-  avatar?: string;
-  email: string;
   department: string;
-  performance_score: number;
-  utilization_rate: number;
-  billable_hours: number;
-  completed_projects: number;
-  kpi_completion: number;
-  recent_reviews: number;
-  goals_achieved: number;
-  total_goals: number;
-  certifications: number;
-  training_hours: number;
-  client_satisfaction: number;
-  peer_rating: number;
-  last_evaluation: string;
-}
-
-interface PerformanceMetrics {
-  team_avg_performance: number;
-  team_avg_utilization: number;
-  total_billable_hours: number;
-  active_projects: number;
-  completed_evaluations: number;
-  pending_evaluations: number;
-  improvement_needed: number;
-  high_performers: number;
-}
+  performanceScore: number;
+  financialScore: number;
+  nonFinancialScore: number;
+  utilizationRate: number;
+  billableHours: number;
+  totalHours: number;
+  lastEvaluation: string | null;
+};
 
 const TeamPerformance = () => {
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
+  const [teamMembers, setTeamMembers] = useState<TeamMemberView[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedPeriod, setSelectedPeriod] = useState('last_3_months');
-  const [filterRole, setFilterRole] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('performance_score');
-
-  useEffect(() => {
-    fetchTeamPerformance();
-  }, [selectedPeriod, filterRole]);
+  const [filterRole, setFilterRole] = useState('all');
+  const [sortBy, setSortBy] = useState('performanceScore');
+  const [overview, setOverview] = useState<OverviewResponse | null>(null);
+  const [evaluationSummary, setEvaluationSummary] = useState<EvaluationsResponse | null>(null);
 
   const fetchTeamPerformance = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      
-      const response = await fetch(`http://localhost:4000/api/manager/team-performance?period=${selectedPeriod}&role=${filterRole}`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const [teamResponse, overviewResponse, evaluationsResponse] = await Promise.all([
+        apiFetch<TeamResponse>('GET', '/manager-dashboard/team'),
+        apiFetch<OverviewResponse>('GET', '/manager-dashboard/overview'),
+        apiFetch<EvaluationsResponse>('GET', '/manager-dashboard/evaluations'),
+      ]);
+
+      const membersById = new Map<number, TeamMemberApi>();
+      (teamResponse.teamMembers || []).forEach((member) => membersById.set(member.employeeId, member));
+
+      const mappedMembers = (teamResponse.performance || []).map((row) => {
+        const member = membersById.get(row.employeeId);
+        const fallbackName = member ? `${member.firstName || ''} ${member.lastName || ''}`.trim() : row.employeeName;
+        return {
+          id: row.employeeId,
+          name: fallbackName,
+          role: member?.jobPosition || row.jobPosition || 'Employee',
+          department: member?.departmentName || 'Unassigned',
+          performanceScore: Number(row.avgOverallRating || 0),
+          financialScore: Number(row.avgFinancialScore || 0),
+          nonFinancialScore: Number(row.avgNonFinancialScore || 0),
+          utilizationRate: Number(row.utilizationRate || 0),
+          billableHours: Number(row.billableHoursThisMonth || 0),
+          totalHours: Number(row.totalHoursThisMonth || 0),
+          lastEvaluation: row.lastReviewDate,
+        };
       });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setTeamMembers(data.team_members || []);
-        setMetrics(data.metrics);
-      }
+
+      setTeamMembers(mappedMembers);
+      setOverview(overviewResponse);
+      setEvaluationSummary(evaluationsResponse);
     } catch (error) {
       console.error('Error fetching team performance:', error);
+      setTeamMembers([]);
+      setOverview(null);
+      setEvaluationSummary(null);
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    fetchTeamPerformance();
+  }, []);
+
+  const metrics = useMemo(() => {
+    const count = teamMembers.length;
+    const avg = (values: number[]) => (values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0);
+
+    return {
+      teamAvgPerformance: avg(teamMembers.map((member) => member.performanceScore)),
+      teamAvgUtilization: avg(teamMembers.map((member) => member.utilizationRate)),
+      totalBillableHours: teamMembers.reduce((sum, member) => sum + member.billableHours, 0),
+      activeProjects: Number(overview?.activeJobs || 0),
+      completedEvaluations: Array.isArray(evaluationSummary?.recentPerformance) ? evaluationSummary?.recentPerformance.length : 0,
+      pendingEvaluations: Array.isArray(evaluationSummary?.pendingReviews) ? evaluationSummary?.pendingReviews.length : Number(overview?.pendingReviews || 0),
+      improvementNeeded: teamMembers.filter((member) => member.performanceScore < 70).length,
+      highPerformers: teamMembers.filter((member) => member.performanceScore >= 85).length,
+      totalMembers: count,
+    };
+  }, [teamMembers, overview, evaluationSummary]);
+
+  const filteredAndSortedMembers = useMemo(() => {
+    return teamMembers
+      .filter((member) => {
+        const matchesSearch =
+          member.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          member.role.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesRole = filterRole === 'all' || member.role.toLowerCase().includes(filterRole.toLowerCase());
+        return matchesSearch && matchesRole;
+      })
+      .sort((a, b) => {
+        switch (sortBy) {
+          case 'performanceScore':
+            return b.performanceScore - a.performanceScore;
+          case 'utilizationRate':
+            return b.utilizationRate - a.utilizationRate;
+          case 'billableHours':
+            return b.billableHours - a.billableHours;
+          case 'name':
+            return a.name.localeCompare(b.name);
+          default:
+            return 0;
+        }
+      });
+  }, [teamMembers, searchTerm, filterRole, sortBy]);
+
+  const exportPerformanceReport = () => {
+    const rows = filteredAndSortedMembers.map((member) => ({
+      Name: member.name,
+      Role: member.role,
+      Department: member.department,
+      'Performance Score': Number(member.performanceScore || 0).toFixed(2),
+      'Financial Score': Number(member.financialScore || 0).toFixed(2),
+      'Non-Financial Score': Number(member.nonFinancialScore || 0).toFixed(2),
+      'Utilization (%)': Number(member.utilizationRate || 0).toFixed(2),
+      'Billable Hours': member.billableHours,
+      'Total Hours': member.totalHours,
+      'Last Evaluation': member.lastEvaluation ? new Date(member.lastEvaluation).toLocaleDateString() : '--',
+    }));
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Team Performance');
+    XLSX.writeFile(workbook, 'team_performance.xlsx');
   };
 
   const getPerformanceBadge = (score: number) => {
@@ -100,50 +194,10 @@ const TeamPerformance = () => {
   };
 
   const getUtilizationColor = (rate: number) => {
-    if (rate >= 85) return "text-green-600";
-    if (rate >= 70) return "text-blue-600";
-    if (rate >= 50) return "text-yellow-600";
-    return "text-red-600";
-  };
-
-  const filteredAndSortedMembers = teamMembers
-    .filter(member => 
-      member.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      member.role.toLowerCase().includes(searchTerm.toLowerCase())
-    )
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'performance_score':
-          return b.performance_score - a.performance_score;
-        case 'utilization_rate':
-          return b.utilization_rate - a.utilization_rate;
-        case 'billable_hours':
-          return b.billable_hours - a.billable_hours;
-        case 'name':
-          return a.name.localeCompare(b.name);
-        default:
-          return 0;
-      }
-    });
-
-  const exportPerformanceReport = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:4000/api/manager/team-performance/export?period=${selectedPeriod}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `team_performance_${selectedPeriod}.xlsx`;
-        a.click();
-      }
-    } catch (error) {
-      console.error('Error exporting report:', error);
-    }
+    if (rate >= 85) return 'text-green-600';
+    if (rate >= 70) return 'text-blue-600';
+    if (rate >= 50) return 'text-yellow-600';
+    return 'text-red-600';
   };
 
   if (loading) {
@@ -151,7 +205,7 @@ const TeamPerformance = () => {
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
             <p className="mt-4 text-gray-600">Loading team performance data...</p>
           </div>
         </div>
@@ -162,189 +216,145 @@ const TeamPerformance = () => {
   return (
     <DashboardLayout>
       <div className="p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Team Performance</h1>
-            <p className="text-gray-600 mt-1">Monitor and analyze your team's performance metrics</p>
+            <p className="text-gray-600 mt-1">Live manager view for team performance, utilization, and evaluation coverage</p>
           </div>
-          <div className="flex gap-3">
-            <Button variant="outline" onClick={exportPerformanceReport}>
-              <Download className="w-4 h-4 mr-2" />
-              Export Report
-            </Button>
-          </div>
+          <Button variant="outline" onClick={exportPerformanceReport}>
+            <Download className="w-4 h-4 mr-2" />
+            Export Report
+          </Button>
         </div>
 
-        {/* Filters */}
         <div className="flex flex-wrap gap-4 bg-white p-4 rounded-lg border">
           <div className="flex-1 min-w-[250px]">
             <Input
               placeholder="Search team members..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(event) => setSearchTerm(event.target.value)}
               className="w-full"
             />
           </div>
-          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select period" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="last_month">Last Month</SelectItem>
-              <SelectItem value="last_3_months">Last 3 Months</SelectItem>
-              <SelectItem value="last_6_months">Last 6 Months</SelectItem>
-              <SelectItem value="last_year">Last Year</SelectItem>
-            </SelectContent>
-          </Select>
           <Select value={filterRole} onValueChange={setFilterRole}>
-            <SelectTrigger className="w-[160px]">
+            <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="Filter by role" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Roles</SelectItem>
+              <SelectItem value="manager">Manager</SelectItem>
               <SelectItem value="senior">Senior</SelectItem>
               <SelectItem value="associate">Associate</SelectItem>
-              <SelectItem value="junior">Junior</SelectItem>
-              <SelectItem value="intern">Intern</SelectItem>
             </SelectContent>
           </Select>
           <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-[160px]">
+            <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="Sort by" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="performance_score">Performance</SelectItem>
-              <SelectItem value="utilization_rate">Utilization</SelectItem>
-              <SelectItem value="billable_hours">Hours</SelectItem>
+              <SelectItem value="performanceScore">Performance</SelectItem>
+              <SelectItem value="utilizationRate">Utilization</SelectItem>
+              <SelectItem value="billableHours">Billable Hours</SelectItem>
               <SelectItem value="name">Name</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {/* Key Metrics */}
-        {metrics && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Avg Performance</CardTitle>
-                <BarChart3 className="w-4 h-4 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{metrics.team_avg_performance.toFixed(1)}%</div>
-                <div className="flex items-center mt-2">
-                  {metrics.team_avg_performance >= 80 ? (
-                    <TrendingUp className="w-4 h-4 text-green-600 mr-1" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4 text-red-600 mr-1" />
-                  )}
-                  <p className="text-xs text-gray-600">Team average</p>
-                </div>
-              </CardContent>
-            </Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Avg Performance</CardTitle>
+              <BarChart3 className="w-4 h-4 text-blue-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.teamAvgPerformance.toFixed(1)}</div>
+              <div className="flex items-center mt-2">
+                {metrics.teamAvgPerformance >= 80 ? (
+                  <TrendingUp className="w-4 h-4 text-green-600 mr-1" />
+                ) : (
+                  <TrendingDown className="w-4 h-4 text-red-600 mr-1" />
+                )}
+                <p className="text-xs text-gray-600">Team average</p>
+              </div>
+            </CardContent>
+          </Card>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Utilization Rate</CardTitle>
-                <Clock className="w-4 h-4 text-orange-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{metrics.team_avg_utilization.toFixed(1)}%</div>
-                <Progress value={metrics.team_avg_utilization} className="mt-2" />
-              </CardContent>
-            </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Utilization Rate</CardTitle>
+              <Clock className="w-4 h-4 text-orange-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.teamAvgUtilization.toFixed(1)}%</div>
+              <Progress value={metrics.teamAvgUtilization} className="mt-2" />
+            </CardContent>
+          </Card>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">High Performers</CardTitle>
-                <Award className="w-4 h-4 text-yellow-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{metrics.high_performers}</div>
-                <p className="text-xs text-gray-600">Score ≥ 90%</p>
-              </CardContent>
-            </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">High Performers</CardTitle>
+              <Award className="w-4 h-4 text-yellow-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.highPerformers}</div>
+              <p className="text-xs text-gray-600">Out of {metrics.totalMembers} team members</p>
+            </CardContent>
+          </Card>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Pending Reviews</CardTitle>
-                <AlertCircle className="w-4 h-4 text-red-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{metrics.pending_evaluations}</div>
-                <p className="text-xs text-gray-600">Need attention</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Pending Reviews</CardTitle>
+              <Users className="w-4 h-4 text-purple-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.pendingEvaluations}</div>
+              <p className="text-xs text-gray-600">Active jobs: {metrics.activeProjects}</p>
+            </CardContent>
+          </Card>
+        </div>
 
-        {/* Team Performance Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Team Members Performance</CardTitle>
-            <CardDescription>Individual performance metrics and KPIs</CardDescription>
+            <CardTitle>Team Member Performance</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {filteredAndSortedMembers.map((member) => (
-                <div key={member.id} className="p-4 border rounded-lg hover:bg-gray-50">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      <Avatar>
-                        <AvatarImage src={member.avatar} alt={member.name} />
-                        <AvatarFallback>{member.name.substring(0, 2).toUpperCase()}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <h3 className="font-semibold text-gray-900">{member.name}</h3>
-                        <p className="text-sm text-gray-600">{member.role} • {member.department}</p>
-                        <p className="text-xs text-gray-500">{member.email}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-4">
-                      {getPerformanceBadge(member.performance_score)}
-                      <Button variant="outline" size="sm">
-                        <Eye className="w-4 h-4 mr-1" />
-                        View Details
-                      </Button>
+                <div key={member.id} className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center space-x-4">
+                    <Avatar>
+                      <AvatarFallback>{member.name.split(' ').map((namePart) => namePart[0]).join('').slice(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <h3 className="font-medium">{member.name}</h3>
+                      <p className="text-sm text-gray-600">{member.role} � {member.department}</p>
                     </div>
                   </div>
-                  
-                  <div className="mt-4 grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
-                    <div>
-                      <p className="text-gray-600">Performance</p>
-                      <p className="font-semibold">{member.performance_score}%</p>
+
+                  <div className="flex items-center space-x-6">
+                    <div className="text-center min-w-[120px]">
+                      {getPerformanceBadge(member.performanceScore)}
+                      <p className="text-sm font-medium mt-1">{member.performanceScore.toFixed(1)}</p>
                     </div>
-                    <div>
-                      <p className="text-gray-600">Utilization</p>
-                      <p className={`font-semibold ${getUtilizationColor(member.utilization_rate)}`}>
-                        {member.utilization_rate}%
+
+                    <div className="text-center min-w-[120px]">
+                      <p className={`text-lg font-bold ${getUtilizationColor(member.utilizationRate)}`}>
+                        {member.utilizationRate.toFixed(1)}%
                       </p>
+                      <p className="text-xs text-gray-600">Utilization</p>
                     </div>
-                    <div>
-                      <p className="text-gray-600">Billable Hours</p>
-                      <p className="font-semibold">{member.billable_hours}h</p>
+
+                    <div className="text-center min-w-[120px]">
+                      <p className="text-lg font-bold text-blue-600">{member.billableHours.toFixed(1)}</p>
+                      <p className="text-xs text-gray-600">Billable Hours</p>
                     </div>
-                    <div>
-                      <p className="text-gray-600">Goals</p>
-                      <p className="font-semibold">{member.goals_achieved}/{member.total_goals}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600">Client Rating</p>
-                      <p className="font-semibold">{member.client_satisfaction}/5</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600">Last Review</p>
-                      <p className="font-semibold">{new Date(member.last_evaluation).toLocaleDateString()}</p>
+
+                    <div className="w-24">
+                      <Progress value={Math.min(100, member.utilizationRate)} className="h-2" />
                     </div>
                   </div>
                 </div>
               ))}
-              
-              {filteredAndSortedMembers.length === 0 && (
-                <div className="text-center py-8">
-                  <p className="text-gray-500">No team members found matching your criteria.</p>
-                </div>
-              )}
             </div>
           </CardContent>
         </Card>

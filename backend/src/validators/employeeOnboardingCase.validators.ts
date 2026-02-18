@@ -41,3 +41,16 @@ export const updateOnboardingCaseValidators = [
   body("dueDate").optional({ nullable: true }).isISO8601(),
   body("notes").optional({ nullable: true }).isString(),
 ];
+
+export const updateOnboardingStageValidators = [
+  param("stageId").isInt({ min: 1 }),
+
+  body("status").optional().isIn(Object.values(OnboardingStatus)),
+  body("ownerProfileId").optional({ nullable: true }).isInt({ min: 1 }),
+  body("dueDate").optional({ nullable: true }).isISO8601(),
+  body("notes").optional({ nullable: true }).isString(),
+];
+
+export const initializeOnboardingStagesValidators = [
+  param("caseId").isInt({ min: 1 }),
+];

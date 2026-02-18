@@ -1,49 +1,77 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowUpCircle, CheckCircle2, Clock } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+
+const toValidId = (value: unknown): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+};
 
 export default function UpwardReviews() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [managers, setManagers] = useState<any[]>([]);
   const [evaluations, setEvaluations] = useState<any[]>([]);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate('/auth');
+      return;
+    }
     loadData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const me = await authAPI.me();
-      if (!me) {
+      if (!user) {
         navigate('/auth');
         return;
       }
 
-      // profile
-      const profileData = await apiFetch('GET', `/profiles/${me.id}`);
-      if (profileData && profileData.manager_id) {
-        const managerData = await apiFetch('GET', `/profiles/${profileData.manager_id}`);
-        if (managerData) setManagers([managerData]);
+      const profileId = toValidId(
+        (user as any)?.profileId ?? (user as any)?.profile_id ?? user?.profile?.id
+      );
+
+      if (!profileId) {
+        setManagers([]);
+        setEvaluations([]);
+        return;
       }
 
-      const evalData = await apiFetch('GET', `/upward_evaluations?evaluatorId=${me.id}`);
-      if (evalData && evalData.length > 0) {
-        // fetch manager details (may be null)
-        const evaluationsWithManagers = await Promise.all(
-          evalData.map(async (evaluation: any) => {
-            const managerData = evaluation.manager_id ? await apiFetch('GET', `/profiles/${evaluation.manager_id}`) : null;
-            return { ...evaluation, manager: managerData };
-          })
-        );
+      // Use manager id from auth payload profile to avoid redundant profile lookup
+      const managerProfileId = toValidId(
+        (user as any)?.profile?.managerId ?? (user as any)?.profile?.manager_id
+      );
+      if (managerProfileId) {
+        setManagers([
+          {
+            id: managerProfileId,
+            firstName: "Manager",
+            lastName: "",
+            positionTitle: "Manager",
+          },
+        ]);
+      }
+
+      const evalData = await apiFetch('GET', `/upward-evaluations?evaluatorId=${profileId}`);
+      if (Array.isArray(evalData) && evalData.length > 0) {
+        // Keep manager identifiers from evaluation payload without extra profile lookups.
+        const evaluationsWithManagers = evalData.map((evaluation: any) => {
+          const managerId = toValidId(evaluation.managerId ?? evaluation.manager_id);
+          return { ...evaluation, manager: null, managerId };
+        });
         setEvaluations(evaluationsWithManagers);
       } else {
         setEvaluations([]);
@@ -112,11 +140,16 @@ export default function UpwardReviews() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {managers.map((manager) => {
+                    const managerId = toValidId(manager.id);
                     const existingEval = evaluations.find(
-                      (e) => e.manager_id === manager.id && e.status === "pending"
+                      (e) =>
+                        toValidId(e.managerId ?? e.manager_id) === managerId &&
+                        e.status === "pending"
                     );
                     const completedEval = evaluations.find(
-                      (e) => e.manager_id === manager.id && e.status === "completed"
+                      (e) =>
+                        toValidId(e.managerId ?? e.manager_id) === managerId &&
+                        e.status === "completed"
                     );
 
                     if (completedEval) return null;
@@ -128,10 +161,11 @@ export default function UpwardReviews() {
                       >
                         <div>
                           <p className="font-medium">
-                            {manager.first_name} {manager.last_name}
+                            {manager.firstName ?? manager.first_name}{" "}
+                            {manager.lastName ?? manager.last_name}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {manager.position || "Manager"}
+                            {(manager.positionTitle ?? manager.position) || "Manager"}
                           </p>
                         </div>
                         <Button
@@ -162,10 +196,15 @@ export default function UpwardReviews() {
                       >
                         <div>
                           <p className="font-medium">
-                            {evaluation.manager?.first_name} {evaluation.manager?.last_name}
+                            {(evaluation.manager?.firstName ?? evaluation.manager?.first_name) ||
+                              "Manager"}{" "}
+                            {(evaluation.manager?.lastName ?? evaluation.manager?.last_name) || ""}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            Submitted {new Date(evaluation.submitted_at).toLocaleDateString()}
+                            Submitted{" "}
+                            {new Date(
+                              evaluation.submittedAt ?? evaluation.submitted_at
+                            ).toLocaleDateString()}
                           </p>
                         </div>
                         {getStatusBadge(evaluation.status)}

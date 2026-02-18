@@ -1,9 +1,9 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { apiFetch,  authAPI, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Building2, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Sidebar,
   SidebarContent,
@@ -49,153 +49,70 @@ interface DashboardLayoutProps {
   children: ReactNode;
 }
 
-interface UserRole {
-  role: string;
-}
+type ModuleAction = "read" | "write" | "approve" | "admin";
+
+type HasModuleAccessFn = (moduleKey: string, action?: ModuleAction) => boolean;
 
 const DashboardLayout = ({ children }: DashboardLayoutProps) => {
-  const [user, setUser] = useState<any | null>(null);
-  const [userRoles, setUserRoles] = useState<string[]>([]);
-  const [userProfile, setUserProfile] = useState<any | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
+  const {
+    user,
+    profile: userProfile,
+    isLoading: authLoading,
+    isAdmin,
+    isHR,
+    isGMP,
+    isPartner,
+    isManager,
+    isMarketing,
+    isFinance,
+    isEmployee,
+    hasRole,
+    hasModuleAccess,
+    logout,
+  } = useAuth();
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const me = await authAPI.me();
-        setUser(me);
-
-        const roleCandidates = Array.isArray(me?.roles)
-          ? me.roles
-          : Array.isArray(me?.authRoles)
-            ? me.authRoles
-            : [];
-        const normalizedRoles = roleCandidates
-          .map((role: any) => (typeof role === 'string' ? role : role?.role?.name))
-          .filter(Boolean)
-          .map((role: string) => role.toLowerCase());
-        if (normalizedRoles.length > 0) {
-          setUserRoles(normalizedRoles);
-        }
-
-        let profile = me?.profile;
-        if (!profile) {
-          const profileResponse = await apiFetch(
-            'GET',
-            `/profiles/email/${encodeURIComponent(me.email)}`
-          );
-          profile = profileResponse?.data ?? profileResponse;
-        }
-        setUserProfile(profile);
-        
-        // Get the user's role - handle both object and string formats
-        if (profile?.role) {
-          const roleName = typeof profile.role === 'object' ? profile.role.name : profile.role;
-          const mergedRoles = new Set<string>(normalizedRoles);
-          if (roleName) mergedRoles.add(String(roleName).toLowerCase());
-          console.log('=== ROLE DETECTION DEBUG ===');
-          console.log('User email:', me.email);
-          console.log('User role object:', profile.role);
-          console.log('User role name:', roleName);
-          console.log('User position:', profile.positionTitle);
-          console.log('User is_partner:', profile.isPartner);
-          console.log('Profile data:', profile);
-          setUserRoles(Array.from(mergedRoles));
-        } else {
-          console.log('No role found in profile');
-          await loadUserRoles(me.id);
-        }
-      } catch (err) {
-        console.error('Error loading user:', err);
-        navigate('/auth');
-      }
-    })();
-  }, [navigate]);
-
-  const loadUserRoles = async (userId: any) => {
-    try {
-      const uid = typeof userId === 'number' ? userId : Number(userId);
-      const data = await apiFetch('GET', `/user-roles?userId=${uid}`);
-      setUserRoles((data as UserRole[]).map((r) => r.role.toLowerCase()) || []);
-    } catch (error: any) {
-      console.error("Error loading roles:", error);
-    }
-  };
-
-  // Role detection flags - moved before useEffect
-  const normalizedRoles = userRoles.map((role) => role.toLowerCase());
+  const normalizedRoles = useMemo(() => {
+    const roleCandidates = Array.isArray(user?.roles)
+      ? user.roles
+      : Array.isArray((user as any)?.authRoles)
+        ? (user as any).authRoles
+        : [];
+    return roleCandidates
+      .map((role: any) => (typeof role === "string" ? role : role?.role?.name))
+      .filter(Boolean)
+      .map((role: string) => role.toLowerCase());
+  }, [user]);
   const normalizedPosition = userProfile?.positionTitle?.toLowerCase() || '';
   const isHROrAdmin =
-    normalizedRoles.some(r => ['super_admin', 'admin', 'hr', 'hr_manager'].includes(r)) ||
+    isAdmin ||
+    isHR ||
     normalizedPosition.includes('administrator') ||
     normalizedPosition.includes('hr') ||
     false;
-  const isManager =
-    normalizedRoles.includes('manager') ||
-    normalizedPosition.includes('manager') ||
-    false;
-  const isPartner = userProfile?.isPartner || normalizedRoles.includes('partner') || false;
-  const isSeniorAssociate = normalizedRoles.includes('senior associate');
-  const isAssociate = normalizedRoles.includes('associate');
-  const isMarketing =
-    normalizedRoles.includes('marketing') ||
-    normalizedRoles.includes('business_development') ||
-    normalizedPosition.includes('marketing') ||
-    normalizedPosition.includes('business development') ||
-    false;
-  const isFinance =
-    normalizedRoles.includes('finance') ||
-    normalizedPosition.includes('finance') ||
-    false;
-  const isGMP =
-    normalizedRoles.includes('gmp') ||
-    normalizedRoles.includes('group_managing_partner') ||
-    normalizedPosition.includes('group managing partner') ||
-    normalizedPosition.includes('group_managing_partner') ||
-    false;
-  
-  console.log('=== ROLE FLAGS DEBUG ===');
-  console.log('isHROrAdmin:', isHROrAdmin);
-  console.log('isManager:', isManager); 
-  console.log('isPartner:', isPartner);
-  console.log('isMarketing:', isMarketing);
-  console.log('isFinance:', isFinance);
-  console.log('isGMP:', isGMP);
-  console.log('userRoles:', userRoles);
-  console.log('userProfile position:', userProfile?.positionTitle);
-  
+  const isSeniorAssociate = hasRole('senior associate');
+  const isAssociate = hasRole('associate');
+
   const isActive = (path: string) => location.pathname === path;
 
   // Auto-redirect to appropriate dashboard based on role
   useEffect(() => {
+    if (authLoading) return;
     if (user && location.pathname === '/dashboard') {
-      console.log('=== DASHBOARD REDIRECT LOGIC ===');
-      console.log('Current path:', location.pathname);
-      console.log('isGMP:', isGMP);
-      console.log('isHROrAdmin:', isHROrAdmin);
-      console.log('isPartner:', isPartner);
-      console.log('isManager:', isManager);
-      
       if (isGMP) {
-        console.log('Redirecting to GMP dashboard');
         navigate('/gmp-dashboard', { replace: true });
       } else if (isHROrAdmin) {
-        console.log('Redirecting to HR dashboard');
         navigate('/hr-dashboard', { replace: true });
       } else if (isPartner) {
-        console.log('Redirecting to Partner dashboard');
         navigate('/partner-dashboard', { replace: true });
       } else if (isManager) {
-        console.log('Redirecting to Manager dashboard');
         navigate('/manager-dashboard', { replace: true });
       } else if (isMarketing) {
-        console.log('Redirecting to Marketing intake');
         navigate('/marketing-dashboard', { replace: true });
       } else if (isFinance) {
-        console.log('Redirecting to Finance dashboard');
         navigate('/finance-dashboard', { replace: true });
       }
     }
@@ -213,7 +130,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   ]);
 
   const handleSignOut = async () => {
-    setToken(null);
+    await logout();
     navigate("/auth");
   };
 
@@ -257,14 +174,16 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           isManager={isManager} 
           isPartner={isPartner} 
           isGMP={isGMP} 
+          isEmployee={isEmployee}
           isSeniorAssociate={isSeniorAssociate}
           isAssociate={isAssociate}
           isMarketing={isMarketing}
           isFinance={isFinance}
+          hasModuleAccess={hasModuleAccess}
           isActive={isActive} 
         />
 
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 min-w-0 flex flex-col">
           {/* Header */}
           <header className="bg-card border-b border-border shadow-sm sticky top-0 z-50">
             <div className="px-4 sm:px-6 lg:px-8 py-4">
@@ -300,7 +219,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </header>
 
           {/* Main Content */}
-          <main className="flex-1 px-4 sm:px-6 lg:px-8 py-8">{children}</main>
+          <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-8">{children}</main>
         </div>
       </div>
     </SidebarProvider>
@@ -312,10 +231,12 @@ interface AppSidebarProps {
   isManager: boolean;
   isPartner: boolean;
   isGMP: boolean;
+  isEmployee: boolean;
   isSeniorAssociate: boolean;
   isAssociate: boolean;
   isMarketing: boolean;
   isFinance: boolean;
+  hasModuleAccess: HasModuleAccessFn;
   isActive: (path: string) => boolean;
 }
 
@@ -324,25 +245,42 @@ function AppSidebar({
   isManager,
   isPartner,
   isGMP,
+  isEmployee,
   isSeniorAssociate,
   isAssociate,
   isMarketing,
   isFinance,
+  hasModuleAccess,
   isActive,
 }: AppSidebarProps) {
   const location = useLocation();
   const { state } = useSidebar();
 
-  const NavItem = ({ path, icon: Icon, label }: { path: string; icon: any; label: string }) => (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive(path)}>
-        <a href={path} className="flex items-center gap-2">
-          <Icon className="h-4 w-4" />
-          {state !== "collapsed" && <span>{label}</span>}
-        </a>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
+  const NavItem = ({
+    path,
+    icon: Icon,
+    label,
+    module,
+    action = "read",
+  }: {
+    path: string;
+    icon: any;
+    label: string;
+    module?: string;
+    action?: ModuleAction;
+  }) => {
+    if (module && !hasModuleAccess(module, action)) return null;
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton asChild isActive={isActive(path)}>
+          <a href={path} className="flex items-center gap-2">
+            <Icon className="h-4 w-4" />
+            {state !== "collapsed" && <span>{label}</span>}
+          </a>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    );
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -365,23 +303,23 @@ function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {isGMP ? (
-                <NavItem path="/gmp-dashboard" icon={Crown} label="Executive Dashboard" />
+                <NavItem path="/gmp-dashboard" icon={Crown} label="Executive Dashboard" module="dashboard" />
               ) : isHROrAdmin ? (
-                <NavItem path="/hr-dashboard" icon={BarChart3} label="Dashboard" />
+                <NavItem path="/hr-dashboard" icon={BarChart3} label="Dashboard" module="dashboard" />
               ) : isPartner ? (
-                <NavItem path="/partner-dashboard" icon={BarChart3} label="Partner Dashboard" />
+                <NavItem path="/partner-dashboard" icon={BarChart3} label="Partner Dashboard" module="dashboard" />
               ) : isManager ? (
-                <NavItem path="/manager-dashboard" icon={BarChart3} label="Manager Dashboard" />
+                <NavItem path="/manager-dashboard" icon={BarChart3} label="Manager Dashboard" module="dashboard" />
               ) : isMarketing ? (
-                <NavItem path="/marketing-dashboard" icon={BarChart3} label="Marketing Overview" />
+                <NavItem path="/marketing-dashboard" icon={BarChart3} label="Marketing Overview" module="dashboard" />
               ) : isFinance ? (
-                <NavItem path="/finance-dashboard" icon={BarChart3} label="Finance Overview" />
+                <NavItem path="/finance-dashboard" icon={BarChart3} label="Finance Overview" module="dashboard" />
               ) : (
-                <NavItem path="/dashboard" icon={BarChart3} label="Dashboard" />
+                <NavItem path="/dashboard" icon={BarChart3} label="Dashboard" module="dashboard" />
               )}
-              <NavItem path="/non-financial-analytics" icon={TrendingUp} label="Analytics" />
-              <NavItem path="/reports" icon={FileText} label="Reports" />
-              <NavItem path="/notifications" icon={Bell} label="Notifications" />
+              <NavItem path="/non-financial-analytics" icon={TrendingUp} label="Analytics" module="reports" />
+              <NavItem path="/reports" icon={FileText} label="Reports" module="reports" />
+              <NavItem path="/notifications" icon={Bell} label="Notifications" module="notifications" />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -398,12 +336,12 @@ function AppSidebar({
             <CollapsibleContent>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <NavItem path="/profile" icon={UserIcon} label="Profile" />
-                  <NavItem path="/scorecard" icon={Target} label="Scorecard" />
-                  <NavItem path="/goals" icon={Target} label="Goals" />
+                  <NavItem path="/profile" icon={UserIcon} label="Profile" module="users" />
+                  <NavItem path="/scorecard" icon={Target} label="Scorecard" module="kpis" />
+                  <NavItem path="/goals" icon={Target} label="Goals" module="kpis" />
                   <NavItem path="/todos" icon={CheckSquare} label="My To-Dos" />
-                  <NavItem path="/timesheets" icon={Clock} label="Timesheets" />
-                  <NavItem path="/development-plan" icon={FileText} label="Development Plan" />
+                  <NavItem path="/timesheets" icon={Clock} label="Timesheets" module="time_entries" />
+                  <NavItem path="/development-plan" icon={FileText} label="Development Plan" module="evaluations" />
                 </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
@@ -422,13 +360,13 @@ function AppSidebar({
             <CollapsibleContent>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <NavItem path="/evaluations" icon={ClipboardCheck} label="Evaluations" />
-                  <NavItem path="/continuous-feedback" icon={Users} label="Feedback" />
+                  <NavItem path="/evaluations" icon={ClipboardCheck} label="Evaluations" module="evaluations" />
+                  <NavItem path="/continuous-feedback" icon={Users} label="Feedback" module="evaluations" />
                   {(isManager || isHROrAdmin) && (
-                    <NavItem path="/manager-evaluation" icon={UserCheck} label="Team Evaluations" />
+                    <NavItem path="/manager-evaluation" icon={UserCheck} label="Team Evaluations" module="evaluations" />
                   )}
                   {(isManager || isPartner || isHROrAdmin) && (
-                    <NavItem path="/project-evaluations" icon={ClipboardCheck} label="Project Evaluations" />
+                    <NavItem path="/project-evaluations" icon={ClipboardCheck} label="Project Evaluations" module="evaluations" />
                   )}
                 </SidebarMenu>
               </SidebarGroupContent>
@@ -437,12 +375,12 @@ function AppSidebar({
         </Collapsible>
 
         {/* Financials */}
-        {!isFinance && (
+        {(isEmployee || isManager || isPartner || isHROrAdmin || isGMP) && (
           <SidebarGroup>
             <SidebarGroupLabel>Financials</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <NavItem path="/financial-summary" icon={DollarSign} label="Financial Summary" />
+                <NavItem path="/financial-summary" icon={DollarSign} label="Financial Summary" module="finance" />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -461,13 +399,13 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/clients" icon={Users} label="Client Intake" />
-                    <NavItem path="/clients/new" icon={Plus} label="New Client" />
-                    <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" />
-                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" />
-                    <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" />
-                    <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" />
-                    <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" />
+                    <NavItem path="/clients" icon={Users} label="Client Intake" module="clients" />
+                    <NavItem path="/clients/new" icon={Plus} label="New Client" module="clients" action="write" />
+                    <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" module="clients" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" module="clients" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" module="proposals" />
+                    <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" module="surveys" />
+                    <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" module="clients" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -488,12 +426,12 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/finance-collections" icon={DollarSign} label="Collections" />
-                    <NavItem path="/finance-projections" icon={TrendingUp} label="Projections" />
-                    <NavItem path="/finance-balances" icon={BarChart3} label="Balances" />
-                    <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" />
-                    <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" />
-                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" />
+                    <NavItem path="/finance-collections" icon={DollarSign} label="Collections" module="finance" />
+                    <NavItem path="/finance-projections" icon={TrendingUp} label="Projections" module="finance" />
+                    <NavItem path="/finance-balances" icon={BarChart3} label="Balances" module="finance" />
+                    <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" module="finance" />
+                    <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" module="finance" />
+                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -514,16 +452,17 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/employee-management" icon={Users} label="Employee Management" />
+                    <NavItem path="/employee-management" icon={Users} label="Employee Management" module="users" />
 
-                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" />
-                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" />
-                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" />
-                    <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" />
-                    <NavItem path="/kpi-management" icon={Settings} label="KPIs" />
-                    <NavItem path="/calibration" icon={Settings} label="Calibration" />
-                    <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" />
-                    <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" />
+                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" module="users" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" module="clients" />
+                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" module="jobs" action="write" />
+                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" module="jobs" />
+                    <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" module="evaluations" />
+                    <NavItem path="/kpi-management" icon={Settings} label="KPIs" module="kpis" />
+                    <NavItem path="/calibration" icon={Settings} label="Calibration" module="evaluations" />
+                    <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" module="users" />
+                    <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -544,10 +483,10 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" />
-                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" />
-                    <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" />
-                    <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" />
+                    <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" module="clients" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" module="proposals" />
+                    <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" module="reports" />
+                    <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" module="jobs" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -568,10 +507,10 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/team-performance" icon={Users} label="Team Performance" />
-                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" />
-                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" />
-                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" />
+                    <NavItem path="/team-performance" icon={Users} label="Team Performance" module="reports" />
+                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" module="dashboard" />
+                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" module="evaluations" />
+                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" module="jobs" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>

@@ -250,6 +250,7 @@ export class PartnerService {
         timeEntries: {
           where: { status: 'approved' },
         },
+        jobCosting: { include: { budgetCap: true } },
       },
     });
 
@@ -259,7 +260,13 @@ export class PartnerService {
 
     for (const job of jobs) {
       if (job.status === 'completed') jobsCompleted++;
-      totalBudget += Number(job.budgetHours) || 0;
+      const budgetHours = Number(
+        job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.jobCosting?.totalEstimatedHours ??
+          job.budgetHours ??
+          0
+      );
+      totalBudget += budgetHours;
       totalApprovedHours += job.timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
     }
 
@@ -283,6 +290,7 @@ export class PartnerService {
       include: {
         client: { select: { clientName: true } },
         staffing: { select: { employeeProfileId: true } },
+        jobCosting: { include: { budgetCap: true } },
         timeEntries: {
           where: { status: 'approved' },
           select: {
@@ -298,20 +306,50 @@ export class PartnerService {
     });
 
     const jobIds = jobs.map((job) => job.id);
-    const allocations = await prisma.revenueAllocation.findMany({
-      where: { jobId: { in: jobIds } },
-      select: { jobId: true, allocatedAmount: true, employeeProfit: true, employeeLoss: true },
-    });
-
-    const payments = await prisma.clientPayment.findMany({
-      where: { jobId: { in: jobIds } },
-      select: { jobId: true, paymentAmount: true },
-    });
-
-    const surveys = await prisma.clientSatisfactionSurvey.findMany({
-      where: { jobId: { in: jobIds } },
-      select: { overallSatisfaction: true, completedAt: true },
-    });
+    const [allocations, payments, surveys, approvalGroups, overBudgetGroups, latestApprovalRows] =
+      await Promise.all([
+        prisma.revenueAllocation.findMany({
+          where: { jobId: { in: jobIds } },
+          select: {
+            jobId: true,
+            allocatedAmount: true,
+            employeeProfit: true,
+            employeeLoss: true,
+          },
+        }),
+        prisma.clientPayment.findMany({
+          where: { jobId: { in: jobIds } },
+          select: { jobId: true, paymentAmount: true },
+        }),
+        prisma.clientSatisfactionSurvey.findMany({
+          where: { jobId: { in: jobIds } },
+          select: { overallSatisfaction: true, completedAt: true },
+        }),
+        prisma.timeEntryApprovalRequest.groupBy({
+          by: ['jobId', 'status'],
+          where: { jobId: { in: jobIds } },
+          _count: { _all: true },
+        }),
+        prisma.timeOverBudgetRequest.groupBy({
+          by: ['jobId', 'status'],
+          where: { jobId: { in: jobIds } },
+          _count: { _all: true },
+        }),
+        prisma.timeEntryApprovalRequest.findMany({
+          where: { jobId: { in: jobIds } },
+          select: {
+            id: true,
+            jobId: true,
+            status: true,
+            requestType: true,
+            requestedAt: true,
+            approvedAt: true,
+            approver: { select: { firstName: true, lastName: true } },
+          },
+          orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
+          take: 300,
+        }),
+      ]);
 
     const allocationByJob = new Map<number, { revenue: number; profit: number }>();
     allocations.forEach((allocation) => {
@@ -332,6 +370,75 @@ export class PartnerService {
       where: { jobId: { in: jobIds }, status: 'submitted' },
     });
 
+    type ApprovalChainCounter = {
+      pending: number;
+      approved: number;
+      rejected: number;
+      cancelled: number;
+      overBudgetPending: number;
+      awaitingPartner: number;
+      overBudgetPartnerApproved: number;
+      overBudgetPartnerRejected: number;
+      latestStatus: string | null;
+      latestRequestedAt: Date | null;
+      latestApprovedAt: Date | null;
+      latestApproverName: string | null;
+      latestRequestType: string | null;
+    };
+
+    const approvalChainByJob = new Map<number, ApprovalChainCounter>();
+    const ensureApprovalCounter = (jobId: number) => {
+      const existing = approvalChainByJob.get(jobId);
+      if (existing) return existing;
+      const seeded: ApprovalChainCounter = {
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        cancelled: 0,
+        overBudgetPending: 0,
+        awaitingPartner: 0,
+        overBudgetPartnerApproved: 0,
+        overBudgetPartnerRejected: 0,
+        latestStatus: null,
+        latestRequestedAt: null,
+        latestApprovedAt: null,
+        latestApproverName: null,
+        latestRequestType: null,
+      };
+      approvalChainByJob.set(jobId, seeded);
+      return seeded;
+    };
+
+    approvalGroups.forEach((group) => {
+      const counter = ensureApprovalCounter(group.jobId);
+      const count = Number(group._count?._all || 0);
+      if (group.status === 'pending') counter.pending += count;
+      if (group.status === 'approved') counter.approved += count;
+      if (group.status === 'rejected') counter.rejected += count;
+      if (group.status === 'cancelled') counter.cancelled += count;
+    });
+
+    overBudgetGroups.forEach((group) => {
+      const counter = ensureApprovalCounter(group.jobId);
+      const count = Number(group._count?._all || 0);
+      if (group.status === 'pending') counter.overBudgetPending += count;
+      if (group.status === 'manager_approved') counter.awaitingPartner += count;
+      if (group.status === 'partner_approved') counter.overBudgetPartnerApproved += count;
+      if (group.status === 'partner_rejected') counter.overBudgetPartnerRejected += count;
+    });
+
+    latestApprovalRows.forEach((row) => {
+      const counter = ensureApprovalCounter(row.jobId);
+      if (counter.latestRequestedAt) return;
+      counter.latestStatus = row.status;
+      counter.latestRequestedAt = row.requestedAt;
+      counter.latestApprovedAt = row.approvedAt;
+      counter.latestRequestType = row.requestType;
+      counter.latestApproverName = row.approver
+        ? `${row.approver.firstName} ${row.approver.lastName}`.trim()
+        : null;
+    });
+
     const uniqueTeamMembers = new Set<number>();
     let totalRevenueCollected = 0;
     let totalProfit = 0;
@@ -341,18 +448,31 @@ export class PartnerService {
     let efficiencyCount = 0;
     let marginSum = 0;
     let marginCount = 0;
+    let jobsOverPlannedCost = 0;
+    let jobsOverPlannedHours = 0;
+    let jobsOverFeeCap = 0;
+    let jobsAwaitingPartner = 0;
+    let totalPendingApprovalRequests = 0;
+    let totalPlannedCost = 0;
+    let totalPlannedHours = 0;
+    let totalActualHours = 0;
 
     const topJobs = jobs.map((job) => {
       job.staffing.forEach((assignment) => uniqueTeamMembers.add(assignment.employeeProfileId));
 
-      const estimatedHours = Number(job.budgetHours || 0);
+      const estimatedHours = Number(
+        job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.jobCosting?.totalEstimatedHours ??
+          job.budgetHours ??
+          0
+      );
       const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours), 0);
       const billableHours = job.timeEntries
         .filter((entry) => entry.billable)
         .reduce((sum, entry) => sum + Number(entry.hours), 0);
       const allocationTotals = allocationByJob.get(job.id);
       const paymentTotal = paymentsByJob.get(job.id) || 0;
-      const feeAmount = Number(job.fixedFeeAmount || 0);
+      const feeAmount = Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
       const amountCollected = paymentTotal;
       const timeEntries = job.timeEntries as Array<{
         costAmount?: unknown;
@@ -367,6 +487,29 @@ export class PartnerService {
         return sum + entryCost;
       }, 0);
       const profit = amountCollected - costAmount;
+      const plannedCost = Number(job.jobCosting?.totalEstimatedCost || 0);
+      const plannedHours = Number(
+        job.jobCosting?.totalEstimatedHours ??
+          job.jobCosting?.budgetCap?.totalAllocatedHours ??
+          job.budgetHours ??
+          0
+      );
+      const feeCap = Number(
+        job.jobCosting?.jobFee ||
+          (job.billingType === 'fixed_fee' ? job.fixedFeeAmount : 0) ||
+          0
+      );
+      const costVariance = costAmount - plannedCost;
+      const hoursVariance = actualHours - plannedHours;
+      const costVariancePct = plannedCost > 0 ? (costVariance / plannedCost) * 100 : 0;
+      const hoursVariancePct = plannedHours > 0 ? (hoursVariance / plannedHours) * 100 : 0;
+      const remainingFeeBuffer = feeCap > 0 ? feeCap - costAmount : 0;
+      const approvalChain = approvalChainByJob.get(job.id) || ensureApprovalCounter(job.id);
+      const pendingApprovalTotal =
+        approvalChain.pending + approvalChain.overBudgetPending + approvalChain.awaitingPartner;
+      const isOverPlannedCost = plannedCost > 0 ? costAmount > plannedCost : false;
+      const isOverPlannedHours = plannedHours > 0 ? actualHours > plannedHours : false;
+      const isOverFeeCap = feeCap > 0 ? costAmount > feeCap : false;
 
       const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
       const margin = amountCollected > 0 ? (profit / amountCollected) * 100 : 0;
@@ -384,6 +527,14 @@ export class PartnerService {
       totalProfit += profit;
       totalCost += costAmount;
       totalFee += feeAmount;
+      totalPlannedCost += plannedCost;
+      totalPlannedHours += plannedHours;
+      totalActualHours += actualHours;
+      totalPendingApprovalRequests += pendingApprovalTotal;
+      if (isOverPlannedCost) jobsOverPlannedCost += 1;
+      if (isOverPlannedHours) jobsOverPlannedHours += 1;
+      if (isOverFeeCap) jobsOverFeeCap += 1;
+      if ((approvalChain.awaitingPartner || 0) > 0) jobsAwaitingPartner += 1;
 
       return {
         jobId: job.id,
@@ -400,6 +551,34 @@ export class PartnerService {
         profit,
         efficiencyRatio: efficiency,
         marginPercentage: margin,
+        plannedCost,
+        plannedHours,
+        actualCost: costAmount,
+        feeCap,
+        costVariance,
+        hoursVariance,
+        costVariancePct,
+        hoursVariancePct,
+        remainingFeeBuffer,
+        isOverPlannedCost,
+        isOverPlannedHours,
+        isOverFeeCap,
+        pendingApprovalTotal,
+        approvalChain: {
+          pending: approvalChain.pending,
+          approved: approvalChain.approved,
+          rejected: approvalChain.rejected,
+          cancelled: approvalChain.cancelled,
+          overBudgetPending: approvalChain.overBudgetPending,
+          awaitingPartner: approvalChain.awaitingPartner,
+          partnerApproved: approvalChain.overBudgetPartnerApproved,
+          partnerRejected: approvalChain.overBudgetPartnerRejected,
+          latestStatus: approvalChain.latestStatus,
+          latestRequestedAt: approvalChain.latestRequestedAt,
+          latestApprovedAt: approvalChain.latestApprovedAt,
+          latestApproverName: approvalChain.latestApproverName,
+          latestRequestType: approvalChain.latestRequestType,
+        },
       };
     });
 
@@ -427,6 +606,16 @@ export class PartnerService {
         averageEfficiency: efficiencyCount > 0 ? efficiencySum / efficiencyCount : 0,
         averageMargin: marginCount > 0 ? marginSum / marginCount : 0,
         totalTeamSize: uniqueTeamMembers.size,
+        totalPlannedCost,
+        totalPlannedHours,
+        totalActualHours,
+        totalCostVariance: totalCost - totalPlannedCost,
+        totalHoursVariance: totalActualHours - totalPlannedHours,
+        jobsOverPlannedCost,
+        jobsOverPlannedHours,
+        jobsOverFeeCap,
+        jobsAwaitingPartner,
+        totalPendingApprovalRequests,
       },
       clientFeedback: {
         totalSurveys,
@@ -434,8 +623,207 @@ export class PartnerService {
         responseRate,
         avgOverallSatisfaction,
       },
-      topJobs: topJobs.slice(0, 5),
+      topJobs,
       pendingTimeEntriesCount,
+    };
+  }
+
+  /**
+   * Approval chain visibility for partner-owned jobs
+   */
+  static async getPartnerApprovalChain(
+    partnerId: number,
+    auth: AuthContext,
+    options?: { jobId?: number }
+  ) {
+    const partner = await prisma.profile.findUnique({
+      where: { id: partnerId },
+      select: { id: true },
+    });
+
+    if (!partner) {
+      throw {
+        statusCode: 404,
+        message: 'Partner not found',
+      };
+    }
+
+    const canView =
+      auth.roleName === 'admin' ||
+      auth.roleName === 'manager' ||
+      auth.roleName === 'hr' ||
+      auth.roleName === 'hr_manager' ||
+      auth.profileId === partnerId;
+
+    if (!canView) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to view this approval chain',
+      };
+    }
+
+    const jobFilter: Record<string, any> = { partnerProfileId: partnerId };
+    if (options?.jobId) {
+      jobFilter.id = options.jobId;
+    }
+
+    const jobs = await prisma.job.findMany({
+      where: jobFilter,
+      select: {
+        id: true,
+        jobName: true,
+        jobCode: true,
+        client: { select: { id: true, clientName: true } },
+        manager: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { jobName: 'asc' },
+    });
+
+    if (options?.jobId && jobs.length === 0) {
+      throw {
+        statusCode: 404,
+        message: 'Job not found in partner portfolio',
+      };
+    }
+
+    const jobIds = jobs.map((job) => job.id);
+    if (jobIds.length === 0) {
+      return {
+        jobs: [],
+        summary: {
+          pending: 0,
+          approved: 0,
+          rejected: 0,
+          cancelled: 0,
+          overBudgetPending: 0,
+          awaitingPartner: 0,
+          managerRejected: 0,
+          partnerApproved: 0,
+          partnerRejected: 0,
+          autoRejected: 0,
+        },
+        standardRequests: [],
+        overBudgetRequests: [],
+      };
+    }
+
+    const [standardRequests, overBudgetRequests] = await Promise.all([
+      prisma.timeEntryApprovalRequest.findMany({
+        where: { jobId: { in: jobIds } },
+        orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
+        include: {
+          job: {
+            select: {
+              id: true,
+              jobName: true,
+              jobCode: true,
+              client: { select: { id: true, clientName: true } },
+            },
+          },
+          employee: { select: { id: true, firstName: true, lastName: true } },
+          approver: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.timeOverBudgetRequest.findMany({
+        where: { jobId: { in: jobIds } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: {
+          job: {
+            select: {
+              id: true,
+              jobName: true,
+              jobCode: true,
+              client: { select: { id: true, clientName: true } },
+            },
+          },
+          employee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+
+    const summary = {
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      cancelled: 0,
+      overBudgetPending: 0,
+      awaitingPartner: 0,
+      managerRejected: 0,
+      partnerApproved: 0,
+      partnerRejected: 0,
+      autoRejected: 0,
+    };
+
+    standardRequests.forEach((item) => {
+      if (item.status === 'pending') summary.pending += 1;
+      if (item.status === 'approved') summary.approved += 1;
+      if (item.status === 'rejected') summary.rejected += 1;
+      if (item.status === 'cancelled') summary.cancelled += 1;
+    });
+
+    overBudgetRequests.forEach((item) => {
+      if (item.status === 'pending') summary.overBudgetPending += 1;
+      if (item.status === 'manager_approved') summary.awaitingPartner += 1;
+      if (item.status === 'manager_rejected') summary.managerRejected += 1;
+      if (item.status === 'partner_approved') summary.partnerApproved += 1;
+      if (item.status === 'partner_rejected') summary.partnerRejected += 1;
+      if (item.status === 'auto_rejected') summary.autoRejected += 1;
+    });
+
+    return {
+      jobs: jobs.map((job) => ({
+        jobId: job.id,
+        jobName: job.jobName,
+        jobCode: job.jobCode,
+        clientName: job.client?.clientName ?? null,
+        managerName: job.manager
+          ? `${job.manager.firstName} ${job.manager.lastName}`.trim()
+          : null,
+      })),
+      summary,
+      standardRequests: standardRequests.map((item) => ({
+        id: item.id,
+        jobId: item.jobId,
+        jobName: item.job.jobName,
+        jobCode: item.job.jobCode,
+        clientName: item.job.client?.clientName ?? null,
+        employeeName: `${item.employee.firstName} ${item.employee.lastName}`.trim(),
+        status: item.status,
+        requestType: item.requestType,
+        currentAllocatedHours: Number(item.currentAllocatedHours || 0),
+        currentLoggedHours: Number(item.currentLoggedHours || 0),
+        additionalHoursRequested: Number(item.additionalHoursRequested || 0),
+        justification: item.justification,
+        approvalNotes: item.approvalNotes,
+        requestedAt: item.requestedAt,
+        approvedAt: item.approvedAt,
+        approverName: item.approver
+          ? `${item.approver.firstName} ${item.approver.lastName}`.trim()
+          : null,
+      })),
+      overBudgetRequests: overBudgetRequests.map((item) => ({
+        id: item.id,
+        jobId: item.jobId,
+        jobName: item.job.jobName,
+        jobCode: item.job.jobCode,
+        clientName: item.job.client?.clientName ?? null,
+        employeeName: `${item.employee.firstName} ${item.employee.lastName}`.trim(),
+        status: item.status,
+        billableType: item.billableType,
+        allocatedHours: Number(item.allocatedHours || 0),
+        loggedHours: Number(item.loggedHours || 0),
+        requestedAdditional: Number(item.requestedAdditional || 0),
+        totalAfterRequest: Number(item.totalAfterRequest || 0),
+        requiresPartnerApproval: Boolean(item.requiresPartnerApproval),
+        managerApproved: Boolean(item.managerApproved),
+        partnerApproved: Boolean(item.partnerApproved),
+        wouldExceedBudget: Boolean(item.wouldExceedBudget),
+        estimatedCostImpact: Number(item.estimatedCostImpact || 0),
+        approvalNotes: item.approvalNotes,
+        rejectionReason: item.rejectionReason,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
     };
   }
 

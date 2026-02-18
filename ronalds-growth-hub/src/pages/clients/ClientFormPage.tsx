@@ -125,7 +125,7 @@ export function ClientFormPage() {
 
   const { data: partnersData } = useQuery({
     queryKey: ['employees', 'partners'],
-    queryFn: () => employeesAPI.list({ isPartner: true, pageSize: 100 }),
+    queryFn: () => employeesAPI.listPartners(),
   });
 
   const { data: managersData } = useQuery({
@@ -133,7 +133,7 @@ export function ClientFormPage() {
     queryFn: () => employeesAPI.list({ pageSize: 100 }),
   });
 
-  const partners = partnersData?.data || [];
+  const partners = Array.isArray(partnersData) ? partnersData : partnersData?.data || [];
   const managers = managersData?.data || [];
 
   useEffect(() => {

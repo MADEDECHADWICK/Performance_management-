@@ -90,6 +90,34 @@ router.patch(
 );
 
 /**
+ * PATCH /time-entries/over-budget-requests/:requestId/approve
+ * Approve over-budget request (manager stage or partner stage)
+ */
+router.patch(
+  "/over-budget-requests/:requestId/approve",
+  authMiddleware,
+  loadProfile,
+  requireRole("manager", "partner", "admin", "super_admin"),
+  ...approvalRequestIdParamValidator,
+  handleValidationErrors,
+  TimeEntryController.approveOverBudgetRequest
+);
+
+/**
+ * PATCH /time-entries/over-budget-requests/:requestId/reject
+ * Reject over-budget request (manager stage or partner stage)
+ */
+router.patch(
+  "/over-budget-requests/:requestId/reject",
+  authMiddleware,
+  loadProfile,
+  requireRole("manager", "partner", "admin", "super_admin"),
+  ...approvalRequestIdParamValidator,
+  handleValidationErrors,
+  TimeEntryController.rejectOverBudgetRequest
+);
+
+/**
  * POST /time-entries
  * Create new time entry
  */

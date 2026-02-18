@@ -92,15 +92,69 @@ const parseDate = (value?: string): Date | undefined => {
 };
 
 export class DepartmentService {
+  private normalizeRoles(auth: AuthContext): Set<string> {
+    return new Set((auth.roles || []).map((role) => String(role).toLowerCase()));
+  }
+
+  private isPrivileged(auth: AuthContext): boolean {
+    const roles = this.normalizeRoles(auth);
+    return (
+      roles.has("admin") ||
+      roles.has("super_admin") ||
+      roles.has("hr") ||
+      roles.has("hr_manager")
+    );
+  }
+
   private requireAdminOrHr(auth: AuthContext) {
-    const roles = auth.roles ?? [];
-    const isAdmin = roles.includes("admin") || roles.includes("super_admin");
-    const isHr = roles.includes("hr") || roles.includes("hr_manager");
-    if (!isAdmin && !isHr) {
+    if (!this.isPrivileged(auth)) {
       const err = new Error("Forbidden");
       (err as any).statusCode = 403;
       throw err;
     }
+  }
+
+  private async assertDepartmentAccess(departmentId: number, auth?: AuthContext) {
+    if (!auth) return;
+    if (this.isPrivileged(auth)) return;
+
+    const profile = await prisma.profile.findUnique({
+      where: { id: auth.profileId },
+      select: {
+        id: true,
+        departmentId: true,
+        departmentsHeaded: { select: { id: true } },
+        departmentsAsPartner: { select: { id: true } },
+      },
+    });
+
+    if (!profile) {
+      const err = new Error("Profile not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const headedIds = new Set(profile.departmentsHeaded.map((department) => department.id));
+    const partnerIds = new Set(profile.departmentsAsPartner.map((department) => department.id));
+    if (
+      profile.departmentId === departmentId ||
+      headedIds.has(departmentId) ||
+      partnerIds.has(departmentId)
+    ) {
+      return;
+    }
+
+    const directReportsInDepartment = await prisma.profile.count({
+      where: {
+        managerId: auth.profileId,
+        departmentId,
+      },
+    });
+    if (directReportsInDepartment > 0) return;
+
+    const err = new Error("Forbidden");
+    (err as any).statusCode = 403;
+    throw err;
   }
 
   /**
@@ -193,7 +247,7 @@ export class DepartmentService {
   /**
    * Get department by id
    */
-  async getDepartmentById(departmentId: number) {
+  async getDepartmentById(departmentId: number, auth?: AuthContext) {
     const department = await prisma.department.findUnique({
       where: { id: departmentId },
       include: {
@@ -209,6 +263,8 @@ export class DepartmentService {
       (err as any).statusCode = 404;
       throw err;
     }
+
+    await this.assertDepartmentAccess(departmentId, auth);
 
     if (!department?.partnerProfileId) return department;
     const partner = await prisma.profile.findUnique({
@@ -227,7 +283,7 @@ export class DepartmentService {
   /**
    * List departments (pagination + sorting)
    */
-  async listDepartments(options: ListDepartmentsOptions) {
+  async listDepartments(options: ListDepartmentsOptions, auth?: AuthContext) {
     const {
       page,
       pageSize,
@@ -236,9 +292,41 @@ export class DepartmentService {
     } = options;
 
     const skip = (page - 1) * pageSize;
+    let where: Prisma.DepartmentWhereInput | undefined;
+
+    if (auth && !this.isPrivileged(auth)) {
+      const profile = await prisma.profile.findUnique({
+        where: { id: auth.profileId },
+        select: {
+          departmentId: true,
+          departmentsHeaded: { select: { id: true } },
+          departmentsAsPartner: { select: { id: true } },
+        },
+      });
+
+      const scopedIds = new Set<number>();
+      if (profile?.departmentId) scopedIds.add(profile.departmentId);
+      profile?.departmentsHeaded.forEach((department) => scopedIds.add(department.id));
+      profile?.departmentsAsPartner.forEach((department) => scopedIds.add(department.id));
+
+      const scopedConditions: Prisma.DepartmentWhereInput[] = [];
+      if (scopedIds.size > 0) {
+        scopedConditions.push({ id: { in: Array.from(scopedIds) } });
+      }
+      scopedConditions.push({
+        profiles: {
+          some: {
+            managerId: auth.profileId,
+          },
+        },
+      });
+
+      where = { OR: scopedConditions };
+    }
 
     const [departments, total] = await Promise.all([
       prisma.department.findMany({
+        where,
         skip,
         take: pageSize,
         orderBy:
@@ -250,7 +338,7 @@ export class DepartmentService {
           _count: { select: { profiles: true, jobs: true, kpis: true } },
         },
       }),
-      prisma.department.count(),
+      prisma.department.count({ where }),
     ]);
 
     const partnerIds = Array.from(
@@ -293,8 +381,8 @@ export class DepartmentService {
   /**
    * Back-compat helper: get department (with auth optional)
    */
-  async getDepartment(departmentId: number) {
-    return this.getDepartmentById(departmentId);
+  async getDepartment(departmentId: number, auth?: AuthContext) {
+    return this.getDepartmentById(departmentId, auth);
   }
 
   /**
@@ -310,7 +398,7 @@ export class DepartmentService {
    * Back-compat helper: list department employees
    */
   async getDepartmentEmployees(departmentId: number, auth: AuthContext) {
-    this.requireAdminOrHr(auth);
+    await this.assertDepartmentAccess(departmentId, auth);
     return this.listDepartmentEmployees(departmentId);
   }
 
@@ -318,9 +406,63 @@ export class DepartmentService {
    * Back-compat helper: get department manager (head)
    */
   async getDepartmentManager(departmentId: number, auth: AuthContext) {
-    this.requireAdminOrHr(auth);
-    const dept = await this.getDepartmentById(departmentId);
+    const dept = await this.getDepartmentById(departmentId, auth);
     return dept.departmentHead ?? null;
+  }
+
+  /**
+   * Get all managers in a department.
+   * A manager here means profile role/title contains "manager", excluding partners.
+   */
+  async getDepartmentManagers(departmentId: number, auth: AuthContext) {
+    await this.assertDepartmentAccess(departmentId, auth);
+    await this.getDepartmentById(departmentId, auth);
+
+    const members = await prisma.profile.findMany({
+      where: {
+        departmentId,
+        status: "active",
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        positionTitle: true,
+        isPartner: true,
+        role: { select: { id: true, name: true } },
+        user: {
+          select: {
+            roles: {
+              include: {
+                role: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+
+    return members
+      .filter((member) => {
+        if (member.isPartner) return false;
+        const positionLabel = String(member.positionTitle || "").toLowerCase();
+        const positionRoleLabel = String(member.role?.name || "").toLowerCase();
+        const authRoleLabels = (member.user?.roles || [])
+          .map((entry) => String(entry.role?.name || "").toLowerCase());
+        return (
+          positionLabel.includes("manager") ||
+          positionRoleLabel.includes("manager") ||
+          authRoleLabels.some((role) => role.includes("manager"))
+        );
+      })
+      .map((member) => ({
+        id: member.id,
+        firstName: member.firstName,
+        lastName: member.lastName,
+        positionTitle: member.positionTitle,
+        role: member.role,
+      }));
   }
 
   /**
@@ -817,8 +959,12 @@ export class DepartmentService {
    * Team KPI breakdown by evaluation team
    * Uses latest performance score per employee (if available).
    */
-  async getDepartmentTeamKpis(departmentId: number, opts: TeamKpiOptions = {}) {
-    await this.getDepartmentById(departmentId);
+  async getDepartmentTeamKpis(
+    departmentId: number,
+    opts: TeamKpiOptions = {},
+    auth?: AuthContext
+  ) {
+    await this.getDepartmentById(departmentId, auth);
 
     const statusFilter = opts.status && opts.status !== "all" ? opts.status : undefined;
 

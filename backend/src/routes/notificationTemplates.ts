@@ -59,4 +59,12 @@ router.delete(
   NotificationTemplateController.deleteTemplate
 );
 
+router.post(
+  "/seed-defaults",
+  authMiddleware,
+  loadProfile,
+  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  NotificationTemplateController.seedDefaults
+);
+
 export default router;

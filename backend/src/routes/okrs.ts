@@ -1,21 +1,85 @@
 import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { requireRole } from "../middleware/reqiureRole";
 import { createAudit } from "../utils/audit";
 import { OkrApprovalStatus, OkrStatus } from "@prisma/client";
 
 const router = Router();
+const privilegedRoles = new Set([
+  "admin",
+  "super_admin",
+  "hr",
+  "hr_manager",
+  "gmp",
+  "group_managing_partner",
+  "partner",
+]);
+
+const getRoleNames = (req: AuthRequest) => {
+  const roles = [
+    ...(req.userRoles || []),
+    ...(req.user?.authRoles || []),
+    req.profile?.role?.name,
+  ]
+    .filter(Boolean)
+    .map((role) => String(role).toLowerCase());
+  return Array.from(new Set(roles));
+};
+
+const isPrivileged = (req: AuthRequest) =>
+  getRoleNames(req).some((role) => privilegedRoles.has(role));
+
+const isManagerRole = (req: AuthRequest) =>
+  getRoleNames(req).some((role) => role.includes("manager") || role.includes("team lead"));
+
+const resolveRequesterProfileId = (req: AuthRequest) =>
+  req.profile?.id ?? (req.user?.profileId ? Number(req.user.profileId) : undefined);
+
+const parseOptionalInt = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
+};
+
+const canAccessOwner = async (req: AuthRequest, ownerProfileId: number) => {
+  if (isPrivileged(req)) return true;
+
+  const requesterId = resolveRequesterProfileId(req);
+  if (!requesterId) return false;
+  if (requesterId === ownerProfileId) return true;
+
+  if (isManagerRole(req)) {
+    const owner = await prisma.profile.findUnique({
+      where: { id: ownerProfileId },
+      select: { managerId: true },
+    });
+    return owner?.managerId === requesterId;
+  }
+
+  return false;
+};
+
+const canManageObjective = async (
+  req: AuthRequest,
+  objectiveId: number
+): Promise<{ allowed: boolean; objective?: { id: number; ownerProfileId: number } }> => {
+  const objective = await prisma.okrObjective.findUnique({
+    where: { id: objectiveId },
+    select: { id: true, ownerProfileId: true },
+  });
+  if (!objective) return { allowed: false };
+  const allowed = await canAccessOwner(req, objective.ownerProfileId);
+  return { allowed, objective };
+};
 
 // GET /okrs?ownerProfileId=1&departmentId=2&cycleId=3&status=active&approvalStatus=pending
 router.get("/", authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const ownerProfileId = req.query.ownerProfileId
-      ? Number(req.query.ownerProfileId)
-      : undefined;
-    const departmentId = req.query.departmentId
-      ? Number(req.query.departmentId)
-      : undefined;
-    const cycleId = req.query.cycleId ? Number(req.query.cycleId) : undefined;
+    const ownerProfileId = parseOptionalInt(req.query.ownerProfileId);
+    const kpiId = parseOptionalInt(req.query.kpiId);
+    const departmentId = parseOptionalInt(req.query.departmentId);
+    const cycleId = parseOptionalInt(req.query.cycleId);
     const status = typeof req.query.status === "string" && req.query.status in OkrStatus
       ? (req.query.status as OkrStatus)
       : undefined;
@@ -23,16 +87,54 @@ router.get("/", authMiddleware, async (req: AuthRequest, res) => {
       typeof req.query.approvalStatus === "string" && req.query.approvalStatus in OkrApprovalStatus
         ? (req.query.approvalStatus as OkrApprovalStatus)
         : undefined;
+    const requesterId = resolveRequesterProfileId(req);
+    if (!requesterId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    let ownerFilter: number[] | undefined;
+    if (ownerProfileId) {
+      if (!(await canAccessOwner(req, ownerProfileId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      ownerFilter = [ownerProfileId];
+    } else if (!isPrivileged(req)) {
+      if (isManagerRole(req)) {
+        const directReports = await prisma.profile.findMany({
+          where: { managerId: requesterId },
+          select: { id: true },
+        });
+        ownerFilter = Array.from(
+          new Set([requesterId, ...directReports.map((profile) => profile.id)])
+        );
+      } else {
+        ownerFilter = [requesterId];
+      }
+    }
 
     const objectives = await prisma.okrObjective.findMany({
       where: {
-        ...(ownerProfileId ? { ownerProfileId } : {}),
+        ...(ownerFilter ? { ownerProfileId: { in: ownerFilter } } : {}),
+        ...(kpiId ? { kpiId } : {}),
         ...(departmentId ? { departmentId } : {}),
         ...(cycleId ? { cycleId } : {}),
         ...(status ? { status } : {}),
         ...(approvalStatus ? { approvalStatus } : {}),
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+            isActive: true,
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -83,6 +185,8 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       title,
       description,
       ownerProfileId,
+      kpiId,
+      kpi_id,
       departmentId,
       cycleId,
       startDate,
@@ -92,17 +196,55 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       keyResults,
     } = req.body;
 
-    if (!title || !ownerProfileId) {
-      return res.status(400).json({ error: "title and ownerProfileId required" });
+    const requesterId = resolveRequesterProfileId(req);
+    if (!requesterId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!title) {
+      return res.status(400).json({ error: "title required" });
+    }
+
+    const resolvedOwnerProfileId =
+      parseOptionalInt(ownerProfileId) ?? parseOptionalInt((req.body as any)?.owner_profile_id) ?? requesterId;
+    if (!resolvedOwnerProfileId) {
+      return res.status(400).json({ error: "ownerProfileId required" });
+    }
+
+    if (resolvedOwnerProfileId !== requesterId && !isPrivileged(req)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const owner = await prisma.profile.findUnique({
+      where: { id: resolvedOwnerProfileId },
+      select: { id: true, departmentId: true },
+    });
+    if (!owner) {
+      return res.status(404).json({ error: "Owner profile not found" });
+    }
+
+    const resolvedKpiId = parseOptionalInt(kpiId ?? kpi_id);
+    if (resolvedKpiId) {
+      const kpi = await prisma.kpi.findUnique({
+        where: { id: resolvedKpiId },
+        select: { id: true, isActive: true },
+      });
+      if (!kpi) {
+        return res.status(404).json({ error: "KPI not found" });
+      }
+      if (!kpi.isActive) {
+        return res.status(400).json({ error: "Cannot link archived KPI" });
+      }
     }
 
     const objective = await prisma.okrObjective.create({
       data: {
         title,
         description,
-        ownerProfileId: Number(ownerProfileId),
-        departmentId: departmentId ? Number(departmentId) : undefined,
-        cycleId: cycleId ? Number(cycleId) : undefined,
+        ownerProfileId: resolvedOwnerProfileId,
+        kpiId: resolvedKpiId,
+        departmentId: parseOptionalInt(departmentId) ?? owner.departmentId ?? undefined,
+        cycleId: parseOptionalInt(cycleId),
         startDate: startDate ? new Date(startDate) : undefined,
         endDate: endDate ? new Date(endDate) : undefined,
         status: (status as OkrStatus) || OkrStatus.active,
@@ -121,7 +263,19 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
             }
           : undefined,
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+          },
+        },
+      },
     });
 
     const performedBy = req.user?.userId;
@@ -145,6 +299,8 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
     const {
       title,
       description,
+      kpiId,
+      kpi_id,
       departmentId,
       cycleId,
       startDate,
@@ -152,24 +308,62 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
       status,
       approvalStatus,
     } = req.body;
+    const objectiveId = Number(id);
+
+    const access = await canManageObjective(req, objectiveId);
+    if (!access.objective) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!access.allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const existing = await prisma.okrObjective.findUnique({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
     });
+    const resolvedKpiId = parseOptionalInt(kpiId ?? kpi_id);
+    if (resolvedKpiId) {
+      const kpi = await prisma.kpi.findUnique({
+        where: { id: resolvedKpiId },
+        select: { id: true, isActive: true },
+      });
+      if (!kpi) {
+        return res.status(404).json({ error: "KPI not found" });
+      }
+      if (!kpi.isActive) {
+        return res.status(400).json({ error: "Cannot link archived KPI" });
+      }
+    }
+    const shouldClearKpiLink =
+      (kpiId !== undefined || kpi_id !== undefined) && !resolvedKpiId;
 
     const objective = await prisma.okrObjective.update({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
       data: {
         ...(title !== undefined && { title }),
         ...(description !== undefined && { description }),
-        ...(departmentId !== undefined && { departmentId: Number(departmentId) }),
-        ...(cycleId !== undefined && { cycleId: Number(cycleId) }),
+        ...(departmentId !== undefined && { departmentId: parseOptionalInt(departmentId) ?? null }),
+        ...(cycleId !== undefined && { cycleId: parseOptionalInt(cycleId) ?? null }),
+        ...(resolvedKpiId ? { kpiId: resolvedKpiId } : {}),
+        ...(shouldClearKpiLink ? { kpiId: null } : {}),
         ...(startDate !== undefined && { startDate: startDate ? new Date(startDate) : null }),
         ...(endDate !== undefined && { endDate: endDate ? new Date(endDate) : null }),
         ...(status !== undefined && { status: status as OkrStatus }),
         ...(approvalStatus !== undefined && { approvalStatus: approvalStatus as OkrApprovalStatus }),
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+          },
+        },
+      },
     });
 
     const changedByProfileId = await getApproverProfileId(req);
@@ -202,16 +396,37 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
 router.post("/:id/submit", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const objectiveId = Number(id);
+    const access = await canManageObjective(req, objectiveId);
+    if (!access.objective) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!access.allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     const existing = await prisma.okrObjective.findUnique({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
     });
     const objective = await prisma.okrObjective.update({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
       data: {
         approvalStatus: OkrApprovalStatus.pending,
         submittedAt: new Date(),
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+          },
+        },
+      },
     });
 
     const changedByProfileId = await getApproverProfileId(req);
@@ -241,24 +456,47 @@ router.post("/:id/submit", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /okrs/:id/approve
-router.post("/:id/approve", authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  "/:id/approve",
+  authMiddleware,
+  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const objectiveId = Number(id);
     const { approvalNotes } = req.body || {};
     const approverProfileId = await getApproverProfileId(req);
     const existing = await prisma.okrObjective.findUnique({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
     });
+    if (!existing) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!(await canAccessOwner(req, existing.ownerProfileId))) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const objective = await prisma.okrObjective.update({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
       data: {
         approvalStatus: OkrApprovalStatus.approved,
         approvedAt: new Date(),
         approvedByProfileId: approverProfileId ?? undefined,
         approvalNotes: approvalNotes ?? undefined,
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+          },
+        },
+      },
     });
 
     await logOkrHistory({
@@ -286,24 +524,47 @@ router.post("/:id/approve", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /okrs/:id/reject
-router.post("/:id/reject", authMiddleware, async (req: AuthRequest, res) => {
+router.post(
+  "/:id/reject",
+  authMiddleware,
+  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const objectiveId = Number(id);
     const { approvalNotes } = req.body || {};
     const approverProfileId = await getApproverProfileId(req);
     const existing = await prisma.okrObjective.findUnique({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
     });
+    if (!existing) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!(await canAccessOwner(req, existing.ownerProfileId))) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const objective = await prisma.okrObjective.update({
-      where: { id: Number(id) },
+      where: { id: objectiveId },
       data: {
         approvalStatus: OkrApprovalStatus.rejected,
         approvedAt: new Date(),
         approvedByProfileId: approverProfileId ?? undefined,
         approvalNotes: approvalNotes ?? undefined,
       },
-      include: { keyResults: true },
+      include: {
+        keyResults: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            measurementUnit: true,
+            targetValue: true,
+            targetFrequency: true,
+          },
+        },
+      },
     });
 
     await logOkrHistory({
@@ -331,10 +592,22 @@ router.post("/:id/reject", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // DELETE /okrs/:id
-router.delete("/:id", authMiddleware, async (req: AuthRequest, res) => {
+router.delete(
+  "/:id",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    await prisma.okrObjective.delete({ where: { id: Number(id) } });
+    const objectiveId = Number(id);
+    const access = await canManageObjective(req, objectiveId);
+    if (!access.objective) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!access.allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    await prisma.okrObjective.delete({ where: { id: objectiveId } });
 
     const performedBy = req.user?.userId;
     await createAudit({
@@ -354,6 +627,15 @@ router.delete("/:id", authMiddleware, async (req: AuthRequest, res) => {
 router.post("/:id/key-results", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const objectiveId = Number(id);
+    const access = await canManageObjective(req, objectiveId);
+    if (!access.objective) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!access.allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     const { title, unit, targetValue, currentValue, weight, status } = req.body;
 
     if (!title || targetValue === undefined) {
@@ -362,7 +644,7 @@ router.post("/:id/key-results", authMiddleware, async (req: AuthRequest, res) =>
 
     const keyResult = await prisma.okrKeyResult.create({
       data: {
-        objectiveId: Number(id),
+        objectiveId,
         title,
         unit,
         targetValue,
@@ -388,6 +670,12 @@ router.patch("/key-results/:krId", authMiddleware, async (req: AuthRequest, res)
       where: { id: Number(krId) },
       include: { objective: true },
     });
+    if (!existing) {
+      return res.status(404).json({ error: "OKR key result not found" });
+    }
+    if (!(await canAccessOwner(req, existing.objective.ownerProfileId))) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const keyResult = await prisma.okrKeyResult.update({
       where: { id: Number(krId) },
@@ -436,9 +724,20 @@ router.get("/:id/history", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const limit = req.query.limit ? Number(req.query.limit) : 10;
+    const objectiveId = Number(id);
+    const objective = await prisma.okrObjective.findUnique({
+      where: { id: objectiveId },
+      select: { ownerProfileId: true },
+    });
+    if (!objective) {
+      return res.status(404).json({ error: "OKR objective not found" });
+    }
+    if (!(await canAccessOwner(req, objective.ownerProfileId))) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const history = await prisma.okrProgressHistory.findMany({
-      where: { objectiveId: Number(id) },
+      where: { objectiveId },
       orderBy: { changedAt: "desc" },
       take: limit,
       include: {
@@ -458,16 +757,42 @@ router.get("/:id/history", authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // GET /okrs/history?limit=20&ownerProfileId=1
-router.get("/history/all", authMiddleware, async (req: AuthRequest, res) => {
+router.get(
+  "/history/all",
+  authMiddleware,
+  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  async (req: AuthRequest, res) => {
   try {
     const limit = req.query.limit ? Number(req.query.limit) : 20;
-    const ownerProfileId = req.query.ownerProfileId
-      ? Number(req.query.ownerProfileId)
-      : undefined;
+    const ownerProfileId = parseOptionalInt(req.query.ownerProfileId);
+    const requesterId = resolveRequesterProfileId(req);
+    if (!requesterId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    let ownerFilter: number[] | undefined;
+    if (ownerProfileId) {
+      if (!(await canAccessOwner(req, ownerProfileId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      ownerFilter = [ownerProfileId];
+    } else if (!isPrivileged(req)) {
+      if (isManagerRole(req)) {
+        const directReports = await prisma.profile.findMany({
+          where: { managerId: requesterId },
+          select: { id: true },
+        });
+        ownerFilter = Array.from(
+          new Set([requesterId, ...directReports.map((profile) => profile.id)])
+        );
+      } else {
+        ownerFilter = [requesterId];
+      }
+    }
 
     const history = await prisma.okrProgressHistory.findMany({
-      where: ownerProfileId
-        ? { objective: { ownerProfileId } }
+      where: ownerFilter
+        ? { objective: { ownerProfileId: { in: ownerFilter } } }
         : undefined,
       orderBy: { changedAt: "desc" },
       take: limit,
@@ -488,6 +813,17 @@ router.get("/history/all", authMiddleware, async (req: AuthRequest, res) => {
 router.delete("/key-results/:krId", authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { krId } = req.params;
+    const existing = await prisma.okrKeyResult.findUnique({
+      where: { id: Number(krId) },
+      include: { objective: { select: { ownerProfileId: true } } },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "OKR key result not found" });
+    }
+    if (!(await canAccessOwner(req, existing.objective.ownerProfileId))) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     await prisma.okrKeyResult.delete({ where: { id: Number(krId) } });
     return res.json({ ok: true });
   } catch (error: any) {

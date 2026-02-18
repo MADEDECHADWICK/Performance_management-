@@ -7,6 +7,8 @@ import {
   createOnboardingCaseValidators,
   updateOnboardingCaseValidators,
   getOnboardingCaseValidators,
+  updateOnboardingStageValidators,
+  initializeOnboardingStagesValidators,
 } from "../validators/employeeOnboardingCase.validators";
 
 const router = Router();
@@ -53,6 +55,28 @@ router.patch(
   validateRequest(updateOnboardingCaseValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.update
+);
+
+/**
+ * PATCH /onboarding-cases/stages/:stageId (HR/Admin)
+ */
+router.patch(
+  "/stages/:stageId",
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  validateRequest(updateOnboardingStageValidators),
+  handleValidationErrors,
+  EmployeeOnboardingCaseController.updateStage
+);
+
+/**
+ * POST /onboarding-cases/:caseId/initialize-stages (HR/Admin)
+ */
+router.post(
+  "/:caseId/initialize-stages",
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  validateRequest(initializeOnboardingStagesValidators),
+  handleValidationErrors,
+  EmployeeOnboardingCaseController.initializeStages
 );
 
 export default router;

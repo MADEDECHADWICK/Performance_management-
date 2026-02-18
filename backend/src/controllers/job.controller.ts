@@ -25,10 +25,14 @@ export class JobController {
         ? statusParam.split(",").map((value) => value.trim()).filter(Boolean)
         : undefined;
 
+      const roleHints = [req.profile?.role?.name].filter(Boolean) as string[];
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: [
+          ...((req as any).userRoles || req.user?.authRoles || []),
+          ...roleHints,
+        ],
       };
 
       const result = await jobService.listJobs(

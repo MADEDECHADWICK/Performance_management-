@@ -2,15 +2,17 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, TrendingUp, Users, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle, CheckCircle2 } from "lucide-react";
+import { BarChart3, TrendingUp, Users, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Bell } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface PerformanceData {
   overallScore: number;
+  grade: string;
   revenueContribution: number;
   allocatedRevenue: number;
   billableHours: number;
@@ -18,123 +20,130 @@ interface PerformanceData {
   clientRating: number;
   clientReviewCount: number;
   financialScore: number;
+  nonFinancialScore: number;
+  efficiencyScore: number;
   customerScore: number;
   internalProcessScore: number;
   learningGrowthScore: number;
   okrScore: number;
   projectEvaluationScore: number;
+  roleFormula: string;
+  jobScope: string;
+  overallWeights: {
+    financial: number;
+    nonFinancial: number;
+    efficiency?: number;
+  };
+  financialSignals: {
+    revenueScore: number;
+    profitScore: number;
+    bdScore: number;
+  };
   lossAlert?: boolean;
+  insights: string[];
 }
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const {
+    user,
+    profile,
+    isLoading: authLoading,
+    isAdmin,
+    isHR,
+    isGMP,
+    isPartner,
+    isManager,
+    hasRole,
+  } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
   const [unreadNotifications, setUnreadNotifications] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [isPartner, setIsPartner] = useState(false);
+  const [isPartnerView, setIsPartnerView] = useState(false);
   const [partnerData, setPartnerData] = useState<any>(null);
 
   useEffect(() => {
-    checkUserRoleAndLoadData();
-  }, []);
-
-  const checkUserRoleAndLoadData = async () => {
-    try {
-      const user = await authAPI.me();
-      if (!user) {
-        navigate("/auth");
-        return;
-      }
-
-      // Store user in sessionStorage for component access
-      sessionStorage.setItem('currentUser', JSON.stringify(user));
-
-      const roles = await apiFetch("GET", `/user-roles?userId=${user.id}`);
-      const userRoles = roles?.map((r: any) => r.role) || [];
-      
-      // Get user profile to check for GMP position
-      const profileResponse = await apiFetch(
-        'GET',
-        `/profiles/email/${encodeURIComponent(user.email)}`
-      );
-      const userProfile = profileResponse?.data ?? profileResponse;
-      
-      // Check if user is Group Managing Partner
-      const isGMP = userProfile?.positionTitle?.toLowerCase().includes('group_managing_partner') || 
-                    userProfile?.positionTitle?.toLowerCase().includes('group managing partner') ||
-                    userProfile?.positionTitle === 'group_managing_partner' ||
-                    userRoles.includes('group_managing_partner');
-      
-      // Redirect GMP to executive dashboard
-      if (isGMP) {
-        navigate("/gmp-dashboard", { replace: true });
-        return;
-      }
-      
-      // Redirect HR/Admin to dedicated HR dashboard
-      if (userRoles.includes("hr_manager") || userRoles.includes("super_admin")) {
-        navigate("/hr-dashboard", { replace: true });
-        return;
-      }
-
-      // Check if user is a partner (not GMP) - redirect to partner dashboard
-      const isPartner = userProfile?.positionTitle?.toLowerCase() === 'partner' || 
-                        userProfile?.isPartner === true ||
-                        userRoles.includes('partner');
-      
-      if (isPartner) {
-        navigate("/partner-dashboard", { replace: true });
-        return;
-      }
-
-      // Check if user is a manager - redirect to manager dashboard
-      const isManager = userProfile?.positionTitle?.toLowerCase().includes('manager') ||
-                        userProfile?.positionTitle?.toLowerCase() === 'manager' ||
-                        userRoles.includes('manager');
-      
-      if (isManager) {
-        navigate("/manager-dashboard", { replace: true });
-        return;
-      }
-
-      const isMarketing =
-        userRoles.includes('marketing') ||
-        userRoles.includes('business_development') ||
-        userProfile?.positionTitle?.toLowerCase().includes('marketing') ||
-        userProfile?.positionTitle?.toLowerCase().includes('business development');
-
-      if (isMarketing) {
-        navigate("/marketing-dashboard", { replace: true });
-        return;
-      }
-
-      const isFinance =
-        userRoles.includes('finance') ||
-        userProfile?.positionTitle?.toLowerCase().includes('finance');
-
-      if (isFinance) {
-        navigate("/finance-dashboard", { replace: true });
-        return;
-      }
-
-      // Default: Load employee dashboard data
-      await loadPersonalPerformance(user.id);
-      await loadRecentActivity(user.id);
-      await loadEmployeeNotifications();
-    } catch (error) {
-      console.error("Error loading dashboard:", error);
-      toast({
-        title: "Error",
-        description: "Failed to load dashboard data",
-        variant: "destructive"
-      });
-    } finally {
-      setIsLoading(false);
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
     }
-  };
+
+    const load = async () => {
+      setIsLoading(true);
+      try {
+        sessionStorage.setItem('currentUser', JSON.stringify(user));
+
+        if (isGMP) {
+          navigate("/gmp-dashboard", { replace: true });
+          return;
+        }
+        if (isHR || isAdmin) {
+          navigate("/hr-dashboard", { replace: true });
+          return;
+        }
+        if (isPartner) {
+          navigate("/partner-dashboard", { replace: true });
+          return;
+        }
+        if (isManager) {
+          navigate("/manager-dashboard", { replace: true });
+          return;
+        }
+
+        const normalizedPosition = profile?.positionTitle?.toLowerCase() || "";
+        const isMarketing =
+          hasRole('marketing') ||
+          hasRole('business_development') ||
+          normalizedPosition.includes('marketing') ||
+          normalizedPosition.includes('business development');
+
+        if (isMarketing) {
+          navigate("/marketing-dashboard", { replace: true });
+          return;
+        }
+
+        const isFinance = hasRole('finance') || normalizedPosition.includes('finance');
+        if (isFinance) {
+          navigate("/finance-dashboard", { replace: true });
+          return;
+        }
+
+        const userProfileId = Number(
+          user.profileId ?? (user as any).profile_id ?? user.profile?.id ?? 0
+        );
+        await loadPersonalPerformance(userProfileId);
+        await loadRecentActivity(userProfileId);
+        await loadEmployeeNotifications();
+      } catch (error) {
+        console.error("Error loading dashboard:", error);
+        toast({
+          title: "Error",
+          description: "Failed to load dashboard data",
+          variant: "destructive"
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    load();
+  }, [
+    authLoading,
+    user,
+    profile,
+    isGMP,
+    isHR,
+    isAdmin,
+    isPartner,
+    isManager,
+    hasRole,
+    navigate,
+    toast,
+  ]);
 
   const loadEmployeeNotifications = async () => {
     try {
@@ -161,7 +170,7 @@ const Dashboard = () => {
     }
   };
 
-  const loadPersonalPerformance = async (userId: string) => {
+  const loadPersonalPerformance = async (userProfileId: number) => {
     try {
       // Prefer new performance score endpoint (financials tied to collections)
       const performanceResponse = await apiFetch("GET", "/performance-scores/me");
@@ -172,16 +181,64 @@ const Dashboard = () => {
       if (performancePayload?.financial && performancePayload?.overall) {
         const financial = performancePayload.financial;
         const nonFinancial = performancePayload.nonFinancial || {};
+        const formula = performancePayload.formula || {};
+        const scoreBreakdown = performancePayload.scoreBreakdown || {};
         const utilizationPercent = Math.round((financial.utilizationRate || 0) * 100);
         const customerRating =
           typeof nonFinancial.customerSatisfactionScore === "number"
             ? Math.round((nonFinancial.customerSatisfactionScore / 20) * 10) / 10
             : 0;
         const lossAlert = Boolean(performancePayload?.scoreBreakdown?.lossAlert);
-        const allocatedRevenueTotal = Number(analyticsPayload?.allocatedRevenueTotal || financial.revenue || 0);
+        const allocatedRevenueTotal = Number(
+          scoreBreakdown?.allocationRevenue ??
+          analyticsPayload?.allocatedRevenueTotal ??
+          financial.revenue ??
+          0
+        );
+        const nonFinancialWeight = Number(formula?.overallWeights?.nonFinancial ?? 0.3);
+        const operationalEfficiencyBlend = Number(
+          formula?.nonFinancialOperationalBlend?.operationalEfficiency ?? 0.3
+        );
+        const overallWeights = {
+          financial: Number(formula?.overallWeights?.financial ?? 0.7),
+          nonFinancial: nonFinancialWeight,
+          efficiency: Number(
+            formula?.overallWeights?.efficiency ??
+              nonFinancialWeight * operationalEfficiencyBlend
+          ),
+        };
+        const roleFormula = String(
+          formula?.role ||
+          scoreBreakdown?.role ||
+          profile?.positionTitle ||
+          "employee"
+        );
+        const jobScope = String(formula?.jobScope || scoreBreakdown?.jobScope || "assigned");
+        const financialSignals = {
+          revenueScore: Number(formula?.financial?.scores?.revenue || financial?.revenueScore || 0),
+          profitScore: Number(formula?.financial?.scores?.profit || financial?.profitScore || 0),
+          bdScore: Number(formula?.financial?.scores?.bd || financial?.bdScore || 0),
+        };
+        const insights: string[] = [];
+        if (Number(financial.financialWeighted || 0) <= 0) {
+          insights.push("No financial contribution captured in this period (cash allocation/profit/BD signals are zero).");
+        }
+        if (Number(financial.billableHours || 0) <= 0) {
+          insights.push("No approved billable time entries captured in this period.");
+        }
+        if (Number(nonFinancial.customerSatisfactionScore || 0) <= 0) {
+          insights.push("No client satisfaction ratings captured yet.");
+        }
+        if (Number(nonFinancial.learningGrowthScore || 0) <= 0 && Number(nonFinancial.okrScore || 0) <= 0) {
+          insights.push("Learning & growth inputs are missing (OKRs/evaluations/feedback).");
+        }
+        if (insights.length === 0) {
+          insights.push("Score is healthy. Keep maintaining your financial, delivery, and feedback inputs.");
+        }
 
         setPerformance({
           overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
+          grade: String(performancePayload.overall.grade || "N/A"),
           revenueContribution: financial.revenue || 0,
           allocatedRevenue: allocatedRevenueTotal,
           billableHours: financial.billableHours || 0,
@@ -189,39 +246,50 @@ const Dashboard = () => {
           clientRating: customerRating,
           clientReviewCount: 0,
           financialScore: Math.round(financial.financialWeighted || 0),
+          nonFinancialScore: Math.round(nonFinancial.overallNonFinancialScore || 0),
+          efficiencyScore: Math.round(performancePayload?.efficiency?.efficiencyWeighted || 0),
           customerScore: Math.round(nonFinancial.customerSatisfactionScore || 0),
           internalProcessScore: Math.round(nonFinancial.internalProcessesScore || 0),
           learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
           okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
+          roleFormula,
+          jobScope,
+          overallWeights,
+          financialSignals,
           lossAlert: lossAlert || Number(analyticsPayload?.lossTotal || 0) > 0,
+          insights,
         });
         return;
       }
 
-      const allocations = await apiFetch("GET", `/employee_project_allocations?employee_id=${userId}`);
-      const totalRevenue = allocations?.reduce((sum: number, a: any) => sum + (a.allocation_amount || 0), 0) || 0;
-      const totalBillableHours = allocations?.reduce((sum: number, a: any) => sum + (a.billable_hours || 0), 0) || 0;
+      const allocations = await apiFetch("GET", `/employee-project-allocations?employee_ids=${userProfileId}`);
+      const assignmentRows = Array.isArray(allocations) ? allocations : [];
+      const totalRevenue = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.allocatedRevenue || a?.allocationAmount || 0), 0);
+      const totalBillableHours = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.plannedHours || a?.billableHours || 0), 0);
 
       // Get client ratings
-      const clientEvals = await apiFetch("GET", `/client_evaluations?employee_id=${userId}`);
+      const clientEvals = await apiFetch("GET", `/client-evaluations?employee_ids=${userProfileId}`);
       const avgClientRating = clientEvals && clientEvals.length > 0
-        ? clientEvals.reduce((sum: number, e: any) => sum + (e.overall_rating || 0), 0) / clientEvals.length
+        ? clientEvals.reduce((sum: number, e: any) => sum + Number(e?.overallRating || e?.overall_rating || 0), 0) / clientEvals.length
         : 0;
 
       // Get KPI scores by BSC category
-      const kpiAssignments = await apiFetch("GET", `/employee_kpi_assignments?employee_id=${userId}`);
+      const kpiAssignments = await apiFetch("GET", `/employee-kpi-assignments`);
+      const scopedAssignments = (Array.isArray(kpiAssignments) ? kpiAssignments : []).filter(
+        (assignment: any) => Number(assignment?.employeeProfileId ?? assignment?.employee_id) === userProfileId
+      );
 
-      const financialKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "financial") || [];
-      const customerKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "customer") || [];
-      const internalKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "internal_processes") || [];
-      const learningKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "learning_growth") || [];
+      const financialKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "financial" || k?.kpi?.bsc_category === "financial");
+      const customerKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "customer" || k?.kpi?.bsc_category === "customer");
+      const internalKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "internal_processes" || k?.kpi?.bsc_category === "internal_processes");
+      const learningKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "learning_growth" || k?.kpi?.bsc_category === "learning_growth");
 
       const calculateScore = (kpis: any[]) => {
         if (kpis.length === 0) return 0;
         const total = kpis.reduce((sum, k) => {
-          const achieved = k.achieved_value || 0;
-          const target = k.target_value || 1;
+          const achieved = Number(k?.achievedValue ?? k?.achieved_value ?? 0);
+          const target = Number(k?.targetValue ?? k?.target_value ?? 1);
           return sum + (achieved / target) * 100;
         }, 0);
         return Math.min(100, total / kpis.length);
@@ -245,43 +313,67 @@ const Dashboard = () => {
 
       setPerformance({
         overallScore: Math.round(overallScore * 10) / 10,
+        grade: overallScore >= 90 ? "A" : overallScore >= 80 ? "B" : overallScore >= 70 ? "C" : overallScore >= 60 ? "D" : "E",
         revenueContribution: totalRevenue,
         allocatedRevenue: totalRevenue,
         billableHours: totalBillableHours,
         utilizationRate: Math.round(utilizationRate),
         clientRating: Math.round(avgClientRating * 10) / 10,
-        clientReviewCount: clientEvals?.length || 0,
+        clientReviewCount: Array.isArray(clientEvals) ? clientEvals.length : 0,
         financialScore: Math.round(financialScore),
+        nonFinancialScore: Math.round((customerScore + internalProcessScore + learningGrowthScore) / 3),
+        efficiencyScore: Math.round(utilizationRate),
         customerScore: Math.round(customerScore),
         internalProcessScore: Math.round(internalProcessScore),
         learningGrowthScore: Math.round(learningGrowthScore),
         okrScore: 0,
-        projectEvaluationScore: 0
+        projectEvaluationScore: 0,
+        roleFormula: String(profile?.positionTitle || "employee"),
+        jobScope: "assigned",
+        overallWeights: {
+          financial: 0.7,
+          nonFinancial: 0.3,
+          efficiency: 0.09,
+        },
+        financialSignals: {
+          revenueScore: Math.round(financialScore),
+          profitScore: 0,
+          bdScore: 0,
+        },
+        insights: [
+          "This view is using fallback metrics because score-engine data was unavailable.",
+        ],
       });
     } catch (error) {
       console.error("Error loading performance:", error);
     }
   };
 
-  const loadRecentActivity = async (userId: string) => {
+  const loadRecentActivity = async (userProfileId: number) => {
     try {
       const activities: any[] = [];
 
       // Check completed evaluations
-      const completedEvals = await apiFetch("GET", `/evaluation_assignments?evaluator_id=${userId}&status=completed&limit=1`);
+      const completedEvals = await apiFetch(
+        "GET",
+        `/evaluation-assignments?evaluatorProfileId=${userProfileId}&status=completed&limit=1&include=definition`
+      );
 
-      if (completedEvals && completedEvals.length > 0) {
+      if (Array.isArray(completedEvals) && completedEvals.length > 0) {
         activities.push({
           type: "success",
           title: "Evaluation completed",
-          description: `${completedEvals[0].evaluation_type} evaluation submitted`,
-          date: completedEvals[0].submitted_at
+          description: `${completedEvals[0]?.definition?.name || completedEvals[0]?.evaluatorType || "Assigned"} evaluation submitted`,
+          date: completedEvals[0]?.submittedAt || completedEvals[0]?.updatedAt
         });
       }
 
       // Check pending evaluations
-      const pendingEvals = await apiFetch("GET", `/evaluation_assignments?evaluator_id=${userId}&status=pending&count=true`);
-      const pendingCount = Array.isArray(pendingEvals) ? pendingEvals.length : pendingEvals?.count || 0;
+      const pendingEvals = await apiFetch(
+        "GET",
+        `/evaluation-assignments?evaluatorProfileId=${userProfileId}&status=pending&limit=100`
+      );
+      const pendingCount = Array.isArray(pendingEvals) ? pendingEvals.length : 0;
 
       if (pendingCount && pendingCount > 0) {
         activities.push({
@@ -293,14 +385,17 @@ const Dashboard = () => {
       }
 
       // Check KPI assignments
-      const kpiUpdates = await apiFetch("GET", `/employee_kpi_assignments?employee_id=${userId}&limit=1`);
+      const kpiUpdates = await apiFetch("GET", `/employee-kpi-assignments`);
+      const scopedUpdates = (Array.isArray(kpiUpdates) ? kpiUpdates : []).filter(
+        (assignment: any) => Number(assignment?.employeeProfileId ?? assignment?.employee_id) === userProfileId
+      );
 
-      if (kpiUpdates && kpiUpdates.length > 0) {
+      if (scopedUpdates.length > 0) {
         activities.push({
           type: "info",
           title: "KPI updated",
           description: "Performance metrics were recently updated",
-          date: kpiUpdates[0].updated_at
+          date: scopedUpdates[0]?.updatedAt || scopedUpdates[0]?.updated_at
         });
       }
 
@@ -312,26 +407,26 @@ const Dashboard = () => {
 
   const loadPartnerPerformance = async (user: any) => {
     try {
-      setIsPartner(true);
+      setIsPartnerView(true);
       
-      const profileId = user.profile_id ?? user.profileId;
+      const profileId = user.profile_id ?? user.profileId ?? user?.profile?.id;
       if (!profileId) {
         throw new Error('No profile ID found for partner');
       }
 
       // Get partner portfolio metrics
-      const portfolioRes = await apiFetch("GET", "/partner/portfolio");
+      const portfolioRes = await apiFetch("GET", "/partners/dashboard-summary");
       
       // Get top jobs
-      const jobsRes = await apiFetch("GET", "/partner/jobs");
+      const jobsRes = portfolioRes?.topJobs || [];
       
       // Get pending approvals
-      const pendingRes = await apiFetch("GET", "/partner/jobs?pending=true");
+      const pendingRes = Number(portfolioRes?.pendingTimeEntriesCount || 0);
 
       setPartnerData({
-        portfolio: portfolioRes,
+        portfolio: portfolioRes?.portfolio || {},
         topJobs: jobsRes?.slice(0, 5) || [],
-        pendingApprovalsCount: pendingRes?.length || 0
+        pendingApprovalsCount: pendingRes
       });
     } catch (error) {
       console.error("Error loading partner data:", error);
@@ -365,18 +460,19 @@ const Dashboard = () => {
       <div className="space-y-8">
         <div>
           <h2 className="text-3xl font-bold text-foreground mb-2">
-            {isPartner ? 'Partner Dashboard' : 'Welcome back!'}
+            {isPartnerView ? 'Partner Dashboard' : 'Welcome back!'}
           </h2>
           <p className="text-muted-foreground">
-            {isPartner 
+            {isPartnerView 
               ? `Here's an overview of your portfolio and projects.`
               : "Here's an overview of your personal performance metrics and activities."
             }
           </p>
         </div>
 
+
         {/* Partner Dashboard View */}
-        {isPartner && partnerData ? (
+        {isPartnerView && partnerData ? (
           <div className="space-y-6">
             {/* Partner Metrics Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -398,7 +494,7 @@ const Dashboard = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">
-                    KES {((partnerData.portfolio?.totalRevenue || 0) / 1000000).toFixed(1)}M
+                    KES {((partnerData.portfolio?.totalRevenueCollected || 0) / 1000000).toFixed(1)}M
                   </div>
                   <p className="text-xs text-muted-foreground">Collected</p>
                 </CardContent>
@@ -483,13 +579,15 @@ const Dashboard = () => {
               <div className="text-2xl font-bold text-primary">
                 {performance?.overallScore || 0}
               </div>
-              <p className="text-xs text-muted-foreground">Based on BSC framework</p>
+              <p className="text-xs text-muted-foreground">
+                Grade {performance?.grade || "N/A"} • {String(performance?.roleFormula || "employee").replaceAll("_", " ")}
+              </p>
             </CardContent>
           </Card>
 
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Allocated Revenue</CardTitle>
+              <CardTitle className="text-sm font-medium">Cash Revenue</CardTitle>
               <div className="flex items-center gap-2">
                 {performance?.lossAlert && (
                   <Badge variant="destructive">Loss alert</Badge>
@@ -500,40 +598,42 @@ const Dashboard = () => {
             <CardContent>
               <div
                 className="text-2xl font-bold text-foreground leading-tight break-words"
-                title={`KES ${((performance?.allocatedRevenue || 0) / 1000000).toFixed(1)}M`}
+                title={`KES ${(performance?.allocatedRevenue || 0).toLocaleString()}`}
               >
-                KES {((performance?.allocatedRevenue || 0) / 1000000).toFixed(1)}M
-              </div>
-              <p className="text-xs text-muted-foreground">Cash collected and allocated</p>
-            </CardContent>
-          </Card>
-
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Billable Hours</CardTitle>
-              <TrendingUp className="h-4 w-4 text-info" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                {performance?.billableHours || 0}
+                KES {(performance?.allocatedRevenue || 0).toLocaleString()}
               </div>
               <p className="text-xs text-muted-foreground">
-                {performance?.utilizationRate || 0}% utilization rate
+                Score driver: revenue {performance?.financialSignals?.revenueScore || 0}%
               </p>
             </CardContent>
           </Card>
 
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Client Rating</CardTitle>
+              <CardTitle className="text-sm font-medium">Financial Score</CardTitle>
+              <TrendingUp className="h-4 w-4 text-info" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-foreground">
+                {performance?.financialScore || 0}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Rev {performance?.financialSignals?.revenueScore || 0}% • Profit {performance?.financialSignals?.profitScore || 0}% • BD {performance?.financialSignals?.bdScore || 0}%
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Non-Financial & Efficiency</CardTitle>
               <Users className="h-4 w-4 text-secondary" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-foreground">
-                {performance?.clientRating || 0}/5.0
+                {performance?.nonFinancialScore || 0} / {performance?.efficiencyScore || 0}
               </div>
               <p className="text-xs text-muted-foreground">
-                Based on {performance?.clientReviewCount || 0} reviews
+                Client rating {performance?.clientRating || 0}/5.0 • Utilization {performance?.utilizationRate || 0}%
               </p>
             </CardContent>
           </Card>
@@ -547,13 +647,17 @@ const Dashboard = () => {
                 <Target className="h-5 w-5 text-primary" />
                 My Performance Scorecard
               </CardTitle>
-              <CardDescription>Balanced Scorecard framework breakdown</CardDescription>
+              <CardDescription>
+                Role formula: {String(performance?.roleFormula || "employee").replaceAll("_", " ")} • Scope: {String(performance?.jobScope || "assigned").replaceAll("_", " ")}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 <div>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Financial (40%)</span>
+                    <span className="font-medium">
+                      Financial ({Math.round((performance?.overallWeights?.financial || 0.7) * 100)}%)
+                    </span>
                     <span className="text-primary font-semibold">
                       {performance?.financialScore || 0}%
                     </span>
@@ -567,74 +671,53 @@ const Dashboard = () => {
                 </div>
                 <div>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Customer (30%)</span>
+                    <span className="font-medium">
+                      Non-Financial ({Math.round((performance?.overallWeights?.nonFinancial || 0.3) * 100)}%)
+                    </span>
                     <span className="text-success font-semibold">
-                      {performance?.customerScore || 0}%
+                      {performance?.nonFinancialScore || 0}%
                     </span>
                   </div>
                   <div className="w-full bg-muted rounded-full h-2">
                     <div 
                       className="bg-gradient-to-r from-success to-secondary h-2 rounded-full" 
-                      style={{ width: `${performance?.customerScore || 0}%` }} 
+                      style={{ width: `${performance?.nonFinancialScore || 0}%` }} 
                     />
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Internal Process (20%)</span>
+                    <span className="font-medium">
+                      Operational Efficiency Signal ({Math.round((performance?.overallWeights?.efficiency || 0.09) * 100)}% effective)
+                    </span>
                     <span className="text-info font-semibold">
-                      {performance?.internalProcessScore || 0}%
+                      {performance?.efficiencyScore || 0}%
                     </span>
                   </div>
                   <div className="w-full bg-muted rounded-full h-2">
                     <div 
                       className="bg-gradient-to-r from-info to-primary h-2 rounded-full" 
-                      style={{ width: `${performance?.internalProcessScore || 0}%` }} 
+                      style={{ width: `${performance?.efficiencyScore || 0}%` }} 
                     />
                   </div>
                 </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Learning & Growth (10%)</span>
-                    <span className="text-secondary font-semibold">
-                      {performance?.learningGrowthScore || 0}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div 
-                      className="bg-gradient-to-r from-secondary to-accent h-2 rounded-full" 
-                      style={{ width: `${performance?.learningGrowthScore || 0}%` }} 
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">OKR Progress</span>
-                    <span className="text-primary font-semibold">
-                      {performance?.okrScore || 0}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-gradient-to-r from-primary to-success h-2 rounded-full"
-                      style={{ width: `${performance?.okrScore || 0}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Project Evaluations</span>
-                    <span className="text-warning font-semibold">
-                      {performance?.projectEvaluationScore || 0}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
-                      style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
-                    />
-                  </div>
-                </div>
+              </div>
+              <div className="mt-4 rounded-md border p-3 space-y-1 text-sm">
+                <p className="font-medium">Component detail</p>
+                <p className="text-muted-foreground">
+                  Customer: {performance?.customerScore || 0}% • Internal: {performance?.internalProcessScore || 0}% • Learning: {performance?.learningGrowthScore || 0}%
+                </p>
+                <p className="text-muted-foreground">
+                  OKR: {performance?.okrScore || 0}% • Project eval: {performance?.projectEvaluationScore || 0}% • Billable hours: {performance?.billableHours || 0}
+                </p>
+              </div>
+              <div className="mt-4 rounded-md border p-3 space-y-2">
+                <p className="text-sm font-medium">What is affecting your score now</p>
+                <ul className="text-sm text-muted-foreground list-disc pl-4 space-y-1">
+                  {(performance?.insights || []).map((insight, idx) => (
+                    <li key={idx}>{insight}</li>
+                  ))}
+                </ul>
               </div>
               <Link to="/scorecard" className="block mt-4">
                 <Button className="w-full" variant="outline">
@@ -681,7 +764,7 @@ const Dashboard = () => {
                   <p className="text-sm text-muted-foreground">No recent activity</p>
                 )}
               </div>
-              <Link to="/my-evaluations" className="block mt-4">
+              <Link to="/evaluations" className="block mt-4">
                 <Button className="w-full" variant="outline">
                   View All Activity
                 </Button>

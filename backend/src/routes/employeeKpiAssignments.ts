@@ -1,15 +1,327 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { loadProfile } from '../middleware/loadProfile';
 import prisma from '../prisma';
 import { createAudit } from '../utils/audit';
 import { NotificationService } from '../services/notifications.service';
 
 const router = Router();
+const privilegedRoles = new Set([
+  'admin',
+  'super_admin',
+  'hr',
+  'hr_manager',
+  'gmp',
+  'group_managing_partner',
+  'partner',
+]);
+
+const getRoleNames = (req: AuthRequest) => {
+  const roles = [
+    ...(req.userRoles || []),
+    ...(req.user?.authRoles || []),
+    req.profile?.role?.name,
+  ]
+    .filter(Boolean)
+    .map((role) => String(role).toLowerCase());
+  return Array.from(new Set(roles));
+};
+
+const isPrivileged = (req: AuthRequest) =>
+  getRoleNames(req).some((role) => privilegedRoles.has(role));
+
+const isManagerRole = (req: AuthRequest) =>
+  getRoleNames(req).some((role) => role.includes('manager') || role.includes('team lead'));
+
+const resolveRequesterProfileId = (req: AuthRequest) =>
+  req.profile?.id ?? (req.user?.profileId ? Number(req.user.profileId) : undefined);
+
+const parseOptionalInt = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
+};
+
+const parseOptionalBoolean = (value: unknown): boolean | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).toLowerCase().trim();
+  if (['1', 'true', 'yes', 'y'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n'].includes(normalized)) return false;
+  return undefined;
+};
+
+const toNumber = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const canAccessEmployee = async (req: AuthRequest, employeeId: number) => {
+  if (isPrivileged(req)) return true;
+
+  const requesterId = resolveRequesterProfileId(req);
+  if (!requesterId) return false;
+
+  if (requesterId === employeeId) return true;
+
+  if (isManagerRole(req)) {
+    const employee = await prisma.profile.findUnique({
+      where: { id: employeeId },
+      select: { managerId: true },
+    });
+    return employee?.managerId === requesterId;
+  }
+
+  return false;
+};
+
+type OkrTrackingObjective = {
+  id: number;
+  ownerProfileId: number;
+  kpiId: number | null;
+  status: string;
+  approvalStatus: string;
+  updatedAt: Date;
+  keyResults: Array<{
+    targetValue: unknown;
+    currentValue: unknown;
+    weight: unknown;
+    status: string;
+  }>;
+};
+
+const buildOkrTrackingKey = (ownerProfileId: number, kpiId: number) =>
+  `${ownerProfileId}:${kpiId}`;
+
+const clampPercent = (value: number) => Math.min(100, Math.max(0, value));
+
+const computeObjectiveCompletion = (objective: OkrTrackingObjective) => {
+  if (!objective.keyResults?.length) {
+    return objective.status === 'completed' ? 100 : 0;
+  }
+
+  const weightedResults = objective.keyResults
+    .filter((kr) => kr.status !== 'archived')
+    .map((kr) => {
+      const target = toNumber(kr.targetValue, 0);
+      const current = toNumber(kr.currentValue, 0);
+      const weight = toNumber(kr.weight, 0);
+      const progress = target > 0 ? clampPercent((current / target) * 100) : 0;
+      return { progress, weight };
+    });
+
+  if (!weightedResults.length) {
+    return objective.status === 'completed' ? 100 : 0;
+  }
+
+  const totalWeight = weightedResults.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight > 0) {
+    const weightedProgress = weightedResults.reduce(
+      (sum, item) => sum + item.progress * item.weight,
+      0
+    );
+    return clampPercent(weightedProgress / totalWeight);
+  }
+
+  const avgProgress =
+    weightedResults.reduce((sum, item) => sum + item.progress, 0) / weightedResults.length;
+  return clampPercent(avgProgress);
+};
+
+const computeOkrSummary = (objectives: OkrTrackingObjective[]) => {
+  const relevantObjectives = objectives.filter((objective) => objective.status !== 'archived');
+  if (!relevantObjectives.length) {
+    return {
+      objectiveCount: 0,
+      approvedObjectiveCount: 0,
+      completedObjectiveCount: 0,
+      keyResultCount: 0,
+      overallCompletionPercent: 0,
+      lastUpdatedAt: null as string | null,
+    };
+  }
+
+  const approvedObjectiveCount = relevantObjectives.filter(
+    (objective) => objective.approvalStatus === 'approved'
+  ).length;
+
+  const objectiveCompletions = relevantObjectives.map((objective) => ({
+    objective,
+    percent: computeObjectiveCompletion(objective),
+  }));
+
+  const overallCompletionPercent =
+    objectiveCompletions.reduce((sum, item) => sum + item.percent, 0) /
+    objectiveCompletions.length;
+
+  const completedObjectiveCount = objectiveCompletions.filter(
+    (item) => item.objective.status === 'completed' || item.percent >= 100
+  ).length;
+
+  const keyResultCount = relevantObjectives.reduce(
+    (sum, objective) => sum + objective.keyResults.length,
+    0
+  );
+
+  const lastUpdatedAt = relevantObjectives
+    .map((objective) => objective.updatedAt)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
+
+  return {
+    objectiveCount: relevantObjectives.length,
+    approvedObjectiveCount,
+    completedObjectiveCount,
+    keyResultCount,
+    overallCompletionPercent: Number(overallCompletionPercent.toFixed(2)),
+    lastUpdatedAt: lastUpdatedAt?.toISOString() ?? null,
+  };
+};
+
+const withTracking = async (assignments: any[]) => {
+  if (!assignments.length) return assignments;
+
+  const scopedPairs = Array.from(
+    new Set(
+      assignments
+        .filter((assignment) => Number.isInteger(assignment?.kpiId))
+        .map((assignment) => buildOkrTrackingKey(assignment.employeeProfileId, assignment.kpiId))
+    )
+  );
+
+  if (!scopedPairs.length) {
+    return assignments.map((assignment) => ({
+      ...assignment,
+      tracking: {
+        targetValue:
+          assignment.targetValue ?? assignment.kpi?.targetValue ?? null,
+        achievedValue: assignment.achievedValue ?? null,
+        derivedAchievedValueFromOkrs: null,
+        progressPercent: 0,
+        okr: computeOkrSummary([]),
+      },
+    }));
+  }
+
+  const ownerIds = Array.from(
+    new Set(assignments.map((assignment) => Number(assignment.employeeProfileId)))
+  );
+  const kpiIds = Array.from(
+    new Set(assignments.map((assignment) => Number(assignment.kpiId)).filter(Number.isFinite))
+  );
+
+  const objectives = await prisma.okrObjective.findMany({
+    where: {
+      ownerProfileId: { in: ownerIds },
+      kpiId: { in: kpiIds },
+    },
+    select: {
+      id: true,
+      ownerProfileId: true,
+      kpiId: true,
+      status: true,
+      approvalStatus: true,
+      updatedAt: true,
+      keyResults: {
+        select: {
+          targetValue: true,
+          currentValue: true,
+          weight: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  const grouped = objectives.reduce((map, objective) => {
+    if (!objective.kpiId) return map;
+    const key = buildOkrTrackingKey(objective.ownerProfileId, objective.kpiId);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(objective as OkrTrackingObjective);
+    return map;
+  }, new Map<string, OkrTrackingObjective[]>());
+
+  return assignments.map((assignment) => {
+    const key = buildOkrTrackingKey(assignment.employeeProfileId, assignment.kpiId);
+    const summary = computeOkrSummary(grouped.get(key) ?? []);
+    const targetValue = toNumber(
+      assignment.targetValue ?? assignment.kpi?.targetValue,
+      0
+    );
+    const hasManualAchieved =
+      assignment.achievedValue !== undefined &&
+      assignment.achievedValue !== null &&
+      assignment.achievedValue !== '';
+    const achievedValue = hasManualAchieved ? toNumber(assignment.achievedValue, 0) : null;
+    const derivedAchievedValueFromOkrs =
+      targetValue > 0
+        ? Number(((summary.overallCompletionPercent / 100) * targetValue).toFixed(2))
+        : null;
+    const resolvedAchievedValue =
+      achievedValue !== null ? achievedValue : derivedAchievedValueFromOkrs;
+    const progressPercent =
+      targetValue > 0 && resolvedAchievedValue !== null
+        ? Number(clampPercent((resolvedAchievedValue / targetValue) * 100).toFixed(2))
+        : summary.overallCompletionPercent;
+
+    return {
+      ...assignment,
+      tracking: {
+        targetValue: targetValue > 0 ? targetValue : null,
+        achievedValue,
+        derivedAchievedValueFromOkrs,
+        progressPercent,
+        okr: summary,
+      },
+    };
+  });
+};
 
 // GET /employee_kpi_assignments
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
+    const requesterId = resolveRequesterProfileId(req);
+    if (!requesterId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const requestedEmployeeId = parseOptionalInt(
+      req.query.employeeProfileId ?? req.query.employee_id
+    );
+    const requestedKpiId = parseOptionalInt(req.query.kpiId ?? req.query.kpi_id);
+    const requestedStatus =
+      typeof req.query.status === 'string' ? String(req.query.status).toLowerCase() : undefined;
+    const includeTracking =
+      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
+
+    let where: any = {};
+    if (!isPrivileged(req)) {
+      if (isManagerRole(req)) {
+        const directReports = await prisma.profile.findMany({
+          where: { managerId: requesterId },
+          select: { id: true },
+        });
+        const allowedIds = Array.from(
+          new Set([requesterId, ...directReports.map((p) => p.id)])
+        );
+        where.employeeProfileId = { in: allowedIds };
+      } else {
+        where.employeeProfileId = requesterId;
+      }
+    }
+    if (requestedEmployeeId) {
+      if (!(await canAccessEmployee(req, requestedEmployeeId))) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      where.employeeProfileId = requestedEmployeeId;
+    }
+    if (requestedKpiId) {
+      where.kpiId = requestedKpiId;
+    }
+    if (requestedStatus && ['active', 'paused', 'closed'].includes(requestedStatus)) {
+      where.status = requestedStatus;
+    }
+
     const assignments = await prisma.employeeKpiAssignment.findMany({
+      where,
       include: {
         employee: true,
         kpi: true,
@@ -17,15 +329,143 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    return res.json(assignments || []);
+    if (!includeTracking) {
+      return res.json(assignments || []);
+    }
+
+    return res.json(await withTracking(assignments || []));
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /employee_kpi_assignments/my - current user's assignments only
+router.get('/my', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    const requesterId = resolveRequesterProfileId(req);
+    if (!requesterId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const requestedKpiId = parseOptionalInt(req.query.kpiId ?? req.query.kpi_id);
+    const requestedStatus =
+      typeof req.query.status === 'string' ? String(req.query.status).toLowerCase() : undefined;
+    const includeTracking =
+      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
+
+    const assignments = await prisma.employeeKpiAssignment.findMany({
+      where: {
+        employeeProfileId: requesterId,
+        ...(requestedKpiId ? { kpiId: requestedKpiId } : {}),
+        ...(requestedStatus && ['active', 'paused', 'closed'].includes(requestedStatus)
+          ? { status: requestedStatus as any }
+          : {}),
+      },
+      include: {
+        employee: true,
+        kpi: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!includeTracking) {
+      return res.json(assignments || []);
+    }
+
+    return res.json(await withTracking(assignments || []));
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /employee_kpi_assignments/bulk-department
+router.post('/bulk-department', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    if (!isPrivileged(req)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const departmentId = parseOptionalInt(req.body?.departmentId ?? req.body?.department_id);
+    const kpiIds = Array.isArray(req.body?.kpiIds)
+      ? req.body.kpiIds.map((value: unknown) => parseOptionalInt(value)).filter(Boolean)
+      : [];
+
+    if (!departmentId || kpiIds.length === 0) {
+      return res
+        .status(400)
+        .json({ error: 'departmentId and non-empty kpiIds are required' });
+    }
+
+    const department = await prisma.department.findUnique({
+      where: { id: departmentId },
+      select: { id: true },
+    });
+    if (!department) {
+      return res.status(404).json({ error: 'Department not found' });
+    }
+
+    const kpis = await prisma.kpi.findMany({
+      where: {
+        id: { in: kpiIds as number[] },
+        isActive: true,
+      },
+      select: {
+        id: true,
+        targetValue: true,
+        weight: true,
+      },
+    });
+    if (kpis.length !== kpiIds.length) {
+      return res
+        .status(404)
+        .json({ error: 'One or more KPI records were not found or are inactive' });
+    }
+
+    const employees = await prisma.profile.findMany({
+      where: {
+        departmentId,
+        status: 'active',
+      },
+      select: { id: true },
+    });
+
+    if (employees.length === 0) {
+      return res.json({ assigned: 0 });
+    }
+
+    const rows = employees.flatMap((employee) =>
+      kpis.map((kpi) => ({
+        employeeProfileId: employee.id,
+        kpiId: kpi.id,
+        targetValue: kpi.targetValue,
+        weight: kpi.weight,
+        status: 'active' as const,
+      }))
+    );
+
+    const created = await prisma.employeeKpiAssignment.createMany({
+      data: rows,
+      skipDuplicates: true,
+    });
+
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
+    await createAudit({
+      action: 'employee_kpi_assignment:bulk_department',
+      entity_type: 'employee_kpi_assignment',
+      user_id: performedBy,
+      ip_address: req.ip,
+    });
+
+    return res.json({ assigned: created.count });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
 // GET /employee_kpi_assignments/:id
-router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
+    const includeTracking =
+      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
     const assignment = await prisma.employeeKpiAssignment.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
@@ -38,14 +478,23 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'KPI assignment not found' });
     }
 
-    return res.json(assignment);
+    if (!(await canAccessEmployee(req, assignment.employeeProfileId))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!includeTracking) {
+      return res.json(assignment);
+    }
+
+    const [tracked] = await withTracking([assignment]);
+    return res.json(tracked);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
 // POST /employee_kpi_assignments
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const {
       employeeProfileId,
@@ -68,6 +517,10 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 
     if (!resolvedEmployeeId || !resolvedKpiId) {
       return res.status(400).json({ error: 'employeeProfileId and kpiId required' });
+    }
+
+    if (!(await canAccessEmployee(req, Number(resolvedEmployeeId)))) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
     const assignment = await prisma.employeeKpiAssignment.create({
@@ -110,14 +563,118 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       }
     );
 
-    return res.status(201).json(assignment);
+    const [tracked] = await withTracking([assignment]);
+    return res.status(201).json(tracked);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /employee_kpi_assignments/:id/progress - update achieved value
+router.post('/:id/progress', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    const assignmentId = Number(req.params.id);
+    if (!Number.isFinite(assignmentId)) {
+      return res.status(400).json({ error: 'Invalid assignment id' });
+    }
+
+    const value = req.body.value ?? req.body.achievedValue ?? req.body.achieved_value;
+    if (value === undefined || value === null || value === '') {
+      return res.status(400).json({ error: 'Progress value is required' });
+    }
+
+    const parsedValue = Number(value);
+    if (Number.isNaN(parsedValue)) {
+      return res.status(400).json({ error: 'Progress value must be a number' });
+    }
+
+    const current = await prisma.employeeKpiAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { employeeProfileId: true },
+    });
+    if (!current) {
+      return res.status(404).json({ error: 'KPI assignment not found' });
+    }
+
+    if (!(await canAccessEmployee(req, current.employeeProfileId))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const assignment = await prisma.employeeKpiAssignment.update({
+      where: { id: assignmentId },
+      data: {
+        achievedValue: parsedValue,
+      },
+      include: {
+        employee: true,
+        kpi: true,
+      },
+    });
+
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
+    await createAudit({
+      action: 'employee_kpi_assignment:progress',
+      entity_type: 'employee_kpi_assignment',
+      user_id: performedBy,
+      ip_address: req.ip,
+    });
+
+    const [tracked] = await withTracking([assignment]);
+    return res.json(tracked);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /employee_kpi_assignments/:id/close
+router.post('/:id/close', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    const assignmentId = Number(req.params.id);
+    if (!Number.isFinite(assignmentId)) {
+      return res.status(400).json({ error: 'Invalid assignment id' });
+    }
+
+    const current = await prisma.employeeKpiAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { employeeProfileId: true },
+    });
+    if (!current) {
+      return res.status(404).json({ error: 'KPI assignment not found' });
+    }
+
+    if (!(await canAccessEmployee(req, current.employeeProfileId))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const assignment = await prisma.employeeKpiAssignment.update({
+      where: { id: assignmentId },
+      data: {
+        status: 'closed',
+        periodEnd: new Date(),
+      },
+      include: {
+        employee: true,
+        kpi: true,
+      },
+    });
+
+    const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
+    await createAudit({
+      action: 'employee_kpi_assignment:close',
+      entity_type: 'employee_kpi_assignment',
+      user_id: performedBy,
+      ip_address: req.ip,
+    });
+
+    const [tracked] = await withTracking([assignment]);
+    return res.json(tracked);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
 // PATCH /employee_kpi_assignments/:id
-router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const {
@@ -131,6 +688,18 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       period_end,
       status,
     } = req.body;
+
+    const current = await prisma.employeeKpiAssignment.findUnique({
+      where: { id: parseInt(id) },
+      select: { employeeProfileId: true },
+    });
+    if (!current) {
+      return res.status(404).json({ error: 'KPI assignment not found' });
+    }
+
+    if (!(await canAccessEmployee(req, current.employeeProfileId))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     const assignment = await prisma.employeeKpiAssignment.update({
       where: { id: parseInt(id) },
@@ -171,16 +740,29 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
       }
     );
 
-    return res.json(assignment);
+    const [tracked] = await withTracking([assignment]);
+    return res.json(tracked);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
 // DELETE /employee_kpi_assignments/:id
-router.delete('/:id', authMiddleware, async (req: AuthRequest, res) => {
+router.delete('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+
+    const current = await prisma.employeeKpiAssignment.findUnique({
+      where: { id: parseInt(id) },
+      select: { employeeProfileId: true },
+    });
+    if (!current) {
+      return res.status(404).json({ error: 'KPI assignment not found' });
+    }
+
+    if (!(await canAccessEmployee(req, current.employeeProfileId))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     await prisma.employeeKpiAssignment.delete({
       where: { id: parseInt(id) },

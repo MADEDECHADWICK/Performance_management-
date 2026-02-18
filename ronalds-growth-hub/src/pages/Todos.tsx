@@ -7,9 +7,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { CheckCircle2, Clock, AlertCircle, FileText, DollarSign, Calendar } from "lucide-react";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Job {
   id: number;
@@ -38,16 +39,18 @@ export default function Todos() {
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
   const [notes, setNotes] = useState("");
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
     loadTodos();
-  }, []);
+  }, [authLoading, user]);
 
   const loadTodos = async () => {
     try {
-      const me = await authAPI.me();
-      if (!me) return;
-      const data = await apiFetch('GET', `/todos?userId=${me.id}`);
+      if (!user) return;
+      const data = await apiFetch('GET', `/todos?userId=${user.id}`);
       setTodos(data || []);
     } catch (error: any) {
       toast({

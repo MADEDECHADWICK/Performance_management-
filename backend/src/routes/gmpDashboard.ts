@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
 
@@ -68,6 +69,9 @@ const sumPaymentsByJob = async (jobIds: number[]) => {
   return totals;
 };
 
+const resolveJobFee = (job: { fixedFeeAmount?: any; jobCosting?: { jobFee?: any } | null }) =>
+  Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
+
 // GET /gmp-dashboard/overview
 router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -97,6 +101,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       select: {
         id: true,
         fixedFeeAmount: true,
+        jobCosting: { select: { jobFee: true } },
         clientId: true,
         departmentId: true,
         partnerProfileId: true,
@@ -182,6 +187,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
           select: {
             id: true,
             fixedFeeAmount: true,
+            jobCosting: { select: { jobFee: true } },
             payments: { select: { paymentAmount: true } },
           },
         },
@@ -193,7 +199,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         const jobPayments = job.payments.reduce((acc, payment) => acc + Number(payment.paymentAmount || 0), 0);
         return sum + jobPayments;
       }, 0);
-      const fees = dept.jobs.reduce((sum, job) => sum + Number(job.fixedFeeAmount || 0), 0);
+      const fees = dept.jobs.reduce((sum, job) => sum + resolveJobFee(job), 0);
       const employeeCount = dept.profiles.length;
       const partnerCount = dept.profiles.filter((profile) => profile.isPartner).length;
       const managerCount = dept.profiles.filter((profile) => {
@@ -224,6 +230,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
             id: true,
             status: true,
             fixedFeeAmount: true,
+            jobCosting: { select: { jobFee: true } },
             clientId: true,
             payments: { select: { paymentAmount: true } },
           },
@@ -237,7 +244,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         const paid = job.payments.reduce((acc, payment) => acc + Number(payment.paymentAmount || 0), 0);
         return sum + paid;
       }, 0);
-      const fees = jobsAsPartner.reduce((sum, job) => sum + Number(job.fixedFeeAmount || 0), 0);
+      const fees = jobsAsPartner.reduce((sum, job) => sum + resolveJobFee(job), 0);
       const activeJobCount = jobsAsPartner.filter((job) => ['planned', 'in_progress', 'on_hold'].includes(job.status)).length;
       const clientCount = new Set(jobsAsPartner.map((job) => job.clientId).filter(Boolean)).size;
 
@@ -355,7 +362,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         total_partners: totalPartners,
         total_managers: totalManagers,
         total_revenue: Number(paymentsAgg._sum.paymentAmount || 0),
-        total_fees: jobs.reduce((sum, job) => sum + Number(job.fixedFeeAmount || 0), 0),
+        total_fees: jobs.reduce((sum, job) => sum + resolveJobFee(job), 0),
         active_jobs: activeJobs,
         active_clients: activeClients,
         total_departments: totalDepartments,
@@ -387,6 +394,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
         engagementsApprovedNotStarted,
         pendingOverBudget,
       },
+      framework: getDashboardModuleCoverageSummary("gmp"),
     });
   } catch (error) {
     console.error('[GMP Dashboard] Error fetching GMP dashboard data:', error);
@@ -410,6 +418,7 @@ router.get('/partner/:partnerId', authMiddleware, async (req: AuthRequest, res) 
         jobsAsPartner: {
           include: {
             client: true,
+            jobCosting: { select: { jobFee: true } },
             staffing: {
               include: {
                 employee: {
@@ -436,7 +445,7 @@ router.get('/partner/:partnerId', authMiddleware, async (req: AuthRequest, res) 
     const paymentsByJob = await sumPaymentsByJob(jobIds);
 
     const totalRevenue = Array.from(paymentsByJob.values()).reduce((sum, value) => sum + value, 0);
-    const totalFees = partnerJobs.reduce((sum, job) => sum + Number(job.fixedFeeAmount || 0), 0);
+    const totalFees = partnerJobs.reduce((sum, job) => sum + resolveJobFee(job), 0);
 
     const teamMembers = await prisma.profile.findMany({
       where: { managerId: partnerId },
@@ -478,7 +487,7 @@ router.get('/partner/:partnerId', authMiddleware, async (req: AuthRequest, res) 
         clientName: job.client?.clientName,
         status: job.status,
         amountCollected: paymentsByJob.get(job.id) || 0,
-        fees: Number(job.fixedFeeAmount || 0),
+        fees: resolveJobFee(job),
         teamSize: job.staffing.length,
         startDate: job.startDate,
         deadlineDate: job.dueDate,
@@ -505,6 +514,7 @@ router.get('/personal', authMiddleware, async (req: AuthRequest, res) => {
       },
       include: {
         client: true,
+        jobCosting: { select: { jobFee: true } },
         staffing: {
           include: {
             employee: {
@@ -523,7 +533,7 @@ router.get('/personal', authMiddleware, async (req: AuthRequest, res) => {
     const jobIds = personalJobs.map((job) => job.id);
     const paymentsByJob = await sumPaymentsByJob(jobIds);
     const personalRevenue = Array.from(paymentsByJob.values()).reduce((sum, value) => sum + value, 0);
-    const personalFees = personalJobs.reduce((sum, job) => sum + Number(job.fixedFeeAmount || 0), 0);
+    const personalFees = personalJobs.reduce((sum, job) => sum + resolveJobFee(job), 0);
 
     const directReports = await prisma.profile.findMany({
       where: { managerId: profileId },
@@ -555,7 +565,7 @@ router.get('/personal', authMiddleware, async (req: AuthRequest, res) => {
         clientName: job.client?.clientName,
         status: job.status,
         amountCollected: paymentsByJob.get(job.id) || 0,
-        fees: Number(job.fixedFeeAmount || 0),
+        fees: resolveJobFee(job),
         teamSize: job.staffing.length,
         role: job.partnerProfileId === profileId ? 'Partner' : 'Manager',
       })),

@@ -127,6 +127,16 @@ router.patch(
   ProfileController.updateProfile
 );
 
+// DELETE /profiles/:profileId
+router.delete(
+  '/:profileId',
+  authMiddleware,
+  loadProfile,
+  param('profileId').isInt().toInt(),
+  handleValidationErrors,
+  ProfileController.deleteProfile
+);
+
 // GET /profiles/email/:email
 router.get(
   '/email/:email',

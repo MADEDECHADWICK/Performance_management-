@@ -56,7 +56,7 @@ export default function MarketingDashboard() {
   const pipelineTrend = proposalMetrics?.pipelineTrend || [];
   const surveyTrends = surveyAnalytics?.trends || [];
   const surveyList = recentSurveys?.surveys || [];
-  const currentPipeline = pipelineTrend.length > 0 ? pipelineTrend[pipelineTrend.length - 1] : null;
+  const leadToCash = proposalMetrics?.leadToCash;
   const pipelineMax = Math.max(
     1,
     ...pipelineTrend.flatMap((item: any) => [item.created || 0, item.won || 0, item.lost || 0])
@@ -98,6 +98,7 @@ export default function MarketingDashboard() {
             </Button>
           </div>
         </div>
+
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
           <Card>
@@ -151,20 +152,20 @@ export default function MarketingDashboard() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Pipeline (This Month)</CardTitle>
+              <CardTitle className="text-sm text-muted-foreground">Lead-to-Cash</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Created</span>
-                <span className="font-medium">{currentPipeline?.created ?? 0}</span>
+                <span className="text-muted-foreground">Conversion</span>
+                <span className="font-medium">{Number(leadToCash?.conversionRate || 0).toFixed(1)}%</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Won</span>
-                <span className="font-medium">{currentPipeline?.won ?? 0}</span>
+                <span className="text-muted-foreground">Won Value</span>
+                <span className="font-medium">KES {Number(leadToCash?.wonProposalValue || 0).toLocaleString()}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Lost</span>
-                <span className="font-medium">{currentPipeline?.lost ?? 0}</span>
+                <span className="text-muted-foreground">Collected</span>
+                <span className="font-medium">KES {Number(leadToCash?.collectedFromWonClients || 0).toLocaleString()}</span>
               </div>
             </CardContent>
           </Card>

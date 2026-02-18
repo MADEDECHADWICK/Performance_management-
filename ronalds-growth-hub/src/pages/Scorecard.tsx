@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Award, TrendingUp, DollarSign, Target, Star, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DashboardLayout from "@/components/DashboardLayout";
+import KpiProgressPanel from "@/components/KpiProgressPanel";
 import {
   SECTION_TITLE,
   SECTION_SUBTITLE,
@@ -15,6 +16,7 @@ import {
   SUMMARY_CARD_HEADER,
   SUMMARY_CARD_TITLE,
 } from "@/components/ui/cardStyles";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface UserProfile {
   id: number;
@@ -39,6 +41,7 @@ interface PerformanceData {
     utilizationRate: number;
     revenueScore: number;
     profitScore: number;
+    bdScore?: number;
     utilizationScore: number;
     financialWeighted: number;
   };
@@ -49,11 +52,47 @@ interface PerformanceData {
     internalProcessesScore: number;
     feedbackScore?: number;
     projectEvaluationScore?: number;
+    coreNonFinancialScore?: number;
+    operationalEfficiencyScore?: number;
     overallNonFinancialScore: number;
   };
   overall: {
     totalScore: number;
     grade: string;
+  };
+  scoreBreakdown?: {
+    role?: string;
+    jobScope?: string;
+    revenueTarget?: number;
+    utilizationTarget?: number;
+    lossAlert?: boolean;
+    leadToCashCollected?: number;
+    leadToCashRate?: number;
+    wonProposalValue?: number;
+    allocationRevenue?: number;
+  };
+  formula?: {
+    role: string;
+    jobScope: string;
+    overallWeights: {
+      financial: number;
+      nonFinancial: number;
+      efficiency?: number;
+    };
+    nonFinancialOperationalBlend?: {
+      coreNonFinancial: number;
+      operationalEfficiency: number;
+    };
+    financial: {
+      weights: { revenue: number; profit: number; bd: number };
+      scores: { revenue: number; profit: number; bd: number };
+      contributions: { revenue: number; profit: number; bd: number };
+    };
+    efficiency: {
+      weights: { utilization: number; jobCompletion: number; timeToDelivery: number };
+      scores: { utilization: number; jobCompletion: number; timeToDelivery: number };
+      contributions: { utilization: number; jobCompletion: number; timeToDelivery: number };
+    };
   };
 }
 
@@ -64,52 +103,31 @@ const Scorecard = () => {
   const [performanceData, setPerformanceData] = useState<PerformanceData | null>(null);
   const [activeTab, setActiveTab] = useState("my-performance");
   const { toast } = useToast();
+  const { user, isLoading: authLoading, isAdmin: isAdminRole } = useAuth();
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
     loadPerformanceData();
-  }, []);
+  }, [authLoading, user]);
 
   const loadPerformanceData = async () => {
-    let user: any = null;
+    const currentUser: any = user;
     try {
-      user = await authAPI.me();
-      if (!user) return;
+      if (!currentUser) return;
 
-      const roleList = Array.isArray(user?.roles) ? user.roles : [];
-      const isAdminRole = roleList.some((role: string) =>
-        ["hr_manager", "super_admin", "admin"].includes(role)
-      );
       setIsAdmin(isAdminRole);
 
-      const [performanceResponse, analyticsResponse] = await Promise.all([
-        apiFetch('GET', '/performance-scores/me'),
-        apiFetch('GET', '/analytics/financial').catch(() => null),
-      ]);
-
+      const performanceResponse = await apiFetch('GET', '/performance-scores/me');
       const payload = performanceResponse?.data ?? performanceResponse;
-      const analyticsPayload = analyticsResponse?.data ?? analyticsResponse ?? {};
-
-      if (payload?.financial && analyticsPayload?.allocatedRevenueTotal !== undefined) {
-        const allocatedRevenueTotal = Number(analyticsPayload.allocatedRevenueTotal || 0);
-        const profitTotal = Number(analyticsPayload.profitTotal || 0);
-        const lossTotal = Number(analyticsPayload.lossTotal || 0);
-
-        payload.financial = {
-          ...payload.financial,
-          revenue: allocatedRevenueTotal,
-          profit: profitTotal,
-          loss: lossTotal,
-          netProfit: profitTotal - lossTotal,
-        };
-      }
 
       setPerformanceData(payload);
-      setUserProfile(payload?.profile || user.profile || null);
+      setUserProfile(payload?.profile || currentUser.profile || null);
 
     } catch (error: any) {
       if (error?.status === 404) {
         setPerformanceData(null);
-        setUserProfile(user?.profile || null);
+        setUserProfile(currentUser?.profile || null);
         return;
       }
       toast({
@@ -121,6 +139,7 @@ const Scorecard = () => {
       setLoading(false);
     }
   };
+
 
   if (loading) {
     return (
@@ -187,6 +206,16 @@ const Scorecard = () => {
     return "Company-wide performance metrics";
   };
 
+  const financialMix = Number(data.formula?.overallWeights?.financial ?? 0.7);
+  const nonFinancialMix = Number(data.formula?.overallWeights?.nonFinancial ?? 0.3);
+  const operationalEfficiencyBlend = Number(
+    data.formula?.nonFinancialOperationalBlend?.operationalEfficiency ?? 0.3
+  );
+  const effectiveEfficiencyContribution = Number(
+    data.formula?.overallWeights?.efficiency ??
+      nonFinancialMix * operationalEfficiencyBlend
+  );
+
   return (
     <DashboardLayout>
       <div className={PAGE_STACK}>
@@ -238,7 +267,9 @@ const Scorecard = () => {
             </CardHeader>
             <CardContent className={SUMMARY_CARD_CONTENT}>
               <div className="text-2xl font-bold">{data.financial.financialWeighted}</div>
-              <p className="text-xs text-muted-foreground">Weighted 70%</p>
+              <p className="text-xs text-muted-foreground">
+                Weighted {(Number(data.formula?.overallWeights?.financial || 0.7) * 100).toFixed(0)}%
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -248,7 +279,9 @@ const Scorecard = () => {
             </CardHeader>
             <CardContent className={SUMMARY_CARD_CONTENT}>
               <div className="text-2xl font-bold">{data.nonFinancial.overallNonFinancialScore}</div>
-              <p className="text-xs text-muted-foreground">Weighted 30%</p>
+              <p className="text-xs text-muted-foreground">
+                Weighted {(nonFinancialMix * 100).toFixed(0)}%
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -267,6 +300,8 @@ const Scorecard = () => {
           </Card>
         </div>
 
+        <KpiProgressPanel />
+
         {/* Overall Score */}
         <Card className="bg-gradient-to-br from-primary/10 to-secondary/10 border-primary/20">
           <CardHeader>
@@ -281,7 +316,9 @@ const Scorecard = () => {
               <div className="flex-1">
                 <Progress value={data.overall.totalScore} className="h-4" />
                 <p className="text-sm text-muted-foreground mt-2">
-                  Based on 70% financial and 30% non-financial metrics
+                  Based on {(financialMix * 100).toFixed(0)}% financial and{" "}
+                  {(nonFinancialMix * 100).toFixed(0)}% non-financial. Operational efficiency contributes{" "}
+                  {(effectiveEfficiencyContribution * 100).toFixed(0)}% through the non-financial blend.
                 </p>
               </div>
             </div>
@@ -305,6 +342,22 @@ const Scorecard = () => {
                   <span className="text-muted-foreground">Revenue Contribution:</span>
                   <span className="font-medium">KES {data.financial.revenue.toLocaleString()}</span>
                 </div>
+                {typeof data.scoreBreakdown?.leadToCashCollected === "number" && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Lead-to-Cash Collected:</span>
+                    <span className="font-medium">
+                      KES {Number(data.scoreBreakdown.leadToCashCollected || 0).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {typeof data.scoreBreakdown?.leadToCashRate === "number" && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Lead-to-Cash Rate:</span>
+                    <span className="font-medium">
+                      {Number(data.scoreBreakdown.leadToCashRate || 0).toFixed(1)}%
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Billable Hours:</span>
                   <span className="font-medium">{data.financial.billableHours.toFixed(1)}</span>
@@ -315,9 +368,15 @@ const Scorecard = () => {
                     {(data.financial.utilizationRate * 100).toFixed(1)}%
                   </span>
                 </div>
+                {typeof data.financial.bdScore === 'number' && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">BD Score:</span>
+                    <span className="font-medium">{data.financial.bdScore.toFixed(1)}%</span>
+                  </div>
+                )}
               </div>
               <div className="text-sm text-muted-foreground mt-4">
-                Contributes 70% to overall score
+                Contributes {(financialMix * 100).toFixed(0)}% to overall score
               </div>
             </CardContent>
           </Card>
@@ -357,9 +416,25 @@ const Scorecard = () => {
                   <span className="text-muted-foreground">Continuous Feedback:</span>
                   <span className="font-medium">{data.nonFinancial.feedbackScore ?? 0}%</span>
                 </div>
+                {typeof data.nonFinancial.coreNonFinancialScore === "number" && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Core BSC Score:</span>
+                    <span className="font-medium">
+                      {Number(data.nonFinancial.coreNonFinancialScore || 0).toFixed(1)}%
+                    </span>
+                  </div>
+                )}
+                {typeof data.nonFinancial.operationalEfficiencyScore === "number" && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Operational Efficiency Signal:</span>
+                    <span className="font-medium">
+                      {Number(data.nonFinancial.operationalEfficiencyScore || 0).toFixed(1)}%
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="text-sm text-muted-foreground mt-4">
-                Contributes 30% to overall score
+                Contributes {(nonFinancialMix * 100).toFixed(0)}% to overall score
               </div>
             </CardContent>
           </Card>
@@ -426,6 +501,20 @@ const Scorecard = () => {
           </CardHeader>
           <CardContent>
             <div className={SECTION_STACK}>
+              {data.formula && (
+                <div className="rounded-md border p-3 bg-muted/30">
+                  <p className="text-sm font-medium">
+                    Role Formula: {String(data.formula.role || '').replace(/_/g, ' ')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Scope: {String(data.formula.jobScope || '').replace(/_/g, ' ')} · Weights (Revenue/Profit/BD):
+                    {' '}
+                    {(data.formula.financial.weights.revenue * 100).toFixed(0)}% /
+                    {(data.formula.financial.weights.profit * 100).toFixed(0)}% /
+                    {(data.formula.financial.weights.bd * 100).toFixed(0)}%
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div>

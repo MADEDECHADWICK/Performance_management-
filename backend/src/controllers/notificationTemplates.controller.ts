@@ -81,4 +81,21 @@ export class NotificationTemplateController {
         .json(errorResponse(error.message || "Failed to delete template", error.statusCode || 400));
     }
   }
+
+  static async seedDefaults(req: AuthRequest, res: Response) {
+    try {
+      const createdByProfileId = req.profile?.id ?? null;
+      const templates = await NotificationTemplateService.upsertDefaults(createdByProfileId);
+      res.json(
+        successResponse(
+          { count: templates.length, templates },
+          "Default notification templates applied"
+        )
+      );
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 400)
+        .json(errorResponse(error.message || "Failed to seed templates", error.statusCode || 400));
+    }
+  }
 }

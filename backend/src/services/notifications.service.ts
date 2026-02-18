@@ -34,6 +34,31 @@ interface CreateNotificationInput {
   link?: string;
 }
 
+interface TemplateNotificationInput {
+  recipientProfileId: number;
+  label: string;
+  data?: Record<string, unknown>;
+  type?: NotificationType;
+  title?: string;
+  message?: string;
+  actionRequired?: boolean;
+  dueDate?: Date;
+  escalationLevel?: number;
+  jobId?: number;
+  clientId?: number;
+  evaluationDefinitionId?: number;
+  timeEntryId?: number;
+  workflowAssignmentId?: number;
+  link?: string;
+}
+
+const renderTemplateString = (template: string, data: Record<string, unknown>) =>
+  template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_, key) => {
+    const value = data[key];
+    if (value === null || value === undefined) return "";
+    return String(value);
+  });
+
 export class NotificationService {
   /**
    * List notifications for profile
@@ -139,6 +164,45 @@ export class NotificationService {
     });
 
     return notification;
+  }
+
+  /**
+   * Create notification from a template label (fallbacks to provided defaults)
+   */
+  static async createFromTemplate(input: TemplateNotificationInput, auth: AuthContext) {
+    const template = await prisma.notificationTemplate.findFirst({
+      where: { label: input.label, isActive: true },
+      select: { title: true, message: true, type: true, actionRequired: true },
+    });
+
+    const data = input.data || {};
+    const resolvedTitle = renderTemplateString(
+      template?.title ?? input.title ?? "Notification",
+      data
+    );
+    const resolvedMessage = renderTemplateString(
+      template?.message ?? input.message ?? "",
+      data
+    );
+
+    return this.createNotification(
+      {
+        recipientProfileId: input.recipientProfileId,
+        type: template?.type ?? input.type ?? "info",
+        title: resolvedTitle,
+        message: resolvedMessage,
+        actionRequired: template?.actionRequired ?? input.actionRequired ?? false,
+        dueDate: input.dueDate,
+        escalationLevel: input.escalationLevel,
+        jobId: input.jobId,
+        clientId: input.clientId,
+        evaluationDefinitionId: input.evaluationDefinitionId,
+        timeEntryId: input.timeEntryId,
+        workflowAssignmentId: input.workflowAssignmentId,
+        link: input.link,
+      },
+      auth
+    );
   }
 
   /**

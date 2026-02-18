@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch, authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -462,7 +462,7 @@ const EvaluationManagement = () => {
       }
 
       if (assignments.length > 0) {
-        await apiFetch("POST", "/evaluation_assignments", assignments);
+        await apiFetch("POST", "/evaluation-assignments", assignments);
       }
 
       // KPI weighting integration will be wired to evaluation definitions in Phase B2.

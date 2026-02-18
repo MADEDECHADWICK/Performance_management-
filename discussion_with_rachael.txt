@@ -1,0 +1,125 @@
+meeting with Rachael [cut 1268sec]
+So, we were discussing about the finance calculation, some of the financial aspects. So, basically, this is what I have been doing up to now. So, employee, because there’re the unit measure, because from employee, employee's performance will cascade up to the manager, the manager to the partner, the partner to the GMP and the company overall performance.
+So, if we get this right, the hierarchy will be right. So, like I said, I had some files here. You see, there is this financial summary, then there is this one here, employees.
+So, the performance score, because the performance score will do the scoring. So, there is a department, let me look for employee. 
+So, you will have the financial target, this is what we call projections, then you will have the utilization target. Utilization is what I was telling you, billable hours over allocated hours, like we have been allocated 10 hours. I have done mine with 3 hours.
+My utilization is higher than maybe another person who has been allocated 10 hours and requesst 5 hours more. So, the utilization rate is low, so it will be a factor for the overall scorecard. Then, this here, billable hours, these are the matrices.
+So, there is billable hours, the aggregate sum of all hours, allocated hours, how many hours are you allocated, then the utilization rate. Billable hours over allocated hours. So, it's billable hours divided by allocated hours, there is a metric of 100%, which is 1. So, if your billable hours are more than your utilization, it's a loss.
+So, that means anything over 1 is a loss, then anything less than 1 is a profit. So, the utilization rate is above. So, then from there, maybe, in there, you can put the utilization target.
+Now, this is for you personally, you can have a target, like that. That is what you set? Yes, this is after the computation, maybe if you have a goal or a certain KPI that you want to fulfill, so you can tie it here. So, there is a revenue target.
+What is the revenue target now? The revenue target now is what we have set, if we had a target of 80 million. That is the overall for the department? That is the overall, but now it is broken down to individuals. How? Like what Mark was saying, if the management consulting it is 80, we have 80 per year.
+So, 80 per year and we have 10. So, it is 8 million per person. Yes, it is 8 million per person.
+And this 8 million is per year, so it is divided by 12. So, you will know your target per month or per quarter, depending on what report you want to get from there. Now, I want to tell you how it is, then you give me insight from there.
+So, the financial weight is this, revenue score plus profit score plus utilization score. So, this is what I was telling you. So, you see, this is the amount of revenue that you have generated.
+So, out of 1, it will carry more. Because it is actual money. Because it is actual money.
+Then the profit score, your profit. Which is calculated as? Your profit, maybe I have done the work in 3 hours. In 3 hours, my billable rate is 1,000.
+1,000. So, other than me, it will be 3K. What I have done with the work.
+And the other, what was expected, what was calculated there, I did it in 10 hours. So, that is 10,000. So, my profit score on that job will be 10,000 minus 3,000.
+So, my profit score is 7,000. The profit that I have made from that job. I have never understood the utilization score.
+Because utilization is what you explained. So, this is the figure alone. That 7,000, you understood.
+But now, utilization is how much time, that is billable time, that you have used in a certain job. It can be 10 hours, it can be 12 hours, it can be any amount, you understood. But considering profit and utilization go hand in hand.
+Because utilization informs your profit. It will not be like a repetition. Because from explanation, utilization, you are supposed to do that work in maybe in two days.
+You have done it in one day. So, let us say in two days you are supposed to use cumulatively maybe 48,000. And then in one day you have used 24,000.
+So, you have profited 24,000. And that translates to hours. You are supposed to use 48 hours.
+You have used 24,000. So, I am just wondering where this comes in. Now, let me explain.
+You see the profit score is the money. We use a practical example so that we can differentiate what revenues. I think it is pretty clear.
+So, like a practical example to differentiate what a profit score is and a utilization score is. So, assuming we have done a job of 10,000. So, let us use this example.
+A job of 10,000. Let us start with hours and then rates. Yes, let me do that.
+Hours, rate and then billable. No, not billable. Let us start with allocation.
+Maybe we can start with scratch. Do you have space? I did not want to write it here. It is a rough book.
+No, no. I wrote it to remember. So, if you write it here, you will get it.
+Yes, I am sorry. I wrote it here. So, normally what happens is we start a job.
+Let us say that job is billing 100,000. The client is paying 100,000. Then we add that job to XPM.
+Let us say it is Rachel and Chadwick. And then we will say Rachel's billable rate is 2,000. Chadwick's billable rate is 1,000.
+So, let me say I allocate Rachel maybe 30 hours. That is 60,000. 60,000.
+And then I allocate Chadwick the remainder, 40 hours. So, that is 40,000. That is the start.
+This is allocation. So, when it comes to the actual execution, the rate remains the same. And you find that Chadwick has used, Rachel has used maybe out of the 30, I have used 20.
+And Chadwick has also maybe used just 20. So, that is 40, right? And that is 20. And that is 60.
+So, that means this job is profitable by 40,000. So, using this rationale, explain to me what profit score is and utilization score is. Okay.
+So, from here. So, profit score will be 40,000. That is the profit score.
+But utilization will be 10. This is 10 hours. Then these are 20 hours.
+So, the profit score will be the money. Then the utilization score will be the time. You have been allocated 10 hours.
+How have you utilized the 10 hours? So, this is time, this is money, and this is money. Yeah, this is money, this is money, this is time. But say, because this is money, this is money, this is time.
+It is supposed to be this is money, this is money, this is money. So, how are you putting that? I think you could change this to be money, money, money. Because it is financial.
+So, that is another thing. Because we have different KPIs for different levels. For me, my financial target might include how many businesses I have brought in, proposals I have written, proposals that I have translated to money.
+That translates to my financial needs as a team leader. And then for someone who is underneath, I am trying to see the current structure. I don't know if you guys are extrapolating what you already have to this, or you are coming up with a totally different... No, no, we are trying.
+You see, whatever we are having in XPM does not factor these specific things. Like one, you compare what I have called the utilization, and for two, whatever you are talking about, proposals. You see, it is not factoring in.
+So, what we are coming up with is something that can be a score for all these. I am opening the performance. Yes.
+Now, I am going to show you. Why are you sending me these performance? Yes, my manager told me 25,000. So, you see, they are telling me my target was 1.2. My job completion, meaning this is an allocated target.
+This is how many hours I build on XPM. And this is how much I actually collected. So, this is what they currently use for financial achievement.
+So, I am trying to see. If you are looking at financial, we start with how much, I think the most important and I think how much money you actually brought in, which is these collections, how much money you actually brought in. And then how much money you build on XPM.
+So, profit score, you said from the jobs that you did, how many of them were profitable, used less time. So, I think this is still okay. I am thinking of how we can replace this so that it is money, money, money, not money, money time, because it will not measure the same matrices.
+That is my only problem with this one because it is not monetary. And then the financial weight, is it a percentage, is it a ratio, the outcome? It is a percentage. It will be now the one that will be weighted out of 70, because they are currently saying 30-70.
+So, the financial weight will be 70%. Like you see, my main question is, maybe a scenario will be given this work. Like currently, everybody feels that as long as management consulting have done this work, then the job is well done.
+And maybe in management consulting, Rachel did a good job, Chadwick was the one who was lagging the team behind. Now, we need to capture those in matrix form, because they will now inform my performance, because you cannot be performing the same. Maybe you have done the job in less time, you have started another job, I am still lagging behind, maybe three jobs behind you.
+But as long as reports are delivered, people tend to think that all of us have done the job equally, which is not true. So, my main idea was, we need to come up with something. This is not Ronald's LLP center, it is us employees center.
+We need to come up with a matrix by which you can evaluate me, and when you are going to make a claim, you want maybe a salary increase, you want maybe a promotion, or there is an advertisement of a promotion, you want to be promoted, there is something that you can show. Because you cannot tell somebody that I did this job this well, because there is nothing to show. But as long as you have everything to show, then it is very easy.
+You just come, we pull Rachel's report, we see, we understand her. Rachel works smart, her utilization is good, her profits are good, everything is good. I understand this.
+And I think it is important. My only worry is, this is money, this is money, and this is not money. So how can we do that? Or should it be a different matrix? Should it be from financial weights? It should be from financial weights, because it is not measuring money.
+It is measuring hours. So it is more like efficiency. How efficient are you in doing the job? You are not directly tied to profit, because we can see if you actually did.
+But this is tied to efficiency and not really financial. That is my only worry. But I think maybe I can think and look at what we can replace this with, instead of equal utilization.
+But no worries. I believe when we finish, you can just describe in your own words how do you envision finance, how should financial weights be determined. So maybe how do you think? One aspect is what I told you about proposals and business plotting.
+Because I don't want at the end of the year, when I am evaluated, or sent as the excel file of the jobs that you have written proposals on and all that, that I come and do it again. If it could be in-built, when I do a proposal, maybe it is me who enters the data, or it is HR who enters the data, so you give them reports maybe every month, and you tell them this month I have written this and this proposals, and there were this much. Then maybe in the following months, when they materialize into money, then that is also recorded.
+So every month you tell HR, I wrote this number of proposals, because already we are doing that. We already do that currently. You wrote these proposals, this is the amount.
+You wrote these proposals, this is the amount. Did they then turn to money? Businesses you brought in, did you up-sell, did you cross-sell? So in that line, does it imply to all employees or a certain type? No, that one, it implies to mostly team leads and managers. It does not trickle down to associates.
+It is mostly managers. So you will probably have to create different financial matrices for different positions, because you will not measure partners the same way. You will not measure managers, you will not measure runners the same way.
+HR you will not measure the same way. So depending on who is logging in, then the financial score depends on that. So that is what I add currently, but I think this should be separate to measure efficiency.
+So, then now, it's not part of financial, but it's part of the BSE.
+So, we can add efficiency. And then there's also another aspect... There's another aspect of billing, and this goes with bidding. I personally have had a problem with them, and I feel like they are low-balling.
+And low-balling to me, they are billing jobs less than what it actually takes to do them. So, my financial score will be low because this job was under-billed. I'll give you a practical example.
+I do a lot of clubs. Clubs are so demanding. So, you can't bill a client 400,000, and do interim audit and final audit, and be very demanding.
+So, if I am to estimate, they need almost like three months of your time. If I translate that to my billable hours, that's over like 1 million. Because if one month is 1 million, October to December target was 1 million.
+So, if like three months be 1 million, and then I do that job, it's taking like three months of my time, and you're billing it at 400,000. Does it make sense for you? It does not make sense. So, maybe don't tell me, because my financial target will be hit.
+But, ideally, the problem is not with me. The problem is how the job was billed. So, if you can incorporate a method of looking at like BD, how they bill for jobs, and does it translate to, if you're billing for jobs, and this is the manpower that is needed to do that job, whatever you bill, does it adequately cover your period in your job? Because when you're doing proposals, you look at the time.
+You look at the number of people who are going to do that job. Then, whatever you're billing, when you're writing that proposal, and you're submitting your financial proposal, should make sense, basically. So, maybe that's... Because that ties with profit score.
+Profit score in Attina, BD. So, how could you do it? Maybe to assume you are BD, and you want to solve that problem. How could you do it? Because we also don't want a scenario where maybe I'm not efficient, then BD catches the blame.
+Or BD has billed low, then I catch the blame. So, I'm just trying to think of... I'm thinking of it in mathematical formulas. Of how you can then make sure that whatever is billed makes sense in execution.
+Every time BD... Every time they write a proposal... Proposals still involve the number of people who are going to do that job. Is there a way then you can capture the number of people who are going to do that job? But you see, if they're going to start using BSC, and profit score is one of the things, how much the job is worth, how much the client is paying, and how much time is going to be used as a matrix for your financial performance. Now, on a bill, not practically, but with the mind of winning the job, and beating individual consultants.
+So... Now, it is up to us. No, no, no, no. Some are very impractical.
+Yes, beat competition, but low billing actually is an offensive in professional meaning. You're not supposed to low bill. What they can only give you is thousands of dollars.
+You know, for example. Probably. But what is... There's no way.
+It doesn't make sense to me. Because... Can I think about that? You think about it, then. So, that's what I wanted to get clarity on.
+Based on the financial matrix. Any other thing you want clarification on? Clarity. Am I any eye-opener? Clarity is everything that's coming to the top of my mind.
+But I'll think about it further. Especially if we can get another matrix to be covered here. So that it's 0.5, 0.3, and another one takes 0.2. That is financial.
+Okay. So, how we can turn the efficiency into money. But now, it will be repeating.
+The same thing, exactly. This and this are basically the same thing. But this is money, money.
+But this is not money. So, we add money. It's like adding X plus Y. Because you have to add X, X and X. The same way we were saying, you can't add fractions.
+You can't add two things at once. You can't add mangoes and apples. You have to add mangoes and mangoes.
+Yes. It's okay. So, let me think about it.
+And come up with another matrix. Because if you look at this application, the financial summary is not yet complete. Because these questions keep coming up.
+You see how you have these questions. So, each and every time you're doing something, you get, oh, there is another question. And I think financially, it can't be one blanket fits all.
+Because you have very different matrices. So, you'll have to find out how a partner would want to measure their financial matrices. How the GMP, like what works best rationally.
+And then for associates, maybe interns or whatever, what makes more sense. And then managers, what makes more sense. And it's directly tied to your GPI.
+So, maybe your BHRA coordination. What is the GPI of an intern? What is the GPI of an associate? What is the GPI of a senior? Audit senior, audits and senior, manager, assistant manager. How do they differ? In that sense, that's fine.
+So, there is another dimension that I wanted clarity. Now, you know, we have finance. How do you think finance should be measured? The finance department.
+I just feel like finance. I don't know. I work as an admin and they're like, wait.
+I'm recording. But anyway, because I feel like my part is to do the job. Do the job.
+Finance, follow up on collections. If the LOE says 50, 30, 20, 50, 50, at the beginning of the job and at the end, at the issuance of the final report, then there should be a way that finance, I can track the job I'm doing. So, if I'm doing a job, I'll say it's at this stage.
+It's at planning stage. Is it at field work stage or execution stage? Or have I finished? Then, finance, it should have all the numbers, all the contacts, the clients. So, when I log in, when I log my jobs, I'm at planning.
+There's nothing to collect at that point. I'm executing. Nothing to collect.
+I've finished. I can say, I've finished, ready for collection. So, then, it's collecting the money.
+Because I don't think I'm supposed to be executing and still following money. Then, another thing they can do is, you have your target. There are collections.
+So, the receivables should be back to me. Why are there receivables? I've finished the job. I've told you I've finished the job.
+You get money from the client. You find out. That's part of your work.
+Get money from the client. Follow up on the payments from the client. So, that it's very straightforward.
+And, like, for finance, you log in the number, as you log in the jobs that you are doing. So, you have a breakdown of, these are the collections coming in for that month. Then, what have you collected? And, what are your receivables? Then, follow up should also be a matrix that they use.
+So, what, how do they, because even when you're doing audits, and you're looking at receivables, you generally look at what measures have been taken to make sure that this debt is paid. Have you called the client? Have you written emails? Have you sought out the client to see why that bill remains unpaid? But then, I'm thinking also about it in the sense of, how can you measure follow up? How can you measure follow up? And, I think I can put a pin on that one as well. Okay.
+So, because I believe the last module will be marketing. Because marketing now, Marketing is different. But, I wanted to build one module for them because BDL marketing is almost one and the same.
+One and the same thing in the aspect that marketing will be gauged on the number of leads. Then, BD will be gauged on the, how do we call them? When you close. Proposals, and then the closing of, and then translating that proposal to a job.
+But also, marketing is leads. Because leads don't do anything unless they translate to money. So, you have these leads.
+You're doing these campaigns. You're attending this event. You're there.
+How many people did you get as clients from there? So, you went to an activation. You got a hundred leads that were interested in. Out of the hundred, how many were translated? In a month, what, you have contacted clients.
+Because, rather than a manga, you just send email, send newsletters. And then, somehow, if you send a thousand, maybe twenty will translate into clients or into money. Then, the other thing they can be tied to is maybe the customer survey and customer satisfaction.
+Yeah, they'll be the custodians of that particular... But customer satisfaction is CCPR, because we are client-facing. Yeah. So, customer score.
+Marketing, when it's a lead, lead goes to BD. A potential client from your leads goes to BD, then BD to Apple. Unless, now, when you're doing your client evaluations, there's a section for different... Whoever the client interacted with, from marketing to BD to execution, it's a general score or it's an area score for each and every person.
+I think that one will be the last thing that we'll do. But maybe we can try as a career of how the client satisfaction survey should be done. So that each and every person is accountable to what the client expected.
+So that is, maybe you did well, I did bad. So, because I'm the one who presented the report, we are bad. Yeah.
+But also, you have to be very specific. When you're dealing with clients, you don't want the survey or your method of collecting data, which is, I think, something you should think about also. Data that is going to be input here, what does it look like? Because garbage in, garbage out.
+You might have a very good system and you know what you want, but you don't have the same templates of what it should look like. So if you're talking about revenue targets, is there a template? I mean, people know what, because you're getting this data from someone. I don't know where you're getting this data from.
+I don't know if it will be tied to the system, if it's going to be a HR account, I don't know. But the data that you're getting, is it what is supposed to go into those categories? So you should have a very clear roadmap, even at inception and onboarding of this system, what data looks like. What is good data? What is quality data? And what is junk? So, yeah, I believe that's all.
+Thank you very much. Let me think about how to rectify this. Because now we are somewhere.
+So what we need to do is just one line. Maybe we can build different financial metrics. Because here I was doing a general one, because I believed, maybe that's what I was thinking, when a job comes in, it trickles down.
+So that's why I did a general one. But you see, partners don't execute. Yeah.
+So you have to, so it's a profit, right? You have forever zero. That's a partners, whatever I was using for partners was, how many clients have you won? How many of them have actually paid? Now that's your profit. And also I think another thing for partners, sometimes we retire clients after, it depends on the term, pensions, I think three years.
+So when you have retired clients, maybe it was 10 million, how many have you gotten to replace the gap? Because you're actually supposed to replace, to adjust that gap. So you've lost clients, you've retired this number of clients, they were bringing this amount of money to the company, what have you gained instead? How many clients have you gotten to replace that? So that could also be another financial metric for partners. And we can incorporate that salary somewhere.
+But that's a different conversation, because there are actually metrics, it's a social sustainability, we can go into that in detail. Because it's something that I'm very... Yes.

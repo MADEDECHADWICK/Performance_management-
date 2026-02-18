@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   BarChart,
   Bar,
@@ -39,6 +40,8 @@ type ClientOption = { id: number; clientName: string };
 export default function FinanceProjections() {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { hasModuleAccess } = useAuth();
+  const canWriteProjections = hasModuleAccess("finance", "write");
   const [loading, setLoading] = useState(true);
   const [projections, setProjections] = useState<Projection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -175,6 +178,15 @@ export default function FinanceProjections() {
 
   const handleProjectionSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canWriteProjections) {
+      toast({
+        title: "Permission required",
+        description: "You need finance write access to add projections.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       await apiFetch("POST", "/finance-dashboard/projections", {
         clientId: projectionForm.clientId || null,
@@ -254,10 +266,15 @@ export default function FinanceProjections() {
           <Card>
             <CardHeader>
               <CardTitle>Add Projection</CardTitle>
-              <CardDescription>Set monthly collection targets.</CardDescription>
+              <CardDescription>
+                {canWriteProjections
+                  ? "Set monthly collection targets."
+                  : "Read-only: you need finance write access to add projections."}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={handleProjectionSubmit}>
+                <fieldset className="space-y-4" disabled={!canWriteProjections}>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="projectionClientId">Client (optional)</Label>
@@ -327,9 +344,10 @@ export default function FinanceProjections() {
                     placeholder="Leave blank for firm-wide"
                   />
                 </div>
-                <Button type="submit" variant="outline">
+                <Button type="submit" variant="outline" disabled={!canWriteProjections}>
                   Save Projection
                 </Button>
+                </fieldset>
               </form>
             </CardContent>
           </Card>

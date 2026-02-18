@@ -3,12 +3,11 @@
  * Includes timer feature, budget caps, and approval workflow
  */
 import { api } from './client';
-import type { 
-  TimeEntry, 
+import type {
+  TimeEntry,
   TimeEntryApprovalRequest,
   PaginatedResponse,
-  TimeEntryStatus,
-  BillableType
+  TimeEntryStatus
 } from './types';
 
 interface CreateTimeEntryPayload {
@@ -18,7 +17,6 @@ interface CreateTimeEntryPayload {
   dateWorked?: string;
   hours: number;
   description?: string;
-  billableType?: BillableType;
   billable?: boolean;
 }
 
@@ -29,7 +27,7 @@ interface TimeEntryFilters {
   jobId?: number;
   taskId?: number;
   status?: TimeEntryStatus | TimeEntryStatus[];
-  billableType?: BillableType;
+  billableOnly?: boolean;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -68,7 +66,9 @@ export const timeEntriesAPI = {
         params.append('status', filters.status);
       }
     }
-    if (filters?.billableType) params.append('billableType', filters.billableType);
+    if (typeof filters?.billableOnly === 'boolean') {
+      params.append('billableOnly', String(filters.billableOnly));
+    }
     if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
     if (filters?.dateTo) params.append('dateTo', filters.dateTo);
     
@@ -115,7 +115,7 @@ export const timeEntriesAPI = {
       dateWorked: data.dateWorked ?? data.date,
       hours: data.hours,
       description: data.description,
-      billable: data.billable ?? (data.billableType ? data.billableType === 'billable' : undefined),
+      billable: data.billable,
     };
     return api.post('/time-entries', payload);
   },
@@ -237,6 +237,20 @@ export const timeEntriesAPI = {
    */
   rejectApprovalRequest: async (requestId: number, approvalNotes?: string): Promise<TimeEntryApprovalRequest> => {
     return api.patch(`/time-entries/approval-requests/${requestId}/reject`, { approvalNotes });
+  },
+
+  /**
+   * Approve over-budget request
+   */
+  approveOverBudgetRequest: async (requestId: number, approvalNotes?: string) => {
+    return api.patch(`/time-entries/over-budget-requests/${requestId}/approve`, { approvalNotes });
+  },
+
+  /**
+   * Reject over-budget request
+   */
+  rejectOverBudgetRequest: async (requestId: number, approvalNotes?: string) => {
+    return api.patch(`/time-entries/over-budget-requests/${requestId}/reject`, { approvalNotes });
   },
 
   /**

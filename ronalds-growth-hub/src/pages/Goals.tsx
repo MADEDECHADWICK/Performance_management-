@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { apiFetch,  authAPI } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,12 +20,13 @@ import {
   SUMMARY_CARD_HEADER,
   SUMMARY_CARD_TITLE,
 } from "@/components/ui/cardStyles";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function Goals() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, isLoading: authLoading, isHR, isAdmin, isManager } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [goals, setGoals] = useState<any[]>([]);
   const [okrs, setOkrs] = useState<any[]>([]);
   const [teamOkrs, setTeamOkrs] = useState<any[]>([]);
   const [pendingOkrs, setPendingOkrs] = useState<any[]>([]);
@@ -34,20 +35,14 @@ export default function Goals() {
   const [auditHistory, setAuditHistory] = useState<any[]>([]);
   const [cycles, setCycles] = useState<any[]>([]);
   const [kpis, setKpis] = useState<any[]>([]);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isOkrDialogOpen, setIsOkrDialogOpen] = useState(false);
   const [canApproveOkrs, setCanApproveOkrs] = useState(false);
   const [canEditOkrs, setCanEditOkrs] = useState(false);
-  const [newGoal, setNewGoal] = useState({
-    cycle_id: "",
-    kpi_id: "",
-    goal_title: "",
-    goal_description: "",
-    target_value: "",
-  });
   const [newOkr, setNewOkr] = useState({
     title: "",
     description: "",
+    cycleId: "",
+    kpiId: "",
     status: "active",
     startDate: "",
     endDate: "",
@@ -60,18 +55,23 @@ export default function Goals() {
   >([{ title: "", unit: "", targetValue: "", weight: "" }]);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
     loadData();
-  }, []);
+  }, [authLoading, user, navigate]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const user = await authAPI.me();
       if (!user) {
         navigate("/auth");
         return;
       }
-      setCurrentProfileId(user.profileId ?? null);
+      const profileId = (user as any)?.profileId ?? user.profile?.id ?? null;
+      setCurrentProfileId(profileId);
 
       // Load active cycles
       const cyclesData = await apiFetch('GET', '/evaluation-cycles?status=active');
@@ -81,34 +81,19 @@ export default function Goals() {
       const kpisData = await apiFetch('GET', '/kpis?is_active=true');
       setKpis(kpisData || []);
 
-      // Load goals (backend should return joined data as needed)
-      const goalsData = await apiFetch('GET', `/employee_goals?employee_id=${user.id}`);
-      setGoals(goalsData || []);
-
-      const roles = await apiFetch("GET", `/user-roles?userId=${user.id}`);
-      const roleNames = roles?.map((r: any) => r.role) || [];
-      const isApprover =
-        roleNames.includes("hr_manager") ||
-        roleNames.includes("super_admin") ||
-        roleNames.includes("manager");
+      const isApprover = isHR || isAdmin || isManager;
       setCanApproveOkrs(isApprover);
-      setCanEditOkrs(
-        roleNames.includes("hr_manager") ||
-          roleNames.includes("super_admin") ||
-          roleNames.includes("manager")
-      );
-      const isHr =
-        roleNames.includes("hr_manager") || roleNames.includes("super_admin");
-      setIsHrAdmin(isHr);
+      setCanEditOkrs(Boolean(profileId));
+      setIsHrAdmin(isHR || isAdmin);
 
-      if (user.profileId) {
-        const okrData = await apiFetch('GET', `/okrs?ownerProfileId=${user.profileId}`);
+      if (profileId) {
+        const okrData = await apiFetch('GET', `/okrs?ownerProfileId=${profileId}`);
         setOkrs(okrData || []);
       }
 
       if (isApprover) {
-        if (roleNames.includes("manager") && user.profileId) {
-          const teamResponse = await apiFetch("GET", `/profiles/${user.profileId}/team`);
+        if (isManager && profileId) {
+          const teamResponse = await apiFetch("GET", `/profiles/${profileId}/team`);
           const teamItems = teamResponse?.data ?? teamResponse ?? [];
           const teamIds = Array.isArray(teamItems)
             ? teamItems.map((member: any) => member.id)
@@ -154,52 +139,6 @@ export default function Goals() {
     }
   };
 
-  const handleCreateGoal = async () => {
-    try {
-      const user = await authAPI.me();
-      if (!user) return;
-
-      if (!newGoal.cycle_id || !newGoal.goal_title) {
-        toast({
-          variant: "destructive",
-          title: "Missing information",
-          description: "Please fill in all required fields.",
-        });
-        return;
-      }
-
-      await apiFetch('POST', '/employee_goals', {
-        employee_id: user.id,
-        cycle_id: newGoal.cycle_id,
-        kpi_id: newGoal.kpi_id || null,
-        goal_title: newGoal.goal_title,
-        goal_description: newGoal.goal_description,
-        target_value: newGoal.target_value ? parseFloat(newGoal.target_value) : null,
-      });
-
-      toast({
-        title: "Goal created",
-        description: "Your goal has been submitted for manager approval.",
-      });
-
-      setIsDialogOpen(false);
-      setNewGoal({
-        cycle_id: "",
-        kpi_id: "",
-        goal_title: "",
-        goal_description: "",
-        target_value: "",
-      });
-      loadData();
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error creating goal",
-        description: error.message,
-      });
-    }
-  };
-
   const addKeyResultRow = () => {
     setNewKeyResults([
       ...newKeyResults,
@@ -225,12 +164,12 @@ export default function Goals() {
 
   const handleCreateOkr = async () => {
     try {
-      const user = await authAPI.me();
-      if (!user?.profileId) {
+      const profileId = (user as any)?.profileId ?? user?.profile?.id;
+      if (!profileId) {
         toast({
           variant: "destructive",
           title: "Profile required",
-          description: "Your profile is required to create OKRs.",
+          description: "Your profile is required to create goal objectives.",
         });
         return;
       }
@@ -256,7 +195,9 @@ export default function Goals() {
       await apiFetch("POST", "/okrs", {
         title: newOkr.title,
         description: newOkr.description,
-        ownerProfileId: user.profileId,
+        ownerProfileId: profileId,
+        cycleId: newOkr.cycleId ? Number(newOkr.cycleId) : undefined,
+        kpiId: newOkr.kpiId ? Number(newOkr.kpiId) : undefined,
         status: newOkr.status,
         startDate: newOkr.startDate || null,
         endDate: newOkr.endDate || null,
@@ -264,7 +205,7 @@ export default function Goals() {
       });
 
       toast({
-        title: "OKR created",
+        title: "Goal objective created",
         description: "Objective and key results saved.",
       });
 
@@ -272,6 +213,8 @@ export default function Goals() {
       setNewOkr({
         title: "",
         description: "",
+        cycleId: "",
+        kpiId: "",
         status: "active",
         startDate: "",
         endDate: "",
@@ -281,44 +224,9 @@ export default function Goals() {
     } catch (error: any) {
       toast({
         variant: "destructive",
-        title: "Error creating OKR",
+        title: "Error creating goal objective",
         description: error.message,
       });
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "approved":
-        return (
-          <Badge className="bg-green-500">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive">
-            <XCircle className="h-3 w-3 mr-1" />
-            Rejected
-          </Badge>
-        );
-      case "completed":
-        return (
-          <Badge className="bg-blue-500">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Completed
-          </Badge>
-        );
-      case "pending":
-        return (
-          <Badge variant="secondary">
-            <Clock className="h-3 w-3 mr-1" />
-            Pending Review
-          </Badge>
-        );
-      default:
-        return <Badge variant="outline">{status}</Badge>;
     }
   };
 
@@ -422,6 +330,30 @@ export default function Goals() {
     return okr?.ownerProfileId && okr.ownerProfileId === currentProfileId;
   };
 
+  const getObjectiveCompletionPercent = (okr: any) => {
+    const keyResults = Array.isArray(okr?.keyResults) ? okr.keyResults : [];
+    if (keyResults.length === 0) return 0;
+
+    const totalRatio = keyResults.reduce((sum: number, keyResult: any) => {
+      const target = Number(keyResult?.targetValue || 0);
+      const current = Number(keyResult?.currentValue || 0);
+      if (!target) return sum;
+      const ratio = Math.max(0, Math.min(1, current / target));
+      return sum + ratio;
+    }, 0);
+
+    return (totalRatio / keyResults.length) * 100;
+  };
+
+  const myGoalCompletion = useMemo(() => {
+    if (okrs.length === 0) return 0;
+    const total = okrs.reduce(
+      (sum, objective) => sum + getObjectiveCompletionPercent(objective),
+      0
+    );
+    return total / okrs.length;
+  }, [okrs]);
+
   const handleApproveOkr = async (okrId: number) => {
     try {
       await apiFetch("POST", `/okrs/${okrId}/approve`, {});
@@ -467,26 +399,26 @@ export default function Goals() {
           <div>
             <h1 className={`${SECTION_TITLE} flex items-center gap-2`}>
               <Target className="h-8 w-8" />
-              My Goals
+              Goals & OKRs
             </h1>
-            <p className={SECTION_SUBTITLE}>Set and track your performance goals</p>
+            <p className={SECTION_SUBTITLE}>Unified objective tracking with measurable key results</p>
           </div>
           <div className="flex gap-2">
             <Dialog open={isOkrDialogOpen} onOpenChange={setIsOkrDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline">
                   <Plus className="h-4 w-4 mr-2" />
-                  New OKR
+                  New Goal (OKR)
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-3xl">
+              <DialogContent className="w-[95vw] max-w-3xl max-h-[90vh] overflow-hidden">
                 <DialogHeader>
-                  <DialogTitle>Create OKR</DialogTitle>
+                  <DialogTitle>Create Goal (OKR)</DialogTitle>
                   <DialogDescription>
-                    Define an objective and its key results.
+                    Define one goal objective and the key results that measure it.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="space-y-4">
+                <div className="space-y-4 overflow-y-auto pr-1 max-h-[calc(90vh-8rem)]">
                   <div className="space-y-2">
                     <Label>Objective Title *</Label>
                     <Input
@@ -504,6 +436,41 @@ export default function Goals() {
                       placeholder="What success looks like for this objective..."
                       rows={3}
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Evaluation Cycle (Optional)</Label>
+                    <select
+                      className="w-full rounded-md border border-input bg-background px-3 py-2"
+                      value={newOkr.cycleId}
+                      onChange={(e) => setNewOkr({ ...newOkr, cycleId: e.target.value })}
+                    >
+                      <option value="">No cycle link</option>
+                      {cycles.map((cycle) => (
+                        <option key={cycle.id} value={cycle.id}>
+                          {cycle.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Linked KPI (Optional)</Label>
+                    <select
+                      className="w-full rounded-md border border-input bg-background px-3 py-2"
+                      value={newOkr.kpiId}
+                      onChange={(e) => setNewOkr({ ...newOkr, kpiId: e.target.value })}
+                    >
+                      <option value="">No KPI link</option>
+                      {kpis.map((kpi) => (
+                        <option key={kpi.id} value={kpi.id}>
+                          {kpi.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      Link this objective to the KPI it helps fulfill.
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -572,99 +539,12 @@ export default function Goals() {
                   </div>
 
                   <Button onClick={handleCreateOkr} className="w-full">
-                    Create OKR
+                    Create Goal Objective
                   </Button>
                 </div>
               </DialogContent>
             </Dialog>
 
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Goal
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Create New Goal</DialogTitle>
-                  <DialogDescription>
-                    Set a new performance goal for an evaluation cycle
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="cycle">Evaluation Cycle *</Label>
-                    <select
-                      id="cycle"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2"
-                      value={newGoal.cycle_id}
-                      onChange={(e) => setNewGoal({ ...newGoal, cycle_id: e.target.value })}
-                    >
-                      <option value="">Select a cycle</option>
-                      {cycles.map((cycle) => (
-                        <option key={cycle.id} value={cycle.id}>
-                          {cycle.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="kpi">Related KPI (Optional)</Label>
-                    <select
-                      id="kpi"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2"
-                      value={newGoal.kpi_id}
-                      onChange={(e) => setNewGoal({ ...newGoal, kpi_id: e.target.value })}
-                    >
-                      <option value="">No specific KPI</option>
-                      {kpis.map((kpi) => (
-                        <option key={kpi.id} value={kpi.id}>
-                          {kpi.name} ({kpi.category})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="title">Goal Title *</Label>
-                    <Input
-                      id="title"
-                      value={newGoal.goal_title}
-                      onChange={(e) => setNewGoal({ ...newGoal, goal_title: e.target.value })}
-                      placeholder="E.g., Increase client satisfaction scores"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="description">Goal Description</Label>
-                    <Textarea
-                      id="description"
-                      value={newGoal.goal_description}
-                      onChange={(e) => setNewGoal({ ...newGoal, goal_description: e.target.value })}
-                      placeholder="Describe your goal in detail..."
-                      rows={3}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="target">Target Value</Label>
-                    <Input
-                      id="target"
-                      type="number"
-                      value={newGoal.target_value}
-                      onChange={(e) => setNewGoal({ ...newGoal, target_value: e.target.value })}
-                      placeholder="E.g., 85"
-                    />
-                  </div>
-
-                  <Button onClick={handleCreateGoal} className="w-full">
-                    Create Goal
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
           </div>
         </div>
 
@@ -680,12 +560,12 @@ export default function Goals() {
           </Card>
           <Card>
             <CardHeader className={SUMMARY_CARD_HEADER}>
-              <CardTitle className={SUMMARY_CARD_TITLE}>My OKRs</CardTitle>
+              <CardTitle className={SUMMARY_CARD_TITLE}>My Goal Objectives</CardTitle>
               <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent className={SUMMARY_CARD_CONTENT}>
               <div className="text-2xl font-bold">{okrs.length}</div>
-              <p className="text-xs text-muted-foreground">Objectives in progress</p>
+              <p className="text-xs text-muted-foreground">Trackable goal objectives</p>
             </CardContent>
           </Card>
           <Card>
@@ -700,12 +580,12 @@ export default function Goals() {
           </Card>
           <Card>
             <CardHeader className={SUMMARY_CARD_HEADER}>
-              <CardTitle className={SUMMARY_CARD_TITLE}>Goals</CardTitle>
+              <CardTitle className={SUMMARY_CARD_TITLE}>Goal Completion</CardTitle>
               <AlertCircle className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent className={SUMMARY_CARD_CONTENT}>
-              <div className="text-2xl font-bold">{goals.length}</div>
-              <p className="text-xs text-muted-foreground">Cycle-linked goals</p>
+              <div className="text-2xl font-bold">{myGoalCompletion.toFixed(1)}%</div>
+              <p className="text-xs text-muted-foreground">Average key-result completion</p>
             </CardContent>
           </Card>
         </div>
@@ -715,7 +595,7 @@ export default function Goals() {
             <CardHeader>
               <CardTitle>No Active Cycles</CardTitle>
               <CardDescription>
-                There are no active evaluation cycles at the moment. Goals can be set once a cycle is active.
+                There are no active evaluation cycles right now. You can still create goal objectives and link a cycle later.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -724,12 +604,12 @@ export default function Goals() {
             {canApproveOkrs && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Pending OKR Approvals</CardTitle>
+                  <CardTitle>Pending Goal Approvals</CardTitle>
                   <CardDescription>Review objectives submitted by your team.</CardDescription>
                 </CardHeader>
                 <CardContent className={SECTION_STACK}>
                   {pendingOkrs.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No pending OKRs right now.</p>
+                    <p className="text-sm text-muted-foreground">No pending goal objectives right now.</p>
                   ) : (
                     pendingOkrs.map((okr) => (
                       <div key={okr.id} className="border rounded-lg p-4 space-y-2">
@@ -738,6 +618,11 @@ export default function Goals() {
                             <p className="font-semibold">{okr.title}</p>
                             {okr.description && (
                               <p className="text-sm text-muted-foreground">{okr.description}</p>
+                            )}
+                            {okr.kpi?.name && (
+                              <p className="text-xs text-muted-foreground">
+                                Linked KPI: {okr.kpi.name}
+                              </p>
                             )}
                           </div>
                           {getApprovalBadge(okr.approvalStatus)}
@@ -763,7 +648,7 @@ export default function Goals() {
             {canApproveOkrs && (
               <Card>
                 <CardHeader>
-                  <CardTitle>OKR Audit Log</CardTitle>
+                  <CardTitle>Goal Audit Log</CardTitle>
                   <CardDescription>Recent objective updates across the firm.</CardDescription>
                 </CardHeader>
                 <CardContent className={SECTION_STACK}>
@@ -798,12 +683,12 @@ export default function Goals() {
             )}
             <Card>
               <CardHeader>
-                <CardTitle>My OKRs</CardTitle>
+                <CardTitle>My Goals (OKRs)</CardTitle>
                 <CardDescription>Objectives and key results tied to your evaluation cycle.</CardDescription>
               </CardHeader>
               <CardContent className={SECTION_STACK}>
                 {okrs.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No OKRs yet. Create one to start tracking.</p>
+                  <p className="text-sm text-muted-foreground">No goal objectives yet. Create one to start tracking.</p>
                 ) : (
                   <div className={SECTION_STACK}>
                     {okrs.map((okr) => (
@@ -813,6 +698,11 @@ export default function Goals() {
                             <p className="font-semibold">{okr.title}</p>
                             {okr.description && (
                               <p className="text-sm text-muted-foreground">{okr.description}</p>
+                            )}
+                            {okr.kpi?.name && (
+                              <p className="text-xs text-muted-foreground">
+                                Linked KPI: {okr.kpi.name}
+                              </p>
                             )}
                           </div>
                           {getApprovalBadge(okr.approvalStatus)}
@@ -929,7 +819,7 @@ export default function Goals() {
             {teamOkrs.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Team OKRs</CardTitle>
+                  <CardTitle>Team Goals (OKRs)</CardTitle>
                   <CardDescription>Objectives owned by your direct reports.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -940,6 +830,11 @@ export default function Goals() {
                           <p className="font-semibold">{okr.title}</p>
                           {okr.description && (
                             <p className="text-sm text-muted-foreground">{okr.description}</p>
+                          )}
+                          {okr.kpi?.name && (
+                            <p className="text-xs text-muted-foreground">
+                              Linked KPI: {okr.kpi.name}
+                            </p>
                           )}
                         </div>
                         {getApprovalBadge(okr.approvalStatus)}
@@ -1013,63 +908,6 @@ export default function Goals() {
               </Card>
             )}
 
-            {goals.length === 0 ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle>No Goals Yet</CardTitle>
-                  <CardDescription>
-                    Start by creating your first performance goal for the current evaluation cycle.
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            ) : (
-              goals.map((goal) => (
-                <Card key={goal.id}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <CardTitle>{goal.goal_title}</CardTitle>
-                        <CardDescription>
-                          {goal.cycle?.name}
-                          {goal.kpi && ` - ${goal.kpi.name}`}
-                        </CardDescription>
-                      </div>
-                      {getStatusBadge(goal.status)}
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {goal.goal_description && (
-                      <p className="text-sm">{goal.goal_description}</p>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      {goal.target_value && (
-                        <div>
-                          <p className="text-muted-foreground">Target</p>
-                          <p className="font-medium">{goal.target_value}</p>
-                        </div>
-                      )}
-                      {goal.achieved_value && (
-                        <div>
-                          <p className="text-muted-foreground">Achieved</p>
-                          <p className="font-medium">{goal.achieved_value}</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {goal.manager_comments && (
-                      <div className="border-t pt-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <AlertCircle className="h-4 w-4 text-muted-foreground" />
-                          <p className="text-sm font-medium">Manager Feedback</p>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{goal.manager_comments}</p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))
-            )}
           </div>
       </div>
     </DashboardLayout>
