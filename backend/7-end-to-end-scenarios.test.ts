@@ -29,6 +29,7 @@ describe('End-to-end workflow smoke test', () => {
     const engagementLetter = await prisma.engagementLetter.create({
       data: {
         clientId: seed.client.id,
+        documentId: seed.document.id,
         engagementType: seed.engagementLetter.engagementType,
         feeAmount: seed.engagementLetter.feeAmount ?? 500000,
         currency: seed.engagementLetter.currency ?? 'KES',

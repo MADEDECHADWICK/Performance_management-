@@ -88,6 +88,14 @@ const resolveStatusFilter = (rawStatus: unknown): JobStatus[] | undefined => {
 
 const mapJobToLegacyProject = (job: any) => ({
   id: Number(job.id),
+  project_name: job.jobName,
+  project_code: job.jobCode || `JOB-${job.id}`,
+  client_id: job.clientId ?? null,
+  start_date: job.startDate ?? null,
+  end_date: job.dueDate ?? job.completionDate ?? null,
+  manager_profile_id: job.managerProfileId ?? null,
+  partner_profile_id: job.partnerProfileId ?? null,
+  budget_hours: Number(job.budgetHours || 0),
   projectName: job.jobName,
   projectCode: job.jobCode || `JOB-${job.id}`,
   clientId: job.clientId ?? null,

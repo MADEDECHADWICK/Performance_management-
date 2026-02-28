@@ -76,6 +76,18 @@ const ensureRolePolicies = async (req: AuthRequest) => {
   return rolePolicies;
 };
 
+const applyUserOverridePrecedence = (
+  rolePolicies: Array<{ roleName: string; permissionKeys?: string[] | null }>
+) => {
+  const overrides = rolePolicies.filter((policy) =>
+    String(policy.roleName || "")
+      .toLowerCase()
+      .trim()
+      .startsWith("user_override_")
+  );
+  return overrides.length > 0 ? overrides : rolePolicies;
+};
+
 export const requireRole = (...allowedRoles: string[]) => {
   const allowed = allowedRoles.map(r => r.toLowerCase());
 
@@ -88,7 +100,7 @@ export const requireRole = (...allowedRoles: string[]) => {
 
       const currentModuleKey = req.currentModuleAccess?.moduleKey;
       if (currentModuleKey && isModuleKey(currentModuleKey)) {
-        const rolePolicies = await ensureRolePolicies(req);
+        const rolePolicies = applyUserOverridePrecedence(await ensureRolePolicies(req));
         const requiredAction = inferModuleAction(allowedRoles, methodToModuleAction(req.method));
         const allowedByModule = hasModuleAccess({
           moduleKey: currentModuleKey as ModuleKey,

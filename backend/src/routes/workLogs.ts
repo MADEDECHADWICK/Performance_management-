@@ -128,20 +128,39 @@ const buildAuthContext = (req: AuthRequest) => {
 
 const mapTimeEntryToLegacyWorkLog = (entry: any) => {
   const extracted = extractLegacyDescription(entry?.description);
+  const employeeId = Number(entry?.employeeProfileId || 0);
+  const jobId = Number(entry?.jobId || 0);
+  const dateWorked = entry?.dateWorked || null;
+  const startedAt = entry?.startedAt || null;
+  const endedAt = entry?.endedAt || null;
+  const hours = Number(entry?.hours || 0);
+  const taskDescription = extracted.taskDescription;
+  const billable = Boolean(entry?.billable);
+  const status = String(entry?.status || "pending");
+  const activityType = extracted.activityType;
 
   return {
     id: Number(entry?.id || 0),
-    employeeId: Number(entry?.employeeProfileId || 0),
-    jobId: Number(entry?.jobId || 0),
-    projectId: Number(entry?.jobId || 0),
-    dateWorked: entry?.dateWorked || null,
-    startTime: entry?.startedAt || null,
-    endTime: entry?.endedAt || null,
-    hoursWorked: Number(entry?.hours || 0),
-    taskDescription: extracted.taskDescription,
-    billable: Boolean(entry?.billable),
-    status: String(entry?.status || "pending"),
-    activityType: extracted.activityType,
+    employee_id: employeeId,
+    job_id: jobId,
+    project_id: jobId,
+    date_worked: dateWorked,
+    start_time: startedAt,
+    end_time: endedAt,
+    hours_worked: hours,
+    task_description: taskDescription,
+    billable,
+    status,
+    activity_type: activityType,
+    employeeId,
+    jobId,
+    projectId: jobId,
+    dateWorked,
+    startTime: startedAt,
+    endTime: endedAt,
+    hoursWorked: hours,
+    taskDescription,
+    activityType,
     jobs: entry?.job
       ? {
           id: Number(entry.job.id),
@@ -268,15 +287,23 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: scopeError });
     }
 
-    const activityType = normalizeActivityType(req.body?.activityType ?? req.body?.taskType);
-    const jobId = parsePositiveInt(req.body?.jobId ?? req.body?.projectId);
-    const dateWorked = req.body?.dateWorked ?? req.body?.workDate;
-    const descriptionSource = req.body?.taskDescription ?? req.body?.description;
+    const activityType = normalizeActivityType(
+      req.body?.activityType ?? req.body?.activity_type ?? req.body?.taskType
+    );
+    const jobId = parsePositiveInt(
+      req.body?.jobId ??
+        req.body?.job_id ??
+        req.body?.projectId ??
+        req.body?.project_id
+    );
+    const dateWorked = req.body?.dateWorked ?? req.body?.date_worked ?? req.body?.workDate;
+    const descriptionSource =
+      req.body?.taskDescription ?? req.body?.task_description ?? req.body?.description;
 
     if (!jobId) {
       return res.status(400).json({
         error:
-          "jobId is required. This system enforces assignment-scoped time tracking against jobs.",
+          "job_id is required. This system enforces assignment-scoped time tracking against jobs.",
       });
     }
     if (!dateWorked) {
@@ -285,17 +312,17 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
 
     const startedAt = combineDateAndTime(
       dateWorked,
-      req.body?.startTime ?? req.body?.startedAt
+      req.body?.startTime ?? req.body?.start_time ?? req.body?.startedAt
     );
     let endedAt = combineDateAndTime(
       dateWorked,
-      req.body?.endTime ?? req.body?.endedAt
+      req.body?.endTime ?? req.body?.end_time ?? req.body?.endedAt
     );
     if (startedAt && endedAt && endedAt <= startedAt) {
       endedAt = new Date(endedAt.getTime() + 24 * 60 * 60 * 1000);
     }
 
-    const explicitHours = req.body?.hoursWorked ?? req.body?.hours;
+    const explicitHours = req.body?.hoursWorked ?? req.body?.hours_worked ?? req.body?.hours;
     const parsedHours =
       explicitHours === undefined || explicitHours === null || explicitHours === ""
         ? undefined
@@ -370,7 +397,7 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
 
     const updateInput: Record<string, unknown> = {};
 
-    const explicitHours = req.body?.hoursWorked ?? req.body?.hours;
+    const explicitHours = req.body?.hoursWorked ?? req.body?.hours_worked ?? req.body?.hours;
     if (explicitHours !== undefined && explicitHours !== null && explicitHours !== "") {
       const parsedHours = Number(explicitHours);
       if (!Number.isFinite(parsedHours) || parsedHours <= 0) {
@@ -384,20 +411,23 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
       updateInput.billable = parsedBillable;
     }
 
-    const activityType = normalizeActivityType(req.body?.activityType ?? req.body?.taskType);
-    const descriptionSource = req.body?.taskDescription ?? req.body?.description;
+    const activityType = normalizeActivityType(
+      req.body?.activityType ?? req.body?.activity_type ?? req.body?.taskType
+    );
+    const descriptionSource =
+      req.body?.taskDescription ?? req.body?.task_description ?? req.body?.description;
     if (descriptionSource !== undefined) {
       updateInput.description = withActivityPrefix(descriptionSource, activityType);
     }
 
-    const dateWorked = req.body?.dateWorked ?? req.body?.workDate;
+    const dateWorked = req.body?.dateWorked ?? req.body?.date_worked ?? req.body?.workDate;
     const startedAt = combineDateAndTime(
       dateWorked,
-      req.body?.startTime ?? req.body?.startedAt
+      req.body?.startTime ?? req.body?.start_time ?? req.body?.startedAt
     );
     let endedAt = combineDateAndTime(
       dateWorked,
-      req.body?.endTime ?? req.body?.endedAt
+      req.body?.endTime ?? req.body?.end_time ?? req.body?.endedAt
     );
     if (startedAt && endedAt && endedAt <= startedAt) {
       endedAt = new Date(endedAt.getTime() + 24 * 60 * 60 * 1000);
