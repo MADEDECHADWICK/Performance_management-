@@ -18,6 +18,51 @@ import routes from './routes';
 dotenv.config();
 
 const app = express();
+const toCamelKey = (key: string) =>
+  key.replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Object.prototype.toString.call(value) === '[object Object]';
+
+const camelizePayload = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => camelizePayload(entry));
+  }
+
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [
+        toCamelKey(key),
+        camelizePayload(nested),
+      ])
+    );
+  }
+
+  return value;
+};
+
+const hasSnakeCaseSegment = (key: string) => /[a-z0-9]_[a-z0-9]/.test(key);
+
+const findSnakeCaseKey = (value: unknown, prefix = ''): string | null => {
+  if (!isPlainObject(value) && !Array.isArray(value)) return null;
+
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      const found = findSnakeCaseKey(value[i], `${prefix}[${i}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  for (const [key, nested] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (hasSnakeCaseSegment(key)) return path;
+    const found = findSnakeCaseKey(nested, path);
+    if (found) return found;
+  }
+
+  return null;
+};
 
 /**
  * ==========================================
@@ -33,6 +78,34 @@ app.use(cors({
 
 // JSON body parser
 app.use(express.json());
+
+// Enforce camelCase request keys for query/body payloads.
+app.use((req, res, next) => {
+  const invalidBodyKey = findSnakeCaseKey(req.body);
+  if (invalidBodyKey) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid request key '${invalidBodyKey}'. Use camelCase keys only.`,
+    });
+  }
+
+  const invalidQueryKey = Object.keys(req.query || {}).find((key) => hasSnakeCaseSegment(key));
+  if (invalidQueryKey) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid query key '${invalidQueryKey}'. Use camelCase keys only.`,
+    });
+  }
+
+  return next();
+});
+
+// Normalize API response payload keys to camelCase.
+app.use((_req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: any) => originalJson(camelizePayload(body))) as typeof res.json;
+  next();
+});
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

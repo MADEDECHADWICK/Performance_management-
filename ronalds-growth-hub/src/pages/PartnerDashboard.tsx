@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef } from 'react';
+﻿import { useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import PageLoader from '@/components/ui/page-loader';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch, surveysAPI, timeEntriesAPI } from '@/lib/api';
 import type { TimeEntryApprovalRequest } from '@/lib/api/types';
@@ -11,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import MiniStatGraph from '@/components/ui/mini-stat-graph';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -232,7 +234,7 @@ const PartnerDashboard = () => {
       return;
     }
     loadDashboardData();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -290,8 +292,14 @@ const PartnerDashboard = () => {
   const loadAlerts = async () => {
     try {
       const response = await apiFetch('GET', '/notifications?status=unread&type=action&pageSize=20');
-      const payload = response?.data ?? response ?? {};
-      const list = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      const payload: any = response ?? {};
+      const list = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.items)
+            ? payload.items
+            : [];
       setAlerts(list.slice(0, 4));
       setPendingAlertsCount(list.length);
     } catch (err) {
@@ -455,12 +463,7 @@ const PartnerDashboard = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading dashboard...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -556,6 +559,10 @@ const PartnerDashboard = () => {
               <CardContent>
                 <div className="metric-value">{personalPerformance.overallScore}</div>
                 <p className="text-xs text-muted-foreground">Financial + non-financial</p>
+                <MiniStatGraph
+                  value={personalPerformance.overallScore}
+                  baseline={personalPerformance.utilizationRate}
+                />
               </CardContent>
             </Card>
 
@@ -568,6 +575,7 @@ const PartnerDashboard = () => {
                 <div className="metric-value" title={formatCurrency(personalPerformance.revenue)}>
                   {formatCompactCurrency(personalPerformance.revenue)}
                 </div>
+                <MiniStatGraph value={personalPerformance.revenue} />
               </CardContent>
             </Card>
 
@@ -580,6 +588,7 @@ const PartnerDashboard = () => {
                 <div className="metric-value" title={formatCurrency(personalPerformance.netProfit)}>
                   {formatCompactCurrency(personalPerformance.netProfit)}
                 </div>
+                <MiniStatGraph value={personalPerformance.netProfit} baseline={0} />
               </CardContent>
             </Card>
 
@@ -591,6 +600,7 @@ const PartnerDashboard = () => {
               <CardContent>
                 <div className="metric-value">{personalPerformance.utilizationRate}%</div>
                 <p className="text-xs text-muted-foreground">Billable vs allocated</p>
+                <MiniStatGraph value={personalPerformance.utilizationRate} baseline={75} />
               </CardContent>
             </Card>
           </div>
@@ -608,6 +618,10 @@ const PartnerDashboard = () => {
               <p className="text-xs text-muted-foreground">
                 {portfolio?.activeJobs || 0} active
               </p>
+              <MiniStatGraph
+                value={portfolio?.totalJobs || 0}
+                baseline={portfolio?.activeJobs || 0}
+              />
             </CardContent>
           </Card>
 
@@ -620,6 +634,7 @@ const PartnerDashboard = () => {
               <div className="metric-value" title={formatCurrency(portfolio?.totalFee || 0)}>
                 {formatCompactCurrency(portfolio?.totalFee || 0)}
               </div>
+              <MiniStatGraph value={portfolio?.totalFee || 0} />
             </CardContent>
           </Card>
 
@@ -632,6 +647,7 @@ const PartnerDashboard = () => {
               <div className="metric-value" title={formatCurrency(portfolio?.totalRevenueCollected || 0)}>
                 {formatCompactCurrency(portfolio?.totalRevenueCollected || 0)}
               </div>
+              <MiniStatGraph value={portfolio?.totalRevenueCollected || 0} />
             </CardContent>
           </Card>
 
@@ -644,6 +660,7 @@ const PartnerDashboard = () => {
               <div className="metric-value" title={formatCurrency(portfolio?.totalCost || 0)}>
                 {formatCompactCurrency(portfolio?.totalCost || 0)}
               </div>
+              <MiniStatGraph value={portfolio?.totalCost || 0} inverse />
             </CardContent>
           </Card>
 
@@ -656,6 +673,7 @@ const PartnerDashboard = () => {
               <div className="metric-value" title={formatCurrency(portfolio?.totalProfit || 0)}>
                 {formatCompactCurrency(portfolio?.totalProfit || 0)}
               </div>
+              <MiniStatGraph value={portfolio?.totalProfit || 0} baseline={0} />
             </CardContent>
           </Card>
 
@@ -666,6 +684,7 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="metric-value">{(portfolio?.averageMargin || 0).toFixed(1)}%</div>
+              <MiniStatGraph value={portfolio?.averageMargin || 0} baseline={25} />
             </CardContent>
           </Card>
 
@@ -676,6 +695,7 @@ const PartnerDashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="metric-value">{portfolio?.totalTeamSize || 0}</div>
+              <MiniStatGraph value={portfolio?.totalTeamSize || 0} />
             </CardContent>
           </Card>
 
@@ -691,6 +711,15 @@ const PartnerDashboard = () => {
                   Number(summary?.portfolio?.jobsAwaitingPartner || 0)}
               </div>
               <p className="text-xs text-muted-foreground">Awaiting action</p>
+              <MiniStatGraph
+                value={
+                  approvalRequests.length +
+                  overBudgetRequests.length +
+                  Number(summary?.portfolio?.jobsAwaitingPartner || 0)
+                }
+                baseline={0}
+                inverse
+              />
             </CardContent>
           </Card>
 
@@ -711,6 +740,11 @@ const PartnerDashboard = () => {
               <p className="text-xs text-muted-foreground">
                 Planned vs actual cost
               </p>
+              <MiniStatGraph
+                value={Number(portfolio?.totalCostVariance || 0)}
+                baseline={0}
+                inverse
+              />
             </CardContent>
           </Card>
 
@@ -724,6 +758,7 @@ const PartnerDashboard = () => {
               <p className="text-xs text-muted-foreground">
                 Jobs with manager-approved overage
               </p>
+              <MiniStatGraph value={Number(portfolio?.jobsAwaitingPartner || 0)} baseline={0} inverse />
             </CardContent>
           </Card>
         </div>
@@ -904,7 +939,7 @@ const PartnerDashboard = () => {
               </CardHeader>
               <CardContent className="space-y-3">
                 {surveyLoading && (
-                  <div className="text-sm text-muted-foreground">Loading surveys…</div>
+                  <div className="text-sm text-muted-foreground">Loading surveysâ€¦</div>
                 )}
                 {!surveyLoading && partnerSurveys.length === 0 && (
                   <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -916,7 +951,7 @@ const PartnerDashboard = () => {
                     <div>
                       <p className="font-medium">{survey.jobName || 'Job'}</p>
                       <p className="text-xs text-muted-foreground">
-                        {survey.clientName || 'Client'} · {formatDate(survey.completedAt)}
+                        {survey.clientName || 'Client'} Â· {formatDate(survey.completedAt)}
                       </p>
                     </div>
                     <Badge variant="secondary">
@@ -1168,7 +1203,7 @@ const PartnerDashboard = () => {
               </CardHeader>
               <CardContent className="space-y-4">
                 {approvalsLoading && (
-                  <div className="text-sm text-muted-foreground">Loading approvals…</div>
+                  <div className="text-sm text-muted-foreground">Loading approvalsâ€¦</div>
                 )}
                 <div className="flex flex-wrap gap-2">
                   <Badge variant="secondary">{approvalRequests.length} standard</Badge>
@@ -1195,7 +1230,7 @@ const PartnerDashboard = () => {
                             : 'Team member'}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          Requested {request.additionalHoursRequested} hrs · Logged {request.currentLoggedHours} hrs
+                          Requested {request.additionalHoursRequested} hrs Â· Logged {request.currentLoggedHours} hrs
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1212,7 +1247,7 @@ const PartnerDashboard = () => {
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground mt-2">
-                      Justification: {request.justification || '—'}
+                      Justification: {request.justification || 'â€”'}
                     </p>
                   </div>
                 ))}
@@ -1225,7 +1260,7 @@ const PartnerDashboard = () => {
                           <div>
                             <p className="font-medium">{request.jobName || 'Job'}</p>
                             <p className="text-xs text-muted-foreground">
-                              {request.employeeName || 'Team member'} · +{Number(request.requestedAdditional || 0).toFixed(1)}h
+                              {request.employeeName || 'Team member'} Â· +{Number(request.requestedAdditional || 0).toFixed(1)}h
                             </p>
                           </div>
                           <div className="text-right">
@@ -1285,7 +1320,7 @@ const PartnerDashboard = () => {
                         <p className="text-xs text-muted-foreground">
                           {request.employee
                             ? `${request.employee.firstName} ${request.employee.lastName}`
-                            : 'Team member'} · {formatDate(request.approvedAt)}
+                            : 'Team member'} Â· {formatDate(request.approvedAt)}
                         </p>
                       </div>
                       <Badge variant="secondary">{request.status}</Badge>
@@ -1379,7 +1414,7 @@ const PartnerDashboard = () => {
                             <div>
                               <p className="font-medium">{job.jobName}</p>
                               <p className="text-xs text-muted-foreground">
-                                {job.jobCode || `Job #${job.jobId}`} · {job.clientName || 'Client'}
+                                {job.jobCode || `Job #${job.jobId}`} Â· {job.clientName || 'Client'}
                               </p>
                             </div>
                             <div className="flex flex-wrap gap-4 text-sm">
@@ -1430,7 +1465,7 @@ const PartnerDashboard = () => {
                             <div>
                               <p className="font-medium">{allocation.employeeName}</p>
                               <p className="text-xs text-muted-foreground">
-                                {allocation.jobName} · {allocation.clientName}
+                                {allocation.jobName} Â· {allocation.clientName}
                               </p>
                             </div>
                             <div className="flex flex-wrap items-center gap-4 text-sm">

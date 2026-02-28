@@ -3,7 +3,7 @@ import { prisma } from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { notifyProfilesByRoles } from "./notificationRecipients";
 
-const buildToken = () => crypto.randomBytes(16).toString("hex");
+const buildToken = () => crypto.randomBytes(32).toString("hex");
 
 export const createClientSurveyForJobCompletion = async (
   jobId: number,

@@ -1,6 +1,8 @@
-import DashboardLayout from "@/components/DashboardLayout";
+﻿import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import UserRoleManagement from "@/components/UserRoleManagement";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -149,7 +151,7 @@ const HRDashboard = () => {
     if (authLoading) return;
     if (!user) return;
     loadAllData();
-  }, [authLoading, user]);
+  }, [authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mapProfile = (user: any) => {
     const profile = user?.profile;
@@ -192,16 +194,30 @@ const HRDashboard = () => {
     }
   };
 
-  const loadPendingTasks = async (userId: string) => {
-    const notifs = await apiFetch('GET', `/notifications?user_id=${userId}&is_read=false`);
-    setPendingTasks((notifs || []).length || 0);
+  const loadPendingTasks = async (_userId: number | string) => {
+    const response = await apiFetch('GET', '/notifications?status=unread&page=1&pageSize=100');
+    const payload: any = response ?? {};
+    const items = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload.items)
+          ? payload.items
+          : [];
+    setPendingTasks(items.length || 0);
   };
 
   const loadNotifications = async () => {
     try {
       const response = await apiFetch("GET", "/notifications?page=1&pageSize=5");
-      const payload = response?.data ?? response ?? {};
-      const items = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      const payload: any = response ?? {};
+      const items = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.items)
+            ? payload.items
+            : [];
       setNotifications(Array.isArray(items) ? items : []);
 
       const unreadResponse = await apiFetch("GET", "/notifications/unread-count");
@@ -211,6 +227,23 @@ const HRDashboard = () => {
     } catch (error) {
       console.error("Error loading notifications:", error);
     }
+  };
+
+  const resolveNotificationLink = (link?: string | null) => {
+    if (!link) return "/notifications";
+    const rawLink = link.trim();
+    const jobMatch = rawLink.match(/^\/jobs\/(\d+)(?:\/.*)?$/);
+    if (jobMatch) {
+      const jobId = Number(jobMatch[1]);
+      if (hasModuleAccess("jobs", "read")) {
+        return `/jobs?jobId=${jobId}`;
+      }
+      return `/timesheets?jobId=${jobId}`;
+    }
+    if (rawLink === "/onboarding") {
+      return "/profile";
+    }
+    return rawLink;
   };
 
   const markNotificationRead = async (id: number) => {
@@ -231,7 +264,7 @@ const HRDashboard = () => {
     }
   };
 
-  const loadPersonalPerformance = async (userId: string) => {
+  const loadPersonalPerformance = async (userId: number | string) => {
     try {
       const performanceResponse = await apiFetch('GET', '/performance-scores/me');
       const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
@@ -429,7 +462,7 @@ const HRDashboard = () => {
       minimumFractionDigits: 0,
     }).format(amount);
 
-  const loadSubordinates = async (userId: string) => {
+  const loadSubordinates = async (userId: number | string) => {
     try {
       const subs = await apiFetch('GET', `/subordinates?user_id=${userId}`);
       setSubordinates(subs || []);
@@ -468,9 +501,7 @@ const HRDashboard = () => {
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -566,6 +597,10 @@ const HRDashboard = () => {
                     {performance?.overallScore || 0}
                   </div>
                   <p className="text-xs text-muted-foreground">Based on BSC framework</p>
+                  <MiniStatGraph
+                    value={performance?.overallScore || 0}
+                    baseline={performance?.financialScore || 0}
+                  />
                 </CardContent>
               </Card>
 
@@ -579,6 +614,7 @@ const HRDashboard = () => {
                     KES {((performance?.revenueContribution || 0) / 1000000).toFixed(1)}M
                   </div>
                   <p className="text-xs text-muted-foreground">Current fiscal year</p>
+                  <MiniStatGraph value={performance?.revenueContribution || 0} />
                 </CardContent>
               </Card>
 
@@ -594,6 +630,10 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     {performance?.utilizationRate || 0}% utilization
                   </p>
+                  <MiniStatGraph
+                    value={performance?.billableHours || 0}
+                    baseline={performance?.utilizationRate || 0}
+                  />
                 </CardContent>
               </Card>
 
@@ -609,6 +649,10 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     {performance?.clientReviewCount || 0} reviews
                   </p>
+                  <MiniStatGraph
+                    value={performance?.clientRating || 0}
+                    baseline={4}
+                  />
                 </CardContent>
               </Card>
 
@@ -622,6 +666,10 @@ const HRDashboard = () => {
                     {performance?.projectEvaluationScore || 0}%
                   </div>
                   <p className="text-xs text-muted-foreground">Job-based reviews</p>
+                  <MiniStatGraph
+                    value={performance?.projectEvaluationScore || 0}
+                    baseline={performance?.okrScore || 0}
+                  />
                 </CardContent>
               </Card>
             </div>
@@ -811,6 +859,7 @@ const HRDashboard = () => {
                     {companyMetrics?.totalEmployees || 0}
                   </div>
                   <p className="text-xs text-muted-foreground">Active employees</p>
+                  <MiniStatGraph value={companyMetrics?.totalEmployees || 0} />
                 </CardContent>
               </Card>
 
@@ -826,6 +875,10 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     {companyMetrics?.pendingEvaluations || 0} pending completion
                   </p>
+                  <MiniStatGraph
+                    value={companyMetrics?.activeEvaluations || 0}
+                    baseline={companyMetrics?.pendingEvaluations || 0}
+                  />
                 </CardContent>
               </Card>
 
@@ -839,6 +892,7 @@ const HRDashboard = () => {
                     {missingChecklistCount}
                   </div>
                   <p className="text-xs text-muted-foreground">Employees without induction</p>
+                  <MiniStatGraph value={missingChecklistCount} baseline={0} inverse />
                 </CardContent>
               </Card>
 
@@ -854,6 +908,10 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     Projected {formatCurrency(companyMetrics?.projectedMonth || 0)}
                   </p>
+                  <MiniStatGraph
+                    value={companyMetrics?.collectedMonth || 0}
+                    baseline={companyMetrics?.projectedMonth || 0}
+                  />
                 </CardContent>
               </Card>
 
@@ -874,6 +932,7 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     Collection rate {(companyMetrics?.collectionRate || 0).toFixed(1)}%
                   </p>
+                  <MiniStatGraph value={companyMetrics?.firmProfit || 0} baseline={0} />
                 </CardContent>
               </Card>
 
@@ -887,6 +946,7 @@ const HRDashboard = () => {
                     {(companyMetrics?.utilizationRate || 0).toFixed(0)}%
                   </div>
                   <p className="text-xs text-muted-foreground">Billable vs total hours</p>
+                  <MiniStatGraph value={companyMetrics?.utilizationRate || 0} baseline={75} />
                 </CardContent>
               </Card>
 
@@ -902,6 +962,7 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">
                     Outstanding {formatCurrency(companyMetrics?.totalOutstanding || 0)}
                   </p>
+                  <MiniStatGraph value={companyMetrics?.overdueJobs || 0} baseline={0} inverse />
                 </CardContent>
               </Card>
             </div>
@@ -1003,10 +1064,10 @@ const HRDashboard = () => {
                       <div>
                         <p className="font-medium">{request.jobName}</p>
                         <p className="text-xs text-muted-foreground">
-                          {request.clientName || 'Client'} · {request.employeeName || 'Team member'}
+                          {request.clientName || 'Client'} Â· {request.employeeName || 'Team member'}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          +{Number(request.requestedAdditional || 0).toFixed(1)}h ·
+                          +{Number(request.requestedAdditional || 0).toFixed(1)}h Â·
                           {' '}Impact {formatCurrency(Number(request.estimatedCostImpact || 0))}
                         </p>
                       </div>
@@ -1095,38 +1156,40 @@ const HRDashboard = () => {
                     notifications.map((notification) => (
                       <div
                         key={notification.id}
-                        className="border border-border rounded-lg p-3 bg-background flex justify-between gap-3"
+                        className="border border-border rounded-lg bg-background p-3"
                       >
-                        <div className="flex-1 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{notification.title}</span>
-                            {!notification.isRead && (
-                              <Badge variant="secondary">Unread</Badge>
+                        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium break-words">{notification.title}</span>
+                              {!notification.isRead && (
+                                <Badge variant="secondary">Unread</Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground break-words whitespace-normal">
+                              {notification.message}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(notification.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2 sm:flex-col sm:items-end">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => markNotificationRead(notification.id)}
+                              disabled={notification.isRead}
+                            >
+                              {notification.isRead ? "Read" : "Mark read"}
+                            </Button>
+                            {notification.link && (
+                              <Link to={resolveNotificationLink(notification.link)}>
+                                <Button size="sm" variant="link">
+                                  View
+                                </Button>
+                              </Link>
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground truncate">
-                            {notification.message}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(notification.createdAt).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="flex flex-col justify-between">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => markNotificationRead(notification.id)}
-                            disabled={notification.isRead}
-                          >
-                            {notification.isRead ? "Read" : "Mark read"}
-                          </Button>
-                          {notification.link && (
-                            <Link to={notification.link}>
-                              <Button size="sm" variant="link">
-                                View
-                              </Button>
-                            </Link>
-                          )}
                         </div>
                       </div>
                     ))

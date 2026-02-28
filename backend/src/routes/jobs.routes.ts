@@ -12,7 +12,10 @@ import {
   createJobValidators,
   updateJobValidators,
   listJobsValidators,
+  updateJobStatusValidator,
   assignJobTeamValidators,
+  updateJobStaffAssignmentValidators,
+  removeJobStaffAssignmentValidators,
   upsertJobCostingValidators,
   createJobFromOnboardingValidators,
 } from "../validators/job.validators";
@@ -67,6 +70,17 @@ router.get(
 );
 
 /**
+ * GET /jobs/:jobId/invoice-milestones
+ * Get milestone-based invoice tracking for a job
+ */
+router.get(
+  "/:jobId/invoice-milestones",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.getInvoiceMilestones
+);
+
+/**
  * PATCH /jobs/:jobId
  * Update job
  */
@@ -87,7 +101,20 @@ router.patch(
   "/:jobId/status",
   ...authenticated(),
   requireJobAccess("manage"),
+  validateRequest(updateJobStatusValidator),
+  handleValidationErrors,
   JobController.updateJobStatus
+);
+
+/**
+ * PATCH /jobs/:jobId/invoice-milestones/:milestoneTaskId/status
+ * Update invoice milestone condition status
+ */
+router.patch(
+  "/:jobId/invoice-milestones/:milestoneTaskId/status",
+  ...authenticated(),
+  requireJobAccess("manage"),
+  JobController.updateInvoiceMilestoneStatus
 );
 
 /**
@@ -146,6 +173,8 @@ router.patch(
   "/:jobId/staff/:assignmentId",
   ...authenticated(),
   requireJobAccess("manage"),
+  validateRequest(updateJobStaffAssignmentValidators),
+  handleValidationErrors,
   JobController.updateStaffAssignment
 );
 
@@ -157,6 +186,8 @@ router.delete(
   "/:jobId/staff/:assignmentId",
   ...authenticated(),
   requireJobAccess("manage"),
+  validateRequest(removeJobStaffAssignmentValidators),
+  handleValidationErrors,
   JobController.removeStaffAssignment
 );
 

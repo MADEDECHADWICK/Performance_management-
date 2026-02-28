@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { ProposalStatus } from "@prisma/client";
 import { notifyHrGroup } from "../services/hrNotifications";
@@ -17,7 +17,7 @@ const parseNumber = (value: unknown) => {
 router.get(
   "/metrics",
   authMiddleware,
-  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  requireModuleAccess("proposals", "read"),
   async (req: AuthRequest, res) => {
   try {
     const [totalCount, wonCount, lostCount] = await Promise.all([
@@ -217,7 +217,7 @@ router.get(
 router.get(
   "/",
   authMiddleware,
-  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  requireModuleAccess("proposals", "read"),
   async (req: AuthRequest, res) => {
   try {
     const page = parseNumber(req.query.page) || 1;
@@ -262,7 +262,7 @@ router.get(
 router.get(
   "/:id",
   authMiddleware,
-  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  requireModuleAccess("proposals", "read"),
   async (req: AuthRequest, res) => {
   try {
     const proposalId = parseNumber(req.params.id);
@@ -293,7 +293,7 @@ router.get(
 router.post(
   "/",
   authMiddleware,
-  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  requireModuleAccess("proposals", "write"),
   async (req: AuthRequest, res) => {
   try {
     const {
@@ -469,7 +469,7 @@ router.post(
 router.patch(
   "/:id",
   authMiddleware,
-  requireRole("admin", "super_admin", "partner", "manager", "hr", "hr_manager", "finance", "marketing"),
+  requireModuleAccess("proposals", "write"),
   async (req: AuthRequest, res) => {
   try {
     const proposalId = parseNumber(req.params.id);

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import prisma from "../prisma";
 import { errorResponse, successResponse } from "../utils/response";
 import { createAudit } from "../utils/audit";
@@ -24,7 +24,7 @@ router.get(
   "/scores",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  requireModuleAccess("evaluations", "admin"),
   async (req: AuthRequest, res) => {
   try {
     const evaluationCycleId = req.query.evaluationCycleId
@@ -90,7 +90,7 @@ router.patch(
   "/scores/:id",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  requireModuleAccess("evaluations", "admin"),
   async (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
@@ -135,7 +135,7 @@ router.patch(
   "/assignments/:assignmentId/reopen",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "super_admin", "hr", "hr_manager"),
+  requireModuleAccess("evaluations", "admin"),
   async (req: AuthRequest, res) => {
     try {
       const assignmentId = Number(req.params.assignmentId);

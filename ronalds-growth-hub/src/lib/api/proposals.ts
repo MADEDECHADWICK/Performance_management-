@@ -16,6 +16,7 @@ export interface Proposal {
   status: 'draft' | 'sent' | 'won' | 'lost';
   probability: number;
   notes?: string | null;
+  lostReason?: string | null;
   client?: { id: number; clientName: string; industry?: string | null };
   assignedPartner?: { id: number; firstName: string; lastName: string } | null;
 }
@@ -54,6 +55,22 @@ interface ProposalFilters {
   search?: string;
 }
 
+export interface CreateProposalPayload {
+  clientId: number;
+  proposalTitle: string;
+  serviceType: string;
+  proposedFee: number;
+  proposalDate: string;
+  expectedStart?: string;
+  probability: number;
+  status: Proposal["status"];
+}
+
+export interface UpdateProposalPayload {
+  status?: Proposal["status"];
+  lostReason?: string;
+}
+
 export const proposalsAPI = {
   list: async (filters?: ProposalFilters) => {
     const params = new URLSearchParams();
@@ -70,12 +87,12 @@ export const proposalsAPI = {
     return api.get(`/proposals/${id}`);
   },
 
-  create: async (data: any) => {
-    return api.post('/proposals', data);
+  create: async (data: CreateProposalPayload) => {
+    return api.post<Proposal | { data?: Proposal }>('/proposals', data);
   },
 
-  update: async (id: number, data: any) => {
-    return api.patch(`/proposals/${id}`, data);
+  update: async (id: number, data: UpdateProposalPayload) => {
+    return api.patch<Proposal | { data?: Proposal }>(`/proposals/${id}`, data);
   },
 
   metrics: async (params?: { startDate?: string; endDate?: string }): Promise<ProposalMetrics> => {

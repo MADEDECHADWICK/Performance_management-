@@ -5,13 +5,13 @@ import { loadProfile } from '../middleware/loadProfile';
 
 const router = Router();
 
-// GET /peer_evaluations?evaluator_id=&cycle_id=
+// GET /peer_evaluations?evaluatorId=&cycleId=
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const { evaluator_id, cycle_id } = req.query;
+    const { evaluatorId, cycleId } = req.query;
     
     // Return empty array since we don't have peer evaluation data yet
-    // In a real scenario, this would fetch peer evaluations where evaluator_id matches
+    // In a real scenario, this would fetch peer evaluations where evaluatorId matches
     return res.json([]);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -21,9 +21,9 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
 // POST /peer_evaluations
 router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const { evaluator_id, evaluatee_id, cycle_id, scores } = req.body;
+    const { evaluatorId, evaluateeId, cycleId, scores } = req.body;
     
-    if (!evaluator_id || !evaluatee_id || !cycle_id) {
+    if (!evaluatorId || !evaluateeId || !cycleId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 

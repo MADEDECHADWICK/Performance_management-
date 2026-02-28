@@ -73,6 +73,13 @@ export const createTimeEntryValidators = [
     .isBoolean()
     .withMessage("Billable must be a boolean"),
 
+  body("nonBillableCategory")
+    .optional({ nullable: true })
+    .isIn(["leave", "public_holiday", "internal", "training", "other"])
+    .withMessage(
+      "nonBillableCategory must be one of: leave, public_holiday, internal, training, other"
+    ),
+
   body("description")
     .optional({ nullable: true })
     .isString()
@@ -105,6 +112,15 @@ export const createTimeEntryValidators = [
       if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
         throw new Error("'endedAt' must be after 'startedAt'");
       }
+    }
+    return true;
+  }),
+
+  body().custom((value) => {
+    if (value.billable === false && !value.nonBillableCategory) {
+      throw new Error(
+        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, other)"
+      );
     }
     return true;
   }),
@@ -142,6 +158,13 @@ export const updateTimeEntryValidators = [
     .isBoolean()
     .withMessage("Billable must be a boolean"),
 
+  body("nonBillableCategory")
+    .optional({ nullable: true })
+    .isIn(["leave", "public_holiday", "internal", "training", "other"])
+    .withMessage(
+      "nonBillableCategory must be one of: leave, public_holiday, internal, training, other"
+    ),
+
   body("description")
     .optional({ nullable: true })
     .isString()
@@ -177,6 +200,15 @@ export const updateTimeEntryValidators = [
       if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
         throw new Error("'endedAt' must be after 'startedAt'");
       }
+    }
+    return true;
+  }),
+
+  body().custom((value) => {
+    if (value.billable === false && !value.nonBillableCategory) {
+      throw new Error(
+        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, other)"
+      );
     }
     return true;
   }),

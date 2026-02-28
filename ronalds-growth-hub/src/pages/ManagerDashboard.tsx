@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
+import PageLoader from '@/components/ui/page-loader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +11,19 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { apiFetch, timeEntriesAPI } from '@/lib/api';
+import {
+  BarChart as RechartsBarChart,
+  Bar,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart as RechartsPieChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { 
   Users, 
   DollarSign, 
@@ -259,7 +273,7 @@ const ManagerDashboard = () => {
 
   useEffect(() => {
     loadDashboardData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDashboardData = async () => {
     try {
@@ -367,8 +381,14 @@ const ManagerDashboard = () => {
   const loadAlerts = async () => {
     try {
       const response = await apiFetch('GET', '/notifications?status=unread&type=action&pageSize=20');
-      const payload = response?.data ?? response ?? {};
-      const list = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
+      const payload: any = response ?? {};
+      const list = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.items)
+            ? payload.items
+            : [];
       setAlerts(list.slice(0, 4));
       setPendingAlertsCount(list.length);
     } catch (error) {
@@ -436,15 +456,17 @@ const ManagerDashboard = () => {
   };
 
   const handleApproveRequest = async (id: number) => {
-    const notes = window.prompt('Approval notes (optional):') || undefined;
-    await timeEntriesAPI.approveApprovalRequest(id, notes);
+    const notes = window.prompt('Approval reason (required):');
+    if (!notes || !notes.trim()) return;
+    await timeEntriesAPI.approveApprovalRequest(id, notes.trim());
     await loadApprovals();
     await loadApprovalAudit();
   };
 
   const handleRejectRequest = async (id: number) => {
-    const notes = window.prompt('Rejection reason (optional):') || undefined;
-    await timeEntriesAPI.rejectApprovalRequest(id, notes);
+    const notes = window.prompt('Rejection reason (required):');
+    if (!notes || !notes.trim()) return;
+    await timeEntriesAPI.rejectApprovalRequest(id, notes.trim());
     await loadApprovals();
     await loadApprovalAudit();
   };
@@ -598,15 +620,151 @@ const ManagerDashboard = () => {
     return <Badge variant={config.variant as any}>{config.label}</Badge>;
   };
 
+  const resolveAlertLink = (alert: NotificationItem) => {
+    const rawLink = alert.link?.trim();
+    if (!rawLink) return null;
+    const context = `${alert.title} ${alert.message}`.toLowerCase();
+
+    if (rawLink.startsWith('http://') || rawLink.startsWith('https://')) {
+      return rawLink;
+    }
+
+    if (rawLink.startsWith('/workload-management')) {
+      const isApprovalAlert =
+        context.includes('additional hours') ||
+        context.includes('over-budget') ||
+        context.includes('approval');
+      if (isApprovalAlert) {
+        const query = rawLink.includes('?') ? rawLink.split('?')[1] : '';
+        const params = new URLSearchParams(query || '');
+        const mapped = new URLSearchParams();
+        mapped.set('tab', 'approvals');
+        const jobId = Number(params.get('jobId'));
+        if (Number.isFinite(jobId) && jobId > 0) {
+          mapped.set('jobId', String(jobId));
+        }
+        const approvalRequestId = Number(
+          params.get('approvalRequestId') || params.get('requestId')
+        );
+        if (Number.isFinite(approvalRequestId) && approvalRequestId > 0) {
+          mapped.set('approvalRequestId', String(approvalRequestId));
+        }
+        return `/timesheets?${mapped.toString()}`;
+      }
+    }
+
+    const jobMatch = rawLink.match(/^\/jobs\/(\d+)(?:\/.*)?$/);
+    if (jobMatch) {
+      return `/jobs?jobId=${Number(jobMatch[1])}`;
+    }
+
+    const evaluationMatch = rawLink.match(/^\/evaluations\/(\d+)$/);
+    if (evaluationMatch) {
+      return `/evaluation/${evaluationMatch[1]}`;
+    }
+
+    if (rawLink.startsWith('/complete-evaluation/')) {
+      return rawLink.replace('/complete-evaluation/', '/evaluation/');
+    }
+
+    if (rawLink === '/onboarding') {
+      return '/profile?tab=onboarding';
+    }
+
+    if (rawLink.startsWith('/hr-queue')) {
+      return rawLink.replace('/hr-queue', '/client-onboarding-queue');
+    }
+
+    if (rawLink === '/profile') {
+      if (context.includes('onboarding') || context.includes('checklist')) {
+        return '/profile?tab=onboarding';
+      }
+    }
+
+    return rawLink;
+  };
+
+  const openAlert = (alert: NotificationItem) => {
+    const target = resolveAlertLink(alert);
+    if (!target) return;
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      window.open(target, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    navigate(target);
+  };
+
+  const financialPayload = financialData?.data ?? financialData ?? {};
+  const financialSummary = financialPayload?.summary ?? financialPayload ?? {};
+  const financialControls =
+    financialPayload?.controls ??
+    financialPayload?.jobControls ??
+    jobData?.controls ??
+    {};
+
+  const monthlyRevenue = toNumber(
+    financialSummary.monthlyRevenue ??
+      financialSummary.revenueMonth ??
+      overview?.monthlyRevenue
+  );
+  const monthlyProfit = toNumber(
+    financialSummary.monthlyProfit ??
+      financialSummary.profitMonth ??
+      overview?.monthlyProfit
+  );
+  const monthlyCost = Math.max(
+    0,
+    toNumber(
+      financialSummary.monthlyCost ??
+        financialSummary.costMonth ??
+        (teamData?.financials?.totalCost ?? monthlyRevenue - monthlyProfit)
+    )
+  );
+
+  const utilizationRate = Math.min(
+    100,
+    Math.max(
+      0,
+      toNumber(
+        overview?.utilizationRate ??
+          financialSummary.utilizationRate ??
+          safeWorkloadMetrics.avg_utilization
+      )
+    )
+  );
+
+  const financialMixData = [
+    { name: 'Profit', value: Math.max(0, monthlyProfit) },
+    { name: 'Cost', value: Math.max(0, monthlyCost) },
+  ];
+
+  const utilizationMixData = [
+    { name: 'Utilized', value: utilizationRate },
+    { name: 'Available', value: Math.max(0, 100 - utilizationRate) },
+  ];
+
+  const approvalMixData = [
+    { name: 'Pending approvals', value: toNumber(pendingAlertsCount) },
+    { name: 'Pending reviews', value: toNumber(overview?.pendingReviews) },
+    { name: 'Over-budget queue', value: toNumber(overBudgetRequests.length) },
+  ];
+
+  const riskBreakdownData = [
+    { label: 'Over cost', value: toNumber(financialControls.jobsOverPlannedCost) },
+    { label: 'Over hours', value: toNumber(financialControls.jobsOverPlannedHours) },
+    { label: 'Fee cap', value: toNumber(financialControls.jobsOverFeeCap) },
+    { label: 'Awaiting partner', value: toNumber(financialControls.jobsAwaitingPartner) },
+  ];
+
+  const chartPalette = ['#0ea5e9', '#22c55e', '#f97316', '#ef4444', '#6366f1'];
+  const hasFinancialMixData = financialMixData.some((item) => item.value > 0);
+  const hasApprovalMixData = approvalMixData.some((item) => item.value > 0);
+  const hasRiskData = riskBreakdownData.some((item) => item.value > 0);
+
   if (loading && !overview) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading dashboard...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -646,7 +804,7 @@ const ManagerDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  KES {personalPerformance.revenue.toFixed(0)}
+                  KES {toNumber(personalPerformance.revenue).toFixed(0)}
                 </div>
               </CardContent>
             </Card>
@@ -658,7 +816,7 @@ const ManagerDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  KES {personalPerformance.netProfit.toFixed(0)}
+                  KES {toNumber(personalPerformance.netProfit).toFixed(0)}
                 </div>
               </CardContent>
             </Card>
@@ -871,12 +1029,12 @@ const ManagerDashboard = () => {
                       <div key={alert.id} className="rounded-md border p-3">
                         <p className="font-medium">{alert.title}</p>
                         <p className="text-sm text-muted-foreground">{alert.message}</p>
-                        {alert.link && (
+                        {resolveAlertLink(alert) && (
                           <Button
                             className="mt-2"
                             size="sm"
                             variant="outline"
-                            onClick={() => navigate(alert.link!)}
+                            onClick={() => openAlert(alert)}
                           >
                             Review
                           </Button>
@@ -1506,13 +1664,178 @@ const ManagerDashboard = () => {
           </TabsContent>
 
           <TabsContent value="financials" className="space-y-4">
-            <div className="text-center py-8">
-              <BarChart3 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold">Financial Analytics</h3>
-              <p className="text-muted-foreground">
-                Detailed financial charts and analytics will be displayed here
-              </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Monthly Revenue</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{formatCurrency(monthlyRevenue)}</div>
+                  <p className="text-xs text-muted-foreground">Revenue this month</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Monthly Cost</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{formatCurrency(monthlyCost)}</div>
+                  <p className="text-xs text-muted-foreground">Direct delivery cost</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Monthly Profit</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{formatCurrency(monthlyProfit)}</div>
+                  <p className="text-xs text-muted-foreground">Revenue minus cost</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Utilization Rate</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{utilizationRate.toFixed(1)}%</div>
+                  <p className="text-xs text-muted-foreground">Team billable utilization</p>
+                </CardContent>
+              </Card>
             </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <PieChart className="h-5 w-5 text-primary" />
+                    Financial Mix
+                  </CardTitle>
+                  <CardDescription>Profit vs cost composition.</CardDescription>
+                </CardHeader>
+                <CardContent className="h-[250px]">
+                  {hasFinancialMixData ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RechartsPieChart>
+                        <Pie
+                          data={financialMixData}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={52}
+                          outerRadius={84}
+                          paddingAngle={3}
+                        >
+                          {financialMixData.map((entry, index) => (
+                            <Cell key={`financial-mix-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
+                          ))}
+                        </Pie>
+                        <Legend verticalAlign="bottom" height={20} />
+                        <RechartsTooltip formatter={(value: number) => formatCurrency(Number(value || 0))} />
+                      </RechartsPieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      No financial mix data yet.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <PieChart className="h-5 w-5 text-primary" />
+                    Utilization Mix
+                  </CardTitle>
+                  <CardDescription>Used capacity vs available capacity.</CardDescription>
+                </CardHeader>
+                <CardContent className="h-[250px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsPieChart>
+                      <Pie
+                        data={utilizationMixData}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={52}
+                        outerRadius={84}
+                        paddingAngle={2}
+                      >
+                        <Cell fill="#22c55e" />
+                        <Cell fill="#cbd5e1" />
+                      </Pie>
+                      <Legend verticalAlign="bottom" height={20} />
+                      <RechartsTooltip formatter={(value: number) => `${Number(value || 0).toFixed(1)}%`} />
+                    </RechartsPieChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <PieChart className="h-5 w-5 text-primary" />
+                    Approval Pressure
+                  </CardTitle>
+                  <CardDescription>Current queue pressure by type.</CardDescription>
+                </CardHeader>
+                <CardContent className="h-[250px]">
+                  {hasApprovalMixData ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RechartsPieChart>
+                        <Pie
+                          data={approvalMixData}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={52}
+                          outerRadius={84}
+                          paddingAngle={3}
+                        >
+                          {approvalMixData.map((entry, index) => (
+                            <Cell key={`approval-mix-${entry.name}`} fill={chartPalette[(index + 1) % chartPalette.length]} />
+                          ))}
+                        </Pie>
+                        <Legend verticalAlign="bottom" height={20} />
+                        <RechartsTooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                      </RechartsPieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      No approval pressure data yet.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                  Risk Breakdown
+                </CardTitle>
+                <CardDescription>Jobs at risk by control category.</CardDescription>
+              </CardHeader>
+              <CardContent className="h-[280px]">
+                {hasRiskData ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsBarChart data={riskBreakdownData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="label" />
+                      <YAxis allowDecimals={false} />
+                      <RechartsTooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                      <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                        {riskBreakdownData.map((entry, index) => (
+                          <Cell key={`risk-${entry.label}`} fill={chartPalette[(index + 2) % chartPalette.length]} />
+                        ))}
+                      </Bar>
+                    </RechartsBarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                    No risk data available yet.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

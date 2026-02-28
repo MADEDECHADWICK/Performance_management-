@@ -1,411 +1,415 @@
 /**
- * Analytics Aggregation Service
- * 
- * Consolidates data across all domains for:
- * - Dashboard metrics
- * - KPI trends
- * - Performance comparisons
- * - Variance analysis
- * - Forecasting
+ * Legacy analytics compatibility service.
+ *
+ * This version is aligned to the current Prisma schema and keeps the
+ * historical method signatures used by older modules.
  */
 
-import { prisma } from '../prisma';
-import cacheService from './cache.service';
+import { Prisma } from "@prisma/client";
+import { prisma } from "../prisma";
+import cacheService from "./cache.service";
+
+type TrendPeriod = "weekly" | "monthly" | "quarterly" | "yearly";
+
+const toNumber = (value: unknown): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof value === "object" && value && "toString" in value) {
+    const parsed = Number(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const periodKey = (date: Date, period: TrendPeriod): string => {
+  const d = new Date(date);
+  if (period === "weekly") {
+    const weekStart = new Date(d);
+    weekStart.setDate(d.getDate() - d.getDay());
+    return `${weekStart.getFullYear()}-W${Math.ceil(weekStart.getDate() / 7)}`;
+  }
+  if (period === "quarterly") {
+    const quarter = Math.floor(d.getMonth() / 3) + 1;
+    return `${d.getFullYear()}-Q${quarter}`;
+  }
+  if (period === "yearly") {
+    return `${d.getFullYear()}`;
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
 
 class AnalyticsService {
-  /**
-   * Get KPI trends over time period
-   */
   async getKPITrends(options: {
-    period: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+    period: TrendPeriod;
     departmentId?: string;
     months?: number;
   }): Promise<any> {
-    const months = options.months || (options.period === 'yearly' ? 12 : 6);
+    const months = options.months || (options.period === "yearly" ? 12 : 6);
     const startDate = new Date();
     startDate.setMonth(startDate.getMonth() - months);
 
-    const where: any = {
-      created_at: { gte: startDate },
+    const departmentId = options.departmentId ? Number(options.departmentId) : undefined;
+    const where: Prisma.PerformanceScoreWhereInput = {
+      calculatedAt: { gte: startDate },
+      ...(Number.isFinite(departmentId)
+        ? { employee: { departmentId: departmentId as number } }
+        : {}),
     };
 
-    if (options.departmentId) {
-      where.employee = { department_id: options.departmentId };
-    }
-
-    const kpis = await prisma.kPI.findMany({
+    const scores = await prisma.performanceScore.findMany({
       where,
-      include: { employee: true },
-      orderBy: { created_at: 'asc' },
+      select: {
+        calculatedAt: true,
+        totalScore: true,
+      },
+      orderBy: { calculatedAt: "asc" },
     });
 
-    // Group by period
-    const grouped = this.groupByPeriod(kpis, options.period);
+    const grouped = new Map<string, number[]>();
+    scores.forEach((item) => {
+      const key = periodKey(item.calculatedAt, options.period);
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(toNumber(item.totalScore));
+    });
+
+    const data = Array.from(grouped.entries()).map(([key, values]) => {
+      const average = values.length
+        ? values.reduce((sum, current) => sum + current, 0) / values.length
+        : 0;
+      return {
+        period: key,
+        average: Number(average.toFixed(2)),
+        count: values.length,
+        trend: this.calculateTrend(values),
+      };
+    });
 
     return {
       period: options.period,
       departmentId: options.departmentId,
       months,
-      data: Object.entries(grouped).map(([period, data]: any) => ({
-        period,
-        average: (data.reduce((sum: number, item: any) => sum + (item.score || 0), 0) / data.length).toFixed(2),
-        count: data.length,
-        trend: this.calculateTrend(data),
-      })),
+      data,
     };
   }
 
-  /**
-   * Compare performance across employees
-   */
   async getPerformanceComparison(options: {
     cycleId: string;
     departmentId?: string;
     limit?: number;
   }): Promise<any> {
-    const where: any = {
-      evaluation_cycle_id: options.cycleId,
-    };
-
-    if (options.departmentId) {
-      where.evaluatedEmployee = { department_id: options.departmentId };
+    const cycleId = Number(options.cycleId);
+    if (!Number.isFinite(cycleId)) {
+      return {
+        cycleId: options.cycleId,
+        totalEmployees: 0,
+        summary: [],
+      };
     }
 
-    const evaluations = await prisma.evaluation.findMany({
+    const departmentId = options.departmentId ? Number(options.departmentId) : undefined;
+    const where: Prisma.EvaluationAssignmentWhereInput = {
+      definition: { cycleId },
+      ...(Number.isFinite(departmentId)
+        ? { evaluatee: { departmentId: departmentId as number } }
+        : {}),
+    };
+
+    const rows = await prisma.evaluationAssignment.findMany({
       where,
       include: {
-        evaluatedEmployee: true,
+        evaluatee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            departmentId: true,
+          },
+        },
       },
-      orderBy: { average_score: 'desc' },
-      take: options.limit || 10,
+      orderBy: { createdAt: "desc" },
     });
 
-    const comparison = evaluations.map((e: any, idx) => ({
-      rank: idx + 1,
-      employeeId: e.evaluated_by,
-      employeeName: e.evaluatedEmployee?.first_name + ' ' + e.evaluatedEmployee?.last_name,
-      score: e.average_score,
-      rating: this.determineRating(e.average_score),
-      submission_count: 1, // Would be aggregated in real scenario
-    }));
+    const grouped = new Map<
+      number,
+      { employeeName: string; scores: number[]; evaluationCount: number }
+    >();
 
-    const avgScore =
-      evaluations.reduce((sum: number, e: any) => sum + (e.average_score || 0), 0) / evaluations.length;
+    rows.forEach((row) => {
+      const score = toNumber(row.score);
+      const existing = grouped.get(row.evaluateeProfileId) || {
+        employeeName: `${row.evaluatee.firstName} ${row.evaluatee.lastName}`.trim(),
+        scores: [],
+        evaluationCount: 0,
+      };
+      existing.scores.push(score);
+      existing.evaluationCount += 1;
+      grouped.set(row.evaluateeProfileId, existing);
+    });
+
+    const summary = Array.from(grouped.entries())
+      .map(([employeeId, value]) => {
+        const avgScore = value.scores.length
+          ? value.scores.reduce((sum, current) => sum + current, 0) / value.scores.length
+          : 0;
+        return {
+          employeeId,
+          employeeName: value.employeeName,
+          evaluationCount: value.evaluationCount,
+          averageScore: Number(avgScore.toFixed(2)),
+          rating: this.determineRating(avgScore),
+        };
+      })
+      .sort((a, b) => b.averageScore - a.averageScore)
+      .slice(0, options.limit || 10);
 
     return {
-      cycleId: options.cycleId,
-      totalEvaluations: evaluations.length,
-      averageScore: avgScore.toFixed(2),
-      topPerformers: comparison.slice(0, 3),
-      needsImprovement: comparison.slice(-3).reverse(),
-      all: comparison,
+      cycleId,
+      departmentId: options.departmentId || "All",
+      totalEmployees: summary.length,
+      summary,
+      statistics: {
+        averageScore:
+          summary.length > 0
+            ? Number(
+                (
+                  summary.reduce((sum, item) => sum + item.averageScore, 0) / summary.length
+                ).toFixed(2)
+              )
+            : 0,
+        highestScore: summary.length ? Math.max(...summary.map((item) => item.averageScore)) : 0,
+        lowestScore: summary.length ? Math.min(...summary.map((item) => item.averageScore)) : 0,
+      },
     };
   }
 
-  /**
-   * Analyze budget variance across organization
-   */
   async getBudgetVarianceAnalysis(options: {
     departmentId?: string;
-    period: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
-    threshold?: number;
+    months?: number;
   }): Promise<any> {
-    const where: any = {};
+    const months = options.months || 6;
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - months);
+    const departmentId = options.departmentId ? Number(options.departmentId) : undefined;
 
-    if (options.departmentId) {
-      where.department_id = options.departmentId;
-    }
-
-    const budgets = await prisma.budget.findMany({
-      where,
-      include: { job: true },
+    const jobs = await prisma.job.findMany({
+      where: {
+        createdAt: { gte: startDate },
+        ...(Number.isFinite(departmentId) ? { departmentId: departmentId as number } : {}),
+      },
+      include: {
+        jobCosting: { select: { jobFee: true } },
+        payments: { select: { paymentAmount: true } },
+      },
+      orderBy: { createdAt: "desc" },
     });
 
-    const variance = budgets.map((b: any) => {
-      const spent = b.spent_amount || 0;
-      const budgeted = b.total_budget;
-      const variance = spent - budgeted;
-      const variancePercentage = ((variance / budgeted) * 100).toFixed(2);
-      const status =
-        Math.abs(Number(variancePercentage)) > (options.threshold || 10) ? 'alert' : 'normal';
-
+    const details = jobs.map((job) => {
+      const budget = toNumber(job.jobCosting?.jobFee) || toNumber(job.fixedFeeAmount);
+      const actual = job.payments.reduce(
+        (sum, payment) => sum + toNumber(payment.paymentAmount),
+        0
+      );
+      const variance = actual - budget;
+      const variancePercent = budget > 0 ? (variance / budget) * 100 : 0;
       return {
-        jobId: b.job_id,
-        budgeted,
-        spent,
-        variance,
-        variancePercentage: Number(variancePercentage),
-        status,
+        jobId: job.id,
+        jobName: job.jobName,
+        budget: Number(budget.toFixed(2)),
+        actual: Number(actual.toFixed(2)),
+        variance: Number(variance.toFixed(2)),
+        variancePercent: Number(variancePercent.toFixed(2)),
       };
     });
 
-    const totalVariance = variance.reduce((sum: number, v) => sum + v.variance, 0);
-    const alertCount = variance.filter((v) => v.status === 'alert').length;
+    const totalBudget = details.reduce((sum, item) => sum + item.budget, 0);
+    const totalActual = details.reduce((sum, item) => sum + item.actual, 0);
+    const totalVariance = totalActual - totalBudget;
 
     return {
-      period: options.period,
-      departmentId: options.departmentId || 'all',
-      totalBudgeted: budgets.reduce((sum: number, b: any) => sum + b.total_budget, 0),
-      totalSpent: budgets.reduce((sum: number, b: any) => sum + b.spent_amount, 0),
-      totalVariance: totalVariance.toFixed(2),
-      averageVariancePercentage: (totalVariance / budgets.reduce((sum: number, b: any) => sum + b.total_budget, 0)).toFixed(2),
-      alertCount,
-      details: variance,
+      departmentId: options.departmentId || "All",
+      months,
+      summary: {
+        totalBudget: Number(totalBudget.toFixed(2)),
+        totalActual: Number(totalActual.toFixed(2)),
+        totalVariance: Number(totalVariance.toFixed(2)),
+        totalVariancePercent:
+          totalBudget > 0 ? Number(((totalVariance / totalBudget) * 100).toFixed(2)) : 0,
+      },
+      jobs: details,
     };
   }
 
-  /**
-   * Get revenue forecast based on trends
-   */
   async getRevenueForecast(options: {
-    months: number;
-    confidenceLevel: number;
+    months?: number;
     departmentId?: string;
   }): Promise<any> {
-    const historyMonths = 6;
+    const months = options.months || 6;
+    const departmentId = options.departmentId ? Number(options.departmentId) : undefined;
     const startDate = new Date();
-    startDate.setMonth(startDate.getMonth() - historyMonths);
+    startDate.setMonth(startDate.getMonth() - months);
 
-    const where: any = {
-      created_at: { gte: startDate },
-    };
-
-    if (options.departmentId) {
-      where.department_id = options.departmentId;
-    }
-
-    const revenues = await prisma.revenue.findMany({
-      where,
-      orderBy: { created_at: 'asc' },
+    const payments = await prisma.clientPayment.findMany({
+      where: {
+        paymentDate: { gte: startDate },
+        ...(Number.isFinite(departmentId)
+          ? { job: { is: { departmentId: departmentId as number } } }
+          : {}),
+      },
+      select: {
+        paymentDate: true,
+        paymentAmount: true,
+      },
+      orderBy: { paymentDate: "asc" },
     });
 
-    // Group by month and calculate average
-    const monthlyRevenue = this.groupByMonth(revenues);
-    const monthlyAmounts = Object.values(monthlyRevenue).map((m: any) =>
-      m.reduce((sum: number, r: any) => sum + r.amount, 0)
-    );
+    const monthly = new Map<string, number>();
+    payments.forEach((payment) => {
+      const key = periodKey(payment.paymentDate, "monthly");
+      monthly.set(key, (monthly.get(key) || 0) + toNumber(payment.paymentAmount));
+    });
 
-    // Simple linear forecast
-    const avgMonthly = monthlyAmounts.reduce((a, b) => a + b, 0) / monthlyAmounts.length;
-    const trend = this.calculateLinearTrend(monthlyAmounts);
+    const history = Array.from(monthly.entries()).map(([month, amount]) => ({
+      month,
+      amount: Number(amount.toFixed(2)),
+    }));
 
-    const forecast = [];
-    for (let i = 1; i <= options.months; i++) {
-      const projectedRevenue = avgMonthly + trend * i;
-      const confidenceInterval = (projectedRevenue * (100 - options.confidenceLevel)) / 100;
+    const trendValue = this.calculateLinearTrend(history.map((item) => item.amount));
+    const lastValue = history.length ? history[history.length - 1].amount : 0;
 
-      forecast.push({
-        month: i,
-        projected: Math.max(0, projectedRevenue.toFixed(2)),
-        lower: Math.max(0, (projectedRevenue - confidenceInterval).toFixed(2)),
-        upper: (projectedRevenue + confidenceInterval).toFixed(2),
-        confidence: options.confidenceLevel,
-      });
-    }
+    const forecast = Array.from({ length: 3 }).map((_, index) => {
+      const value = Math.max(0, lastValue + trendValue * (index + 1));
+      return {
+        monthOffset: index + 1,
+        projectedRevenue: Number(value.toFixed(2)),
+      };
+    });
 
     return {
-      departmentId: options.departmentId || 'all',
-      months: options.months,
-      historicalAverage: avgMonthly.toFixed(2),
-      trend: trend > 0 ? 'increasing' : 'decreasing',
+      months,
+      departmentId: options.departmentId || "All",
+      trend: Number(trendValue.toFixed(2)),
+      history,
       forecast,
     };
   }
 
-  /**
-   * Get dashboard summary metrics
-   */
   async getDashboardMetrics(userId: string): Promise<any> {
-    const cacheKey = `dashboard:${userId}`;
+    const numericUserId = Number(userId);
+    const profile = Number.isFinite(numericUserId)
+      ? await prisma.profile.findUnique({
+          where: { userId: numericUserId },
+          select: { id: true, departmentId: true },
+        })
+      : null;
+
+    const cacheKey = `dashboard:metrics:${userId}`;
     const cached = cacheService.get(cacheKey);
     if (cached) return cached;
 
-    const user = await prisma.profile.findUnique({
-      where: { id: userId },
-      include: { department: true },
-    });
-
-    if (!user) {
-      throw { statusCode: 404, message: 'User not found' };
-    }
-
-    // Fetch budget metrics
-    const budgets = await prisma.budget.findMany({
-      where: user.role_id ? { department_id: user.department_id } : {},
-    });
-    const budgetUtilization = budgets.length
-      ? (budgets.reduce((sum: number, b: any) => sum + b.spent_amount, 0) /
-          budgets.reduce((sum: number, b: any) => sum + b.total_budget, 0)) *
-        100
-      : 0;
-
-    // Fetch revenue metrics
-    const revenues = await prisma.revenue.findMany({
-      where: user.role_id ? { department_id: user.department_id } : {},
-      where: {
-        created_at: {
-          gte: new Date(new Date().setMonth(new Date().getMonth() - 1)),
-        },
-      },
-    });
-    const monthlyRevenue = revenues.reduce((sum: number, r: any) => sum + r.amount, 0);
-
-    // Fetch evaluation metrics
-    const evaluations = await prisma.evaluation.findMany({
-      where: {
-        OR: [
-          { evaluated_by: userId },
-          { evaluator_id: userId },
-        ],
-      },
-    });
-    const pendingEvaluations = evaluations.filter((e: any) => e.status === 'pending').length;
-
-    // Fetch staffing metrics
-    const assignments = await prisma.jobStaffAssignment.findMany({
-      where: {
-        employee_id: userId,
-      },
-    });
-    const totalUtilization = assignments.reduce((sum: number, a: any) => sum + a.allocation_percentage, 0);
+    const [activeJobs, pendingTimeEntries, openEvaluations, paymentTotals] =
+      await Promise.all([
+        prisma.job.count({ where: { status: { in: ["planned", "in_progress", "on_hold"] } } }),
+        prisma.timeEntry.count({ where: { status: { in: ["pending", "submitted"] } } }),
+        prisma.evaluationAssignment.count({
+          where: { status: { in: ["pending", "in_progress"] } },
+        }),
+        prisma.clientPayment.aggregate({ _sum: { paymentAmount: true } }),
+      ]);
 
     const metrics = {
-      userId,
-      userRole: user.role_id,
-      department: user.department?.name,
-      budgetUtilization: budgetUtilization.toFixed(2),
-      monthlyRevenue: monthlyRevenue.toFixed(2),
-      pendingEvaluations,
-      staffingUtilization: Math.min(100, totalUtilization).toFixed(2),
-      timestamp: new Date(),
+      profileId: profile?.id || null,
+      departmentId: profile?.departmentId || null,
+      activeJobs,
+      pendingTimeEntries,
+      openEvaluations,
+      totalRevenue: Number(toNumber(paymentTotals._sum.paymentAmount).toFixed(2)),
     };
 
-    cacheService.set(cacheKey, metrics, 5 * 60 * 1000); // 5 minute cache
+    cacheService.set(cacheKey, metrics, 60_000);
     return metrics;
   }
 
-  /**
-   * Get department comparison across KPIs
-   */
   async getDepartmentComparison(): Promise<any> {
     const departments = await prisma.department.findMany({
-      include: {
-        employees: true,
-      },
-    });
-
-    return Promise.all(
-      departments.map(async (dept: any) => {
-        const kpis = await prisma.kPI.findMany({
-          where: {
-            employee: { department_id: dept.id },
+      select: {
+        id: true,
+        name: true,
+        profiles: { select: { id: true } },
+        jobs: {
+          select: {
+            id: true,
+            payments: { select: { paymentAmount: true } },
           },
-        });
-
-        const avgScore = kpis.length ? kpis.reduce((sum: number, k: any) => sum + (k.score || 0), 0) / kpis.length : 0;
-
-        return {
-          departmentId: dept.id,
-          departmentName: dept.name,
-          employeeCount: dept.employees.length,
-          averageKPIScore: avgScore.toFixed(2),
-          kpiCount: kpis.length,
-        };
-      })
-    );
-  }
-
-  /**
-   * Helper: Group data by period
-   */
-  private groupByPeriod(data: any[], period: string): Record<string, any[]> {
-    const grouped: Record<string, any[]> = {};
-
-    data.forEach((item) => {
-      let key = '';
-      const date = new Date(item.created_at);
-
-      switch (period) {
-        case 'weekly':
-          const week = Math.ceil(date.getDate() / 7);
-          key = `Week ${week} ${date.getFullYear()}`;
-          break;
-        case 'monthly':
-          key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-          break;
-        case 'quarterly':
-          const quarter = Math.ceil((date.getMonth() + 1) / 3);
-          key = `Q${quarter} ${date.getFullYear()}`;
-          break;
-        case 'yearly':
-          key = date.getFullYear().toString();
-          break;
-      }
-
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(item);
+        },
+      },
+      orderBy: { name: "asc" },
     });
 
-    return grouped;
-  }
+    const rows = departments.map((department) => {
+      const revenue = department.jobs.reduce(
+        (jobSum, job) =>
+          jobSum +
+          job.payments.reduce(
+            (paymentSum, payment) => paymentSum + toNumber(payment.paymentAmount),
+            0
+          ),
+        0
+      );
 
-  /**
-   * Helper: Calculate trend direction
-   */
-  private calculateTrend(data: any[]): string {
-    if (data.length < 2) return 'stable';
-
-    const first = data.slice(0, Math.ceil(data.length / 2)).reduce((sum: number, d: any) => sum + (d.score || 0), 0) / Math.ceil(data.length / 2);
-    const last = data.slice(-Math.ceil(data.length / 2)).reduce((sum: number, d: any) => sum + (d.score || 0), 0) / Math.ceil(data.length / 2);
-
-    const change = ((last - first) / first) * 100;
-    if (Math.abs(change) < 5) return 'stable';
-    return change > 0 ? '📈 increasing' : '📉 decreasing';
-  }
-
-  /**
-   * Helper: Group by month
-   */
-  private groupByMonth(data: any[]): Record<string, any[]> {
-    const grouped: Record<string, any[]> = {};
-
-    data.forEach((item) => {
-      const date = new Date(item.created_at);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(item);
+      return {
+        departmentId: department.id,
+        departmentName: department.name,
+        employeeCount: department.profiles.length,
+        jobCount: department.jobs.length,
+        revenue: Number(revenue.toFixed(2)),
+      };
     });
 
-    return grouped;
+    return {
+      totalDepartments: rows.length,
+      departments: rows,
+    };
   }
 
-  /**
-   * Helper: Calculate linear trend
-   */
+  private calculateTrend(values: number[]): "up" | "down" | "stable" {
+    if (values.length < 2) return "stable";
+    const first = values[0];
+    const last = values[values.length - 1];
+    if (last > first + 0.1) return "up";
+    if (last < first - 0.1) return "down";
+    return "stable";
+  }
+
   private calculateLinearTrend(values: number[]): number {
     if (values.length < 2) return 0;
 
     const n = values.length;
-    const x = Array.from({ length: n }, (_, i) => i);
-    const sumX = x.reduce((a, b) => a + b);
-    const sumY = values.reduce((a, b) => a + b);
-    const sumXY = x.reduce((sum, xi, i) => sum + xi * values[i], 0);
-    const sumX2 = x.reduce((sum, xi) => sum + xi * xi, 0);
+    const xMean = (n - 1) / 2;
+    const yMean = values.reduce((sum, value) => sum + value, 0) / n;
 
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    return slope;
+    let numerator = 0;
+    let denominator = 0;
+    values.forEach((value, index) => {
+      const x = index - xMean;
+      const y = value - yMean;
+      numerator += x * y;
+      denominator += x * x;
+    });
+
+    if (denominator === 0) return 0;
+    return numerator / denominator;
   }
 
-  /**
-   * Helper: Determine rating from score
-   */
   private determineRating(score: number): string {
-    if (score >= 4.5) return 'Excellent';
-    if (score >= 3.5) return 'Good';
-    if (score >= 2.5) return 'Satisfactory';
-    if (score >= 1.5) return 'Needs Improvement';
-    return 'Unsatisfactory';
+    if (score >= 4.5) return "Excellent";
+    if (score >= 3.5) return "Good";
+    if (score >= 2.5) return "Satisfactory";
+    if (score >= 1.5) return "Needs Improvement";
+    return "Unsatisfactory";
   }
 }
 

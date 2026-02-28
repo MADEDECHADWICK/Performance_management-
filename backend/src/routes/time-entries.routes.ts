@@ -4,7 +4,7 @@ import { authMiddleware } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
 import { requireTimeEntryAccess } from "../middleware/requireTimeEntryAccess";
 import { requireJobAccess } from "../middleware/requireJobAccess";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 import {
   createTimeEntryValidators,
@@ -69,7 +69,7 @@ router.patch(
   "/approval-requests/:requestId/approve",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin"),
+  requireModuleAccess("time_entries", "approve"),
   ...approvalRequestIdParamValidator,
   handleValidationErrors,
   TimeEntryController.approveApprovalRequest
@@ -83,7 +83,7 @@ router.patch(
   "/approval-requests/:requestId/reject",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin"),
+  requireModuleAccess("time_entries", "approve"),
   ...approvalRequestIdParamValidator,
   handleValidationErrors,
   TimeEntryController.rejectApprovalRequest
@@ -97,7 +97,7 @@ router.patch(
   "/over-budget-requests/:requestId/approve",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin", "super_admin"),
+  requireModuleAccess("time_entries", "approve"),
   ...approvalRequestIdParamValidator,
   handleValidationErrors,
   TimeEntryController.approveOverBudgetRequest
@@ -111,7 +111,7 @@ router.patch(
   "/over-budget-requests/:requestId/reject",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin", "super_admin"),
+  requireModuleAccess("time_entries", "approve"),
   ...approvalRequestIdParamValidator,
   handleValidationErrors,
   TimeEntryController.rejectOverBudgetRequest
@@ -190,7 +190,7 @@ router.patch(
   "/:timeEntryId/approve",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin"),
+  requireModuleAccess("time_entries", "approve"),
   requireTimeEntryAccess,
   ...approveTimeEntryValidators,
   handleValidationErrors,
@@ -205,7 +205,7 @@ router.patch(
   "/:timeEntryId/reject",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin"),
+  requireModuleAccess("time_entries", "approve"),
   requireTimeEntryAccess,
   ...rejectTimeEntryValidators,
   handleValidationErrors,
@@ -261,7 +261,7 @@ router.post(
   "/batch/approve",
   authMiddleware,
   loadProfile,
-  requireRole("manager", "partner", "admin"),
+  requireModuleAccess("time_entries", "approve"),
   handleValidationErrors,
   TimeEntryController.batchApproveTimeEntries
 );

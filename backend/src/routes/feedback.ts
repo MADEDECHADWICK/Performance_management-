@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { FeedbackController } from '../controllers/feedback.controller';
 import { authMiddleware } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { handleValidationErrors } from '../middleware/validate';
 import { body, param, query } from 'express-validator';
 
@@ -14,9 +14,9 @@ const router = Router();
 
 // ✅ VALIDATORS
 const createFeedbackValidators = [
-  body('recipient_profile_id')
+  body('recipientProfileId')
     .isInt()
-    .withMessage('recipient_profile_id must be an integer'),
+    .withMessage('recipientProfileId must be an integer'),
   body('title')
     .isString()
     .trim()
@@ -32,10 +32,10 @@ const createFeedbackValidators = [
     .isString()
     .isIn(['general', 'praise', 'improvement', 'suggestion'])
     .withMessage('Invalid feedback type'),
-  body('is_anonymous')
+  body('isAnonymous')
     .optional()
     .isBoolean()
-    .withMessage('is_anonymous must be boolean'),
+    .withMessage('isAnonymous must be boolean'),
 ];
 
 const updateStatusValidators = [
@@ -93,7 +93,7 @@ router.patch(
   '/:feedbackId/status',
   authMiddleware,
   loadProfile,
-  requireRole('admin'),
+  requireModuleAccess('evaluations', 'admin'),
   ...updateStatusValidators,
   handleValidationErrors,
   FeedbackController.updateFeedbackStatus

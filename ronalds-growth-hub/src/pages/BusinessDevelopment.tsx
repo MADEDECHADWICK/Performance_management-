@@ -3,6 +3,11 @@ import { Link } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { proposalsAPI, clientsAPI, documentsAPI, surveysAPI } from "@/lib/api";
+import type {
+  CreateProposalPayload,
+  Proposal,
+  UpdateProposalPayload,
+} from "@/lib/api/proposals";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +42,52 @@ const SERVICE_TYPES = [
   "Advisory",
 ];
 
+type ClientOption = {
+  id: number;
+  clientName: string;
+  industry?: string | null;
+};
+
+type SurveyStatusRecord = {
+  clientId?: number | null;
+  completedAt?: string | null;
+};
+
+type ProposalCreateResponse = Proposal | { data?: Proposal };
+
+type ProposalFormState = {
+  clientId: string;
+  proposalTitle: string;
+  serviceType: string;
+  proposedFee: string;
+  proposalDate: string;
+  expectedStart: string;
+  probability: string;
+  status: Proposal["status"];
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return String((error as { message?: string }).message);
+  }
+  return fallback;
+};
+
+const getCreatedProposal = (payload: ProposalCreateResponse): Proposal | null => {
+  if ("id" in payload) {
+    return payload;
+  }
+  return payload.data ?? null;
+};
+
 export default function BusinessDevelopment() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -48,7 +99,7 @@ export default function BusinessDevelopment() {
   const [proposalAttachment, setProposalAttachment] = useState<File | null>(null);
   const [attachingProposalId, setAttachingProposalId] = useState<number | null>(null);
 
-  const [proposalForm, setProposalForm] = useState({
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>({
     clientId: "",
     proposalTitle: "",
     serviceType: "",
@@ -90,10 +141,22 @@ export default function BusinessDevelopment() {
     queryFn: () => surveysAPI.getCompleted(),
   });
 
-  const proposals = proposalsData?.data || [];
-  const clients = clientsData?.data || [];
-  const pendingSurveys = pendingSurveyData?.surveys || [];
-  const completedSurveys = completedSurveyData?.surveys || [];
+  const proposals = useMemo<Proposal[]>(
+    () => (Array.isArray(proposalsData?.data) ? proposalsData.data : []),
+    [proposalsData]
+  );
+  const clients = useMemo<ClientOption[]>(
+    () => (Array.isArray(clientsData?.data) ? clientsData.data : []),
+    [clientsData]
+  );
+  const pendingSurveys = useMemo<SurveyStatusRecord[]>(
+    () => (Array.isArray(pendingSurveyData?.surveys) ? pendingSurveyData.surveys : []),
+    [pendingSurveyData]
+  );
+  const completedSurveys = useMemo(
+    () => (Array.isArray(completedSurveyData?.surveys) ? completedSurveyData.surveys : []),
+    [completedSurveyData]
+  );
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -101,7 +164,7 @@ export default function BusinessDevelopment() {
         throw new Error("Proposal document is required before submission.");
       }
 
-      const created = await proposalsAPI.create({
+      const payload: CreateProposalPayload = {
         clientId: Number(proposalForm.clientId),
         proposalTitle: proposalForm.proposalTitle,
         serviceType: proposalForm.serviceType,
@@ -110,9 +173,11 @@ export default function BusinessDevelopment() {
         expectedStart: proposalForm.expectedStart || undefined,
         probability: Number(proposalForm.probability),
         status: proposalForm.status,
-      });
+      };
 
-      const proposal = (created as any)?.data ?? created;
+      const created = await proposalsAPI.create(payload);
+
+      const proposal = getCreatedProposal(created);
       if (proposalAttachment && proposal?.id) {
         try {
           await documentsAPI.uploadFile(proposalAttachment, {
@@ -123,10 +188,10 @@ export default function BusinessDevelopment() {
             isRequired: true,
             description: `Proposal attachment for ${proposal.proposalTitle}`,
           });
-        } catch (uploadError: any) {
+        } catch (uploadError: unknown) {
           toast({
             title: "Proposal saved, attachment failed",
-            description: uploadError?.message || "Could not upload proposal attachment.",
+            description: getErrorMessage(uploadError, "Could not upload proposal attachment."),
             variant: "destructive",
           });
         }
@@ -150,27 +215,35 @@ export default function BusinessDevelopment() {
       });
       setProposalAttachment(null);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to create proposal",
+        description: getErrorMessage(error, "Failed to create proposal"),
         variant: "destructive",
       });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, status, lostReason }: { id: number; status: string; lostReason?: string }) =>
-      proposalsAPI.update(id, { status, lostReason }),
+    mutationFn: ({
+      id,
+      status,
+      lostReason,
+    }: {
+      id: number;
+      status: Proposal["status"];
+      lostReason?: string;
+    }) =>
+      proposalsAPI.update(id, { status, lostReason } satisfies UpdateProposalPayload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["proposals"] });
       queryClient.invalidateQueries({ queryKey: ["proposal-metrics"] });
       toast({ title: "Proposal updated", description: "Pipeline status refreshed." });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to update proposal",
+        description: getErrorMessage(error, "Failed to update proposal"),
         variant: "destructive",
       });
     },
@@ -184,10 +257,10 @@ export default function BusinessDevelopment() {
       queryClient.invalidateQueries({ queryKey: ["survey-analytics"] });
       toast({ title: "Survey routed", description: "Client survey has been queued." });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       toast({
         title: "Survey failed",
-        description: error?.message || "Could not send client survey.",
+        description: getErrorMessage(error, "Could not send client survey."),
         variant: "destructive",
       });
     },
@@ -200,17 +273,17 @@ export default function BusinessDevelopment() {
 
   const filteredProposals = useMemo(() => proposals, [proposals]);
 
-  const getSurveyRoutingStatus = (proposal: any) => {
+  const getSurveyRoutingStatus = (proposal: Proposal) => {
     const clientId = proposal?.clientId || proposal?.client?.id;
     if (!clientId) return "not_sent";
-    const hasCompleted = completedSurveys.some((survey: any) => survey.clientId === clientId);
+    const hasCompleted = completedSurveys.some((survey) => survey.clientId === clientId);
     if (hasCompleted) return "received";
-    const hasPending = pendingSurveys.some((survey: any) => survey.clientId === clientId);
+    const hasPending = pendingSurveys.some((survey) => survey.clientId === clientId);
     if (hasPending) return "pending";
     return "not_sent";
   };
 
-  const handleAttachProposalFile = async (proposal: any, file: File | null) => {
+  const handleAttachProposalFile = async (proposal: Proposal, file: File | null) => {
     if (!file || !proposal?.id) return;
     setAttachingProposalId(proposal.id);
     try {
@@ -223,10 +296,10 @@ export default function BusinessDevelopment() {
         description: `Proposal attachment for ${proposal.proposalTitle}`,
       });
       toast({ title: "Attachment uploaded", description: "Proposal file saved." });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Attachment failed",
-        description: error?.message || "Could not upload proposal attachment.",
+        description: getErrorMessage(error, "Could not upload proposal attachment."),
         variant: "destructive",
       });
     } finally {
@@ -358,7 +431,10 @@ export default function BusinessDevelopment() {
                     <Select
                       value={proposalForm.status}
                       onValueChange={(value) =>
-                        setProposalForm((prev) => ({ ...prev, status: value }))
+                        setProposalForm((prev) => ({
+                          ...prev,
+                          status: value as Proposal["status"],
+                        }))
                       }
                     >
                       <SelectTrigger>
@@ -500,7 +576,7 @@ export default function BusinessDevelopment() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredProposals.map((proposal: any) => (
+                  {filteredProposals.map((proposal) => (
                     <TableRow key={proposal.id}>
                       <TableCell>
                         <div className="font-medium">{proposal.client?.clientName}</div>
@@ -540,14 +616,20 @@ export default function BusinessDevelopment() {
                           onValueChange={(value) => {
                             if (value === proposal.status) return;
                             if (value === "lost") {
-                              updateMutation.mutate({ id: proposal.id, status: value });
+                              updateMutation.mutate({
+                                id: proposal.id,
+                                status: value as Proposal["status"],
+                              });
                               setLostReasonEditingId(proposal.id);
                               setLostReasonDrafts((prev) => ({
                                 ...prev,
                                 [proposal.id]: proposal.lostReason || "",
                               }));
                             } else {
-                              updateMutation.mutate({ id: proposal.id, status: value });
+                              updateMutation.mutate({
+                                id: proposal.id,
+                                status: value as Proposal["status"],
+                              });
                             }
                           }}
                         >

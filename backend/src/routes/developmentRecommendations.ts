@@ -2,22 +2,27 @@ import { Router } from 'express';
 import prisma from '../prisma';
 
 const router = Router();
+const toCamelKey = (key: string) => key.replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
+const toCamelRow = (row: any) =>
+  Object.fromEntries(
+    Object.entries(row || {}).map(([key, value]) => [toCamelKey(key), value])
+  );
 
-// GET /development_recommendations?employee_id=3
+// GET /development_recommendations?employeeId=3
 router.get('/', async (req, res) => {
   try {
-    const employeeId = req.query.employee_id as string | undefined;
+    const employeeId = req.query.employeeId as string | undefined;
     
     let rows: any[] = [];
     if (employeeId) {
-      // Accept integer user_id - just return empty since employee_id in DB is UUID
+      // Accept integer userId - just return empty since employeeId in DB is UUID
       // and we haven't created any recommendations yet
       return res.json([]);
     } else {
       rows = await prisma.$queryRaw`
         SELECT * FROM development_recommendations ORDER BY "createdAt" DESC`;
     }
-    return res.json(rows || []);
+    return res.json((rows || []).map(toCamelRow));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -32,7 +37,7 @@ router.get('/:id', async (req, res) => {
     if (!row || (Array.isArray(row) && row.length === 0)) {
       return res.status(404).json({ error: 'Not found' });
     }
-    return res.json(Array.isArray(row) ? row[0] : row);
+    return res.json(toCamelRow(Array.isArray(row) ? row[0] : row));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -41,14 +46,14 @@ router.get('/:id', async (req, res) => {
 // POST /development_recommendations
 router.post('/', async (req, res) => {
   try {
-    const { employee_id, recommendation, target_completion, status } = req.body;
+    const { employeeId, recommendation, targetCompletion, status } = req.body;
     
     const created = await prisma.$queryRaw`
       INSERT INTO development_recommendations (employee_id, recommendation, target_completion, status)
-      VALUES (${employee_id}, ${recommendation}, ${target_completion}, ${status || "pending"})
+      VALUES (${employeeId}, ${recommendation}, ${targetCompletion}, ${status || "pending"})
       RETURNING *`;
 
-    return res.json(Array.isArray(created) ? created[0] : created);
+    return res.json(toCamelRow(Array.isArray(created) ? created[0] : created));
   } catch (err: any) {
     console.error('Error creating development recommendation:', err);
     return res.status(500).json({ error: err.message });
@@ -59,15 +64,15 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const { recommendation, target_completion, status } = req.body;
+    const { recommendation, targetCompletion, status } = req.body;
     
     const updateData: any = {};
     
     if (recommendation !== undefined) {
       updateData.recommendation = recommendation;
     }
-    if (target_completion !== undefined) {
-      updateData.target_completion = target_completion;
+    if (targetCompletion !== undefined) {
+      updateData.targetCompletion = targetCompletion;
     }
     if (status !== undefined) {
       updateData.status = status;
@@ -77,12 +82,12 @@ router.patch('/:id', async (req, res) => {
       UPDATE development_recommendations
       SET
         recommendation = COALESCE(${updateData.recommendation}, recommendation),
-        target_completion = COALESCE(${updateData.target_completion}, target_completion),
+        target_completion = COALESCE(${updateData.targetCompletion}, target_completion),
         status = COALESCE(${updateData.status}, status)
       WHERE id = ${id}::uuid
       RETURNING *`;
 
-    return res.json(Array.isArray(updated) ? updated[0] : updated);
+    return res.json(toCamelRow(Array.isArray(updated) ? updated[0] : updated));
   } catch (err: any) {
     console.error('Error updating development recommendation:', err);
     return res.status(500).json({ error: err.message });

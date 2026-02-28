@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
@@ -20,22 +21,42 @@ const ROLE_HIERARCHY: Record<string, number> = {
   super_admin: 7,
 };
 
-/**
- * Check if current user can manage access roles
- * HR/Admin/Super Admin can assign or modify roles
- */
-const canManageRoles = async (userId: number): Promise<boolean> => {
-  const roles = await prisma.userAuthRole.findMany({
-    where: { userId },
-    include: { role: true },
-  });
-  const allowed = new Set(['admin', 'super_admin', 'hr', 'hr_manager']);
-  return roles.some((r) => allowed.has(r.role.name));
-};
+const rolePriority = (roleName: string) => ROLE_HIERARCHY[normalizeRoleName(roleName)] || 0;
+
+const CORE_ACCESS_ROLES = [
+  'employee',
+  'marketing',
+  'finance',
+  'manager',
+  'partner',
+  'gmp',
+  'group_managing_partner',
+  'hr',
+  'hr_manager',
+  'admin',
+  'super_admin',
+] as const;
+
+const CORE_ACCESS_ROLE_SET = new Set<string>(CORE_ACCESS_ROLES);
+
+const normalizeRoleName = (value: unknown) => String(value || '').trim().toLowerCase();
+const isCoreAccessRole = (roleName: unknown) => CORE_ACCESS_ROLE_SET.has(normalizeRoleName(roleName));
+const PRIMARY_ASSIGNABLE_ACCESS_ROLES = [
+  'gmp',
+  'admin',
+  'partner',
+  'manager',
+  'marketing',
+  'finance',
+  'employee',
+] as const;
+const PRIMARY_ASSIGNABLE_ACCESS_ROLE_SET = new Set<string>(PRIMARY_ASSIGNABLE_ACCESS_ROLES);
+const isPrimaryAssignableAccessRole = (roleName: unknown) =>
+  PRIMARY_ASSIGNABLE_ACCESS_ROLE_SET.has(normalizeRoleName(roleName));
 
 // GET /user_roles?userId=123
 // Retrieve all roles for a specific user
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req, res) => {
   const userIdRaw = req.query.userId as string | undefined;
   if (!userIdRaw) return res.json([]);
   const userId = Number(userIdRaw);
@@ -54,16 +75,10 @@ router.get('/', async (req, res) => {
 
 // GET /user_roles/list/all
 // Retrieve all users with their roles, departments, and status (Admin only)
-router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/list/all', authMiddleware, requireModuleAccess('users', 'admin'), async (req: AuthRequest, res) => {
   try {
-    // Check authorization - only admins can view all users
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-    
-    const canView = await canManageRoles(userId);
-    if (!canView) {
-      return res.status(403).json({ error: 'Only HR/Admin can view user list' });
-    }
 
     // Get all users with their roles and profile info
     const users = await prisma.user.findMany({
@@ -80,12 +95,20 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     // Format response
-    const formattedUsers = users.map(user => ({
+    const formattedUsers = users.map(user => {
+      const sortedRoles = user.roles
+        .map((item) => normalizeRoleName(item.role.name))
+        .filter(Boolean)
+        .sort((a, b) => rolePriority(b) - rolePriority(a));
+      const primaryRole = sortedRoles[0] || null;
+
+      return {
       id: user.id,
       profileId: user.profile?.id,
       email: user.email,
       name: user.profile ? `${user.profile.firstName} ${user.profile.lastName}` : user.email,
-      roles: user.roles.map(r => r.role.name),
+      roles: sortedRoles,
+      primaryRole,
       status: user.profile?.status || 'inactive',
       department: user.profile?.department?.name || 'Unassigned',
       departmentId: user.profile?.departmentId,
@@ -95,7 +118,8 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
       billingRate: user.profile?.role?.billingRate ?? null,
       hireDate: user.profile?.hireDate,
       createdAt: user.createdAt,
-    }));
+    };
+    });
 
     return res.json(formattedUsers);
   } catch (err: any) {
@@ -106,19 +130,13 @@ router.get('/list/all', authMiddleware, async (req: AuthRequest, res) => {
 
 // POST /user_roles
 // Assign a role to a user (Admin only)
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/', authMiddleware, requireModuleAccess('users', 'admin'), async (req: AuthRequest, res) => {
   const { userId, role } = req.body;
   if (!userId || !role) return res.status(400).json({ error: 'userId and role required' });
 
   try {
-    // Check authorization - only admins can assign roles
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
-    
-    const canAssign = await canManageRoles(currentUserId);
-    if (!canAssign) {
-      return res.status(403).json({ error: 'Only HR/Admin can assign roles' });
-    }
 
     // Prevent user from changing their own role
     if (currentUserId === Number(userId)) {
@@ -126,12 +144,20 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Check if user already has this role
+    const normalizedRoleName = normalizeRoleName(role);
     const roleRecord = await prisma.authRole.findUnique({
-      where: { name: role },
+      where: { name: normalizedRoleName },
     });
 
     if (!roleRecord) {
       return res.status(400).json({ error: `Invalid role: ${role}` });
+    }
+
+    if (!isPrimaryAssignableAccessRole(roleRecord.name)) {
+      return res.status(400).json({
+        error: `Role '${roleRecord.name}' cannot be assigned as a primary access role`,
+        allowedRoles: PRIMARY_ASSIGNABLE_ACCESS_ROLES,
+      });
     }
 
     const existingRole = await prisma.userAuthRole.findFirst({
@@ -145,11 +171,28 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'User already has this role' });
     }
 
-    const created = await prisma.userAuthRole.create({
-      data: {
-        userId: Number(userId),
-        roleId: roleRecord.id,
-      },
+    const userIdNum = Number(userId);
+    await prisma.$transaction(async (tx) => {
+      await tx.userAuthRole.create({
+        data: {
+          userId: userIdNum,
+          roleId: roleRecord.id,
+        },
+      });
+
+      if (isCoreAccessRole(roleRecord.name)) {
+        const coreRoleRecords = await tx.authRole.findMany({
+          where: { name: { in: [...CORE_ACCESS_ROLE_SET] } },
+          select: { id: true },
+        });
+        const coreRoleIds = coreRoleRecords.map((item) => item.id);
+        await tx.userAuthRole.deleteMany({
+          where: {
+            userId: userIdNum,
+            roleId: { in: coreRoleIds.filter((roleId) => roleId !== roleRecord.id) },
+          },
+        });
+      }
     });
 
     // audit: who assigned the role
@@ -166,8 +209,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     return res.status(201).json({
-      userId: created.userId,
-      roleId: created.roleId,
+      userId: userIdNum,
+      roleId: roleRecord.id,
       message: `Role '${role}' assigned to user ${targetUser?.email || userId}`,
     });
   } catch (err: any) {
@@ -178,33 +221,37 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 
 // PUT /user_roles/change
 // Change a user's primary role (Admin only) - removes old role and assigns new one
-router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
+router.put('/change', authMiddleware, requireModuleAccess('users', 'admin'), async (req: AuthRequest, res) => {
   const { userId, oldRole, newRole } = req.body;
   if (!userId || !oldRole || !newRole) {
     return res.status(400).json({ error: 'userId, oldRole, and newRole required' });
   }
 
   try {
-    // Check authorization - only admins can change roles
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
-    
-    const canAssign = await canManageRoles(currentUserId);
-    if (!canAssign) {
-      return res.status(403).json({ error: 'Only HR/Admin can change roles' });
-    }
 
     // Prevent user from changing their own role
     if (currentUserId === Number(userId)) {
       return res.status(403).json({ error: 'You cannot change your own role' });
     }
 
+    const normalizedOldRole = normalizeRoleName(oldRole);
+    const normalizedNewRole = normalizeRoleName(newRole);
+
+    if (!isPrimaryAssignableAccessRole(normalizedNewRole)) {
+      return res.status(400).json({
+        error: `Role '${newRole}' cannot be assigned as a primary access role`,
+        allowedRoles: PRIMARY_ASSIGNABLE_ACCESS_ROLES,
+      });
+    }
+
     // Check if user has the old role
     const oldRoleRecord = await prisma.authRole.findUnique({
-      where: { name: oldRole },
+      where: { name: normalizedOldRole },
     });
     const newRoleRecord = await prisma.authRole.findUnique({
-      where: { name: newRole },
+      where: { name: normalizedNewRole },
     });
 
     if (!oldRoleRecord || !newRoleRecord) {
@@ -227,13 +274,14 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Role escalation warning - record but allow (admin approved)
-    const oldHierarchy = ROLE_HIERARCHY[oldRole] || 0;
-    const newHierarchy = ROLE_HIERARCHY[newRole] || 0;
+    const oldHierarchy = ROLE_HIERARCHY[normalizeRoleName(oldRoleRecord.name)] || 0;
+    const newHierarchy = ROLE_HIERARCHY[normalizeRoleName(newRoleRecord.name)] || 0;
     const isEscalation = newHierarchy > oldHierarchy;
 
     // Transactional replace:
     // 1) Ensure target role exists for user (create if missing)
-    // 2) Remove old role
+    // 2) For core access roles, keep only one core role
+    // 3) Remove old role for non-core transitions
     const userIdNum = Number(userId);
     await prisma.$transaction(async (tx) => {
       const alreadyHasNewRole = await tx.userAuthRole.findFirst({
@@ -252,12 +300,26 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
         });
       }
 
-      await tx.userAuthRole.deleteMany({
-        where: {
-          userId: userIdNum,
-          roleId: oldRoleRecord.id,
-        },
-      });
+      if (isCoreAccessRole(newRoleRecord.name)) {
+        const coreRoleRecords = await tx.authRole.findMany({
+          where: { name: { in: [...CORE_ACCESS_ROLE_SET] } },
+          select: { id: true },
+        });
+        const coreRoleIds = coreRoleRecords.map((item) => item.id);
+        await tx.userAuthRole.deleteMany({
+          where: {
+            userId: userIdNum,
+            roleId: { in: coreRoleIds.filter((roleId) => roleId !== newRoleRecord.id) },
+          },
+        });
+      } else {
+        await tx.userAuthRole.deleteMany({
+          where: {
+            userId: userIdNum,
+            roleId: oldRoleRecord.id,
+          },
+        });
+      }
     });
 
     // Comprehensive audit logging
@@ -275,10 +337,10 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
     return res.json({
       userId: userIdNum,
       roleId: newRoleRecord.id,
-      message: `Role changed from '${oldRole}' to '${newRole}' for user ${targetUser?.email || userId}`,
+      message: `Role changed from '${oldRoleRecord.name}' to '${newRoleRecord.name}' for user ${targetUser?.email || userId}`,
       escalation: isEscalation,
-      oldRole,
-      newRole,
+      oldRole: oldRoleRecord.name,
+      newRole: newRoleRecord.name,
       changedBy: currentUserId,
       changedAt: new Date(),
     });
@@ -290,19 +352,13 @@ router.put('/change', authMiddleware, async (req: AuthRequest, res) => {
 
 // DELETE /user_roles  body: { userId, role }
 // Remove a specific role from a user (Admin only)
-router.delete('/', authMiddleware, async (req: AuthRequest, res) => {
+router.delete('/', authMiddleware, requireModuleAccess('users', 'admin'), async (req: AuthRequest, res) => {
   const { userId, role } = req.body;
   if (!userId || !role) return res.status(400).json({ error: 'userId and role required' });
   
   try {
-    // Check authorization - only admins can remove roles
     const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
     if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
-    
-    const canAssign = await canManageRoles(currentUserId);
-    if (!canAssign) {
-      return res.status(403).json({ error: 'Only HR/Admin can remove roles' });
-    }
 
     // Prevent user from removing their own roles
     if (currentUserId === Number(userId)) {
@@ -315,6 +371,12 @@ router.delete('/', authMiddleware, async (req: AuthRequest, res) => {
 
     if (!roleRecord) {
       return res.status(400).json({ error: `Invalid role: ${role}` });
+    }
+
+    if (isCoreAccessRole(roleRecord.name)) {
+      return res.status(400).json({
+        error: 'Primary access roles cannot be removed directly. Use role change instead.',
+      });
     }
 
     const deleted = await prisma.userAuthRole.deleteMany({

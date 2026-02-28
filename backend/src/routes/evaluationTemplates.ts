@@ -2,7 +2,7 @@ import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
@@ -21,16 +21,16 @@ const isPrivileged = (roles: string[]) =>
   roles.includes('hr') ||
   roles.includes('hr_manager');
 
-// GET /evaluation_templates?is_active=true
+// GET /evaluation_templates?isActive=true
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const { is_active } = req.query;
+    const { isActive } = req.query;
     const roles = resolveRoles(req);
     const privileged = isPrivileged(roles);
 
     const templates = await prisma.evaluationTemplate.findMany({
       where: privileged
-        ? is_active === 'true'
+        ? isActive === 'true'
           ? { isActive: true }
           : undefined
         : { isActive: true },
@@ -73,24 +73,21 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const {
       name,
-      template_name,
       description,
       templateType,
-      template_type,
       bscCategory,
-      bsc_category,
       competencies,
       questions,
     } = req.body;
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;
-    const templateName = name ?? template_name;
-    const resolvedType = templateType ?? template_type;
-    const resolvedCategory = bscCategory ?? bsc_category;
+    const templateName = name;
+    const resolvedType = templateType;
+    const resolvedCategory = bscCategory;
     
     if (!templateName) {
       return res.status(400).json({ error: 'Template name is required' });
@@ -127,21 +124,17 @@ router.patch(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const {
       name,
-      template_name,
       description,
       templateType,
-      template_type,
       bscCategory,
-      bsc_category,
       competencies,
       questions,
-      is_active,
       isActive,
     } = req.body;
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;
@@ -150,15 +143,11 @@ router.patch(
       where: { id: parseInt(id) },
       data: {
         ...(name && { name }),
-        ...(template_name && { name: template_name }),
         ...(description !== undefined && { description }),
         ...(templateType && { templateType }),
-        ...(template_type && { templateType: template_type }),
         ...(bscCategory !== undefined && { bscCategory }),
-        ...(bsc_category !== undefined && { bscCategory: bsc_category }),
         ...(competencies !== undefined && { competencies }),
         ...(questions !== undefined && { questions }),
-        ...(is_active !== undefined && { isActive: is_active }),
         ...(isActive !== undefined && { isActive }),
       },
     });
@@ -181,7 +170,7 @@ router.delete(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;

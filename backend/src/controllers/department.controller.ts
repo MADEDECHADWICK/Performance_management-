@@ -138,6 +138,14 @@ export class DepartmentController {
   static async getDepartmentEmployees(req: AuthRequest, res: Response): Promise<void> {
     try {
       const departmentId = Number(req.params.departmentId);
+      const page = Number(req.query.page) || 1;
+      const pageSize = Number(req.query.pageSize) || 10;
+      const statusQuery =
+        typeof req.query.status === "string" ? req.query.status.toLowerCase() : undefined;
+      const status =
+        statusQuery === "active" || statusQuery === "inactive" || statusQuery === "separated"
+          ? (statusQuery as "active" | "inactive" | "separated")
+          : undefined;
 
       const auth = {
         userId: req.user!.userId,
@@ -145,8 +153,9 @@ export class DepartmentController {
         roles: req.userRoles ?? req.user?.authRoles ?? [],
       };
 
-      const employees = await departmentService.getDepartmentEmployees(
+      const employees = await departmentService.listDepartmentEmployees(
         departmentId,
+        { page, pageSize, status },
         auth
       );
 

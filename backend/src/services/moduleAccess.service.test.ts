@@ -19,7 +19,7 @@ describe("moduleAccess.service strict role policy mode", () => {
 
     expect(toActionSet(matrix.jobs)).toEqual(new Set(["read"]));
     expect(matrix.finance).toEqual([]);
-    expect(matrix.time_entries).toEqual([]);
+    expect(toActionSet(matrix.time_entries)).toEqual(new Set(["read", "write"]));
   });
 
   it("falls back to default role policy when a role has no explicit module permissions", () => {
@@ -33,8 +33,9 @@ describe("moduleAccess.service strict role policy mode", () => {
     });
 
     expect(toActionSet(matrix.jobs)).toEqual(new Set(["read", "write"]));
-    expect(toActionSet(matrix.time_entries)).toEqual(new Set(["read", "approve"]));
+    expect(toActionSet(matrix.time_entries)).toEqual(new Set(["read", "write", "approve"]));
     expect(toActionSet(matrix.finance)).toEqual(new Set(["read"]));
+    expect(toActionSet(matrix.knowledge_hub)).toEqual(new Set(["read"]));
   });
 
   it("combines multiple roles while keeping strict behavior per role", () => {
@@ -132,7 +133,11 @@ describe("moduleAccess.service strict role policy mode", () => {
 
     expect(matrix.jobs).toEqual([]);
     expect(matrix.finance).toEqual([]);
-    expect(matrix.dashboard).toEqual([]);
+    expect(toActionSet(matrix.dashboard)).toEqual(new Set(["read"]));
+    expect(toActionSet(matrix.users)).toEqual(new Set(["read"]));
+    expect(toActionSet(matrix.kpis)).toEqual(new Set(["read", "write"]));
+    expect(toActionSet(matrix.time_entries)).toEqual(new Set(["read", "write"]));
+    expect(toActionSet(matrix.evaluations)).toEqual(new Set(["read", "write"]));
 
     const canReadJobs = hasModuleAccess({
       moduleKey: "jobs",
@@ -146,5 +151,35 @@ describe("moduleAccess.service strict role policy mode", () => {
     });
 
     expect(canReadJobs).toBe(false);
+  });
+
+  it("grants full system access to hr even if explicit strict permissions are partial", () => {
+    const matrix = buildModuleAccessMatrix({
+      rolePolicies: [
+        {
+          roleName: "hr",
+          permissionKeys: ["module.users.read"],
+        },
+      ],
+    });
+
+    expect(toActionSet(matrix.jobs)).toEqual(new Set(["read", "write", "approve", "admin"]));
+    expect(toActionSet(matrix.finance)).toEqual(new Set(["read", "write", "approve", "admin"]));
+    expect(toActionSet(matrix.access_control)).toEqual(new Set(["read", "write", "approve", "admin"]));
+  });
+
+  it("grants full system access to hr_manager even when explicit-none marker exists", () => {
+    const matrix = buildModuleAccessMatrix({
+      rolePolicies: [
+        {
+          roleName: "hr_manager",
+          permissionKeys: [EXPLICIT_NONE_PERMISSION_KEY],
+        },
+      ],
+    });
+
+    expect(toActionSet(matrix.jobs)).toEqual(new Set(["read", "write", "approve", "admin"]));
+    expect(toActionSet(matrix.clients)).toEqual(new Set(["read", "write", "approve", "admin"]));
+    expect(toActionSet(matrix.reports)).toEqual(new Set(["read", "write", "approve", "admin"]));
   });
 });

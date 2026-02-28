@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import PageLoader from "@/components/ui/page-loader";
 import { useToast } from "@/hooks/use-toast";
 import { Star, CheckCircle2 } from "lucide-react";
 
@@ -40,7 +41,7 @@ const ClientEvaluation = () => {
       return;
     }
     loadEvaluation();
-  }, [token]);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadEvaluation = async () => {
     try {
@@ -173,7 +174,7 @@ const ClientEvaluation = () => {
       <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-secondary/5 flex items-center justify-center">
         <Card className="w-full max-w-2xl">
           <CardContent className="p-8">
-            <div className="text-center">Loading evaluation form...</div>
+            <PageLoader message="Loading..." minHeightClassName="min-h-[220px]" />
           </CardContent>
         </Card>
       </div>

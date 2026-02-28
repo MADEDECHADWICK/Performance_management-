@@ -1,6 +1,7 @@
 import { ReactNode, useMemo } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import PageLoader from "@/components/ui/page-loader";
 
 export type AppRole =
   | "admin"
@@ -123,6 +124,10 @@ const resolveModuleForPath = (pathname: string): { module: string; action: Modul
     return { module: "documents", action: "read" };
   }
 
+  if (path.startsWith("/knowledge-hub")) {
+    return { module: "knowledge_hub", action: "read" };
+  }
+
   if (path.startsWith("/client-surveys")) {
     return { module: "surveys", action: "read" };
   }
@@ -149,18 +154,6 @@ const resolveModuleForPath = (pathname: string): { module: string; action: Modul
   return null;
 };
 
-const isRoleLockedPath = (pathname: string) => {
-  const path = pathname.toLowerCase();
-  return (
-    path.startsWith("/hr-dashboard") ||
-    path.startsWith("/partner-dashboard") ||
-    path.startsWith("/manager-dashboard") ||
-    path.startsWith("/gmp-dashboard") ||
-    path.startsWith("/department-dashboard") ||
-    path.startsWith("/marketing-dashboard")
-  );
-};
-
 const getDefaultRoute = (
   flags: Record<AppRole, boolean>,
   hasModuleAccess: (module: string, action?: ModuleAction) => boolean
@@ -181,6 +174,7 @@ const getDefaultRoute = (
   if (hasModuleAccess("finance", "read")) return "/financial-summary";
   if (hasModuleAccess("proposals", "read")) return "/business-development";
   if (hasModuleAccess("surveys", "read")) return "/client-surveys";
+  if (hasModuleAccess("knowledge_hub", "read")) return "/knowledge-hub";
   if (hasModuleAccess("documents", "read")) return "/documents";
   if (hasModuleAccess("notifications", "read")) return "/notifications";
   if (hasModuleAccess("reports", "read")) return "/reports";
@@ -218,7 +212,11 @@ export default function AppRouteGuard({ children, allow = [] }: AppRouteGuardPro
   );
 
   if (isLoading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
+    return (
+      <div className="p-6">
+        <PageLoader message="Loading..." minHeightClassName="min-h-[220px]" />
+      </div>
+    );
   }
 
   if (!isAuthenticated) {
@@ -231,11 +229,6 @@ export default function AppRouteGuard({ children, allow = [] }: AppRouteGuardPro
     hasModuleAccess(moduleRequirement.module, moduleRequirement.action);
 
   if (allow.length > 0 && !allow.some((role) => flags[role])) {
-    // Keep strict role gates for specialized dashboards.
-    if (!isRoleLockedPath(location.pathname) && hasRequiredModule) {
-      return <>{children}</>;
-    }
-
     const redirectTarget = getDefaultRoute(flags, hasModuleAccess);
     if (redirectTarget === location.pathname) {
       return <div className="p-6 text-sm text-muted-foreground">Access denied.</div>;

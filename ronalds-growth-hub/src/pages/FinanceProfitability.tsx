@@ -1,10 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
 
@@ -54,7 +67,7 @@ export default function FinanceProfitability() {
 
   useEffect(() => {
     loadProfitability();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredJobs = useMemo(() => {
     return jobProfitability.filter((job) => {
@@ -93,6 +106,25 @@ export default function FinanceProfitability() {
     return total / filteredJobs.length;
   }, [filteredJobs]);
 
+  const profitOutcomeMix = useMemo(() => {
+    const profitableJobs = filteredJobs.filter((job) => Number(job.margin || 0) >= 0).length;
+    const lossJobs = Math.max(0, filteredJobs.length - profitableJobs);
+    return [
+      { name: "Profitable", value: profitableJobs },
+      { name: "Loss-making", value: lossJobs },
+    ];
+  }, [filteredJobs]);
+
+  const revenueCostMix = useMemo(
+    () => [
+      { name: "Revenue", value: Math.max(0, totalRevenue) },
+      { name: "Cost", value: Math.max(0, totalCost) },
+    ],
+    [totalRevenue, totalCost]
+  );
+
+  const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
+
   const marginDistribution = useMemo(() => {
     const buckets = [
       { label: "< -20%", min: -Infinity, max: -20 },
@@ -124,9 +156,7 @@ export default function FinanceProfitability() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -174,6 +204,73 @@ export default function FinanceProfitability() {
             <CardContent>
               <div className="metric-value">{averageMargin.toFixed(1)}%</div>
               <p className="text-xs text-muted-foreground">Average job margin</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Profitability Outcome Mix</CardTitle>
+              <CardDescription>Jobs split by positive vs negative margins.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {filteredJobs.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No jobs to evaluate yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={profitOutcomeMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={88}
+                      paddingAngle={2}
+                    >
+                      <Cell fill="#22c55e" />
+                      <Cell fill="#ef4444" />
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Revenue vs Cost Mix</CardTitle>
+              <CardDescription>Current financial composition.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {(totalRevenue <= 0 && totalCost <= 0) ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No revenue/cost data yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={revenueCostMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={88}
+                      paddingAngle={2}
+                    >
+                      {revenueCostMix.map((entry, index) => (
+                        <Cell key={`rev-cost-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </div>

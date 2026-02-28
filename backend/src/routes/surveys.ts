@@ -14,7 +14,63 @@ const parseNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const buildToken = () => crypto.randomBytes(16).toString("hex");
+const buildToken = () => crypto.randomBytes(32).toString("hex");
+
+const PUBLIC_SURVEY_WINDOW_MS = 60 * 1000;
+const PUBLIC_SURVEY_READ_LIMIT = 30;
+const PUBLIC_SURVEY_SUBMIT_LIMIT = 10;
+const publicSurveyRateState = new Map<string, { count: number; resetAt: number }>();
+
+const getClientIp = (req: any) =>
+  String(req.ip || req.headers["x-forwarded-for"] || "unknown")
+    .split(",")[0]
+    .trim();
+
+const consumePublicRateLimit = (bucket: string, maxRequests: number): boolean => {
+  const now = Date.now();
+  if (publicSurveyRateState.size > 5000) {
+    publicSurveyRateState.forEach((value, key) => {
+      if (value.resetAt <= now) {
+        publicSurveyRateState.delete(key);
+      }
+    });
+  }
+  const current = publicSurveyRateState.get(bucket);
+  if (!current || current.resetAt <= now) {
+    publicSurveyRateState.set(bucket, { count: 1, resetAt: now + PUBLIC_SURVEY_WINDOW_MS });
+    return true;
+  }
+  if (current.count >= maxRequests) {
+    return false;
+  }
+  current.count += 1;
+  publicSurveyRateState.set(bucket, current);
+  return true;
+};
+
+const parseOptionalRating = (value: unknown, field: string): number | null => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5) {
+    throw new Error(`${field} must be an integer between 1 and 5`);
+  }
+  return parsed;
+};
+
+const parseOptionalBoolean = (value: unknown, field: string): boolean | null => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`${field} must be true or false`);
+};
 
 // GET /surveys - list surveys
 router.get("/", authMiddleware, requireModuleAccess("surveys"), async (req: AuthRequest, res) => {
@@ -279,8 +335,15 @@ router.get("/:id", authMiddleware, requireModuleAccess("surveys"), async (req: A
 // GET /surveys/token/:token - public survey access
 router.get("/token/:token", async (req, res) => {
   try {
+    const requesterIp = getClientIp(req);
+    const token = String(req.params.token || "").trim();
+    const rateBucket = `survey:view:${requesterIp}:${token}`;
+    if (!consumePublicRateLimit(rateBucket, PUBLIC_SURVEY_READ_LIMIT)) {
+      return res.status(429).json(errorResponse("Too many requests. Please try again shortly.", 429));
+    }
+
     const survey = await prisma.clientSatisfactionSurvey.findUnique({
-      where: { surveyToken: req.params.token },
+      where: { surveyToken: token },
       include: {
         client: { select: { id: true, clientName: true } },
         job: { select: { id: true, jobCode: true, jobName: true } },
@@ -289,6 +352,14 @@ router.get("/token/:token", async (req, res) => {
 
     if (!survey) {
       return res.status(404).json(errorResponse("Survey not found", 404));
+    }
+
+    if (survey.expiresAt && survey.expiresAt.getTime() < Date.now()) {
+      return res.status(410).json(errorResponse("Survey token has expired", 410));
+    }
+
+    if (survey.completedAt) {
+      return res.status(409).json(errorResponse("Survey has already been submitted", 409));
     }
 
     res.json(successResponse(survey, "Survey retrieved"));
@@ -398,12 +469,27 @@ router.post("/:id/remind", authMiddleware, requireModuleAccess("surveys"), async
 // POST /surveys/token/:token/submit - public submission
 router.post("/token/:token/submit", async (req, res) => {
   try {
+    const requesterIp = getClientIp(req);
+    const token = String(req.params.token || "").trim();
+    const rateBucket = `survey:submit:${requesterIp}:${token}`;
+    if (!consumePublicRateLimit(rateBucket, PUBLIC_SURVEY_SUBMIT_LIMIT)) {
+      return res.status(429).json(errorResponse("Too many submission attempts. Please try again shortly.", 429));
+    }
+
     const survey = await prisma.clientSatisfactionSurvey.findUnique({
-      where: { surveyToken: req.params.token },
+      where: { surveyToken: token },
     });
 
     if (!survey) {
       return res.status(404).json(errorResponse("Survey not found", 404));
+    }
+
+    if (survey.expiresAt && survey.expiresAt.getTime() < Date.now()) {
+      return res.status(410).json(errorResponse("Survey token has expired", 410));
+    }
+
+    if (survey.completedAt) {
+      return res.status(409).json(errorResponse("Survey has already been submitted", 409));
     }
 
     const {
@@ -418,22 +504,72 @@ router.post("/token/:token/submit", async (req, res) => {
       additionalComments,
     } = req.body;
 
-    const updated = await prisma.clientSatisfactionSurvey.update({
-      where: { id: survey.id },
+    let normalizedQuality: number | null = null;
+    let normalizedCommunication: number | null = null;
+    let normalizedTimeliness: number | null = null;
+    let normalizedProfessionalism: number | null = null;
+    let normalizedValueForMoney: number | null = null;
+    let normalizedOverall: number | null = null;
+    let normalizedWouldRecommend: boolean | null = null;
+    try {
+      normalizedQuality = parseOptionalRating(qualityRating, "qualityRating");
+      normalizedCommunication = parseOptionalRating(communicationRating, "communicationRating");
+      normalizedTimeliness = parseOptionalRating(timelinessRating, "timelinessRating");
+      normalizedProfessionalism = parseOptionalRating(professionalismRating, "professionalismRating");
+      normalizedValueForMoney = parseOptionalRating(valueForMoneyRating, "valueForMoneyRating");
+      normalizedOverall = parseOptionalRating(overallSatisfaction, "overallSatisfaction");
+      normalizedWouldRecommend = parseOptionalBoolean(wouldRecommend, "wouldRecommend");
+    } catch (validationError: any) {
+      return res.status(400).json(errorResponse(validationError.message || "Invalid survey payload", 400));
+    }
+
+    const normalizedImprovementSuggestions =
+      improvementSuggestions === undefined || improvementSuggestions === null
+        ? null
+        : String(improvementSuggestions).trim();
+    const normalizedAdditionalComments =
+      additionalComments === undefined || additionalComments === null
+        ? null
+        : String(additionalComments).trim();
+    if (
+      (normalizedImprovementSuggestions && normalizedImprovementSuggestions.length > 5000) ||
+      (normalizedAdditionalComments && normalizedAdditionalComments.length > 5000)
+    ) {
+      return res.status(400).json(errorResponse("Comment fields must be 5000 characters or fewer", 400));
+    }
+
+    const now = new Date();
+    const updateResult = await prisma.clientSatisfactionSurvey.updateMany({
+      where: {
+        id: survey.id,
+        completedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+      },
       data: {
-        qualityRating,
-        communicationRating,
-        timelinessRating,
-        professionalismRating,
-        valueForMoneyRating,
-        overallSatisfaction,
-        wouldRecommend,
-        improvementSuggestions,
-        additionalComments,
-        completedAt: new Date(),
-        ipAddress: req.ip,
+        qualityRating: normalizedQuality,
+        communicationRating: normalizedCommunication,
+        timelinessRating: normalizedTimeliness,
+        professionalismRating: normalizedProfessionalism,
+        valueForMoneyRating: normalizedValueForMoney,
+        overallSatisfaction: normalizedOverall,
+        wouldRecommend: normalizedWouldRecommend,
+        improvementSuggestions: normalizedImprovementSuggestions,
+        additionalComments: normalizedAdditionalComments,
+        completedAt: now,
+        ipAddress: requesterIp,
       },
     });
+
+    if (updateResult.count === 0) {
+      return res.status(409).json(errorResponse("Survey has already been submitted or expired", 409));
+    }
+
+    const updated = await prisma.clientSatisfactionSurvey.findUnique({
+      where: { id: survey.id },
+    });
+    if (!updated) {
+      return res.status(500).json(errorResponse("Survey was updated but could not be reloaded", 500));
+    }
 
     if (survey.jobId) {
       const job = await prisma.job.findUnique({

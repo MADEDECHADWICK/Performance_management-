@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { handleValidationErrors } from "../middleware/validate";
 import { body, param, query } from "express-validator";
 import { NotificationTemplateController } from "../controllers/notificationTemplates.controller";
@@ -14,17 +14,15 @@ const templateValidators = [
   body("message").isString().trim().isLength({ min: 2, max: 500 }),
   body("type").isString().trim().isLength({ min: 2, max: 40 }),
   body("actionRequired").optional().isBoolean(),
-  body("action_required").optional().isBoolean(),
   body("isActive").optional().isBoolean(),
-  body("is_active").optional().isBoolean(),
 ];
 
 router.get(
   "/",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
-  query("is_active").optional().isBoolean().toBoolean(),
+  requireModuleAccess("notifications", "admin"),
+  query("isActive").optional().isBoolean().toBoolean(),
   handleValidationErrors,
   NotificationTemplateController.listTemplates
 );
@@ -33,7 +31,7 @@ router.post(
   "/",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("notifications", "admin"),
   ...templateValidators,
   handleValidationErrors,
   NotificationTemplateController.createTemplate
@@ -43,7 +41,7 @@ router.patch(
   "/:templateId",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("notifications", "admin"),
   param("templateId").isInt().toInt(),
   handleValidationErrors,
   NotificationTemplateController.updateTemplate
@@ -53,7 +51,7 @@ router.delete(
   "/:templateId",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("notifications", "admin"),
   param("templateId").isInt().toInt(),
   handleValidationErrors,
   NotificationTemplateController.deleteTemplate
@@ -63,7 +61,7 @@ router.post(
   "/seed-defaults",
   authMiddleware,
   loadProfile,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("notifications", "admin"),
   NotificationTemplateController.seedDefaults
 );
 

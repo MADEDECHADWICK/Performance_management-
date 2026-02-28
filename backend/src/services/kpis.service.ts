@@ -1,8 +1,8 @@
 /**
- * KPIs Service (Modernized - Phase 4)
+ * Legacy KPI service compatibility layer aligned to current schema.
  */
 
-import { prisma } from '../prisma';
+import { prisma } from "../prisma";
 
 interface AuthContext {
   userId: number;
@@ -20,24 +20,40 @@ interface ListOptions {
 interface CreateKPIInput {
   name: string;
   description?: string;
-  target_value: number;
+  targetValue: number;
   unit?: string;
   frequency?: string;
-  department_id?: number;
+  departmentId?: number;
 }
 
+const toNumber = (value: unknown): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof value === "object" && value && "toString" in value) {
+    const parsed = Number(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const isEditorRole = (role?: string) => {
+  const normalized = String(role || "").toLowerCase().trim();
+  return ["admin", "super_admin", "manager", "hr", "hr_manager"].includes(normalized);
+};
+
 export class KPIService {
-  /**
-   * List KPIs with pagination
-   */
-  static async listKPIs(options: ListOptions, auth: AuthContext) {
+  static async listKPIs(options: ListOptions, _auth: AuthContext) {
     const { page, pageSize, departmentId, status } = options;
     const skip = (page - 1) * pageSize;
 
     const where: any = {};
-
-    if (departmentId) where.department_id = departmentId;
-    if (status) where.status = status;
+    if (departmentId) where.departmentId = departmentId;
+    if (status === "active") where.isActive = true;
+    if (status === "inactive") where.isActive = false;
 
     const [kpis, total] = await Promise.all([
       prisma.kpi.findMany({
@@ -47,7 +63,7 @@ export class KPIService {
         },
         skip,
         take: pageSize,
-        orderBy: { created_at: 'desc' },
+        orderBy: { createdAt: "desc" },
       }),
       prisma.kpi.count({ where }),
     ]);
@@ -55,30 +71,32 @@ export class KPIService {
     return { kpis, total };
   }
 
-  /**
-   * Create KPI (admin/manager only)
-   */
   static async createKPI(input: CreateKPIInput, auth: AuthContext) {
-    // ✅ VERIFY AUTHORIZATION
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    if (!isEditorRole(auth.roleName)) {
       throw {
         statusCode: 403,
-        message: 'Only admins/managers can create KPIs',
+        message: "Only admins/managers can create KPIs",
       };
     }
 
-    const { name, description, target_value, unit, frequency, department_id } = input;
+    if (!input.name || !String(input.name).trim()) {
+      throw {
+        statusCode: 400,
+        message: "KPI name is required",
+      };
+    }
 
     const kpi = await prisma.kpi.create({
       data: {
-        name,
-        description: description || null,
-        target_value,
-        unit: unit || 'units',
-        frequency: frequency || 'monthly',
-        department_id: department_id || null,
-        status: 'active',
-        created_at: new Date(),
+        name: String(input.name).trim(),
+        description: input.description || null,
+        category: "general",
+        kpiType: "legacy",
+        measurementUnit: input.unit || "units",
+        targetFrequency: input.frequency || "monthly",
+        targetValue: input.targetValue,
+        departmentId: input.departmentId || null,
+        isActive: true,
       },
       include: {
         department: { select: { id: true, name: true } },
@@ -88,10 +106,7 @@ export class KPIService {
     return kpi;
   }
 
-  /**
-   * Get KPI
-   */
-  static async getKPI(kpiId: number, auth: AuthContext) {
+  static async getKPI(kpiId: number, _auth: AuthContext) {
     const kpi = await prisma.kpi.findUnique({
       where: { id: kpiId },
       include: {
@@ -102,52 +117,42 @@ export class KPIService {
     if (!kpi) {
       throw {
         statusCode: 404,
-        message: 'KPI not found',
+        message: "KPI not found",
       };
     }
 
     return kpi;
   }
 
-  /**
-   * Update KPI
-   */
   static async updateKPI(kpiId: number, input: any, auth: AuthContext) {
-    // ✅ VERIFY AUTHORIZATION
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    if (!isEditorRole(auth.roleName)) {
       throw {
         statusCode: 403,
-        message: 'Only admins/managers can update KPIs',
+        message: "Only admins/managers can update KPIs",
       };
-    }
-
-    const kpi = await prisma.kpi.findUnique({
-      where: { id: kpiId },
-    });
-
-    if (!kpi) {
-      throw {
-        statusCode: 404,
-        message: 'KPI not found',
-      };
-    }
-
-    // ✅ WHITELIST FIELDS
-    const allowedFields = ['name', 'description', 'target_value', 'unit', 'frequency'];
-
-    const updateData: Record<string, any> = {};
-
-    for (const field of allowedFields) {
-      if (field in input) {
-        updateData[field] = input[field];
-      }
     }
 
     const updated = await prisma.kpi.update({
       where: { id: kpiId },
       data: {
-        ...updateData,
-        updated_at: new Date(),
+        name: input.name,
+        description: input.description,
+        measurementUnit: input.unit ?? input.measurementUnit,
+        targetFrequency: input.frequency ?? input.targetFrequency,
+        targetValue:
+          input.targetValue !== undefined
+            ? input.targetValue
+            : undefined,
+        departmentId:
+          input.departmentId !== undefined
+            ? input.departmentId
+            : undefined,
+        isActive:
+          input.status === "inactive"
+            ? false
+            : input.status === "active"
+              ? true
+              : input.isActive,
       },
       include: {
         department: { select: { id: true, name: true } },
@@ -157,70 +162,80 @@ export class KPIService {
     return updated;
   }
 
-  /**
-   * Delete KPI
-   */
   static async deleteKPI(kpiId: number, auth: AuthContext) {
-    // ✅ VERIFY AUTHORIZATION
-    if (auth.roleName !== 'admin') {
+    if (!isEditorRole(auth.roleName)) {
       throw {
         statusCode: 403,
-        message: 'Only admins can delete KPIs',
+        message: "Only admins/managers can delete KPIs",
       };
     }
 
-    const kpi = await prisma.kpi.findUnique({
+    await prisma.kpi.update({
       where: { id: kpiId },
+      data: { isActive: false },
     });
 
-    if (!kpi) {
-      throw {
-        statusCode: 404,
-        message: 'KPI not found',
-      };
-    }
-
-    await prisma.kpi.delete({
-      where: { id: kpiId },
-    });
-
-    return true;
+    return { success: true, id: kpiId };
   }
 
-  /**
-   * Get KPI performance
-   */
-  static async getKPIPerformance(kpiId: number, auth: AuthContext) {
+  static async getKPIPerformance(kpiId: number, _auth: AuthContext) {
     const kpi = await prisma.kpi.findUnique({
       where: { id: kpiId },
+      select: {
+        id: true,
+        name: true,
+        targetValue: true,
+        measurementUnit: true,
+        targetFrequency: true,
+      },
     });
 
     if (!kpi) {
       throw {
         statusCode: 404,
-        message: 'KPI not found',
+        message: "KPI not found",
       };
     }
 
-    // Get performance records for this KPI
-    const performances = await prisma.kpiPerformance.findMany({
-      where: { kpi_id: kpiId },
-      orderBy: { period_start: 'desc' },
-      take: 12, // Last 12 periods
+    const assignments = await prisma.employeeKpiAssignment.findMany({
+      where: { kpiId },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 50,
+    });
+
+    const performances = assignments.map((assignment) => {
+      const target = toNumber(assignment.targetValue ?? kpi.targetValue);
+      const achieved = toNumber(assignment.achievedValue);
+      const variance = target > 0 ? ((achieved - target) / target) * 100 : 0;
+      return {
+        assignmentId: assignment.id,
+        employeeId: assignment.employeeProfileId,
+        employeeName: `${assignment.employee.firstName} ${assignment.employee.lastName}`.trim(),
+        periodStart: assignment.periodStart,
+        periodEnd: assignment.periodEnd,
+        actualValue: achieved,
+        targetValue: target,
+        variance: Number(variance.toFixed(2)),
+        status: achieved >= target ? "met" : "below",
+      };
     });
 
     return {
       kpiId,
       name: kpi.name,
-      targetValue: kpi.target_value,
-      unit: kpi.unit,
-      frequency: kpi.frequency,
-      performances: performances.map(p => ({
-        period: p.period_start,
-        actualValue: p.actual_value,
-        variance: ((p.actual_value - kpi.target_value) / kpi.target_value) * 100,
-        status: p.actual_value >= kpi.target_value ? 'met' : 'below',
-      })),
+      targetValue: toNumber(kpi.targetValue),
+      unit: kpi.measurementUnit,
+      frequency: kpi.targetFrequency,
+      performances,
     };
   }
 }

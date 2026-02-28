@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import DashboardLayout from '@/components/DashboardLayout';
+import PageLoader from '@/components/ui/page-loader';
 import {
   Card,
   CardContent,
@@ -93,7 +94,7 @@ const PartnerJobDetail = () => {
       return;
     }
     loadJobDetails();
-  }, [jobId, authLoading, user]);
+  }, [jobId, authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadJobDetails = async () => {
     try {
@@ -206,12 +207,7 @@ const PartnerJobDetail = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading job details...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -657,8 +653,8 @@ const PartnerJobDetail = () => {
                             {entry.employee.last_name}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            {new Date(entry.date_worked).toLocaleDateString()} •{' '}
-                            {Number(entry.hours).toFixed(1)} hours •{' '}
+                            {new Date(entry.date_worked).toLocaleDateString()} â€¢{' '}
+                            {Number(entry.hours).toFixed(1)} hours â€¢{' '}
                             ${(Number(entry.hours) * entry.employee.hourly_rate).toFixed(0)}
                           </p>
                         </div>

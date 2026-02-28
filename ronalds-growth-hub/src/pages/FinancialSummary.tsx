@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -77,7 +78,6 @@ function buildEmployeeSummary(dashboardData: any, scoreData: any): FinancialSumm
   const financial = dashboardData?.financial ?? {};
   const scoreFinancial = scoreData?.financial ?? {};
   const formula = scoreData?.formula ?? {};
-  const scoreBreakdown = scoreData?.scoreBreakdown ?? {};
 
   const totalHours = asNumber(financial.totalHours);
   const billableHours = asNumber(financial.billableHours);
@@ -141,33 +141,6 @@ function buildEmployeeSummary(dashboardData: any, scoreData: any): FinancialSumm
       },
     ],
     sections: [
-      {
-        type: "stats",
-        title: "Role Formula Inputs",
-        description: "Finalized financial inputs used in your role-specific formula.",
-        items: [
-          {
-            label: "Allocation Revenue",
-            value: formatKES(scoreBreakdown.allocationRevenue),
-            hint: "From revenue allocations linked to client collections",
-          },
-          {
-            label: "Profit Impact",
-            value: formatKES(scoreBreakdown.profitImpact),
-            hint: "Positive allocation-based profitability signal",
-          },
-          {
-            label: "Loss Impact",
-            value: formatKES(scoreBreakdown.lossImpact),
-            hint: "Negative profitability signal",
-          },
-          {
-            label: "Financial Weight",
-            value: formatPct(asNumber(formula?.overallWeights?.financial) * 100, 0),
-            hint: "Weight in total score",
-          },
-        ],
-      },
       {
         type: "table",
         title: "Job-Level Financial Breakdown",
@@ -568,9 +541,21 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
   const financials = overviewData?.financials ?? {};
   const departmentBreakdown = asArray<any>(overviewData?.departmentBreakdown);
   const partnerRankings = asArray<any>(overviewData?.partnerRankings);
+  const managerRankings = asArray<any>(overviewData?.managerRankings);
   const projectionTrend = asArray<any>(overviewData?.projectionTrend);
   const alertsSummary = overviewData?.alertsSummary ?? {};
+  const riskSummary = overviewData?.riskSummary ?? {};
   const personalMetrics = personalData?.personalMetrics ?? {};
+
+  const activeJobs = asNumber(firmMetrics.active_jobs ?? firmMetrics.activeJobs);
+  const utilizationRate = asNumber(firmMetrics.utilization_rate ?? firmMetrics.utilizationRate);
+  const pendingEvaluationsOver30Days = asNumber(
+    alertsSummary.pendingEvaluationsOver30Days
+  );
+  const atRiskJobs = asNumber(riskSummary.atRiskJobs ?? alertsSummary.atRiskJobs);
+  const atRiskExposure = asNumber(
+    riskSummary.atRiskExposure ?? alertsSummary.atRiskExposure
+  );
 
   return {
     role: "gmp",
@@ -583,14 +568,26 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
       { label: "Collected Amount", value: formatKES(financials.collectedAmount), hint: "Projection actual + payments" },
       { label: "Collection Rate", value: formatPct(financials.collectionRate), hint: "Collected vs fee baseline" },
       { label: "Total Profit", value: formatKES(financials.totalProfit), hint: `Total cost ${formatKES(financials.totalCost)}` },
-      { label: "Active Jobs", value: `${asNumber(firmMetrics.activeJobs).toLocaleString()}`, hint: "Firm-wide active engagements" },
+      { label: "Active Jobs", value: `${activeJobs.toLocaleString()}`, hint: "Firm-wide active engagements" },
+      {
+        label: "At-Risk Jobs",
+        value: `${atRiskJobs.toLocaleString()}`,
+        hint: `Exposure ${formatKES(atRiskExposure)}`,
+        tone: atRiskJobs > 0 ? "warning" : "positive",
+      },
       {
         label: "Pending Over-Budget",
         value: `${asNumber(alertsSummary.pendingOverBudget).toLocaleString()}`,
         hint: "Requests needing control decisions",
         tone: asNumber(alertsSummary.pendingOverBudget) > 0 ? "warning" : "positive",
       },
-      { label: "Firm Utilization", value: formatPct(firmMetrics.utilizationRate), hint: "Billable utilization ratio" },
+      {
+        label: "Aged Evaluations",
+        value: `${pendingEvaluationsOver30Days.toLocaleString()}`,
+        hint: "Pending for 30+ days",
+        tone: pendingEvaluationsOver30Days > 0 ? "warning" : "positive",
+      },
+      { label: "Firm Utilization", value: formatPct(utilizationRate), hint: "Billable utilization ratio" },
     ],
     sections: [
       {
@@ -598,12 +595,12 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
         title: "Department Financial Breakdown",
         columns: ["Department", "Revenue", "Fees", "Collection Rate", "Team Size", "Active Jobs"],
         rows: departmentBreakdown.map((department) => [
-          String(department.departmentName || "-"),
-          formatKES(department.departmentRevenue),
-          formatKES(department.departmentFees),
-          formatPct(department.collectionRate),
-          `${asNumber(department.teamSize).toLocaleString()}`,
-          `${asNumber(department.activeJobs).toLocaleString()}`,
+          String(department.department_name ?? department.departmentName ?? "-"),
+          formatKES(department.department_revenue ?? department.departmentRevenue),
+          formatKES(department.department_fees ?? department.departmentFees),
+          formatPct(department.collection_rate ?? department.collectionRate),
+          `${asNumber(department.employee_count ?? department.employeeCount).toLocaleString()}`,
+          `${asNumber(department.active_jobs ?? department.activeJobs ?? department.jobs_count).toLocaleString()}`,
         ]),
       },
       {
@@ -611,12 +608,29 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
         title: "Partner Rankings",
         columns: ["Partner", "Revenue", "Fees", "Collection Rate", "Profit", "Utilization"],
         rows: partnerRankings.map((partner) => [
-          String(partner.partnerName || "-"),
-          formatKES(partner.portfolioRevenue),
-          formatKES(partner.portfolioFees),
-          formatPct(partner.collectionRate),
-          formatKES(partner.portfolioProfit),
-          formatPct(partner.utilizationRate),
+          String(partner.name ?? partner.partnerName ?? "-"),
+          formatKES(partner.portfolio_revenue ?? partner.portfolioRevenue),
+          formatKES(partner.portfolio_fees ?? partner.portfolioFees),
+          formatPct(partner.collection_rate ?? partner.collectionRate),
+          formatKES(
+            (partner.portfolio_profit ?? partner.portfolioProfit) ??
+              (asNumber(partner.portfolio_revenue ?? partner.portfolioRevenue) -
+                asNumber(partner.portfolio_fees ?? partner.portfolioFees))
+          ),
+          formatPct(partner.utilization_rate ?? partner.utilizationRate),
+        ]),
+      },
+      {
+        type: "table",
+        title: "Manager Rankings",
+        columns: ["Manager", "Team Size", "Jobs Managed", "Revenue", "Utilization", "Avg Team Score"],
+        rows: managerRankings.map((manager) => [
+          String(manager.name || "-"),
+          `${asNumber(manager.team_size ?? manager.teamSize).toLocaleString()}`,
+          `${asNumber(manager.jobs_managed ?? manager.jobsManaged).toLocaleString()}`,
+          formatKES(manager.portfolio_revenue ?? manager.portfolioRevenue),
+          formatPct(manager.utilization_rate ?? manager.utilizationRate),
+          `${asNumber(manager.avg_performance ?? manager.avgPerformance).toFixed(1)}`,
         ]),
       },
       {
@@ -828,9 +842,7 @@ export default function FinancialSummary() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }

@@ -71,4 +71,15 @@ export class EmployeeOffboardingCaseController {
       res.status((e as any).statusCode || 500).json({ success: false, message: (e as Error).message });
     }
   }
+
+  static async reactivate(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOffboardingCaseService.reactivate(caseId, authFromReq(req));
+      res.json(successResponse(result, "Account reactivated"));
+    } catch (e) {
+      console.error("EmployeeOffboardingCaseController.reactivate error:", e);
+      res.status((e as any).statusCode || 500).json({ success: false, message: (e as Error).message });
+    }
+  }
 }

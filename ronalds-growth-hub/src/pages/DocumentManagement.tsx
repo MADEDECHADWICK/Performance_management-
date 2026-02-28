@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import PageLoader from '@/components/ui/page-loader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Table,
@@ -208,7 +209,7 @@ export default function DocumentManagement() {
 
   const myDocuments = myDocumentsData?.documents || [];
   const pendingDocuments = pendingDocsData?.documents || [];
-  const employees = employeesData?.employees || [];
+  const employees = employeesData?.data || [];
 
   // Form helpers
   const resetUploadForm = () => {
@@ -340,8 +341,8 @@ export default function DocumentManagement() {
 
   if (isLoading) {
     return (
-      <div className="p-6 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="p-6">
+        <PageLoader message="Loading..." minHeightClassName="min-h-[220px]" />
       </div>
     );
   }

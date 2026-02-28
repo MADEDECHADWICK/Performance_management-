@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +36,7 @@ interface Todo {
 }
 
 export default function Todos() {
+  const navigate = useNavigate();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
@@ -45,12 +48,12 @@ export default function Todos() {
     if (authLoading) return;
     if (!user) return;
     loadTodos();
-  }, [authLoading, user]);
+  }, [authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTodos = async () => {
     try {
       if (!user) return;
-      const data = await apiFetch('GET', `/todos?userId=${user.id}`);
+      const data = await apiFetch('GET', '/todos');
       setTodos(data || []);
     } catch (error: any) {
       toast({
@@ -63,31 +66,25 @@ export default function Todos() {
     }
   };
 
-  const updateTodoStatus = async (todoId: string, newStatus: string) => {
+  const updateTodoStatus = async (todoId: number, newStatus: string) => {
     try {
       await apiFetch('PATCH', `/todos/${todoId}`, { status: newStatus });
 
-      // If marking as completed, also update the job status
-      if (newStatus === 'completed') {
-        const todo = todos.find(t => t.id === Number(todoId));
-        if (todo) {
-          await apiFetch('PATCH', `/jobs/${todo.jobId}`, { status: 'completed' });
-        }
-      }
-
       toast({ title: 'Success', description: `Job marked as ${newStatus}` });
 
-      loadTodos();
+      await loadTodos();
+      return true;
     } catch (error: any) {
       toast({
         title: "Error",
         description: error.message,
         variant: "destructive",
       });
+      return false;
     }
   };
 
-  const updateNotes = async (todoId: string) => {
+  const updateNotes = async (todoId: number) => {
     try {
       await apiFetch('PATCH', `/todos/${todoId}/notes`, { description: notes });
 
@@ -118,12 +115,19 @@ export default function Todos() {
     }
   };
 
-  const calculateFinancialValue = (job: Job) => {
-    let total = 0;
-    if (job.fixedFeeAmount) {
-      total += job.fixedFeeAmount;
+  const toAmount = (value: unknown): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const calculateFinancialValue = (job: Job) => toAmount(job.fixedFeeAmount);
+
+  const executeAssignedJob = async (todo: Todo) => {
+    if (todo.status === "pending") {
+      const started = await updateTodoStatus(todo.id, "in_progress");
+      if (!started) return;
     }
-    return total;
+    navigate(`/timesheets?jobId=${todo.jobId}`);
   };
 
   const getStats = () => {
@@ -143,9 +147,7 @@ export default function Todos() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-muted-foreground">Loading your tasks...</div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -200,7 +202,7 @@ export default function Todos() {
               <DollarSign className="h-4 w-4 text-success" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">KES {stats.totalValue.toLocaleString()}</div>
+              <div className="text-2xl font-bold">KES {stats.totalValue.toLocaleString("en-KE")}</div>
               <p className="text-xs text-muted-foreground">From completed tasks</p>
             </CardContent>
           </Card>
@@ -227,6 +229,7 @@ export default function Todos() {
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
+                onExecute={executeAssignedJob}
               />
             ))}
           </TabsContent>
@@ -243,6 +246,7 @@ export default function Todos() {
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
+                onExecute={executeAssignedJob}
               />
             ))}
           </TabsContent>
@@ -259,6 +263,7 @@ export default function Todos() {
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
+                onExecute={executeAssignedJob}
               />
             ))}
           </TabsContent>
@@ -275,6 +280,7 @@ export default function Todos() {
                 }}
                 calculateFinancialValue={calculateFinancialValue}
                 getStatusBadge={getStatusBadge}
+                onExecute={executeAssignedJob}
               />
             ))}
           </TabsContent>
@@ -320,12 +326,14 @@ function TodoCard({
   onNotesClick,
   calculateFinancialValue,
   getStatusBadge,
+  onExecute,
 }: {
   todo: Todo;
-  onStatusChange: (id: string, status: string) => void;
+  onStatusChange: (id: number, status: string) => void;
   onNotesClick: (todo: Todo) => void;
   calculateFinancialValue: (job: Job) => number;
   getStatusBadge: (status: string) => JSX.Element;
+  onExecute: (todo: Todo) => void | Promise<void>;
 }) {
   const isOverdue = todo.job.dueDate && new Date(todo.job.dueDate) < new Date() && todo.status !== "completed";
 
@@ -363,7 +371,7 @@ function TodoCard({
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold text-success">
-              KES {calculateFinancialValue(todo.job).toLocaleString()}
+              KES {calculateFinancialValue(todo.job).toLocaleString("en-KE")}
             </div>
             {todo.job.budgetHours && (
               <p className="text-xs text-muted-foreground">
@@ -384,18 +392,27 @@ function TodoCard({
           {todo.status === "pending" && (
             <Button
               size="sm"
-              onClick={() => onStatusChange(todo.id, "in_progress")}
+              onClick={() => onExecute(todo)}
             >
               Start Working
             </Button>
           )}
           {todo.status === "in_progress" && (
-            <Button
-              size="sm"
-              onClick={() => onStatusChange(todo.id, "completed")}
-            >
-              Complete Assignment
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onExecute(todo)}
+              >
+                Continue Working
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => onStatusChange(todo.id, "completed")}
+              >
+                Complete Assignment
+              </Button>
+            </>
           )}
           {todo.status !== "completed" && (
             <Button

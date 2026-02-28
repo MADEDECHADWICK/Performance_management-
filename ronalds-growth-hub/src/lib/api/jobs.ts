@@ -6,11 +6,21 @@ import type {
   Job,
   JobStaffAssignment,
   JobCosting,
+  TaskStatus,
+  JobInvoiceMilestoneTracking,
   PaginatedResponse,
   JobStatus,
   Priority,
   BillingType,
 } from './types';
+
+interface JobMilestonePayload {
+  title: string;
+  targetPercent: number;
+  dueDate?: string;
+  requirements?: string;
+  assignedToProfileId?: number;
+}
 
 interface CreateJobPayload {
   jobName: string;
@@ -26,6 +36,7 @@ interface CreateJobPayload {
   fixedFeeAmount?: number;
   budgetHours?: number;
   engagementLetterId?: number;
+  milestones?: JobMilestonePayload[];
 }
 
 interface CreateJobFromOnboardingPayload {
@@ -38,6 +49,7 @@ interface CreateJobFromOnboardingPayload {
   dueDate?: string;
   priority?: Priority;
   budgetHours?: number;
+  milestones?: JobMilestonePayload[];
 }
 
 interface UpdateJobPayload extends Partial<CreateJobPayload> {
@@ -140,6 +152,35 @@ export const jobsAPI = {
    */
   updateStatus: async (id: number, status: JobStatus, reason?: string): Promise<Job> => {
     return api.patch(`/jobs/${id}/status`, { status, reason });
+  },
+
+  /**
+   * Get milestone-based invoice tracking for a job
+   */
+  getInvoiceMilestones: async (jobId: number): Promise<JobInvoiceMilestoneTracking> => {
+    return api.get(`/jobs/${jobId}/invoice-milestones`);
+  },
+
+  /**
+   * Update a milestone's condition status
+   */
+  updateInvoiceMilestoneStatus: async (
+    jobId: number,
+    milestoneTaskId: number,
+    status: TaskStatus
+  ): Promise<{
+    milestoneTask: {
+      id: number;
+      jobId: number;
+      title: string;
+      description?: string | null;
+      status: TaskStatus;
+      dueDate?: string | null;
+      updatedAt: string;
+    };
+    tracking: JobInvoiceMilestoneTracking;
+  }> => {
+    return api.patch(`/jobs/${jobId}/invoice-milestones/${milestoneTaskId}/status`, { status });
   },
 
   // ==================

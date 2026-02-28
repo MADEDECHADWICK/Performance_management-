@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import prisma from "../prisma";
 import { nonFinancialPerformanceService } from "../services/nonFinancialPerformance.service";
 import { normalizeWeights, resolveRoleConfig } from "../services/performanceRoleConfig";
@@ -711,7 +711,7 @@ router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
 router.post(
   "/recalculate",
   authMiddleware,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("reports", "admin"),
   async (req: AuthRequest, res) => {
     try {
       const evaluationCycleId = req.body?.evaluationCycleId

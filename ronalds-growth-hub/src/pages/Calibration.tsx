@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -116,7 +116,7 @@ const Calibration = () => {
     loadLookups();
     loadData();
     loadRecentCalibrations();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async (item: CalibrationItem) => {
     try {
@@ -320,7 +320,7 @@ const Calibration = () => {
                           ? item.metadata.calibratedScore
                           : "--"}
                         {item.metadata?.calibrationNote
-                          ? ` • ${item.metadata.calibrationNote}`
+                          ? ` â€¢ ${item.metadata.calibrationNote}`
                           : ""}
                       </p>
                     )}

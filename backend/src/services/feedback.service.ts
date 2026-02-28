@@ -21,12 +21,10 @@ interface ListOptions {
 
 interface CreateFeedbackInput {
   recipientProfileId?: number;
-  recipient_profile_id?: number;
   title: string;
   content: string;
   type?: string;
   isAnonymous?: boolean;
-  is_anonymous?: boolean;
 }
 
 export class FeedbackService {
@@ -83,9 +81,9 @@ export class FeedbackService {
    * Create feedback
    */
   static async createFeedback(input: CreateFeedbackInput, auth: AuthContext) {
-    const recipientProfileId = input.recipientProfileId ?? input.recipient_profile_id;
+    const recipientProfileId = input.recipientProfileId;
     const { title, content, type } = input;
-    const isAnonymous = input.isAnonymous ?? input.is_anonymous;
+    const isAnonymous = input.isAnonymous;
 
     // ✅ VERIFY RECIPIENT EXISTS
     if (!recipientProfileId) {

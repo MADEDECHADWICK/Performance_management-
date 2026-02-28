@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,7 +48,7 @@ const DevelopmentPlan = () => {
       return;
     }
     loadRecommendations();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadRecommendations = async () => {
     try {
@@ -56,7 +57,7 @@ const DevelopmentPlan = () => {
         return;
       }
 
-      const data = await apiFetch('GET', `/development-recommendations?employee_id=${user.id}`);
+      const data = await apiFetch('GET', `/development-recommendations?employeeId=${user.id}`);
       setRecommendations(data || []);
     } catch (error: any) {
       toast({
@@ -86,9 +87,7 @@ const DevelopmentPlan = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -130,11 +129,11 @@ const DevelopmentPlan = () => {
 
   const getTypeIcon = (type: string) => {
     switch (type) {
-      case "course": return "📚";
-      case "mentorship": return "👥";
-      case "project": return "🎯";
-      case "resource": return "📖";
-      default: return "📋";
+      case "course": return "ðŸ“š";
+      case "mentorship": return "ðŸ‘¥";
+      case "project": return "ðŸŽ¯";
+      case "resource": return "ðŸ“–";
+      default: return "ðŸ“‹";
     }
   };
 
@@ -286,7 +285,7 @@ const DevelopmentPlan = () => {
                     {rec.resource_url && (
                       <Button variant="link" className="p-0 h-auto" asChild>
                         <a href={rec.resource_url} target="_blank" rel="noopener noreferrer">
-                          View Resource →
+                          View Resource â†’
                         </a>
                       </Button>
                     )}

@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,16 +55,7 @@ export default function Goals() {
     Array<{ title: string; unit: string; targetValue: string; weight: string }>
   >([{ title: "", unit: "", targetValue: "", weight: "" }]);
 
-  useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      navigate("/auth");
-      return;
-    }
-    loadData();
-  }, [authLoading, user, navigate]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       if (!user) {
@@ -78,7 +70,7 @@ export default function Goals() {
       setCycles(cyclesData || []);
 
       // Load KPIs
-      const kpisData = await apiFetch('GET', '/kpis?is_active=true');
+      const kpisData = await apiFetch('GET', '/kpis?isActive=true');
       setKpis(kpisData || []);
 
       const isApprover = isHR || isAdmin || isManager;
@@ -137,7 +129,16 @@ export default function Goals() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAdmin, isHR, isManager, navigate, toast, user]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
+    loadData();
+  }, [authLoading, user, navigate, loadData]);
 
   const addKeyResultRow = () => {
     setNewKeyResults([
@@ -385,9 +386,7 @@ export default function Goals() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }

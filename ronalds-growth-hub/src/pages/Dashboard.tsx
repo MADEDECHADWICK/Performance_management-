@@ -1,5 +1,7 @@
-import DashboardLayout from "@/components/DashboardLayout";
+﻿import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BarChart3, TrendingUp, Users, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle } from "lucide-react";
@@ -64,6 +66,12 @@ const Dashboard = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isPartnerView, setIsPartnerView] = useState(false);
   const [partnerData, setPartnerData] = useState<any>(null);
+  const roleLabel = String(performance?.roleFormula || "employee")
+    .replace(/_/g, " ")
+    .toLowerCase();
+  const scopeLabel = String(performance?.jobScope || "assigned")
+    .replace(/_/g, " ")
+    .toLowerCase();
 
   useEffect(() => {
     if (authLoading) return;
@@ -131,7 +139,7 @@ const Dashboard = () => {
     };
 
     load();
-  }, [
+  }, [ // eslint-disable-line react-hooks/exhaustive-deps
     authLoading,
     user,
     profile,
@@ -448,9 +456,7 @@ const Dashboard = () => {
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -484,6 +490,10 @@ const Dashboard = () => {
                 <CardContent>
                   <div className="text-2xl font-bold">{partnerData.portfolio?.totalJobs || 0}</div>
                   <p className="text-xs text-muted-foreground">Active portfolio</p>
+                  <MiniStatGraph
+                    value={partnerData.portfolio?.totalJobs || 0}
+                    baseline={partnerData.portfolio?.activeJobs || 0}
+                  />
                 </CardContent>
               </Card>
 
@@ -497,6 +507,7 @@ const Dashboard = () => {
                     KES {((partnerData.portfolio?.totalRevenueCollected || 0) / 1000000).toFixed(1)}M
                   </div>
                   <p className="text-xs text-muted-foreground">Collected</p>
+                  <MiniStatGraph value={partnerData.portfolio?.totalRevenueCollected || 0} />
                 </CardContent>
               </Card>
 
@@ -510,6 +521,7 @@ const Dashboard = () => {
                     KES {((partnerData.portfolio?.totalProfit || 0) / 1000000).toFixed(1)}M
                   </div>
                   <p className="text-xs text-muted-foreground">Net profit</p>
+                  <MiniStatGraph value={partnerData.portfolio?.totalProfit || 0} />
                 </CardContent>
               </Card>
 
@@ -521,6 +533,11 @@ const Dashboard = () => {
                 <CardContent>
                   <div className="text-2xl font-bold">{partnerData.pendingApprovalsCount || 0}</div>
                   <p className="text-xs text-muted-foreground">Time entries</p>
+                  <MiniStatGraph
+                    value={partnerData.pendingApprovalsCount || 0}
+                    baseline={0}
+                    inverse
+                  />
                 </CardContent>
               </Card>
             </div>
@@ -580,8 +597,12 @@ const Dashboard = () => {
                 {performance?.overallScore || 0}
               </div>
               <p className="text-xs text-muted-foreground">
-                Grade {performance?.grade || "N/A"} • {String(performance?.roleFormula || "employee").replaceAll("_", " ")}
+                Grade {performance?.grade || "N/A"} | {roleLabel}
               </p>
+              <MiniStatGraph
+                value={performance?.overallScore || 0}
+                baseline={performance?.financialScore || 0}
+              />
             </CardContent>
           </Card>
 
@@ -603,8 +624,12 @@ const Dashboard = () => {
                 KES {(performance?.allocatedRevenue || 0).toLocaleString()}
               </div>
               <p className="text-xs text-muted-foreground">
-                Score driver: revenue {performance?.financialSignals?.revenueScore || 0}%
+                Revenue score {performance?.financialSignals?.revenueScore || 0}%
               </p>
+              <MiniStatGraph
+                value={performance?.allocatedRevenue || 0}
+                baseline={performance?.revenueContribution || 0}
+              />
             </CardContent>
           </Card>
 
@@ -618,8 +643,12 @@ const Dashboard = () => {
                 {performance?.financialScore || 0}
               </div>
               <p className="text-xs text-muted-foreground">
-                Rev {performance?.financialSignals?.revenueScore || 0}% • Profit {performance?.financialSignals?.profitScore || 0}% • BD {performance?.financialSignals?.bdScore || 0}%
+                Revenue {performance?.financialSignals?.revenueScore || 0}% | Profit {performance?.financialSignals?.profitScore || 0}% | BD {performance?.financialSignals?.bdScore || 0}%
               </p>
+              <MiniStatGraph
+                value={performance?.financialScore || 0}
+                baseline={performance?.nonFinancialScore || 0}
+              />
             </CardContent>
           </Card>
 
@@ -633,8 +662,12 @@ const Dashboard = () => {
                 {performance?.nonFinancialScore || 0} / {performance?.efficiencyScore || 0}
               </div>
               <p className="text-xs text-muted-foreground">
-                Client rating {performance?.clientRating || 0}/5.0 • Utilization {performance?.utilizationRate || 0}%
+                Client rating {performance?.clientRating || 0}/5 | Utilization {performance?.utilizationRate || 0}%
               </p>
+              <MiniStatGraph
+                value={performance?.nonFinancialScore || 0}
+                baseline={performance?.efficiencyScore || 0}
+              />
             </CardContent>
           </Card>
         </div>
@@ -648,7 +681,7 @@ const Dashboard = () => {
                 My Performance Scorecard
               </CardTitle>
               <CardDescription>
-                Role formula: {String(performance?.roleFormula || "employee").replaceAll("_", " ")} • Scope: {String(performance?.jobScope || "assigned").replaceAll("_", " ")}
+                Role: {roleLabel} | Scope: {scopeLabel}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -705,10 +738,10 @@ const Dashboard = () => {
               <div className="mt-4 rounded-md border p-3 space-y-1 text-sm">
                 <p className="font-medium">Component detail</p>
                 <p className="text-muted-foreground">
-                  Customer: {performance?.customerScore || 0}% • Internal: {performance?.internalProcessScore || 0}% • Learning: {performance?.learningGrowthScore || 0}%
+                  Customer: {performance?.customerScore || 0}% | Internal: {performance?.internalProcessScore || 0}% | Learning: {performance?.learningGrowthScore || 0}%
                 </p>
                 <p className="text-muted-foreground">
-                  OKR: {performance?.okrScore || 0}% • Project eval: {performance?.projectEvaluationScore || 0}% • Billable hours: {performance?.billableHours || 0}
+                  OKR: {performance?.okrScore || 0}% | Project eval: {performance?.projectEvaluationScore || 0}% | Billable hours: {performance?.billableHours || 0}
                 </p>
               </div>
               <div className="mt-4 rounded-md border p-3 space-y-2">
@@ -764,7 +797,7 @@ const Dashboard = () => {
                   <p className="text-sm text-muted-foreground">No recent activity</p>
                 )}
               </div>
-              <Link to="/evaluations" className="block mt-4">
+              <Link to="/notifications" className="block mt-4">
                 <Button className="w-full" variant="outline">
                   View All Activity
                 </Button>

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { notifyHrGroup } from "../services/hrNotifications";
 import { NotificationService } from "../services/notifications.service";
@@ -26,7 +26,7 @@ const getPagination = (req: any) => {
 router.get(
   "/upcoming-jobs",
   authMiddleware,
-  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  requireModuleAccess("clients", "read"),
   async (req, res) => {
   try {
     const { page, pageSize, skip } = getPagination(req);
@@ -75,7 +75,7 @@ router.get(
 router.get(
   "/",
   authMiddleware,
-  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  requireModuleAccess("clients", "read"),
   async (req, res) => {
   try {
     const { page, pageSize, skip } = getPagination(req);
@@ -127,7 +127,7 @@ router.get(
 router.get(
   "/:id",
   authMiddleware,
-  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  requireModuleAccess("clients", "read"),
   async (req, res) => {
   try {
     const id = parseId(req.params.id);
@@ -176,7 +176,7 @@ router.get(
 router.post(
   "/",
   authMiddleware,
-  requireRole("admin", "super_admin", "hr", "hr_manager", "partner", "manager", "finance", "marketing"),
+  requireModuleAccess("clients", "write"),
   async (req: AuthRequest, res) => {
   try {
     const {
@@ -263,7 +263,7 @@ router.post(
 router.post(
   "/:id/approve",
   authMiddleware,
-  requireRole("hr", "hr_manager", "admin", "super_admin"),
+  requireModuleAccess("clients", "admin"),
   async (req: AuthRequest, res) => {
   try {
     const id = parseId(req.params.id);
@@ -332,7 +332,7 @@ router.post(
 router.post(
   "/:id/reject",
   authMiddleware,
-  requireRole("hr", "hr_manager", "admin", "super_admin"),
+  requireModuleAccess("clients", "admin"),
   async (req: AuthRequest, res) => {
   try {
     const id = parseId(req.params.id);

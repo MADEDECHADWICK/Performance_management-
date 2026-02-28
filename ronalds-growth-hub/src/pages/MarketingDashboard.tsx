@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -50,12 +51,12 @@ export default function MarketingDashboard() {
     queryFn: () => surveysAPI.list({ page: 1, pageSize: 5 }),
   });
 
-  const clients = clientsData?.data || [];
-  const onboardings = onboardingData?.data || [];
-  const upcomingJobs = upcomingData?.data || [];
-  const pipelineTrend = proposalMetrics?.pipelineTrend || [];
-  const surveyTrends = surveyAnalytics?.trends || [];
-  const surveyList = recentSurveys?.surveys || [];
+  const clients = useMemo(() => clientsData?.data ?? [], [clientsData]);
+  const onboardings = useMemo(() => onboardingData?.data ?? [], [onboardingData]);
+  const upcomingJobs = useMemo(() => upcomingData?.data ?? [], [upcomingData]);
+  const pipelineTrend = useMemo(() => proposalMetrics?.pipelineTrend ?? [], [proposalMetrics]);
+  const surveyTrends = useMemo(() => surveyAnalytics?.trends ?? [], [surveyAnalytics]);
+  const surveyList = useMemo(() => recentSurveys?.surveys ?? [], [recentSurveys]);
   const leadToCash = proposalMetrics?.leadToCash;
   const pipelineMax = Math.max(
     1,
@@ -108,6 +109,7 @@ export default function MarketingDashboard() {
             <CardContent>
               <div className="text-2xl font-bold">{clients.length}</div>
               <p className="text-xs text-muted-foreground">Active records</p>
+              <MiniStatGraph value={clients.length} />
             </CardContent>
           </Card>
           <Card>
@@ -117,6 +119,7 @@ export default function MarketingDashboard() {
             <CardContent>
               <div className="text-2xl font-bold text-amber-600">{pendingHR.length}</div>
               <p className="text-xs text-muted-foreground">Engagements awaiting HR</p>
+              <MiniStatGraph value={pendingHR.length} baseline={0} inverse />
             </CardContent>
           </Card>
           <Card>
@@ -126,6 +129,10 @@ export default function MarketingDashboard() {
             <CardContent>
               <div className="text-2xl font-bold">{upcomingJobs.length}</div>
               <p className="text-xs text-muted-foreground">Approved & ready for HR</p>
+              <MiniStatGraph
+                value={upcomingJobs.length}
+                baseline={pendingHR.length}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -135,6 +142,10 @@ export default function MarketingDashboard() {
             <CardContent>
               <div className="text-2xl font-bold">KES {(proposalMetrics?.pipelineValue || 0).toLocaleString()}</div>
               <p className="text-xs text-muted-foreground">Open proposals</p>
+              <MiniStatGraph
+                value={proposalMetrics?.pipelineValue || 0}
+                baseline={Number(leadToCash?.wonProposalValue || 0)}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -148,6 +159,10 @@ export default function MarketingDashboard() {
               <p className="text-xs text-muted-foreground">
                 {hasSurveyAnalytics ? "Avg rating" : "No survey data yet"}
               </p>
+              <MiniStatGraph
+                value={Number(surveyAnalytics?.averageRatings?.overall || 0)}
+                baseline={4}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -167,6 +182,11 @@ export default function MarketingDashboard() {
                 <span className="text-muted-foreground">Collected</span>
                 <span className="font-medium">KES {Number(leadToCash?.collectedFromWonClients || 0).toLocaleString()}</span>
               </div>
+              <MiniStatGraph
+                value={Number(leadToCash?.conversionRate || 0)}
+                baseline={Number(proposalMetrics?.conversionRate || 0)}
+                className="pt-1"
+              />
             </CardContent>
           </Card>
         </div>

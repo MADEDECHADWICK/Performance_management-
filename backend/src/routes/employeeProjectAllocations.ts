@@ -3,14 +3,14 @@ import prisma from '../prisma';
 
 const router = Router();
 
-// GET /employee_project_allocations?employee_ids=1,2&fields=allocation_amount
+// GET /employee_project_allocations?employeeIds=1,2&fields=allocationAmount
 router.get('/', async (req, res) => {
   try {
-    const { employee_ids } = req.query;
+    const { employeeIds } = req.query;
     
     let ids: number[] = [];
-    if (employee_ids) {
-      ids = (employee_ids as string).split(',').map(id => parseInt(id.trim()));
+    if (employeeIds) {
+      ids = (employeeIds as string).split(',').map(id => parseInt(id.trim()));
     }
 
     const allocations = await prisma.jobStaffAssignment.findMany({

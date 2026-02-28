@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,21 @@ import {
   Star
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
+import { getToken } from "@/lib/api";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 interface TrainingRecord {
   id: number;
@@ -95,7 +110,31 @@ interface StaffDevelopmentMetrics {
   development_goals_completed: number;
 }
 
+const toNumber = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const normalizeMetrics = (payload: any): StaffDevelopmentMetrics => {
+  const source = payload?.data ?? payload ?? {};
+  return {
+    total_employees: toNumber(source.total_employees ?? source.totalEmployees),
+    active_training: toNumber(source.active_training ?? source.activeTraining),
+    completed_courses: toNumber(source.completed_courses ?? source.completedCourses),
+    certifications_expiring: toNumber(
+      source.certifications_expiring ?? source.certificationsExpiring
+    ),
+    avg_skill_level: toNumber(source.avg_skill_level ?? source.avgSkillLevel),
+    training_budget_used: toNumber(source.training_budget_used ?? source.trainingBudgetUsed),
+    training_budget_total: toNumber(source.training_budget_total ?? source.trainingBudgetTotal),
+    development_goals_completed: toNumber(
+      source.development_goals_completed ?? source.developmentGoalsCompleted
+    ),
+  };
+};
+
 const StaffDevelopment = () => {
+  const apiBaseUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api`;
   const [trainingRecords, setTrainingRecords] = useState<TrainingRecord[]>([]);
   const [certifications, setCertifications] = useState<Certification[]>([]);
   const [skillAssessments, setSkillAssessments] = useState<SkillAssessment[]>([]);
@@ -121,12 +160,20 @@ const StaffDevelopment = () => {
 
   useEffect(() => {
     fetchStaffDevelopmentData();
-  }, [selectedEmployee]);
+  }, [selectedEmployee]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchStaffDevelopmentData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = getToken();
+      if (!token) {
+        setTrainingRecords([]);
+        setCertifications([]);
+        setSkillAssessments([]);
+        setDevelopmentGoals([]);
+        setMetrics(null);
+        return;
+      }
       
       const [
         trainingRes,
@@ -135,19 +182,19 @@ const StaffDevelopment = () => {
         goalsRes,
         metricsRes
       ] = await Promise.all([
-        fetch(`http://localhost:4000/api/manager/training-records?employee=${selectedEmployee}`, {
+        fetch(`${apiBaseUrl}/manager/training-records?employee=${encodeURIComponent(selectedEmployee)}`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:4000/api/manager/certifications?employee=${selectedEmployee}`, {
+        fetch(`${apiBaseUrl}/manager/certifications?employee=${encodeURIComponent(selectedEmployee)}`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:4000/api/manager/skill-assessments?employee=${selectedEmployee}`, {
+        fetch(`${apiBaseUrl}/manager/skill-assessments?employee=${encodeURIComponent(selectedEmployee)}`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:4000/api/manager/development-goals?employee=${selectedEmployee}`, {
+        fetch(`${apiBaseUrl}/manager/development-goals?employee=${encodeURIComponent(selectedEmployee)}`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:4000/api/manager/development-metrics`, {
+        fetch(`${apiBaseUrl}/manager/development-metrics`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       ]);
@@ -174,7 +221,7 @@ const StaffDevelopment = () => {
       
       if (metricsRes.ok) {
         const data = await metricsRes.json();
-        setMetrics(data);
+        setMetrics(normalizeMetrics(data));
       }
     } catch (error) {
       console.error('Error fetching staff development data:', error);
@@ -210,8 +257,10 @@ const StaffDevelopment = () => {
 
   const scheduleTraining = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:4000/api/manager/training-records', {
+      const token = getToken();
+      if (!token) return;
+
+      const response = await fetch(`${apiBaseUrl}/manager/training-records`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -233,7 +282,7 @@ const StaffDevelopment = () => {
           formData.append('accessLevel', 'manager');
           formData.append('description', `Training material for ${newTraining.course_name}`);
 
-          await fetch('http://localhost:4000/api/documents/upload', {
+          await fetch(`${apiBaseUrl}/documents/upload`, {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`
@@ -262,22 +311,64 @@ const StaffDevelopment = () => {
     }
   };
 
+  const budgetPercent =
+    metrics && metrics.training_budget_total > 0
+      ? (metrics.training_budget_used / metrics.training_budget_total) * 100
+      : 0;
+
+  const trainingStatusMix = useMemo(() => {
+    const buckets = [
+      { key: "planned", label: "Planned" },
+      { key: "in_progress", label: "In Progress" },
+      { key: "completed", label: "Completed" },
+      { key: "cancelled", label: "Cancelled" },
+    ];
+
+    return buckets.map((bucket) => ({
+      name: bucket.label,
+      value: trainingRecords.filter((record) => record.status === bucket.key).length,
+    }));
+  }, [trainingRecords]);
+
+  const certificationMix = useMemo(() => {
+    const buckets = [
+      { key: "active", label: "Active" },
+      { key: "expiring_soon", label: "Expiring Soon" },
+      { key: "expired", label: "Expired" },
+    ];
+
+    return buckets.map((bucket) => ({
+      name: bucket.label,
+      value: certifications.filter((cert) => cert.status === bucket.key).length,
+    }));
+  }, [certifications]);
+
+  const skillGapData = useMemo(() => {
+    const grouped = new Map<string, { category: string; gap: number }>();
+    skillAssessments.forEach((skill) => {
+      const key = skill.skill_category || "Other";
+      const gap = Math.max(0, Number(skill.target_level || 0) - Number(skill.current_level || 0));
+      if (!grouped.has(key)) {
+        grouped.set(key, { category: key, gap: 0 });
+      }
+      grouped.get(key)!.gap += gap;
+    });
+    return Array.from(grouped.values()).slice(0, 6);
+  }, [skillAssessments]);
+
+  const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
+
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading staff development data...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
 
   return (
     <DashboardLayout>
-      <div className="p-6 space-y-6">
+	      <div className="p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -401,10 +492,10 @@ const StaffDevelopment = () => {
           </div>
         </div>
 
-        {/* Metrics Overview */}
-        {metrics && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card>
+	        {/* Metrics Overview */}
+	        {metrics && (
+	          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+	            <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Active Training</CardTitle>
                 <BookOpen className="w-4 h-4 text-blue-600" />
@@ -415,7 +506,7 @@ const StaffDevelopment = () => {
               </CardContent>
             </Card>
 
-            <Card>
+	            <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Certifications</CardTitle>
                 <Award className="w-4 h-4 text-yellow-600" />
@@ -431,32 +522,128 @@ const StaffDevelopment = () => {
                 <CardTitle className="text-sm font-medium">Training Budget</CardTitle>
                 <TrendingUp className="w-4 h-4 text-green-600" />
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {((metrics.training_budget_used / metrics.training_budget_total) * 100).toFixed(0)}%
-                </div>
-                <Progress 
-                  value={(metrics.training_budget_used / metrics.training_budget_total) * 100} 
-                  className="mt-2" 
-                />
-              </CardContent>
-            </Card>
+	              <CardContent>
+	                <div className="text-2xl font-bold">
+	                  {toNumber(budgetPercent).toFixed(0)}%
+	                </div>
+	                <Progress
+	                  value={toNumber(budgetPercent)}
+	                  className="mt-2"
+	                />
+	              </CardContent>
+	            </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Avg Skill Level</CardTitle>
                 <Star className="w-4 h-4 text-purple-600" />
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{metrics.avg_skill_level.toFixed(1)}/5</div>
-                <p className="text-xs text-gray-600">Team average</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+	              <CardContent>
+	                <div className="text-2xl font-bold">{toNumber(metrics.avg_skill_level).toFixed(1)}/5</div>
+	                <p className="text-xs text-gray-600">Team average</p>
+	              </CardContent>
+	            </Card>
+	          </div>
+	        )}
 
-        {/* Content Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Training Status Mix</CardTitle>
+              <CardDescription>Distribution of training records by status.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {trainingRecords.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No training records yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={trainingStatusMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={52}
+                      outerRadius={86}
+                      paddingAngle={2}
+                    >
+                      {trainingStatusMix.map((item, index) => (
+                        <Cell key={`training-status-${item.name}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Certification Health</CardTitle>
+              <CardDescription>Active vs expiring vs expired certifications.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {certifications.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No certifications recorded yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={certificationMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={52}
+                      outerRadius={86}
+                      paddingAngle={2}
+                    >
+                      <Cell fill="#22c55e" />
+                      <Cell fill="#f59e0b" />
+                      <Cell fill="#ef4444" />
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Skill Gap by Category</CardTitle>
+              <CardDescription>Total target-minus-current skill gap.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {skillGapData.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No skill assessments yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={skillGapData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="category" tickLine={false} axisLine={false} fontSize={11} />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(1)} />
+                    <Bar dataKey="gap" radius={[6, 6, 0, 0]}>
+                      {skillGapData.map((item, index) => (
+                        <Cell key={`skill-gap-${item.category}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+	        {/* Content Tabs */}
+	        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="training">Training</TabsTrigger>
@@ -529,7 +716,7 @@ const StaffDevelopment = () => {
                           <div>
                             <h3 className="font-semibold">{record.course_name}</h3>
                             <p className="text-sm text-gray-600">
-                              {record.employee_name} • {record.provider}
+                              {record.employee_name} - {record.provider}
                             </p>
                           </div>
                         </div>
@@ -586,7 +773,7 @@ const StaffDevelopment = () => {
                           <div>
                             <h3 className="font-semibold">{cert.certification_name}</h3>
                             <p className="text-sm text-gray-600">
-                              {cert.employee_name} • {cert.issuing_organization}
+                              {cert.employee_name} - {cert.issuing_organization}
                             </p>
                           </div>
                         </div>
@@ -644,7 +831,7 @@ const StaffDevelopment = () => {
                         <div>
                           <h3 className="font-semibold">{skill.skill_name}</h3>
                           <p className="text-sm text-gray-600">
-                            {skill.employee_name} • {skill.skill_category}
+                            {skill.employee_name} - {skill.skill_category}
                           </p>
                         </div>
                         <div className="text-right">

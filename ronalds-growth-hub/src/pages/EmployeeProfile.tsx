@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,91 @@ import { User, Briefcase, Award, Calendar, Phone, Mail, ClipboardCheck, CheckCir
 import documentsAPI from "@/lib/api/documents";
 import { useAuth } from "@/contexts/AuthContext";
 
+interface DepartmentOption {
+  id: number;
+  name: string;
+}
+
+interface ManagerOption {
+  id: number;
+  firstName?: string;
+  lastName?: string;
+  positionTitle?: string;
+}
+
+interface ChecklistItem {
+  id: number;
+  itemName: string;
+  description?: string | null;
+  requiresDocument?: boolean;
+  documentId?: number | null;
+  isCompleted?: boolean;
+  document?: {
+    filePath?: string | null;
+  } | null;
+}
+
+interface ChecklistDetail {
+  id: number;
+  checklistName?: string;
+  status?: string;
+  completionPercent?: number;
+  items?: ChecklistItem[];
+}
+
+interface EmployeeProfileRecord {
+  id: number;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  phoneNumber?: string;
+  positionTitle?: string;
+  hireDate?: string | null;
+  departmentId?: number | null;
+  managerId?: number | null;
+  status?: string;
+  department?: {
+    name?: string;
+  } | null;
+}
+
+interface ProfileUpdatePayload {
+  firstName: string;
+  lastName: string;
+  phoneNumber: string;
+  positionTitle?: string;
+  hireDate?: string | null;
+  departmentId?: number | null;
+  managerId?: number | null;
+}
+
+const EMPTY_PROFILE: EmployeeProfileRecord = {
+  id: 0,
+  firstName: "",
+  lastName: "",
+  email: "",
+  phoneNumber: "",
+  positionTitle: "",
+  hireDate: null,
+  departmentId: null,
+  managerId: null,
+  status: "active",
+  department: null,
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) return error.message;
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return String((error as { message?: string }).message);
+  }
+  return fallback;
+};
+
 export default function EmployeeProfile() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -22,71 +108,28 @@ export default function EmployeeProfile() {
   const { user, isLoading: authLoading, isHR, isAdmin } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
-  const [departments, setDepartments] = useState<any[]>([]);
-  const [managers, setManagers] = useState<any[]>([]);
+  const [profile, setProfile] = useState<EmployeeProfileRecord>(EMPTY_PROFILE);
+  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [isHRAdmin, setIsHRAdmin] = useState(false);
   const [isViewingOther, setIsViewingOther] = useState(false);
-  const [checklist, setChecklist] = useState<any>(null);
+  const [checklist, setChecklist] = useState<ChecklistDetail | null>(null);
   const [checklistLoading, setChecklistLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("personal");
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      navigate("/auth");
+    const requestedTab = String(searchParams.get("tab") || "")
+      .trim()
+      .toLowerCase();
+    const allowedTabs = new Set(["personal", "career", "performance", "onboarding"]);
+    if (allowedTabs.has(requestedTab)) {
+      setActiveTab(requestedTab);
       return;
     }
-    loadProfile();
-  }, [authLoading, user, navigate]);
+    setActiveTab("personal");
+  }, [searchParams]);
 
-  const loadProfile = async () => {
-    try {
-      setLoading(true);
-      if (!user) {
-        navigate("/auth");
-        return;
-      }
-
-      // Check if user is HR/Admin
-      const hasHRAdminRole = isHR || isAdmin;
-      setIsHRAdmin(hasHRAdminRole);
-
-      // Check if viewing another employee's profile
-      const viewingProfileId = searchParams.get("id");
-      const currentProfileId = (user as any).profile_id ?? (user as any).profileId ?? user.profile?.id;
-      setIsViewingOther(
-        !!viewingProfileId && Number(viewingProfileId) !== Number(currentProfileId)
-      );
-
-      const data = viewingProfileId
-        ? await apiFetch('GET', `/profiles/${viewingProfileId}`)
-        : await apiFetch('GET', `/profiles/email/${encodeURIComponent(user.email)}`);
-      setProfile(data);
-      if (data?.id) {
-        await loadChecklist(data.id);
-      }
-
-      // Load departments and managers if HR/Admin viewing another employee
-      if (hasHRAdminRole && viewingUserId) {
-        const depts = await apiFetch('GET', '/departments');
-        setDepartments(depts || []);
-
-        // Load all employees for manager selection (exclude current employee)
-        const allEmployees = await apiFetch('GET', `/profiles`);
-        setManagers((allEmployees || []).filter((item: any) => item.id !== data.id));
-      }
-    } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error loading profile",
-        description: error.message,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadChecklist = async (profileId: number) => {
+  const loadChecklist = useCallback(async (profileId: number) => {
     try {
       setChecklistLoading(true);
       const list = await apiFetch("GET", `/onboarding?profileId=${profileId}&page=1&pageSize=1`);
@@ -105,7 +148,64 @@ export default function EmployeeProfile() {
     } finally {
       setChecklistLoading(false);
     }
-  };
+  }, []);
+
+  const loadProfile = useCallback(async () => {
+    try {
+      setLoading(true);
+      if (!user) {
+        navigate("/auth");
+        return;
+      }
+
+      // Check if user is HR/Admin
+      const hasHRAdminRole = isHR || isAdmin;
+      setIsHRAdmin(hasHRAdminRole);
+
+      // Check if viewing another employee's profile
+      const viewingProfileId = searchParams.get("id");
+      const currentProfileId = user.profile_id ?? user.profileId ?? user.profile?.id;
+      setIsViewingOther(
+        !!viewingProfileId && Number(viewingProfileId) !== Number(currentProfileId)
+      );
+
+      const data = viewingProfileId
+        ? await apiFetch<EmployeeProfileRecord>('GET', `/profiles/${viewingProfileId}`)
+        : await apiFetch<EmployeeProfileRecord>('GET', `/profiles/email/${encodeURIComponent(user.email)}`);
+      setProfile(data);
+      if (data?.id) {
+        await loadChecklist(data.id);
+      }
+
+      // Load departments and managers if HR/Admin viewing another employee
+      if (hasHRAdminRole && viewingProfileId) {
+        const depts = await apiFetch<DepartmentOption[]>('GET', '/departments');
+        setDepartments(Array.isArray(depts) ? depts : []);
+
+        // Load all employees for manager selection (exclude current employee)
+        const allEmployees = await apiFetch<ManagerOption[]>('GET', `/profiles`);
+        const managerRows = Array.isArray(allEmployees) ? allEmployees : [];
+        setManagers(managerRows.filter((item) => item.id !== data.id));
+      }
+    } catch (error: unknown) {
+      toast({
+        variant: "destructive",
+        title: "Error loading profile",
+        description: getErrorMessage(error, "Failed to load profile."),
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [isAdmin, isHR, loadChecklist, navigate, searchParams, toast, user]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
+    loadProfile();
+  }, [authLoading, user, navigate, loadProfile]);
 
   const handleCompleteChecklistItem = async (checklistId: number, itemId: number) => {
     try {
@@ -115,11 +215,11 @@ export default function EmployeeProfile() {
         title: "Checklist updated",
         description: "Item marked as complete.",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         variant: "destructive",
         title: "Unable to complete item",
-        description: error.message || "Please try again.",
+        description: getErrorMessage(error, "Please try again."),
       });
     }
   };
@@ -139,7 +239,7 @@ export default function EmployeeProfile() {
         description: `Checklist item document`,
       });
 
-      const documentId = (upload as any)?.data?.id ?? (upload as any)?.id;
+      const documentId = upload?.id;
       if (!documentId) {
         throw new Error("Upload succeeded but document id was missing.");
       }
@@ -155,11 +255,11 @@ export default function EmployeeProfile() {
         title: "Document attached",
         description: "Checklist document uploaded successfully.",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         variant: "destructive",
         title: "Document upload failed",
-        description: error.message || "Please try again.",
+        description: getErrorMessage(error, "Please try again."),
       });
     }
   };
@@ -169,7 +269,7 @@ export default function EmployeeProfile() {
       setSaving(true);
       
       // Personal fields that anyone can edit (only valid Prisma fields)
-      const updateData: any = {
+      const updateData: ProfileUpdatePayload = {
         firstName: profile.firstName,
         lastName: profile.lastName,
         phoneNumber: profile.phoneNumber || '',
@@ -196,12 +296,12 @@ export default function EmployeeProfile() {
       
       // Reload to get fresh data
       loadProfile();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Save error:', error);
       toast({
         variant: "destructive",
         title: "Error saving profile",
-        description: error.message || 'Failed to save profile. Please try again.',
+        description: getErrorMessage(error, 'Failed to save profile. Please try again.'),
       });
     } finally {
       setSaving(false);
@@ -211,9 +311,7 @@ export default function EmployeeProfile() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -232,7 +330,7 @@ export default function EmployeeProfile() {
           </p>
         </div>
 
-        <Tabs defaultValue="personal" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="personal">Personal Info</TabsTrigger>
             <TabsTrigger value="career">Career Details</TabsTrigger>
@@ -400,7 +498,7 @@ export default function EmployeeProfile() {
                       <SelectContent>
                         <SelectItem value="none">No Manager</SelectItem>
                         {managers.map((mgr) => (
-                          <SelectItem key={mgr.id} value={mgr.id}>
+                          <SelectItem key={mgr.id} value={String(mgr.id)}>
                             {mgr.firstName} {mgr.lastName} {mgr.positionTitle ? `(${mgr.positionTitle})` : ""}
                           </SelectItem>
                         ))}
@@ -466,7 +564,7 @@ export default function EmployeeProfile() {
                     </div>
 
                     <div className="space-y-3">
-                      {(checklist.items || []).map((item: any) => (
+                      {(checklist.items || []).map((item: ChecklistItem) => (
                         <div
                           key={item.id}
                           className="flex items-center justify-between rounded-lg border border-border p-3"

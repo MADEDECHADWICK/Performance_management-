@@ -1,6 +1,9 @@
-import { Router } from "express";
+import { NextFunction, Response, Router } from "express";
 import { PartnerController } from "../controllers/partner.controller";
 import { withPartnerAccess, withRoles } from "../utils/middleware";
+import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { loadProfile } from "../middleware/loadProfile";
+import { requireRole } from "../middleware/reqiureRole";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 import {
   createPartnerValidators,
@@ -10,6 +13,18 @@ import {
 } from "../validators/partner.validators";
 
 const router = Router();
+
+const withStrictRoles = (...roles: string[]) => [
+  authMiddleware,
+  loadProfile,
+  (req: AuthRequest, _res: Response, next: NextFunction) => {
+    if (req.currentModuleAccess) {
+      delete req.currentModuleAccess;
+    }
+    next();
+  },
+  requireRole(...roles),
+];
 
 /**
  * GET /partners
@@ -23,7 +38,7 @@ router.get("/", withRoles("admin", "super_admin"), PartnerController.listPartner
  */
 router.get(
   "/dashboard-summary",
-  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
   PartnerController.getPartnerDashboardSummary
 );
 
@@ -33,7 +48,7 @@ router.get(
  */
 router.get(
   "/approval-chain",
-  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
   PartnerController.getPartnerApprovalChain
 );
 
@@ -43,7 +58,7 @@ router.get(
  */
 router.get(
   "/allocations",
-  withRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
   validateRequest(getPartnerAllocationsValidators),
   handleValidationErrors,
   PartnerController.getPartnerAllocations

@@ -118,20 +118,9 @@ router.get('/', async (req, res) => {
 
 // POST /audit_logs
 router.post('/', async (req, res) => {
-  const { action, entity_type, user_id, ip_address } = req.body;
-  try {
-    const created = await prisma.auditLog.create({
-      data: {
-        action: action || '',
-        entityType: entity_type || null,
-        ipAddress: ip_address || null,
-        userId: user_id ? Number(user_id) : null,
-      }
-    });
-    return res.status(201).json({ id: created.id });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
+  return res.status(405).json({
+    error: "Direct audit log writes are disabled. Use audited domain endpoints.",
+  });
 });
 
 export default router;

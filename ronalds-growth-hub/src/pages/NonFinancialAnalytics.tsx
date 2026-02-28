@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -42,13 +43,13 @@ const NonFinancialAnalytics = () => {
       return;
     }
     loadAnalytics();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (analyticsData) {
       loadRoleMetrics(analyticsData);
     }
-  }, [analyticsData]);
+  }, [analyticsData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAnalytics = async () => {
     try {
@@ -124,9 +125,7 @@ const NonFinancialAnalytics = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }

@@ -1,20 +1,20 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
-const canManagePositionRates = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
+const canManagePositionRates = requireModuleAccess('users', 'admin');
 
 const mapRate = (role: any) => ({
   id: role.id,
-  position_level: role.name,
-  billing_rate: Number(role.billingRate ?? 0),
-  is_active: role.isActive,
-  effective_from: role.createdAt,
-  created_at: role.createdAt,
-  updated_at: role.updatedAt,
+  positionLevel: role.name,
+  billingRate: Number(role.billingRate ?? 0),
+  isActive: role.isActive,
+  effectiveFrom: role.createdAt,
+  createdAt: role.createdAt,
+  updatedAt: role.updatedAt,
 });
 
 // GET /position-rates - List all position rates
@@ -56,11 +56,11 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 // POST /position-rates - Create new position rate
 router.post('/', authMiddleware, canManagePositionRates, async (req: AuthRequest, res) => {
   try {
-    const positionLevel = req.body.position_level ?? req.body.name;
-    const billingRate = req.body.billing_rate ?? req.body.billingRate;
+    const positionLevel = req.body.positionLevel ?? req.body.name;
+    const billingRate = req.body.billingRate;
 
     if (!positionLevel || typeof positionLevel !== 'string') {
-      return res.status(400).json({ error: 'position_level is required' });
+      return res.status(400).json({ error: 'positionLevel is required' });
     }
 
     if (typeof billingRate !== 'number' || Number.isNaN(billingRate) || billingRate < 0) {
@@ -105,8 +105,8 @@ router.patch('/:id', authMiddleware, canManagePositionRates, async (req: AuthReq
       return res.status(400).json({ error: 'Invalid id' });
     }
 
-    const billingRate = req.body.billing_rate ?? req.body.billingRate;
-    const isActive = req.body.is_active ?? req.body.isActive;
+    const billingRate = req.body.billingRate;
+    const isActive = req.body.isActive;
 
     const existing = await prisma.positionRole.findUnique({ where: { id } });
     if (!existing) {

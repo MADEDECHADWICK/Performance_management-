@@ -58,7 +58,6 @@ export class NotificationController {
 
       const {
         recipientProfileId,
-        recipient_profile_id,
         type,
         title,
         message,
@@ -72,17 +71,15 @@ export class NotificationController {
         workflowAssignmentId,
         link,
         relatedEntityType,
-        related_entity_type,
         relatedEntityId,
-        related_entity_id,
       } = req.body;
 
-      const entityType = relatedEntityType ?? related_entity_type;
-      const entityId = relatedEntityId ?? related_entity_id;
+      const entityType = relatedEntityType;
+      const entityId = relatedEntityId;
 
       const notification = await NotificationService.createNotification(
         {
-          recipientProfileId: recipientProfileId ?? recipient_profile_id,
+          recipientProfileId,
           type,
           title,
           message,
@@ -234,14 +231,11 @@ export class NotificationController {
     try {
       const {
         recipientProfileIds,
-        recipient_profile_ids,
         type,
         title,
         message,
         relatedEntityType,
-        related_entity_type,
         relatedEntityId,
-        related_entity_id,
         actionRequired,
         dueDate,
         escalationLevel,
@@ -259,10 +253,10 @@ export class NotificationController {
         roleName: req.profile!.role?.name,
       };
 
-      const recipients = recipientProfileIds ?? recipient_profile_ids ?? [];
+      const recipients = recipientProfileIds ?? [];
 
-      const entityType = relatedEntityType ?? related_entity_type;
-      const entityId = relatedEntityId ?? related_entity_id;
+      const entityType = relatedEntityType;
+      const entityId = relatedEntityId;
 
       const mappedJobId = jobId ?? (entityType === 'Job' ? entityId : undefined);
       const mappedClientId = clientId ?? (entityType === 'Client' ? entityId : undefined);

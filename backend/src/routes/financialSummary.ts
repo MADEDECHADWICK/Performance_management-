@@ -24,6 +24,21 @@ const parseProfileIdParam = (value: string) => {
   return parsed;
 };
 
+const toCamelKey = (key: string) =>
+  key.replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
+
+const camelize = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value.map((item) => camelize(item));
+  }
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [toCamelKey(key), camelize(nested)])
+    );
+  }
+  return value;
+};
+
 /**
  * Financial Summary Routes
  *
@@ -58,7 +73,7 @@ router.get('/employee/:id', authMiddleware, canReadFinance, async (req: AuthRequ
       return res.status(404).json({ error: 'Employee financial data not found' });
     }
 
-    res.json((contribution as any[])[0]);
+    res.json(camelize((contribution as any[])[0]));
   } catch (error: any) {
     console.error('Error fetching employee financial contribution:', error);
     res.status(500).json({ error: 'Failed to fetch employee financial data' });
@@ -91,7 +106,7 @@ router.get('/manager/:id', authMiddleware, canReadFinance, async (req: AuthReque
       return res.status(404).json({ error: 'Manager financial data not found' });
     }
 
-    res.json((contribution as any[])[0]);
+    res.json(camelize((contribution as any[])[0]));
   } catch (error: any) {
     console.error('Error fetching manager financial contribution:', error);
     res.status(500).json({ error: 'Failed to fetch manager financial data' });
@@ -124,7 +139,7 @@ router.get('/partner/:id', authMiddleware, canReadFinance, async (req: AuthReque
       return res.status(404).json({ error: 'Partner financial data not found' });
     }
 
-    res.json((contribution as any[])[0]);
+    res.json(camelize((contribution as any[])[0]));
   } catch (error: any) {
     console.error('Error fetching partner financial contribution:', error);
     res.status(500).json({ error: 'Failed to fetch partner financial data' });
@@ -138,16 +153,18 @@ router.get('/company', authMiddleware, canApproveFinance, async (_req: AuthReque
       SELECT * FROM company_financial_summary
     `;
 
-    res.json((summary as any[])[0] || {
-      company_total_revenue: 0,
-      company_total_cost: 0,
-      company_total_profit: 0,
-      company_total_collected: 0,
-      company_avg_margin: 0,
-      active_partners: 0,
-      total_jobs: 0,
-      company_collection_rate: 0,
-    });
+    res.json(
+      camelize((summary as any[])[0]) || {
+        companyTotalRevenue: 0,
+        companyTotalCost: 0,
+        companyTotalProfit: 0,
+        companyTotalCollected: 0,
+        companyAvgMargin: 0,
+        activePartners: 0,
+        totalJobs: 0,
+        companyCollectionRate: 0,
+      }
+    );
   } catch (error: any) {
     console.error('Error fetching company financial summary:', error);
     res.status(500).json({ error: 'Failed to fetch company financial summary' });
@@ -162,7 +179,7 @@ router.get('/partners', authMiddleware, canApproveFinance, async (_req: AuthRequ
       ORDER BY total_portfolio_revenue DESC
     `;
 
-    res.json(partners);
+    res.json(camelize(partners));
   } catch (error: any) {
     console.error('Error fetching partners financial data:', error);
     res.status(500).json({ error: 'Failed to fetch partners financial data' });
@@ -188,7 +205,7 @@ router.get('/departments', authMiddleware, canApproveFinance, async (_req: AuthR
       ORDER BY revenue DESC
     `;
 
-    res.json(departments);
+    res.json(camelize(departments));
   } catch (error: any) {
     console.error('Error fetching departments financial data:', error);
     res.status(500).json({ error: 'Failed to fetch departments financial data' });
@@ -231,9 +248,9 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
       ]);
 
       financialData = {
-        user_type: 'group_managing_partner',
-        personal_portfolio: (personalData as any[])[0] || null,
-        company_summary: (companyData as any[])[0] || null,
+        userType: 'groupManagingPartner',
+        personalPortfolio: camelize((personalData as any[])[0]) || null,
+        companySummary: camelize((companyData as any[])[0]) || null,
       };
     } else if (isPartner) {
       const data = await prisma.$queryRaw`
@@ -241,8 +258,8 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
       `;
 
       financialData = {
-        user_type: 'partner',
-        portfolio: (data as any[])[0] || null,
+        userType: 'partner',
+        portfolio: camelize((data as any[])[0]) || null,
       };
     } else if (isManager) {
       const data = await prisma.$queryRaw`
@@ -250,8 +267,8 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
       `;
 
       financialData = {
-        user_type: 'manager',
-        department: (data as any[])[0] || null,
+        userType: 'manager',
+        department: camelize((data as any[])[0]) || null,
       };
     } else {
       const data = await prisma.$queryRaw`
@@ -259,8 +276,8 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
       `;
 
       financialData = {
-        user_type: 'employee',
-        personal: (data as any[])[0] || null,
+        userType: 'employee',
+        personal: camelize((data as any[])[0]) || null,
       };
     }
 

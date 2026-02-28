@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Plus, Clock, CheckCircle, XCircle } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -72,7 +73,7 @@ const Timesheets = () => {
     if (authLoading) return;
     if (!user) return;
     loadData();
-  }, [authLoading, user]);
+  }, [authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Calculate hours from start and end time
   const calculateHours = (startTime: string, endTime: string) => {
@@ -239,9 +240,7 @@ const Timesheets = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -310,7 +309,7 @@ const Timesheets = () => {
                       {formData.job_id && jobs.find(j => j.id === formData.job_id) && (
                         <p className="text-xs text-muted-foreground">
                           {jobs.find(j => j.id === formData.job_id)?.due_date && 
-                            `Due: ${format(new Date(jobs.find(j => j.id === formData.job_id)!.due_date!), "MMM dd, yyyy")} • `}
+                            `Due: ${format(new Date(jobs.find(j => j.id === formData.job_id)!.due_date!), "MMM dd, yyyy")} â€¢ `}
                           Est. Hours: {jobs.find(j => j.id === formData.job_id)?.billable_hours || "N/A"}
                         </p>
                       )}
@@ -415,7 +414,7 @@ const Timesheets = () => {
                 {(formData.activity_type === "holiday" || formData.activity_type === "sick_leave") && (
                   <div className="p-3 bg-muted/50 rounded-lg">
                     <p className="text-sm text-muted-foreground">
-                      ℹ️ {getActivityTypeLabel(formData.activity_type)} entries are automatically marked as non-billable.
+                      â„¹ï¸ {getActivityTypeLabel(formData.activity_type)} entries are automatically marked as non-billable.
                     </p>
                   </div>
                 )}
@@ -523,7 +522,7 @@ const Timesheets = () => {
                             )}
                             {log.projects && (
                               <>
-                                <span className="text-xs text-muted-foreground">•</span>
+                                <span className="text-xs text-muted-foreground">â€¢</span>
                                 <span className="text-sm text-muted-foreground">
                                   {log.projects.project_code}
                                 </span>

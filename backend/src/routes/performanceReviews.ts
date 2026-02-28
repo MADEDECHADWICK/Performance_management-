@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import prisma from '../prisma';
 
 const router = Router();
 
-// GET /performance_reviews?employee_ids=1,2&status=completed
+// GET /performance_reviews?employeeIds=1,2&status=completed
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     return res.json([]);
@@ -32,27 +32,39 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin', 'manager'),
+  requireModuleAccess('evaluations', 'approve'),
   async (req: AuthRequest, res) => {
   try {
-    const { employee_id, reviewer_id, overall_rating, financial_score, non_financial_score, strengths, areas_for_improvement, goals_next_period, reviewer_comments, employee_comments, status } = req.body;
+    const {
+      employeeId,
+      reviewerId,
+      overallRating,
+      financialScore,
+      nonFinancialScore,
+      strengths,
+      areasForImprovement,
+      goalsNextPeriod,
+      reviewerComments,
+      employeeComments,
+      status,
+    } = req.body;
 
-    if (!employee_id) {
+    if (!employeeId) {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
 
     return res.status(201).json({
       id: 0,
-      employeeId: Number(employee_id),
-      reviewerId: reviewer_id ? Number(reviewer_id) : undefined,
-      overallRating: overall_rating ? Number(overall_rating) : undefined,
-      financialScore: financial_score ? Number(financial_score) : undefined,
-      nonFinancialScore: non_financial_score ? Number(non_financial_score) : undefined,
+      employeeId: Number(employeeId),
+      reviewerId: reviewerId ? Number(reviewerId) : undefined,
+      overallRating: overallRating ? Number(overallRating) : undefined,
+      financialScore: financialScore ? Number(financialScore) : undefined,
+      nonFinancialScore: nonFinancialScore ? Number(nonFinancialScore) : undefined,
       strengths,
-      areasForImprovement: areas_for_improvement,
-      goalsNextPeriod: goals_next_period,
-      reviewerComments: reviewer_comments,
-      employeeComments: employee_comments,
+      areasForImprovement,
+      goalsNextPeriod,
+      reviewerComments,
+      employeeComments,
       status: status || 'draft',
     });
   } catch (err: any) {
@@ -66,22 +78,32 @@ router.patch(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin', 'manager'),
+  requireModuleAccess('evaluations', 'approve'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { overall_rating, financial_score, non_financial_score, strengths, areas_for_improvement, goals_next_period, reviewer_comments, employee_comments, status } = req.body;
+    const {
+      overallRating,
+      financialScore,
+      nonFinancialScore,
+      strengths,
+      areasForImprovement,
+      goalsNextPeriod,
+      reviewerComments,
+      employeeComments,
+      status,
+    } = req.body;
 
     return res.json({
       id: Number(id),
-      overallRating: overall_rating ? Number(overall_rating) : undefined,
-      financialScore: financial_score ? Number(financial_score) : undefined,
-      nonFinancialScore: non_financial_score ? Number(non_financial_score) : undefined,
+      overallRating: overallRating ? Number(overallRating) : undefined,
+      financialScore: financialScore ? Number(financialScore) : undefined,
+      nonFinancialScore: nonFinancialScore ? Number(nonFinancialScore) : undefined,
       strengths,
-      areasForImprovement: areas_for_improvement,
-      goalsNextPeriod: goals_next_period,
-      reviewerComments: reviewer_comments,
-      employeeComments: employee_comments,
+      areasForImprovement,
+      goalsNextPeriod,
+      reviewerComments,
+      employeeComments,
       status,
     });
   } catch (err: any) {

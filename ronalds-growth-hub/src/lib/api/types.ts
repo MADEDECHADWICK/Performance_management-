@@ -35,6 +35,10 @@ export interface User {
   lastLogin?: string;
   createdAt: string;
   updatedAt: string;
+  profileId?: number;
+  profile_id?: number;
+  isPartner?: boolean;
+  is_partner?: boolean;
   moduleAccess?: Record<string, string[]>;
   profile?: Profile;
   roles?: UserAuthRole[];
@@ -139,6 +143,7 @@ export interface Client {
   clientName: string;
   clientCode?: string;
   industry?: string;
+  notes?: string;
   contactPerson?: string;
   contactEmail?: string;
   contactPhone?: string;
@@ -237,6 +242,7 @@ export interface Job {
   tasks?: Task[];
   timeEntries?: TimeEntry[];
   jobCosting?: JobCosting;
+  invoiceTracking?: JobInvoiceMilestoneTracking;
 }
 
 export interface JobStaffAssignment {
@@ -323,6 +329,35 @@ export interface Task {
   assignedTo?: Profile;
 }
 
+export interface JobInvoiceMilestoneTrackingItem {
+  taskId: number;
+  title: string;
+  targetPercent: number;
+  dueDate?: string | null;
+  requirements?: string | null;
+  conditionStatus: TaskStatus;
+  conditionCompleted: boolean;
+  milestoneAmount: number;
+  expectedCumulativeAmount: number;
+  amountRemainingToMilestone: number;
+  milestonePaid: boolean;
+  readyForInvoice: boolean;
+  invoiceNumberSuggestion: string;
+}
+
+export interface JobInvoiceMilestoneTracking {
+  jobId: number;
+  jobCode?: string | null;
+  jobName: string;
+  feeAmount: number;
+  collectedAmount: number;
+  outstandingAmount: number;
+  milestoneCount: number;
+  completedConditionCount: number;
+  nextReadyMilestone?: JobInvoiceMilestoneTrackingItem | null;
+  milestones: JobInvoiceMilestoneTrackingItem[];
+}
+
 // Time Entry Models
 export interface TimeEntry {
   id: number;
@@ -330,6 +365,9 @@ export interface TimeEntry {
   employeeProfileId: number;
   taskId?: number;
   date: string;
+  dateWorked?: string;
+  startedAt?: string | null;
+  endedAt?: string | null;
   hours: number;
   description?: string;
   billable?: boolean;
@@ -497,8 +535,27 @@ export interface EmployeeKpiAssignment {
   tracking?: {
     targetValue?: number | null;
     achievedValue?: number | null;
+    resolvedAchievedValue?: number | null;
     derivedAchievedValueFromOkrs?: number | null;
     progressPercent?: number;
+    achievement?: {
+      status: "not_started" | "behind" | "on_track" | "met" | "exceeded";
+      achievedFrom: "manual" | "okr_derived" | "none";
+      varianceToTarget?: number | null;
+      remainingToTarget?: number | null;
+      formula?: string | null;
+      asOf?: string | null;
+    };
+    history?: Array<{
+      id: number;
+      at: string;
+      action: string;
+      source: "manual_progress_update" | "assignment_update" | "assignment_closed";
+      actorProfileId?: number | null;
+      previousAchievedValue?: number | null;
+      newAchievedValue?: number | null;
+      note?: string | null;
+    }>;
     okr?: {
       objectiveCount: number;
       approvedObjectiveCount: number;

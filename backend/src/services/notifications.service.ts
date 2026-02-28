@@ -4,6 +4,7 @@
 
 import { NotificationType } from '@prisma/client';
 import { prisma } from '../prisma';
+import websocketService from './websocket.service';
 
 interface AuthContext {
   userId: number;
@@ -162,6 +163,20 @@ export class NotificationService {
         link: link ?? null,
       },
     });
+
+    try {
+      websocketService.notifyUser(String(recipientProfileId), {
+        id: notification.id,
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        actionRequired: notification.actionRequired,
+        link: notification.link,
+        isRead: notification.isRead,
+      });
+    } catch {
+      // Do not fail notification creation if real-time delivery is unavailable.
+    }
 
     return notification;
   }
@@ -346,6 +361,21 @@ export class NotificationService {
         isRead: false,
       })),
     });
+
+    try {
+      recipientProfileIds.forEach((recipientProfileId) => {
+        websocketService.notifyUser(String(recipientProfileId), {
+          type: input.type,
+          title: input.title,
+          message: input.message,
+          actionRequired: input.actionRequired ?? false,
+          link: input.link ?? null,
+          isRead: false,
+        });
+      });
+    } catch {
+      // Do not fail batch creation if real-time delivery is unavailable.
+    }
 
     return notifications;
   }

@@ -8,10 +8,11 @@
  * - Request additional time feature
  * - Approval workflow
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { timeEntriesAPI, jobsAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -48,7 +49,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
-import { format, parseISO, startOfWeek, endOfWeek, addDays, differenceInMinutes } from 'date-fns';
+import { format, parseISO, startOfWeek, endOfWeek, addDays, differenceInSeconds } from 'date-fns';
 import {
   Clock,
   Play,
@@ -73,17 +74,19 @@ import {
 interface Job {
   id: number;
   jobName: string;
-  jobCode: string;
+  jobCode?: string;
   client?: { clientName: string };
   budgetHours: number;
   status: string;
+  costingCompleted?: boolean;
+  jobCosting?: { id: number } | null;
   tasks?: Task[];
 }
 
 interface Task {
   id: number;
   title: string;
-  estimatedHours: number;
+  estimatedHours?: number;
   status: string;
 }
 
@@ -153,6 +156,7 @@ export default function TimesheetsNew() {
   const { profile, isManager, isPartner } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   
   // State
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -162,6 +166,9 @@ export default function TimesheetsNew() {
   const [showRejectEntryDialog, setShowRejectEntryDialog] = useState(false);
   const [rejectEntryId, setRejectEntryId] = useState<number | null>(null);
   const [rejectEntryReason, setRejectEntryReason] = useState('');
+  const [showApproveRequestDialog, setShowApproveRequestDialog] = useState(false);
+  const [approveRequestId, setApproveRequestId] = useState<number | null>(null);
+  const [approveRequestReason, setApproveRequestReason] = useState('');
   const [showRejectRequestDialog, setShowRejectRequestDialog] = useState(false);
   const [rejectRequestId, setRejectRequestId] = useState<number | null>(null);
   const [rejectRequestReason, setRejectRequestReason] = useState('');
@@ -176,6 +183,9 @@ export default function TimesheetsNew() {
     description: '',
     elapsedSeconds: 0,
   });
+  const quickTimerCardRef = useRef<HTMLDivElement | null>(null);
+  const quickTimerNotesInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const handledApprovedRequestIdsRef = useRef<Set<number>>(new Set());
   
   // Form state
   const [entryForm, setEntryForm] = useState({
@@ -228,9 +238,63 @@ export default function TimesheetsNew() {
       ),
   });
 
+  const toNumber = (value: unknown, fallback = 0) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const normalizeTimeEntry = (entry: any): TimeEntry & { dateWorked?: string } => {
+    const normalizedDate = String(entry?.date ?? entry?.dateWorked ?? '');
+    return {
+      ...entry,
+      date: normalizedDate,
+      dateWorked: normalizedDate,
+      hours: toNumber(entry?.hours),
+      billable: Boolean(entry?.billable),
+    };
+  };
+
+  const formatDateSafe = (value?: string, pattern = 'MMM d') => {
+    if (!value) return '-';
+    const parsed = parseISO(value);
+    return Number.isNaN(parsed.getTime()) ? '-' : format(parsed, pattern);
+  };
+
   // Get jobs with budget info
-  const myJobs = myJobsData?.data || [];
-  const timeEntries = timeEntriesData?.data || [];
+  const myJobs = (myJobsData?.data || []).map((job: any) => ({
+    ...job,
+    budgetHours: toNumber(job?.budgetHours),
+  })) as Job[];
+  const timeEntries = ((timeEntriesData?.data || []) as any[]).map(normalizeTimeEntry);
+  const requestedTab = String(searchParams.get('tab') || '').trim().toLowerCase();
+  const requestedJobId = Number(searchParams.get('jobId'));
+  const requestedApprovalRequestId = Number(searchParams.get('approvalRequestId'));
+  const requestedApprovedRequestId = Number(searchParams.get('approvedRequestId'));
+
+  useEffect(() => {
+    if (!requestedTab) return;
+    const allowedTabs = new Set(['my-entries', 'by-job', 'approvals']);
+    if (!allowedTabs.has(requestedTab)) return;
+    if (requestedTab === 'approvals' && !(isManager || isPartner)) return;
+    setActiveTab(requestedTab);
+  }, [isManager, isPartner, requestedTab]);
+
+  const canLogTimeOnJob = useCallback((job?: Job | null) => {
+    if (!job) return false;
+    return Boolean(job.costingCompleted || job.jobCosting);
+  }, []);
+
+  useEffect(() => {
+    if (!Number.isFinite(requestedJobId) || requestedJobId <= 0) return;
+    const hasRequestedJob = myJobs.some((job: Job) => job.id === requestedJobId);
+    if (!hasRequestedJob) return;
+
+    setEntryForm((prev) => {
+      const nextJobId = String(requestedJobId);
+      if (prev.jobId === nextJobId) return prev;
+      return { ...prev, jobId: nextJobId };
+    });
+  }, [myJobs, requestedJobId]);
 
   const { data: allocationSummariesData } = useQuery({
     queryKey: ['job-allocation-summaries', myJobs.map((job: Job) => job.id)],
@@ -245,14 +309,80 @@ export default function TimesheetsNew() {
     },
     enabled: myJobs.length > 0,
   });
-  const pendingApprovals = Array.isArray(pendingApprovalsData)
-    ? pendingApprovalsData
-    : pendingApprovalsData?.data || [];
-  const approvalRequests = Array.isArray(approvalRequestsData)
-    ? approvalRequestsData
-    : approvalRequestsData?.data || [];
+  const pendingApprovalsPayload: any = pendingApprovalsData;
+  const approvalRequestsPayload: any = approvalRequestsData;
+  const pendingApprovals = (
+    Array.isArray(pendingApprovalsPayload)
+      ? pendingApprovalsPayload
+      : pendingApprovalsPayload?.data || []
+  ).map(normalizeTimeEntry);
+  const approvalRequests = Array.isArray(approvalRequestsPayload)
+    ? approvalRequestsPayload
+    : approvalRequestsPayload?.data || [];
   const approvalsBadgeCount = pendingApprovals.length + approvalRequests.length;
-  const allocationSummaries = (allocationSummariesData || {}) as Record<number, JobAllocationSummary>;
+  const filteredPendingApprovals = useMemo(() => {
+    if (
+      requestedTab !== 'approvals' ||
+      !Number.isFinite(requestedJobId) ||
+      requestedJobId <= 0
+    ) {
+      return pendingApprovals;
+    }
+    return pendingApprovals.filter(
+      (entry: any) => Number(entry.jobId ?? entry.job?.id ?? 0) === requestedJobId
+    );
+  }, [pendingApprovals, requestedJobId, requestedTab]);
+  const filteredApprovalRequests = useMemo(() => {
+    if (
+      requestedTab !== 'approvals' ||
+      !Number.isFinite(requestedJobId) ||
+      requestedJobId <= 0
+    ) {
+      return approvalRequests;
+    }
+    return approvalRequests.filter(
+      (request: any) => Number(request.jobId ?? request.job?.id ?? 0) === requestedJobId
+    );
+  }, [approvalRequests, requestedJobId, requestedTab]);
+  const allocationSummaries = useMemo(
+    () => (allocationSummariesData ?? {}) as Record<number, JobAllocationSummary>,
+    [allocationSummariesData]
+  );
+
+  useEffect(() => {
+    if (!Number.isFinite(requestedApprovedRequestId) || requestedApprovedRequestId <= 0) return;
+    const approvedRequest = approvalRequests.find(
+      (request: any) => Number(request.id) === requestedApprovedRequestId
+    );
+    if (!approvedRequest) return;
+    if (String(approvedRequest.status || '').toLowerCase() !== 'approved') return;
+
+    const approvedJobId = Number(approvedRequest.jobId ?? approvedRequest.job?.id ?? 0);
+    if (Number.isFinite(approvedJobId) && approvedJobId > 0) {
+      setEntryForm((prev) => {
+        const nextJobId = String(approvedJobId);
+        if (prev.jobId === nextJobId) return prev;
+        return { ...prev, jobId: nextJobId };
+      });
+    }
+    setActiveTab('by-job');
+
+    if (!handledApprovedRequestIdsRef.current.has(requestedApprovedRequestId)) {
+      handledApprovedRequestIdsRef.current.add(requestedApprovedRequestId);
+      toast({
+        title: 'Additional time approved',
+        description: 'Your request was approved. You can continue logging time on this job.',
+      });
+    }
+  }, [approvalRequests, requestedApprovedRequestId, toast]);
+
+  useEffect(() => {
+    if (activeTab !== 'approvals') return;
+    if (!Number.isFinite(requestedApprovalRequestId) || requestedApprovalRequestId <= 0) return;
+    const row = document.getElementById(`approval-request-${requestedApprovalRequestId}`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [activeTab, filteredApprovalRequests.length, requestedApprovalRequestId]);
 
   // Calculate budget info for each job
   const getJobBudgetInfo = useCallback((jobId: number): JobBudgetInfo => {
@@ -391,9 +521,13 @@ export default function TimesheetsNew() {
   });
 
   const approveRequestMutation = useMutation({
-    mutationFn: (requestId: number) => timeEntriesAPI.approveApprovalRequest(requestId),
+    mutationFn: (payload: { requestId: number; note: string }) =>
+      timeEntriesAPI.approveApprovalRequest(payload.requestId, payload.note),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approval-requests'] });
+      setShowApproveRequestDialog(false);
+      setApproveRequestId(null);
+      setApproveRequestReason('');
       toast({ title: 'Request approved', description: 'Additional hours approved.' });
     },
   });
@@ -442,7 +576,7 @@ export default function TimesheetsNew() {
     
     if (timer.isRunning && timer.startTime) {
       interval = setInterval(() => {
-        const elapsed = differenceInMinutes(new Date(), timer.startTime!) * 60;
+        const elapsed = Math.max(0, differenceInSeconds(new Date(), timer.startTime!));
         setTimer(prev => ({ ...prev, elapsedSeconds: elapsed }));
       }, 1000);
     }
@@ -451,12 +585,33 @@ export default function TimesheetsNew() {
   }, [timer.isRunning, timer.startTime]);
 
   const startTimer = (jobId: number, taskId?: number) => {
+    const description = timer.description.trim();
+    if (!description) {
+      toast({
+        title: 'Notes required',
+        description: 'Add notes before starting the timer.',
+        variant: 'destructive',
+      });
+      quickTimerNotesInputRef.current?.focus();
+      return;
+    }
+
+    const job = myJobs.find((item: Job) => item.id === jobId);
+    if (!canLogTimeOnJob(job)) {
+      toast({
+        title: 'Job setup incomplete',
+        description: 'This job is assigned to you but not ready for timesheets. Ask your manager/HR to complete job costing.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setTimer({
       isRunning: true,
       jobId,
       taskId: taskId || null,
       startTime: new Date(),
-      description: '',
+      description,
       elapsedSeconds: 0,
     });
     toast({ title: 'Timer started', description: 'Tracking your time...' });
@@ -464,8 +619,29 @@ export default function TimesheetsNew() {
 
   const stopTimer = () => {
     if (!timer.jobId || !timer.startTime) return;
-    
-    const hours = timer.elapsedSeconds / 3600;
+    const now = new Date();
+    const elapsedSeconds = Math.max(0, differenceInSeconds(now, timer.startTime));
+    if (elapsedSeconds < 60) {
+      toast({
+        title: 'Timer too short',
+        description: 'Run the timer for at least 1 minute before saving.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const description = timer.description.trim();
+    if (!description) {
+      toast({
+        title: 'Notes required',
+        description: 'Add notes before stopping and saving the timer.',
+        variant: 'destructive',
+      });
+      quickTimerNotesInputRef.current?.focus();
+      return;
+    }
+
+    const hours = elapsedSeconds / 3600;
     const budgetInfo = getJobBudgetInfo(timer.jobId);
     
     // Auto-set billable type based on budget
@@ -474,9 +650,10 @@ export default function TimesheetsNew() {
     createEntryMutation.mutate({
       jobId: timer.jobId,
       taskId: timer.taskId || undefined,
-      date: format(new Date(), 'yyyy-MM-dd'),
-      hours: Math.round(hours * 100) / 100,
-      description: timer.description,
+      dateWorked: format(timer.startTime, 'yyyy-MM-dd'),
+      startedAt: timer.startTime.toISOString(),
+      endedAt: now.toISOString(),
+      description,
       billable,
     });
     
@@ -519,9 +696,28 @@ export default function TimesheetsNew() {
     if (!start || !end) return 0;
     const [startH, startM] = start.split(':').map(Number);
     const [endH, endM] = end.split(':').map(Number);
-    let hours = endH - startH + (endM - startM) / 60;
-    if (hours < 0) hours += 24;
-    return Math.round(hours * 100) / 100;
+    const startMinutes = startH * 60 + startM;
+    let endMinutes = endH * 60 + endM;
+    if (endMinutes <= startMinutes) {
+      endMinutes += 24 * 60;
+    }
+
+    const totalMinutes = endMinutes - startMinutes;
+
+    let lunchOverlapMinutes = 0;
+    const dayCount = Math.ceil(endMinutes / (24 * 60));
+    for (let dayOffset = 0; dayOffset < dayCount; dayOffset += 1) {
+      const lunchStart = dayOffset * 24 * 60 + 13 * 60;
+      const lunchEnd = dayOffset * 24 * 60 + 14 * 60;
+      const overlapStart = Math.max(startMinutes, lunchStart);
+      const overlapEnd = Math.min(endMinutes, lunchEnd);
+      if (overlapEnd > overlapStart) {
+        lunchOverlapMinutes += overlapEnd - overlapStart;
+      }
+    }
+
+    const effectiveMinutes = Math.max(0, totalMinutes - lunchOverlapMinutes);
+    return Math.round((effectiveMinutes / 60) * 100) / 100;
   };
 
   const handleTimeChange = (field: 'startTime' | 'endTime', value: string) => {
@@ -541,6 +737,24 @@ export default function TimesheetsNew() {
       // Auto-set billable based on budget availability
       billable: budgetInfo.isBillableAvailable,
     }));
+    window.setTimeout(() => {
+      quickTimerNotesInputRef.current?.focus();
+    }, 0);
+  };
+
+  const startTimerFromJobCard = (jobId: number) => {
+    handleJobChange(String(jobId));
+    quickTimerCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (timer.description.trim()) {
+      startTimer(jobId);
+      return;
+    }
+
+    toast({
+      title: 'Add notes to start',
+      description: 'Job selected. Add notes in Quick Timer, then click Start Timer.',
+    });
   };
 
   const handleCreateEntry = () => {
@@ -548,18 +762,39 @@ export default function TimesheetsNew() {
       toast({ title: 'Error', description: 'Please select a job and enter hours.', variant: 'destructive' });
       return;
     }
+
+    const selectedJob = myJobs.find((job: Job) => job.id === Number(entryForm.jobId));
+    if (!canLogTimeOnJob(selectedJob)) {
+      toast({
+        title: 'Job setup incomplete',
+        description: 'This job is assigned to you but not ready for timesheets. Ask your manager/HR to complete job costing.',
+        variant: 'destructive',
+      });
+      return;
+    }
     
     const budgetInfo = getJobBudgetInfo(Number(entryForm.jobId));
     const billable = entryForm.billable && budgetInfo.isBillableAvailable;
-    
-    createEntryMutation.mutate({
+    const hasTimeRange = Boolean(entryForm.startTime && entryForm.endTime);
+    const startedAt = hasTimeRange ? `${entryForm.date}T${entryForm.startTime}:00` : undefined;
+    const endedAt = hasTimeRange ? `${entryForm.date}T${entryForm.endTime}:00` : undefined;
+
+    const payload: Record<string, any> = {
       jobId: Number(entryForm.jobId),
       taskId: entryForm.taskId ? Number(entryForm.taskId) : undefined,
-      date: entryForm.date,
-      hours: entryForm.hours,
+      dateWorked: entryForm.date,
       description: entryForm.description,
       billable,
-    });
+    };
+
+    if (hasTimeRange) {
+      payload.startedAt = startedAt;
+      payload.endedAt = endedAt;
+    } else {
+      payload.hours = entryForm.hours;
+    }
+
+    createEntryMutation.mutate(payload);
   };
 
   const handleRequestAdditionalTime = () => {
@@ -621,7 +856,7 @@ export default function TimesheetsNew() {
         </div>
 
         {/* Timer Card */}
-        <Card className={timer.isRunning ? 'border-green-500 bg-green-50' : ''}>
+        <Card ref={quickTimerCardRef} className={timer.isRunning ? 'border-green-500 bg-green-50' : ''}>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
               <Timer className="h-5 w-5" />
@@ -648,11 +883,11 @@ export default function TimesheetsNew() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Input
+                  <Textarea
                     placeholder="What are you working on?"
                     value={timer.description}
                     onChange={(e) => setTimer(prev => ({ ...prev, description: e.target.value }))}
-                    className="w-64"
+                    className="w-64 min-h-[80px]"
                   />
                   <Button variant="destructive" onClick={stopTimer}>
                     <Square className="h-4 w-4 mr-2" />
@@ -661,12 +896,12 @@ export default function TimesheetsNew() {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center">
                 <Select
                   value={entryForm.jobId}
                   onValueChange={handleJobChange}
                 >
-                  <SelectTrigger className="w-64">
+                  <SelectTrigger className="w-full md:w-64">
                     <SelectValue placeholder="Select a job to track" />
                   </SelectTrigger>
                   <SelectContent>
@@ -677,9 +912,16 @@ export default function TimesheetsNew() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Textarea
+                  ref={quickTimerNotesInputRef}
+                  placeholder="Add notes before starting timer (required). You can add multiple points on separate lines."
+                  value={timer.description}
+                  onChange={(e) => setTimer(prev => ({ ...prev, description: e.target.value }))}
+                  className="w-full md:w-80 min-h-[80px]"
+                />
                 <Button
                   onClick={() => entryForm.jobId && startTimer(Number(entryForm.jobId))}
-                  disabled={!entryForm.jobId}
+                  disabled={!entryForm.jobId || !timer.description.trim()}
                 >
                   <Play className="h-4 w-4 mr-2" />
                   Start Timer
@@ -896,7 +1138,7 @@ export default function TimesheetsNew() {
                               )}
                             </TableCell>
                             <TableCell>
-                              {format(parseISO(entry.date), 'EEE, MMM d')}
+                              {formatDateSafe(entry.date || (entry as any).dateWorked, 'EEE, MMM d')}
                             </TableCell>
                             <TableCell>
                               <div>
@@ -982,7 +1224,7 @@ export default function TimesheetsNew() {
                               </Badge>
                             </TableCell>
                             <TableCell>
-                              {request.requestedAt ? format(parseISO(request.requestedAt), 'MMM d') : '-'}
+                              {formatDateSafe(request.requestedAt, 'MMM d')}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1024,7 +1266,11 @@ export default function TimesheetsNew() {
                   </CardHeader>
                   <CardContent>
                     <Progress
-                      value={(budgetInfo.usedHours / budgetInfo.allocatedHours) * 100}
+                      value={
+                        budgetInfo.allocatedHours > 0
+                          ? (budgetInfo.usedHours / budgetInfo.allocatedHours) * 100
+                          : 0
+                      }
                       className="mb-4"
                     />
                     <div className="grid grid-cols-4 gap-4 text-sm">
@@ -1063,7 +1309,7 @@ export default function TimesheetsNew() {
                         ) : (
                           <Button
                             size="sm"
-                            onClick={() => startTimer(job.id)}
+                            onClick={() => startTimerFromJobCard(job.id)}
                             disabled={timer.isRunning}
                           >
                             <Play className="h-4 w-4 mr-1" />
@@ -1089,7 +1335,7 @@ export default function TimesheetsNew() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {pendingApprovals.length === 0 ? (
+                  {filteredPendingApprovals.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
                       <p>No pending approvals</p>
@@ -1109,13 +1355,13 @@ export default function TimesheetsNew() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {pendingApprovals.map((entry: any) => (
+                      {filteredPendingApprovals.map((entry: any) => (
                         <TableRow key={entry.id}>
                             <TableCell>
                               {entry.employee?.firstName} {entry.employee?.lastName}
                             </TableCell>
                             <TableCell>
-                              {format(parseISO(entry.date), 'MMM d')}
+                              {formatDateSafe(entry.date || (entry as any).dateWorked, 'MMM d')}
                             </TableCell>
                             <TableCell>{entry.job?.jobName}</TableCell>
                             <TableCell className="max-w-xs truncate">
@@ -1179,7 +1425,7 @@ export default function TimesheetsNew() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {approvalRequests.length === 0 ? (
+                  {filteredApprovalRequests.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
                       <p>No additional hours requests</p>
@@ -1199,8 +1445,18 @@ export default function TimesheetsNew() {
                       </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {approvalRequests.map((request: any) => (
-                          <TableRow key={request.id}>
+                        {filteredApprovalRequests.map((request: any) => (
+                          <TableRow
+                            key={request.id}
+                            id={`approval-request-${request.id}`}
+                            className={
+                              Number.isFinite(requestedApprovalRequestId) &&
+                              requestedApprovalRequestId > 0 &&
+                              Number(request.id) === requestedApprovalRequestId
+                                ? 'bg-blue-50 ring-1 ring-blue-200'
+                                : ''
+                            }
+                          >
                             <TableCell>
                               {request.employee?.firstName} {request.employee?.lastName}
                             </TableCell>
@@ -1235,14 +1491,18 @@ export default function TimesheetsNew() {
                               {request.justification || '-'}
                             </TableCell>
                             <TableCell>
-                              {request.requestedAt ? format(parseISO(request.requestedAt), 'MMM d') : '-'}
+                              {formatDateSafe(request.requestedAt, 'MMM d')}
                             </TableCell>
                             <TableCell>
                               <div className="flex gap-1">
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => approveRequestMutation.mutate(request.id)}
+                                  onClick={() => {
+                                    setApproveRequestId(request.id);
+                                    setApproveRequestReason('');
+                                    setShowApproveRequestDialog(true);
+                                  }}
                                   disabled={approveRequestMutation.isPending}
                                 >
                                   <CheckCircle className="h-4 w-4" />
@@ -1308,6 +1568,18 @@ export default function TimesheetsNew() {
                 {entryForm.jobId && (
                   <div className="mt-2 text-sm">
                     {(() => {
+                      const selectedJob = myJobs.find(job => job.id === Number(entryForm.jobId));
+                      if (!canLogTimeOnJob(selectedJob)) {
+                        return (
+                          <div className="text-red-600">
+                            <span className="flex items-center gap-1">
+                              <AlertTriangle className="h-4 w-4" />
+                              Job costing is not complete. Time entry is currently blocked.
+                            </span>
+                          </div>
+                        );
+                      }
+
                       const budgetInfo = getJobBudgetInfo(Number(entryForm.jobId));
                       return (
                         <div className={budgetInfo.remainingHours <= 0 ? 'text-red-600' : 'text-muted-foreground'}>
@@ -1584,22 +1856,69 @@ export default function TimesheetsNew() {
           </DialogContent>
         </Dialog>
 
+        {/* Approve Additional Hours Request Dialog */}
+        <Dialog open={showApproveRequestDialog} onOpenChange={setShowApproveRequestDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Approve Additional Hours</DialogTitle>
+              <DialogDescription>
+                Provide a brief reason for approving this requested time.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>Approval reason *</Label>
+                <Textarea
+                  value={approveRequestReason}
+                  onChange={(e) => setApproveRequestReason(e.target.value)}
+                  placeholder="Why are you approving this request?"
+                  rows={4}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowApproveRequestDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (!approveRequestId) return;
+                  const note = approveRequestReason.trim();
+                  if (!note) return;
+                  approveRequestMutation.mutate({ requestId: approveRequestId, note });
+                }}
+                disabled={approveRequestMutation.isPending || !approveRequestReason.trim()}
+              >
+                {approveRequestMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                )}
+                Approve Request
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Reject Additional Hours Request Dialog */}
         <Dialog open={showRejectRequestDialog} onOpenChange={setShowRejectRequestDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Reject Additional Hours</DialogTitle>
               <DialogDescription>
-                Provide a brief note for the rejection (optional).
+                Provide a brief reason for rejecting this requested time.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label>Note</Label>
+                <Label>Rejection reason *</Label>
                 <Textarea
                   value={rejectRequestReason}
                   onChange={(e) => setRejectRequestReason(e.target.value)}
-                  placeholder="Optional note for the team member."
+                  placeholder="Why are you rejecting this request?"
                   rows={4}
                 />
               </div>
@@ -1615,13 +1934,15 @@ export default function TimesheetsNew() {
                 variant="destructive"
                 onClick={() => {
                   if (!rejectRequestId) return;
+                  const note = rejectRequestReason.trim();
+                  if (!note) return;
                   rejectRequestMutation.mutate({
                     requestId: rejectRequestId,
-                    note: rejectRequestReason || undefined,
+                    note,
                   });
                   setShowRejectRequestDialog(false);
                 }}
-                disabled={rejectRequestMutation.isPending}
+                disabled={rejectRequestMutation.isPending || !rejectRequestReason.trim()}
               >
                 {rejectRequestMutation.isPending ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

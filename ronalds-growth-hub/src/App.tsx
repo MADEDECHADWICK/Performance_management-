@@ -6,6 +6,7 @@ import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import AppRouteGuard from "@/components/auth/AppRouteGuard";
+import PageLoader from "@/components/ui/page-loader";
 
 // Core pages
 import Index from "./pages/Index";
@@ -59,6 +60,7 @@ const ContinuousFeedback = lazy(() => import("./pages/ContinuousFeedback"));
 // Analytics & Reports
 const Reports = lazy(() => import("./pages/Reports"));
 const NonFinancialAnalytics = lazy(() => import("./pages/NonFinancialAnalytics"));
+const ModuleAnalytics = lazy(() => import("./pages/ModuleAnalytics"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
 const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
 const FinanceCollections = lazy(() => import("./pages/FinanceCollections"));
@@ -88,6 +90,7 @@ const Calibration = lazy(() => import("./pages/Calibration"));
 
 // Document & Surveys
 const DocumentManagement = lazy(() => import("./pages/DocumentManagement"));
+const KnowledgeHub = lazy(() => import("./pages/KnowledgeHub"));
 const ClientSurveys = lazy(() => import("./pages/ClientSurveys"));
 
 // Other
@@ -100,7 +103,9 @@ const RecruitmentCandidates = lazy(() => import("./pages/RecruitmentCandidates")
 const queryClient = new QueryClient();
 
 const RouteFallback = () => (
-  <div className="p-6 text-sm text-muted-foreground">Loading...</div>
+  <div className="p-4 sm:p-6">
+    <PageLoader message="Loading page..." minHeightClassName="min-h-[50vh]" />
+  </div>
 );
 
 const App = () => (
@@ -364,6 +369,62 @@ const App = () => (
               <Route path="/continuous-feedback" element={<AppRouteGuard><ContinuousFeedback /></AppRouteGuard>} />
               
               {/* Analytics & Reports */}
+              <Route
+                path="/analytics/employee"
+                element={
+                  <AppRouteGuard allow={["employee"]}>
+                    <ModuleAnalytics module="employee" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/finance"
+                element={
+                  <AppRouteGuard allow={["finance", "admin", "hr", "gmp"]}>
+                    <ModuleAnalytics module="finance" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/marketing"
+                element={
+                  <AppRouteGuard allow={["marketing", "admin", "hr", "gmp"]}>
+                    <ModuleAnalytics module="marketing" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/manager"
+                element={
+                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                    <ModuleAnalytics module="manager" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/partner"
+                element={
+                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                    <ModuleAnalytics module="partner" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/hr"
+                element={
+                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                    <ModuleAnalytics module="hr" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/analytics/gmp"
+                element={
+                  <AppRouteGuard allow={["gmp", "admin"]}>
+                    <ModuleAnalytics module="gmp" />
+                  </AppRouteGuard>
+                }
+              />
               <Route path="/reports" element={<AppRouteGuard><Reports /></AppRouteGuard>} />
               <Route
                 path="/non-financial-analytics"
@@ -506,6 +567,14 @@ const App = () => (
                 element={
                   <AppRouteGuard allow={["employee", "marketing", "manager", "partner", "finance", "admin", "hr", "gmp"]}>
                     <DocumentManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/knowledge-hub"
+                element={
+                  <AppRouteGuard>
+                    <KnowledgeHub />
                   </AppRouteGuard>
                 }
               />

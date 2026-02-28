@@ -2,8 +2,10 @@ import http from 'http';
 import app from './app';
 import websocketService from './services/websocket.service';
 import dotenv from 'dotenv';
+import { assertJwtSecretConfigured } from './config/jwt';
 
 dotenv.config();
+assertJwtSecretConfigured();
 
 const PORT = Number(process.env.PORT || 4000);
 

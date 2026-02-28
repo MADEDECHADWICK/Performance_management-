@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -105,11 +105,11 @@ export default function CreateEvaluation() {
     loadTemplates();
     loadEmployees();
     loadKPIs();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTemplates = async () => {
     try {
-      const data = await apiFetch('GET', '/evaluation-templates?is_active=true');
+      const data = await apiFetch('GET', '/evaluation-templates?isActive=true');
       setTemplates(extractItems(data));
     } catch (error) {
       console.log('Templates not available:', error);
@@ -136,7 +136,7 @@ export default function CreateEvaluation() {
 
   const loadKPIs = async () => {
     try {
-      const data = await apiFetch('GET', '/kpis?is_active=true');
+      const data = await apiFetch('GET', '/kpis?isActive=true');
       setKPIs(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
@@ -209,7 +209,7 @@ export default function CreateEvaluation() {
         requireEvaluateeSignature: requireEvaluateeSignature,
         status: "published",
         scoringConfig: {
-          requireAllKpis,
+          requireAllKPIs,
           cancelIfNotProcessed,
           sendToEvaluatee,
           sendToManagers,
@@ -395,15 +395,15 @@ export default function CreateEvaluation() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
-              <Label>Downward (Manager → Employee)</Label>
+              <Label>Downward (Manager â†’ Employee)</Label>
               <Switch checked={enableDownward} onCheckedChange={setEnableDownward} />
             </div>
             <div className="flex items-center justify-between">
-              <Label>Upward (Employee → Manager)</Label>
+              <Label>Upward (Employee â†’ Manager)</Label>
               <Switch checked={enableUpward} onCheckedChange={setEnableUpward} />
             </div>
             <div className="flex items-center justify-between">
-              <Label>Peer (Colleague → Colleague)</Label>
+              <Label>Peer (Colleague â†’ Colleague)</Label>
               <Switch checked={enablePeer} onCheckedChange={setEnablePeer} />
             </div>
             <div className="flex items-center justify-between">

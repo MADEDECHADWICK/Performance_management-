@@ -6,7 +6,7 @@ import { Router } from "express";
 import { EvaluationController } from "../controllers/evaluation.controller";
 import { authenticated } from "../utils/middleware";
 import { requireEvaluationAccess } from "../middleware/requireEvaluationAccess";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 
 const router = Router();
@@ -24,7 +24,7 @@ router.get("/", ...authenticated(), EvaluationController.listEvaluations);
 router.post(
   "/",
   ...authenticated(),
-  requireRole("admin", "hr", "hr_manager", "super_admin", "manager"),
+  requireModuleAccess("evaluations", "approve"),
   EvaluationController.createEvaluation
 );
 

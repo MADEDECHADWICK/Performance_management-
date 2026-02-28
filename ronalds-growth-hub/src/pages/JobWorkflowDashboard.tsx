@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,10 +8,15 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { jobsAPI, timeEntriesAPI } from '@/lib/api';
-import type { Job, JobStaffAssignment } from '@/lib/api/types';
-import { Briefcase, Calendar, RefreshCw, Users, Loader2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { documentsAPI, jobsAPI, timeEntriesAPI } from '@/lib/api';
+import type {
+  Job,
+  JobStaffAssignment,
+  JobInvoiceMilestoneTracking,
+  JobInvoiceMilestoneTrackingItem,
+} from '@/lib/api/types';
+import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 const statusColors: Record<string, string> = {
   planned: 'bg-gray-100 text-gray-800',
@@ -49,9 +54,19 @@ interface AllocationSummary {
   remainingEmployeeHours: number;
 }
 
+interface JobDocument {
+  id: number;
+  fileName: string;
+  filePath: string;
+  documentType: string;
+  verificationStatus?: string;
+  createdAt?: string;
+}
+
 export default function JobWorkflowDashboard() {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [staff, setStaff] = useState<JobStaffAssignment[]>([]);
@@ -60,7 +75,50 @@ export default function JobWorkflowDashboard() {
   const [costingLoading, setCostingLoading] = useState(false);
   const [costingSaving, setCostingSaving] = useState(false);
   const [allocationSummary, setAllocationSummary] = useState<AllocationSummary | null>(null);
+  const [invoiceTracking, setInvoiceTracking] = useState<JobInvoiceMilestoneTracking | null>(null);
+  const [jobDocuments, setJobDocuments] = useState<JobDocument[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [milestoneUpdatingId, setMilestoneUpdatingId] = useState<number | null>(null);
   const isFixedFeeJob = selectedJob?.billingType === 'fixed_fee';
+  const selectedJobIdParam = Number(searchParams.get('jobId'));
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
+  const resolveDocumentUrl = (filePath?: string | null) => {
+    if (!filePath) return '#';
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+    return `${baseUrl}${filePath}`;
+  };
+
+  const formatDocumentType = (value?: string) => {
+    if (!value) return 'Document';
+    return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const getVerificationBadgeClass = (status?: string) => {
+    if (status === 'verified') return 'bg-green-100 text-green-800';
+    if (status === 'rejected') return 'bg-red-100 text-red-800';
+    return 'bg-yellow-100 text-yellow-800';
+  };
+
+  const parseDocumentsResponse = (payload: any): JobDocument[] => {
+    if (Array.isArray(payload?.documents)) return payload.documents as JobDocument[];
+    if (Array.isArray(payload?.data)) return payload.data as JobDocument[];
+    if (Array.isArray(payload?.items)) return payload.items as JobDocument[];
+    return [];
+  };
+
+  const loadJobDocuments = async (jobId: number) => {
+    try {
+      setDocumentsLoading(true);
+      const response = await documentsAPI.getJobDocuments(jobId);
+      setJobDocuments(parseDocumentsResponse(response));
+    } catch (error) {
+      console.error('Failed to load job documents:', error);
+      setJobDocuments([]);
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
 
   const loadJobs = async () => {
     try {
@@ -81,21 +139,77 @@ export default function JobWorkflowDashboard() {
 
   const loadJobDetails = async (jobId: number) => {
     try {
-      const [job, staffAssignments] = await Promise.all([
+      const [job, staffAssignments, invoiceMilestones] = await Promise.all([
         jobsAPI.getById(jobId),
         jobsAPI.getStaff(jobId),
+        jobsAPI.getInvoiceMilestones(jobId),
       ]);
       setSelectedJob(job);
       setStaff(staffAssignments);
+      setInvoiceTracking(invoiceMilestones);
       await initializeCosting(job, staffAssignments);
       await loadAllocationSummary(jobId);
+      await loadJobDocuments(jobId);
     } catch (error) {
       console.error('Failed to load job details:', error);
+      setInvoiceTracking(null);
+      setJobDocuments([]);
       toast({
         title: 'Error',
         description: 'Failed to load job details',
         variant: 'destructive',
       });
+    }
+  };
+
+  const formatConditionStatus = (status: string) => status.replace(/_/g, ' ');
+
+  const getConditionStatusBadgeClass = (status: string) => {
+    if (status === 'completed') return 'bg-green-100 text-green-800';
+    if (status === 'in_progress') return 'bg-blue-100 text-blue-800';
+    if (status === 'blocked') return 'bg-red-100 text-red-800';
+    if (status === 'cancelled') return 'bg-gray-200 text-gray-700';
+    return 'bg-gray-100 text-gray-800';
+  };
+
+  const getInvoiceStatusBadge = (milestone: JobInvoiceMilestoneTrackingItem) => {
+    if (milestone.milestonePaid) {
+      return { label: 'Paid', className: 'bg-green-100 text-green-800' };
+    }
+    if (milestone.readyForInvoice) {
+      return { label: 'Ready for Invoice', className: 'bg-amber-100 text-amber-900' };
+    }
+    if (milestone.conditionCompleted) {
+      return { label: 'Awaiting Prior Payment', className: 'bg-blue-100 text-blue-800' };
+    }
+    return { label: 'Condition Pending', className: 'bg-gray-100 text-gray-800' };
+  };
+
+  const handleMarkMilestoneComplete = async (milestoneTaskId: number) => {
+    if (!selectedJob) return;
+
+    try {
+      setMilestoneUpdatingId(milestoneTaskId);
+      const response = await jobsAPI.updateInvoiceMilestoneStatus(
+        selectedJob.id,
+        milestoneTaskId,
+        'completed'
+      );
+      setInvoiceTracking(response.tracking);
+      toast({
+        title: 'Milestone Updated',
+        description:
+          'Milestone condition marked as complete. Invoice readiness has been recalculated.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Update failed',
+        description:
+          error?.message || 'Unable to update milestone status for this job.',
+        variant: 'destructive',
+      });
+    } finally {
+      setMilestoneUpdatingId(null);
     }
   };
 
@@ -280,7 +394,15 @@ export default function JobWorkflowDashboard() {
 
   useEffect(() => {
     loadJobs();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!Number.isFinite(selectedJobIdParam) || selectedJobIdParam <= 0) return;
+    if (selectedJob?.id === selectedJobIdParam) return;
+    if (!jobs.some((job) => job.id === selectedJobIdParam)) return;
+
+    loadJobDetails(selectedJobIdParam);
+  }, [jobs, selectedJob?.id, selectedJobIdParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalAllocatedHours = costingForm
     ? costingForm.allocations.reduce((sum, allocation) => sum + Number(allocation.allocatedHours || 0), 0)
@@ -396,6 +518,188 @@ export default function JobWorkflowDashboard() {
 
                   <Card>
                     <CardHeader>
+                      <CardTitle>Invoice Milestone Tracker</CardTitle>
+                      <CardDescription>
+                        Billing checkpoints are unlocked when the matching milestone condition is completed.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {!invoiceTracking ? (
+                        <p className="text-sm text-muted-foreground">
+                          No milestone billing data available.
+                        </p>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Total Fee</p>
+                              <p className="font-semibold">
+                                KES {Number(invoiceTracking.feeAmount || 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Collected</p>
+                              <p className="font-semibold">
+                                KES {Number(invoiceTracking.collectedAmount || 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Outstanding</p>
+                              <p className="font-semibold">
+                                KES {Number(invoiceTracking.outstandingAmount || 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Next Invoice</p>
+                              <p className="font-semibold">
+                                {invoiceTracking.nextReadyMilestone
+                                  ? `${invoiceTracking.nextReadyMilestone.targetPercent}%`
+                                  : 'No ready milestone'}
+                              </p>
+                            </div>
+                          </div>
+
+                          {invoiceTracking.milestones.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No payment milestones were configured during job creation.
+                            </p>
+                          ) : (
+                            <div className="space-y-3">
+                              {invoiceTracking.milestones.map((milestone) => {
+                                const invoiceBadge = getInvoiceStatusBadge(milestone);
+                                return (
+                                  <div
+                                    key={milestone.taskId}
+                                    className="border rounded-lg p-3 space-y-3"
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <p className="font-medium">
+                                          {milestone.targetPercent}% - {milestone.title}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {milestone.dueDate
+                                            ? `Due ${new Date(milestone.dueDate).toLocaleDateString()}`
+                                            : 'No due date'}
+                                        </p>
+                                      </div>
+                                      <div className="flex flex-wrap gap-2">
+                                        <Badge className={getConditionStatusBadgeClass(milestone.conditionStatus)}>
+                                          {formatConditionStatus(milestone.conditionStatus)}
+                                        </Badge>
+                                        <Badge className={invoiceBadge.className}>
+                                          {invoiceBadge.label}
+                                        </Badge>
+                                      </div>
+                                    </div>
+
+                                    {milestone.requirements && (
+                                      <p className="text-sm text-muted-foreground">
+                                        Requirement: {milestone.requirements}
+                                      </p>
+                                    )}
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                                      <div>
+                                        <span className="text-muted-foreground">Milestone Amount:</span>{' '}
+                                        KES {Number(milestone.milestoneAmount || 0).toLocaleString()}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Cumulative Target:</span>{' '}
+                                        KES {Number(milestone.expectedCumulativeAmount || 0).toLocaleString()}
+                                      </div>
+                                      <div>
+                                        <span className="text-muted-foreground">Remaining:</span>{' '}
+                                        KES {Number(milestone.amountRemainingToMilestone || 0).toLocaleString()}
+                                      </div>
+                                    </div>
+
+                                    {!milestone.conditionCompleted && (
+                                      <div className="flex justify-end">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => handleMarkMilestoneComplete(milestone.taskId)}
+                                          disabled={milestoneUpdatingId === milestone.taskId}
+                                        >
+                                          {milestoneUpdatingId === milestone.taskId ? (
+                                            <>
+                                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                              Updating...
+                                            </>
+                                          ) : (
+                                            'Mark Condition Done'
+                                          )}
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="h-5 w-5" />
+                        Job Documents
+                      </CardTitle>
+                      <CardDescription>
+                        Work plan, budget, draft report, final report, and all job-linked uploads.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {documentsLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Loading job documents...
+                        </div>
+                      ) : jobDocuments.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No documents uploaded for this job yet.
+                        </p>
+                      ) : (
+                        jobDocuments.map((doc) => (
+                          <div
+                            key={doc.id}
+                            className="flex items-center justify-between border-b pb-2 last:border-0 gap-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-medium truncate">{doc.fileName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatDocumentType(doc.documentType)}
+                                {doc.createdAt
+                                  ? ` â€¢ ${new Date(doc.createdAt).toLocaleDateString()}`
+                                  : ''}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Badge className={getVerificationBadgeClass(doc.verificationStatus)}>
+                                {doc.verificationStatus || 'pending'}
+                              </Badge>
+                              <a
+                                href={resolveDocumentUrl(doc.filePath)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <Button size="sm" variant="outline">
+                                  View
+                                </Button>
+                              </a>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Users className="h-5 w-5" />
                         Staff Assignments
@@ -497,7 +801,7 @@ export default function JobWorkflowDashboard() {
                                   <span className="font-medium">
                                     {allocationSummary
                                       ? `${allocationSummary.allowedJobHours.toFixed(1)}h`
-                                      : '—'}
+                                      : 'â€”'}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">
@@ -505,7 +809,7 @@ export default function JobWorkflowDashboard() {
                                   <span className="font-medium">
                                     {allocationSummary
                                       ? `${allocationSummary.loggedJobHours.toFixed(1)}h`
-                                      : '—'}
+                                      : 'â€”'}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">
@@ -519,7 +823,7 @@ export default function JobWorkflowDashboard() {
                                   >
                                     {allocationSummary
                                       ? `${allocationSummary.remainingJobHours.toFixed(1)}h`
-                                      : '—'}
+                                      : 'â€”'}
                                   </span>
                                 </div>
                               </div>

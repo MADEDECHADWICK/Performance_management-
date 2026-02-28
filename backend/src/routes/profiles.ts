@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { ProfileController } from '../controllers/profile.controller';
 import { authMiddleware } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { handleValidationErrors } from '../middleware/validate';
 import { body, param, query } from 'express-validator';
 
@@ -14,32 +14,32 @@ const router = Router();
 
 // ✅ VALIDATORS
 const updateProfileValidators = [
-  body('first_name')
+  body('firstName')
     .optional()
     .isString()
     .trim()
     .isLength({ min: 1, max: 50 })
-    .withMessage('first_name must be 1-50 characters'),
-  body('last_name')
+    .withMessage('firstName must be 1-50 characters'),
+  body('lastName')
     .optional()
     .isString()
     .trim()
     .isLength({ min: 1, max: 50 })
-    .withMessage('last_name must be 1-50 characters'),
-  body('phone_number')
+    .withMessage('lastName must be 1-50 characters'),
+  body('phoneNumber')
     .optional()
     .isString()
     .isLength({ min: 10, max: 20 })
-    .withMessage('phone_number must be 10-20 characters'),
+    .withMessage('phoneNumber must be 10-20 characters'),
   body('bio')
     .optional()
     .isString()
     .isLength({ max: 500 })
     .withMessage('bio must not exceed 500 characters'),
-  body('avatar_url')
+  body('profilePicture')
     .optional()
     .isURL()
-    .withMessage('avatar_url must be valid URL'),
+    .withMessage('profilePicture must be valid URL'),
 ];
 
 const listProfileValidators = [
@@ -72,7 +72,7 @@ router.get(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'super_admin', 'manager', 'hr', 'hr_manager'),
+  requireModuleAccess('users', 'approve'),
   ...listProfileValidators,
   handleValidationErrors,
   ProfileController.listProfiles

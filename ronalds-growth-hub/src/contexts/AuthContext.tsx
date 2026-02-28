@@ -5,6 +5,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { authAPI, getToken, getUser, clearAuth } from '@/lib/api';
 import type { User, Profile } from '@/lib/api/types';
+import PageLoader from '@/components/ui/page-loader';
 
 interface AuthUser extends User {
   profile?: Profile;
@@ -47,6 +48,9 @@ const MODULE_KEY_ALIASES: Record<string, string> = {
   proposals: 'proposals',
   surveys: 'surveys',
   documents: 'documents',
+  knowledge_hub: 'knowledge_hub',
+  'knowledge-hub': 'knowledge_hub',
+  knowledgehub: 'knowledge_hub',
   notifications: 'notifications',
   reports: 'reports',
   analytics: 'reports',
@@ -62,7 +66,12 @@ const MODULE_KEY_ALIASES: Record<string, string> = {
 const MODULE_ACTION_SET = new Set<ModuleAction>(['read', 'write', 'approve', 'admin']);
 
 const normalizeModuleKey = (value: string) => {
-  const normalized = String(value || '').toLowerCase().trim();
+  const normalized = String(value || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .replace(/_+/g, '_')
+    .toLowerCase();
   return MODULE_KEY_ALIASES[normalized] || normalized;
 };
 
@@ -187,7 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasModuleAccess = useCallback(
     (moduleKey: string, action: ModuleAction = 'read'): boolean => {
-      if (isAdmin) return true;
+      if (isAdmin || isHR) return true;
 
       const normalizedModuleKey = normalizeModuleKey(moduleKey);
       const normalizedAction = toModuleAction(action);
@@ -206,22 +215,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return false;
     },
-    [isAdmin, moduleAccessMatrix]
+    [isAdmin, isHR, moduleAccessMatrix]
   );
 
   const hasPermission = useCallback((permission: string): boolean => {
-    if (isAdmin) return true;
+    if (isAdmin || isHR) return true;
     const normalized = String(permission || '').toLowerCase().trim();
     const parts = normalized.split('.');
     if (parts.length === 3 && parts[0] === 'module') {
       return hasModuleAccess(parts[1], toModuleAction(parts[2]));
     }
     return false;
-  }, [isAdmin, hasModuleAccess]);
+  }, [isAdmin, isHR, hasModuleAccess]);
 
   const canAccess = useCallback((resource: string, action: string): boolean => {
     // Admin can access everything
-    if (isAdmin) return true;
+    if (isAdmin || isHR) return true;
 
     const moduleKey = normalizeModuleKey(resource);
     if (moduleAccessMatrix[moduleKey]) {
@@ -311,8 +320,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      setUser(response.user);
-      return response.user;
+      if (!('token' in response)) {
+        throw new Error('Unexpected login response');
+      }
+
+      setUser(response.user as AuthUser);
+      return response.user as AuthUser;
     } catch (error) {
       setUser(null);
       throw error;
@@ -322,8 +335,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const completePasswordSetup = useCallback(
     async (setupToken: string, newPassword: string) => {
       const response = await authAPI.completePasswordSetup(setupToken, newPassword);
-      setUser(response.user);
-      return response.user;
+      setUser(response.user as AuthUser);
+      return response.user as AuthUser;
     },
     []
   );
@@ -403,7 +416,12 @@ export function ProtectedRoute({
   const { isAuthenticated, isLoading, hasRole, hasPermission } = useAuth();
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-screen">Loading...</div>;
+    return (
+      <PageLoader
+        message="Checking access..."
+        minHeightClassName="min-h-screen"
+      />
+    );
   }
 
   if (!isAuthenticated) {

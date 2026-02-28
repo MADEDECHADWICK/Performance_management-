@@ -5,6 +5,73 @@
 
 import { body, param, query } from "express-validator";
 
+const milestoneValidators = [
+  body("milestones")
+    .optional()
+    .isArray({ min: 1, max: 20 })
+    .withMessage("milestones must be an array with 1-20 entries"),
+
+  body("milestones")
+    .optional()
+    .custom((items) => {
+      if (!Array.isArray(items)) return true;
+
+      const percents = new Set<number>();
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index] || {};
+        const title = String(item.title ?? "").trim();
+        if (!title) {
+          throw new Error(`milestones[${index}].title is required`);
+        }
+
+        const percent = Number(item.targetPercent);
+        if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+          throw new Error(`milestones[${index}].targetPercent must be between 1 and 100`);
+        }
+
+        if (percents.has(percent)) {
+          throw new Error(`Duplicate milestone targetPercent: ${percent}`);
+        }
+        percents.add(percent);
+      }
+
+      if (items.length > 0 && !percents.has(100)) {
+        throw new Error("milestones must include a 100% final payment milestone");
+      }
+
+      return true;
+    }),
+
+  body("milestones.*.title")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 160 })
+    .withMessage("milestone title must be 1-160 characters"),
+
+  body("milestones.*.targetPercent")
+    .optional()
+    .isFloat({ gt: 0, max: 100 })
+    .withMessage("milestone targetPercent must be > 0 and <= 100"),
+
+  body("milestones.*.dueDate")
+    .optional({ nullable: true, checkFalsy: true })
+    .isISO8601()
+    .withMessage("milestone dueDate must be a valid ISO8601 date"),
+
+  body("milestones.*.requirements")
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage("milestone requirements must be at most 1000 characters"),
+
+  body("milestones.*.assignedToProfileId")
+    .optional({ nullable: true, checkFalsy: true })
+    .isInt({ min: 1 })
+    .withMessage("milestone assignedToProfileId must be a valid profile id"),
+];
+
 /**
  * Validators for POST /jobs - Create new job
  */
@@ -94,6 +161,8 @@ export const createJobValidators = [
 
     return true;
   }),
+
+  ...milestoneValidators,
 ];
 
 /**
@@ -149,6 +218,8 @@ export const createJobFromOnboardingValidators = [
     .optional()
     .isFloat({ min: 0.01 })
     .withMessage("Budget hours must be >= 0 if provided"),
+
+  ...milestoneValidators,
 ];
 
 /**
@@ -223,11 +294,11 @@ export const listJobsValidators = [
   query("status")
     .optional()
     .custom((value) => {
-      const allowed = ["planned", "in_progress", "on_hold", "completed", "cancelled"];
+      const allowed = ["planned", "in_progress", "on_hold", "completed", "cancelled", "overdue"];
       const statuses = String(value).split(",").map((status) => status.trim()).filter(Boolean);
       return statuses.length > 0 && statuses.every((status) => allowed.includes(status));
     })
-    .withMessage("Status must be one or more of: planned, in_progress, on_hold, completed, cancelled"),
+    .withMessage("Status must be one or more of: planned, in_progress, on_hold, completed, cancelled, overdue"),
 
   query("clientId")
     .optional()
@@ -287,6 +358,61 @@ export const assignJobTeamValidators = [
 ];
 
 /**
+ * Validators for PATCH /jobs/:jobId/staff/:assignmentId
+ */
+export const updateJobStaffAssignmentValidators = [
+  param("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId (integer) required"),
+
+  param("assignmentId")
+    .isInt({ min: 1 })
+    .withMessage("Valid assignmentId (integer) required"),
+
+  body("assignedRoleId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("assignedRoleId must be a valid integer"),
+
+  body("assignedHourlyRate")
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage("assignedHourlyRate must be > 0 if provided"),
+
+  body("roleOnJob")
+    .optional({ nullable: true })
+    .isString()
+    .trim(),
+
+  body()
+    .custom((payload) => {
+      const hasAtLeastOneField =
+        payload.assignedRoleId !== undefined ||
+        payload.assignedHourlyRate !== undefined ||
+        payload.roleOnJob !== undefined;
+      if (!hasAtLeastOneField) {
+        throw new Error(
+          "At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob"
+        );
+      }
+      return true;
+    }),
+];
+
+/**
+ * Validators for DELETE /jobs/:jobId/staff/:assignmentId
+ */
+export const removeJobStaffAssignmentValidators = [
+  param("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId (integer) required"),
+
+  param("assignmentId")
+    .isInt({ min: 1 })
+    .withMessage("Valid assignmentId (integer) required"),
+];
+
+/**
  * Validators for PATCH /jobs/:jobId/status - Update job status
  */
 export const updateJobStatusValidator = [
@@ -298,10 +424,25 @@ export const updateJobStatusValidator = [
     .isIn(["planned", "in_progress", "on_hold", "completed", "cancelled"])
     .withMessage("Status must be one of: planned, in_progress, on_hold, completed, cancelled"),
 
+  body("allowIncompleteTasksOverride")
+    .optional()
+    .isBoolean()
+    .withMessage("allowIncompleteTasksOverride must be boolean"),
+
   body("reason")
     .optional()
     .isString()
     .trim(),
+
+  body().custom((payload) => {
+    const status = String(payload?.status || "").trim();
+    const allowOverride = Boolean(payload?.allowIncompleteTasksOverride);
+    const reason = String(payload?.reason || "").trim();
+    if (status === "completed" && allowOverride && !reason) {
+      throw new Error("reason is required when allowIncompleteTasksOverride is true");
+    }
+    return true;
+  }),
 ];
 
 /**
@@ -364,4 +505,14 @@ export const upsertJobCostingValidators = [
     .optional()
     .isFloat({ min: 0, max: 1 })
     .withMessage("maxOveragePercent must be between 0 and 1"),
+
+  body("submitForApproval")
+    .optional()
+    .isBoolean()
+    .withMessage("submitForApproval must be boolean"),
+
+  body("partnerApprove")
+    .optional()
+    .isBoolean()
+    .withMessage("partnerApprove must be boolean"),
 ];

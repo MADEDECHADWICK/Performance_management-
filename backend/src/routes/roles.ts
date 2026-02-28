@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
-const canManageRoles = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
+const canManageRoles = requireModuleAccess('users', 'admin');
 
 const parseOptionalRate = (value: unknown): number | undefined => {
   if (value === undefined || value === null || value === '') return undefined;
@@ -70,12 +70,12 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/', authMiddleware, canManageRoles, async (req: AuthRequest, res) => {
   try {
     const { name, description } = req.body;
-    const billingRateRaw = req.body.billingRate ?? req.body.billing_rate;
-    const costRateRaw = req.body.costRate ?? req.body.cost_rate;
+    const billingRateRaw = req.body.billingRate;
+    const costRateRaw = req.body.costRate;
     const billingRate = parseOptionalRate(billingRateRaw);
     const costRate = parseOptionalRate(costRateRaw);
     const permissions = req.body.permissions ?? req.body.defaultAccess ?? [];
-    const isActive = req.body.isActive ?? req.body.is_active ?? true;
+    const isActive = req.body.isActive ?? true;
     
     // Validation
     if (!name || typeof name !== 'string') {
@@ -125,12 +125,12 @@ router.put('/:id', authMiddleware, canManageRoles, async (req: AuthRequest, res)
   try {
     const { id } = req.params;
     const { name, description } = req.body;
-    const billingRateRaw = req.body.billingRate ?? req.body.billing_rate;
-    const costRateRaw = req.body.costRate ?? req.body.cost_rate;
+    const billingRateRaw = req.body.billingRate;
+    const costRateRaw = req.body.costRate;
     const billingRate = parseOptionalRate(billingRateRaw);
     const costRate = parseOptionalRate(costRateRaw);
     const permissions = req.body.permissions ?? req.body.defaultAccess;
-    const isActive = req.body.isActive ?? req.body.is_active;
+    const isActive = req.body.isActive;
     
     // Check if role exists
     const role = await prisma.positionRole.findUnique({

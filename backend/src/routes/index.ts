@@ -9,7 +9,7 @@
 
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth';
-import { requireModuleAccess } from '../middleware/requireModuleAccess';
+import { requireAnyModuleAccess, requireModuleAccess } from '../middleware/requireModuleAccess';
 
 // Import all route modules
 import authRoutes from './auth';
@@ -78,6 +78,7 @@ import workLogsRoutes from './workLogs';
 import adHocEvaluationsRoutes from './adHocEvaluations';
 import recruitmentCandidatesRoutes from './recruitmentCandidates.routes';
 import moduleAccessRoutes from './moduleAccess';
+import knowledgeHubRoutes from './knowledgeHub';
 
 const router = Router();
 
@@ -94,13 +95,30 @@ router.use('/auth', authRoutes);
 /**
  * Core CRUD Domains (all require authentication)
  */
-router.use('/departments', authMiddleware, requireModuleAccess('users'), departmentRoutes);
+router.use(
+  '/departments',
+  authMiddleware,
+  requireAnyModuleAccess([
+    { moduleKey: 'users', action: 'read' },
+    { moduleKey: 'dashboard', action: 'read' },
+  ]),
+  departmentRoutes
+);
 router.use('/documents', authMiddleware, requireModuleAccess('documents'), documentsRoutes);
+router.use('/knowledge-hub', authMiddleware, requireModuleAccess('knowledge_hub'), knowledgeHubRoutes);
 router.use('/onboarding', authMiddleware, requireModuleAccess('users'), employeeOnboardingRoutes);
 router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
 router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
 router.use('/induction-checklist', authMiddleware, requireModuleAccess('users'), inductionChecklistRoutes);
-router.use('/partners', authMiddleware, requireModuleAccess('users'), partnerRoutes);
+router.use(
+  '/partners',
+  authMiddleware,
+  requireAnyModuleAccess([
+    { moduleKey: 'users', action: 'read' },
+    { moduleKey: 'dashboard', action: 'read' },
+  ]),
+  partnerRoutes
+);
 router.use('/jobs', authMiddleware, requireModuleAccess('jobs'), jobsRoutes);
 
 /**
@@ -158,7 +176,7 @@ router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), c
 router.use('/proposals', authMiddleware, requireModuleAccess('proposals'), proposalsRoutes);
 router.use('/surveys', surveysRoutes);
 router.use('/feedback', authMiddleware, requireModuleAccess('evaluations'), feedbackRoutes);
-router.use('/notifications', authMiddleware, requireModuleAccess('notifications'), notificationsRoutes);
+router.use('/notifications', authMiddleware, requireModuleAccess('notifications', 'read'), notificationsRoutes);
 router.use('/notification-templates', authMiddleware, requireModuleAccess('notifications'), notificationTemplatesRoutes);
 router.use('/manager-dashboard', authMiddleware, requireModuleAccess('dashboard'), managerDashboardRoutes);
 router.use('/gmp-dashboard', authMiddleware, requireModuleAccess('dashboard'), gmpDashboardRoutes);
@@ -168,8 +186,10 @@ router.use('/roles', authMiddleware, requireModuleAccess('users'), rolesRoutes);
 router.use('/user-roles', authMiddleware, requireModuleAccess('users'), userRolesRoutes);
 router.use('/position-rates', authMiddleware, requireModuleAccess('users'), positionRatesRoutes);
 router.use('/projects', authMiddleware, requireModuleAccess('jobs'), projectsRoutes);
-router.use('/todos', authMiddleware, requireModuleAccess('dashboard'), todosRoutes);
+router.use('/todos', authMiddleware, requireModuleAccess('dashboard', 'read'), todosRoutes);
 router.use('/work-logs', authMiddleware, requireModuleAccess('time_entries'), workLogsRoutes);
+// Backward-compatible alias for older timesheet clients
+router.use('/work_logs', authMiddleware, requireModuleAccess('time_entries'), workLogsRoutes);
 router.use('/recruitment-candidates', authMiddleware, requireModuleAccess('users'), recruitmentCandidatesRoutes);
 router.use('/module-access', authMiddleware, requireModuleAccess('access_control'), moduleAccessRoutes);
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,7 +21,7 @@ import * as XLSX from "xlsx";
 
 const DepartmentDashboard = () => {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, isManager } = useAuth();
   const [departments, setDepartments] = useState<any[]>([]);
   const [selectedDept, setSelectedDept] = useState<string>("");
   const [deptStats, setDeptStats] = useState<any>(null);
@@ -44,10 +45,16 @@ const DepartmentDashboard = () => {
   const [selectedTeamId, setSelectedTeamId] = useState("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState("all");
   const [teamKpis, setTeamKpis] = useState<any[]>([]);
+  const managerDepartmentId =
+    user?.profile?.departmentId != null ? String(user.profile.departmentId) : "";
 
   const normalizeArray = (payload: any) => {
     if (Array.isArray(payload)) return payload;
     if (payload?.data && Array.isArray(payload.data)) return payload.data;
+    if (payload?.items && Array.isArray(payload.items)) return payload.items;
+    if (payload?.employees && Array.isArray(payload.employees)) return payload.employees;
+    if (payload?.departments && Array.isArray(payload.departments)) return payload.departments;
+    if (payload?.kpis && Array.isArray(payload.kpis)) return payload.kpis;
     if (payload?.payload && Array.isArray(payload.payload)) return payload.payload;
     return [];
   };
@@ -79,7 +86,14 @@ const DepartmentDashboard = () => {
   const loadDepartmentStats = async (deptId: string, teamId?: string, statusFilter?: string) => {
     try {
       setLoading(true);
-      const employees = await apiFetch<any[]>('GET', `/profiles?department_id=${deptId}`);
+      const statusQuery =
+        statusFilter && statusFilter !== "all"
+          ? `&status=${encodeURIComponent(statusFilter)}`
+          : "";
+      const employees = await apiFetch<any>(
+        'GET',
+        `/departments/${deptId}/employees?page=1&pageSize=500${statusQuery}`
+      );
       const employeesList = normalizeArray(employees);
       const [nonFinancialRes, financialRes] = await Promise.all([
         apiFetch<any>('GET', '/analytics/non-financial').catch(() => null),
@@ -155,7 +169,7 @@ const DepartmentDashboard = () => {
   useEffect(() => {
     loadDepartments();
     loadAllDepartmentRankings();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDept) {
@@ -164,25 +178,38 @@ const DepartmentDashboard = () => {
       loadDepartmentEmployees(selectedDept);
       loadTeamKpis(selectedDept, memberStatusFilter);
     }
-  }, [selectedDept]);
+  }, [selectedDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDept) {
       loadDepartmentStats(selectedDept, selectedTeamId, memberStatusFilter);
       loadTeamKpis(selectedDept, memberStatusFilter);
     }
-  }, [selectedDept, selectedTeamId, memberStatusFilter, teams]);
+  }, [selectedDept, selectedTeamId, memberStatusFilter, teams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDepartments = async () => {
     try {
       const data = await apiFetch<any[]>('GET', '/departments');
-      const list = normalizeArray(data);
+      const rawList = normalizeArray(data);
+      const list =
+        isManager && managerDepartmentId
+          ? rawList.filter((dept) => String(dept.id) === managerDepartmentId)
+          : rawList;
       setDepartments(list);
-      if (list.length > 0) setSelectedDept(String(list[0].id));
+      if (list.length > 0) {
+        const preferred =
+          managerDepartmentId && list.some((dept) => String(dept.id) === managerDepartmentId)
+            ? managerDepartmentId
+            : String(list[0].id);
+        setSelectedDept(preferred);
+      } else {
+        setSelectedDept("");
+      }
     } catch (error: any) {
       console.error("Error loading departments:", error);
       // Set empty array to prevent UI issues
       setDepartments([]);
+      setSelectedDept("");
       toast({
         title: "Unable to load departments",
         description: "Department data is unavailable right now.",
@@ -198,7 +225,10 @@ const DepartmentDashboard = () => {
         apiFetch<any[]>('GET', '/financial-summary/departments').catch(() => []),
         apiFetch<any>('GET', '/analytics/non-financial').catch(() => null),
       ]);
-      const depts = normalizeArray(deptsResponse);
+      const scopedDepartmentId = managerDepartmentId;
+      const depts = normalizeArray(deptsResponse).filter((dept) =>
+        isManager && scopedDepartmentId ? String(dept.id) === scopedDepartmentId : true
+      );
       const financialDepartments = normalizeArray(financialRes);
       const departmentAverages = normalizeArray(nonFinancialRes?.departmentAverages);
 
@@ -285,7 +315,10 @@ const DepartmentDashboard = () => {
 
   const loadDepartmentEmployees = async (deptId: string) => {
     try {
-      const data = await apiFetch<any[]>('GET', `/profiles?department_id=${deptId}&status=active`);
+      const data = await apiFetch<any>(
+        'GET',
+        `/departments/${deptId}/employees?page=1&pageSize=500&status=active`
+      );
       setDepartmentEmployees(normalizeArray(data));
     } catch (error: any) {
       console.error("Error loading employees:", error);
@@ -469,6 +502,10 @@ const DepartmentDashboard = () => {
                           {deptStats.openReviews} open reviews
                         </span>
                       </div>
+                      <MiniStatGraph
+                        value={deptStats.totalEmployees}
+                        baseline={deptStats.activeEmployees}
+                      />
                     </CardContent>
                   </Card>
 
@@ -482,6 +519,10 @@ const DepartmentDashboard = () => {
                       <p className="text-xs text-muted-foreground">
                         Department average
                       </p>
+                      <MiniStatGraph
+                        value={deptStats.avgOverallScore}
+                        baseline={deptStats.avgFinancialScore}
+                      />
                     </CardContent>
                   </Card>
 
@@ -495,6 +536,10 @@ const DepartmentDashboard = () => {
                       <p className="text-xs text-muted-foreground">
                         {deptStats.clientEvalCount} evaluations
                       </p>
+                      <MiniStatGraph
+                        value={deptStats.avgClientRating}
+                        baseline={4}
+                      />
                     </CardContent>
                   </Card>
 
@@ -508,6 +553,7 @@ const DepartmentDashboard = () => {
                       <p className="text-xs text-muted-foreground">
                         Completed this period
                       </p>
+                      <MiniStatGraph value={deptStats.reviewCount} />
                     </CardContent>
                   </Card>
                 </div>
@@ -609,7 +655,7 @@ const DepartmentDashboard = () => {
                     </div>
                     {loading && teams.length > 0 ? (
                       <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
-                        <p className="text-sm font-medium text-foreground">Loading team KPIs…</p>
+                        <p className="text-sm font-medium text-foreground">Loading team KPIs...</p>
                         <p className="text-xs text-muted-foreground">
                           Fetching the latest performance scores for each team.
                         </p>
@@ -657,14 +703,14 @@ const DepartmentDashboard = () => {
                               <CardHeader className="pb-2">
                                 <CardTitle className="text-base font-semibold">{team.teamName}</CardTitle>
                                 <CardDescription className="flex flex-wrap items-center gap-2">
-                                  <span>{team.activeCount} active · {team.memberCount} total</span>
+                                  <span>{team.activeCount} active | {team.memberCount} total</span>
                                   <span
                                     className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                                     title={`Previous score: ${Number(team.previousOverallScore || 0).toFixed(1)}%`}
                                   >
                                     {trend === "up" && <TrendingUp className="h-3 w-3 text-emerald-500" />}
                                     {trend === "down" && <TrendingDown className="h-3 w-3 text-rose-500" />}
-                                    {trend === "flat" && <span className="h-3 w-3 text-muted-foreground">•</span>}
+                                    {trend === "flat" && <span className="h-3 w-3 text-muted-foreground">o</span>}
                                     {Math.abs(delta).toFixed(1)} pts
                                   </span>
                                   {needsAttention && (
@@ -723,8 +769,12 @@ const DepartmentDashboard = () => {
             {/* Department Rankings Table */}
             <Card>
               <CardHeader>
-                <CardTitle>Department Rankings</CardTitle>
-                <CardDescription>Comparative performance across all departments</CardDescription>
+                <CardTitle>{isManager ? "Department Snapshot" : "Department Rankings"}</CardTitle>
+                <CardDescription>
+                  {isManager
+                    ? "Performance for your assigned department."
+                    : "Comparative performance across all departments"}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 {allDeptRankings.length > 0 ? (

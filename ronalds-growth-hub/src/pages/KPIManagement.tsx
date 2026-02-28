@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -374,7 +374,7 @@ const parseInitiativesText = (value: string) =>
   value
     .split(/\r?\n/)
     .map((row) => row.trim())
-    .map((row) => row.replace(/^(\d+[\.)]\s*|[-*•]\s*)/, "").trim())
+    .map((row) => row.replace(/^(\d+[.)]\s*|[-*]\s*)/, "").trim())
     .filter(Boolean)
     .map((row) => {
       const [titleRaw, weightRaw] = row.split("|").map((part) => part.trim());
@@ -439,12 +439,7 @@ export default function KPIManagement() {
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [showAdvancedFields, setShowAdvancedFields] = useState(false);
 
-  useEffect(() => {
-    if (authLoading) return;
-    loadData();
-  }, [authLoading]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [kpiResponse, departmentsResponse, employeesResponse, frameworkResponse] = await Promise.all([
@@ -467,7 +462,12 @@ export default function KPIManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    loadData();
+  }, [authLoading, loadData]);
 
   const openCreate = () => {
     setEditingKpi(null);
@@ -895,7 +895,7 @@ export default function KPIManagement() {
 
   const handleToggleActive = async (kpi: KpiRecord) => {
     try {
-      await apiFetch("PATCH", `/kpis/${kpi.id}`, { is_active: !kpi.isActive });
+      await apiFetch("PATCH", `/kpis/${kpi.id}`, { isActive: !kpi.isActive });
       await loadData();
     } catch (error: any) {
       toast({

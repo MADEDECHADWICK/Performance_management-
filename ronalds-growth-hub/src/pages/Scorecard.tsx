@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,6 +6,7 @@ import { Progress } from "@/components/ui/progress";
 import { Award, TrendingUp, DollarSign, Target, Star, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import KpiProgressPanel from "@/components/KpiProgressPanel";
 import {
   SECTION_TITLE,
@@ -109,7 +110,7 @@ const Scorecard = () => {
     if (authLoading) return;
     if (!user) return;
     loadPerformanceData();
-  }, [authLoading, user]);
+  }, [authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadPerformanceData = async () => {
     const currentUser: any = user;
@@ -144,9 +145,7 @@ const Scorecard = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -507,7 +506,7 @@ const Scorecard = () => {
                     Role Formula: {String(data.formula.role || '').replace(/_/g, ' ')}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Scope: {String(data.formula.jobScope || '').replace(/_/g, ' ')} · Weights (Revenue/Profit/BD):
+                    Scope: {String(data.formula.jobScope || '').replace(/_/g, ' ')} Â· Weights (Revenue/Profit/BD):
                     {' '}
                     {(data.formula.financial.weights.revenue * 100).toFixed(0)}% /
                     {(data.formula.financial.weights.profit * 100).toFixed(0)}% /

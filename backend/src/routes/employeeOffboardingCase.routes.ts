@@ -5,6 +5,7 @@ import {
   createOffboardingCaseValidators,
   getOffboardingCaseValidators,
   updateOffboardingCaseValidators,
+  reactivateOffboardingCaseValidators,
 } from "../validators/employeeOffboardingCase.validators";
 import { EmployeeOffboardingCaseController } from "../controllers/employeeOffboardingCase.controller";
 import { OffboardingChecklistController } from "../controllers/offboardingChecklist.controller";
@@ -21,6 +22,11 @@ router.get("/", validateRequest(listOffboardingCasesValidators), EmployeeOffboar
 router.post("/", validateRequest(createOffboardingCaseValidators), EmployeeOffboardingCaseController.create);
 router.get("/:caseId", validateRequest(getOffboardingCaseValidators), EmployeeOffboardingCaseController.getById);
 router.patch("/:caseId", validateRequest(updateOffboardingCaseValidators), EmployeeOffboardingCaseController.update);
+router.post(
+  "/:caseId/reactivate",
+  validateRequest(reactivateOffboardingCaseValidators),
+  EmployeeOffboardingCaseController.reactivate
+);
 
 router.get(
   "/:caseId/items",

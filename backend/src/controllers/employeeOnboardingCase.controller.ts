@@ -7,7 +7,7 @@ import { OnboardingStatus } from "@prisma/client";
 const authFromReq = (req: AuthRequest) => ({
   userId: req.user!.userId,
   profileId: req.user!.profileId!,
-  roles: req.userRoles ?? [],
+  roles: req.userRoles ?? req.user?.authRoles ?? [],
 });
 
 export class EmployeeOnboardingCaseController {
@@ -122,6 +122,57 @@ export class EmployeeOnboardingCaseController {
     } catch (e: any) {
       console.error("EmployeeOnboardingCaseController.initializeStages error:", e);
       res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to initialize onboarding stages", e.statusCode ?? 400));
+    }
+  }
+
+  static async listPolicies(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOnboardingCaseService.listPolicies(caseId, authFromReq(req));
+      res.json(successResponse(result, "Onboarding policies retrieved"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.listPolicies error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to retrieve onboarding policies", e.statusCode ?? 400)
+      );
+    }
+  }
+
+  static async assignPolicies(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const documentIds = Array.isArray(req.body?.documentIds)
+        ? req.body.documentIds.map((value: any) => Number(value))
+        : [];
+      const result = await EmployeeOnboardingCaseService.assignPolicies(
+        caseId,
+        documentIds,
+        authFromReq(req)
+      );
+      res.status(201).json(successResponse(result, "Onboarding policies assigned", 201));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.assignPolicies error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to assign onboarding policies", e.statusCode ?? 400)
+      );
+    }
+  }
+
+  static async acknowledgePolicy(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const documentId = Number(req.params.documentId);
+      const result = await EmployeeOnboardingCaseService.acknowledgePolicy(
+        caseId,
+        documentId,
+        authFromReq(req)
+      );
+      res.json(successResponse(result, "Policy acknowledged"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.acknowledgePolicy error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to acknowledge policy", e.statusCode ?? 400)
+      );
     }
   }
 }

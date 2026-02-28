@@ -29,12 +29,6 @@ interface UpdateProfileInput {
   profilePicture?: string;
   departmentId?: number;
   managerId?: number | null;
-  first_name?: string;
-  last_name?: string;
-  phone_number?: string;
-  avatar_url?: string;
-  department_id?: number;
-  manager_id?: number | null;
 }
 
 export class ProfileService {
@@ -240,21 +234,11 @@ export class ProfileService {
       'lastName',
       'phoneNumber',
       'profilePicture',
-      'first_name',
-      'last_name',
-      'phone_number',
-      'avatar_url',
     ];
 
     // Privileged roles can update organization fields.
-    if (
-      canManageOrg &&
-      ('departmentId' in input ||
-        'department_id' in input ||
-        'managerId' in input ||
-        'manager_id' in input)
-    ) {
-      allowedFields.push('departmentId', 'department_id', 'managerId', 'manager_id');
+    if (canManageOrg && ('departmentId' in input || 'managerId' in input)) {
+      allowedFields.push('departmentId', 'managerId');
     }
 
     const updateData: Record<string, any> = {};
@@ -262,20 +246,14 @@ export class ProfileService {
     for (const field of allowedFields) {
       const value = input[field as keyof UpdateProfileInput];
       if (value !== undefined) {
-        if (field === 'first_name') updateData.firstName = value;
-        else if (field === 'last_name') updateData.lastName = value;
-        else if (field === 'phone_number') updateData.phoneNumber = value;
-        else if (field === 'avatar_url') updateData.profilePicture = value;
-        else if (field === 'department_id') updateData.departmentId = value;
-        else if (field === 'manager_id') updateData.managerId = value;
-        else updateData[field] = value;
+        updateData[field] = value;
       }
     }
 
     if (typeof updateData.managerId === 'number' && updateData.managerId === profileId) {
       throw {
         statusCode: 400,
-        message: 'manager_id cannot be the same as profile id',
+        message: 'managerId cannot be the same as profile id',
       };
     }
 

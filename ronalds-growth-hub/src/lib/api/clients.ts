@@ -5,7 +5,7 @@
 import { api } from './client';
 import type { Client, EngagementLetter, Job, PaginatedResponse } from './types';
 
-interface CreateClientPayload {
+export interface CreateClientPayload {
   clientName: string;
   clientCode?: string;
   industry?: string;
@@ -20,13 +20,14 @@ interface CreateClientPayload {
   status?: 'active' | 'inactive';
 }
 
-interface UpdateClientPayload extends Partial<CreateClientPayload> {
+export interface UpdateClientPayload extends Partial<CreateClientPayload> {
 }
 
-interface ClientFilters {
+export interface ClientFilters {
   page?: number;
   pageSize?: number;
   status?: 'active' | 'inactive';
+  industry?: string;
   partnerProfileId?: number;
   managerProfileId?: number;
   departmentId?: number;
@@ -42,6 +43,7 @@ export const clientsAPI = {
     if (filters?.page) params.append('page', String(filters.page));
     if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
     if (filters?.status) params.append('status', filters.status);
+    if (filters?.industry) params.append('industry', filters.industry);
     if (filters?.partnerProfileId) params.append('partnerProfileId', String(filters.partnerProfileId));
     if (filters?.managerProfileId) params.append('managerProfileId', String(filters.managerProfileId));
     if (filters?.departmentId) params.append('departmentId', String(filters.departmentId));

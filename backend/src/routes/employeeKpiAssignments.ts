@@ -90,6 +90,17 @@ type OkrTrackingObjective = {
   }>;
 };
 
+type KpiTrackingHistoryEntry = {
+  id: number;
+  at: string;
+  action: string;
+  source: 'manual_progress_update' | 'assignment_update' | 'assignment_closed';
+  actorProfileId: number | null;
+  previousAchievedValue: number | null;
+  newAchievedValue: number | null;
+  note: string | null;
+};
+
 const buildOkrTrackingKey = (ownerProfileId: number, kpiId: number) =>
   `${ownerProfileId}:${kpiId}`;
 
@@ -177,8 +188,171 @@ const computeOkrSummary = (objectives: OkrTrackingObjective[]) => {
   };
 };
 
+const toNullableNumber = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const toMetadataObject = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+};
+
+const normalizeHistorySource = (
+  action: string
+): KpiTrackingHistoryEntry['source'] => {
+  if (action === 'employee_kpi_assignment:progress') return 'manual_progress_update';
+  if (action === 'employee_kpi_assignment:close') return 'assignment_closed';
+  return 'assignment_update';
+};
+
+const buildHistoryMap = async (assignmentIds: number[]) => {
+  const map = new Map<number, KpiTrackingHistoryEntry[]>();
+  if (!assignmentIds.length) return map;
+
+  const logs = await prisma.auditLog.findMany({
+    where: {
+      entityType: 'employee_kpi_assignment',
+      entityId: { in: assignmentIds },
+      action: {
+        in: [
+          'employee_kpi_assignment:progress',
+          'employee_kpi_assignment:update',
+          'employee_kpi_assignment:close',
+        ],
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: Math.max(assignmentIds.length * 15, 50),
+  });
+
+  for (const log of logs) {
+    if (!log.entityId) continue;
+    if (!map.has(log.entityId)) {
+      map.set(log.entityId, []);
+    }
+    const entries = map.get(log.entityId)!;
+    if (entries.length >= 8) continue;
+
+    const metadata = toMetadataObject(log.metadata);
+    const previousAchievedValue = toNullableNumber(
+      metadata?.previousAchievedValue ?? metadata?.previousValue
+    );
+    const newAchievedValue = toNullableNumber(
+      metadata?.newAchievedValue ?? metadata?.newValue ?? metadata?.value
+    );
+    const actorProfileId = toNullableNumber(
+      metadata?.actorProfileId ??
+        metadata?.profileId ??
+        metadata?.performedByProfileId
+    );
+
+    entries.push({
+      id: log.id,
+      at: log.createdAt.toISOString(),
+      action: log.action,
+      source: normalizeHistorySource(log.action),
+      actorProfileId,
+      previousAchievedValue,
+      newAchievedValue,
+      note:
+        typeof metadata?.notes === 'string'
+          ? metadata.notes
+          : typeof metadata?.note === 'string'
+          ? metadata.note
+          : null,
+    });
+  }
+
+  return map;
+};
+
+const buildTrackingPayload = (
+  assignment: any,
+  summary: ReturnType<typeof computeOkrSummary>,
+  history: KpiTrackingHistoryEntry[]
+) => {
+  const targetValue = toNumber(assignment.targetValue ?? assignment.kpi?.targetValue, 0);
+  const hasManualAchieved =
+    assignment.achievedValue !== undefined &&
+    assignment.achievedValue !== null &&
+    assignment.achievedValue !== '';
+  const achievedValue = hasManualAchieved ? toNumber(assignment.achievedValue, 0) : null;
+  const derivedAchievedValueFromOkrs =
+    targetValue > 0
+      ? Number(((summary.overallCompletionPercent / 100) * targetValue).toFixed(2))
+      : null;
+  const resolvedAchievedValue =
+    achievedValue !== null ? achievedValue : derivedAchievedValueFromOkrs;
+  const progressPercent =
+    targetValue > 0 && resolvedAchievedValue !== null
+      ? Number(clampPercent((resolvedAchievedValue / targetValue) * 100).toFixed(2))
+      : summary.overallCompletionPercent;
+
+  const varianceToTarget =
+    targetValue > 0 && resolvedAchievedValue !== null
+      ? Number((resolvedAchievedValue - targetValue).toFixed(2))
+      : null;
+  const remainingToTarget =
+    targetValue > 0
+      ? Number(
+          Math.max(0, targetValue - (resolvedAchievedValue ?? 0)).toFixed(2)
+        )
+      : null;
+
+  let achievementStatus: 'not_started' | 'behind' | 'on_track' | 'met' | 'exceeded' =
+    'not_started';
+  if (resolvedAchievedValue !== null && targetValue > 0) {
+    if (resolvedAchievedValue > targetValue) {
+      achievementStatus = 'exceeded';
+    } else if (resolvedAchievedValue >= targetValue) {
+      achievementStatus = 'met';
+    } else if (progressPercent >= 75) {
+      achievementStatus = 'on_track';
+    } else if (progressPercent > 0) {
+      achievementStatus = 'behind';
+    }
+  }
+
+  const achievedFrom: 'manual' | 'okr_derived' | 'none' =
+    achievedValue !== null ? 'manual' : derivedAchievedValueFromOkrs !== null ? 'okr_derived' : 'none';
+
+  return {
+    targetValue: targetValue > 0 ? targetValue : null,
+    achievedValue,
+    resolvedAchievedValue,
+    derivedAchievedValueFromOkrs,
+    progressPercent,
+    achievement: {
+      status: achievementStatus,
+      achievedFrom,
+      varianceToTarget,
+      remainingToTarget,
+      formula:
+        targetValue > 0 && resolvedAchievedValue !== null
+          ? `${resolvedAchievedValue.toFixed(2)} / ${targetValue.toFixed(2)} * 100`
+          : null,
+      asOf:
+        history[0]?.at ??
+        summary.lastUpdatedAt ??
+        (assignment.updatedAt ? new Date(assignment.updatedAt).toISOString() : null),
+    },
+    history,
+    okr: summary,
+  };
+};
+
 const withTracking = async (assignments: any[]) => {
   if (!assignments.length) return assignments;
+
+  const historyMap = await buildHistoryMap(
+    assignments
+      .map((assignment) => Number(assignment?.id))
+      .filter((id) => Number.isInteger(id))
+  );
 
   const scopedPairs = Array.from(
     new Set(
@@ -191,14 +365,11 @@ const withTracking = async (assignments: any[]) => {
   if (!scopedPairs.length) {
     return assignments.map((assignment) => ({
       ...assignment,
-      tracking: {
-        targetValue:
-          assignment.targetValue ?? assignment.kpi?.targetValue ?? null,
-        achievedValue: assignment.achievedValue ?? null,
-        derivedAchievedValueFromOkrs: null,
-        progressPercent: 0,
-        okr: computeOkrSummary([]),
-      },
+      tracking: buildTrackingPayload(
+        assignment,
+        computeOkrSummary([]),
+        historyMap.get(Number(assignment.id)) ?? []
+      ),
     }));
   }
 
@@ -243,35 +414,14 @@ const withTracking = async (assignments: any[]) => {
   return assignments.map((assignment) => {
     const key = buildOkrTrackingKey(assignment.employeeProfileId, assignment.kpiId);
     const summary = computeOkrSummary(grouped.get(key) ?? []);
-    const targetValue = toNumber(
-      assignment.targetValue ?? assignment.kpi?.targetValue,
-      0
-    );
-    const hasManualAchieved =
-      assignment.achievedValue !== undefined &&
-      assignment.achievedValue !== null &&
-      assignment.achievedValue !== '';
-    const achievedValue = hasManualAchieved ? toNumber(assignment.achievedValue, 0) : null;
-    const derivedAchievedValueFromOkrs =
-      targetValue > 0
-        ? Number(((summary.overallCompletionPercent / 100) * targetValue).toFixed(2))
-        : null;
-    const resolvedAchievedValue =
-      achievedValue !== null ? achievedValue : derivedAchievedValueFromOkrs;
-    const progressPercent =
-      targetValue > 0 && resolvedAchievedValue !== null
-        ? Number(clampPercent((resolvedAchievedValue / targetValue) * 100).toFixed(2))
-        : summary.overallCompletionPercent;
 
     return {
       ...assignment,
-      tracking: {
-        targetValue: targetValue > 0 ? targetValue : null,
-        achievedValue,
-        derivedAchievedValueFromOkrs,
-        progressPercent,
-        okr: summary,
-      },
+      tracking: buildTrackingPayload(
+        assignment,
+        summary,
+        historyMap.get(Number(assignment.id)) ?? []
+      ),
     };
   });
 };
@@ -284,13 +434,13 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     const requestedEmployeeId = parseOptionalInt(
-      req.query.employeeProfileId ?? req.query.employee_id
+      req.query.employeeProfileId
     );
-    const requestedKpiId = parseOptionalInt(req.query.kpiId ?? req.query.kpi_id);
+    const requestedKpiId = parseOptionalInt(req.query.kpiId);
     const requestedStatus =
       typeof req.query.status === 'string' ? String(req.query.status).toLowerCase() : undefined;
     const includeTracking =
-      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
+      parseOptionalBoolean(req.query.includeTracking) === true;
 
     let where: any = {};
     if (!isPrivileged(req)) {
@@ -346,11 +496,11 @@ router.get('/my', authMiddleware, loadProfile, async (req: AuthRequest, res) => 
     if (!requesterId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    const requestedKpiId = parseOptionalInt(req.query.kpiId ?? req.query.kpi_id);
+    const requestedKpiId = parseOptionalInt(req.query.kpiId);
     const requestedStatus =
       typeof req.query.status === 'string' ? String(req.query.status).toLowerCase() : undefined;
     const includeTracking =
-      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
+      parseOptionalBoolean(req.query.includeTracking) === true;
 
     const assignments = await prisma.employeeKpiAssignment.findMany({
       where: {
@@ -384,7 +534,7 @@ router.post('/bulk-department', authMiddleware, loadProfile, async (req: AuthReq
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const departmentId = parseOptionalInt(req.body?.departmentId ?? req.body?.department_id);
+    const departmentId = parseOptionalInt(req.body?.departmentId);
     const kpiIds = Array.isArray(req.body?.kpiIds)
       ? req.body.kpiIds.map((value: unknown) => parseOptionalInt(value)).filter(Boolean)
       : [];
@@ -465,7 +615,7 @@ router.post('/bulk-department', authMiddleware, loadProfile, async (req: AuthReq
 router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const includeTracking =
-      parseOptionalBoolean(req.query.includeTracking ?? req.query.include_tracking) === true;
+      parseOptionalBoolean(req.query.includeTracking) === true;
     const assignment = await prisma.employeeKpiAssignment.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
@@ -498,22 +648,16 @@ router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const {
       employeeProfileId,
-      employee_id,
       kpiId,
-      kpi_id,
       targetValue,
-      target_value,
       weight,
-      weight_percentage,
       periodStart,
-      period_start,
       periodEnd,
-      period_end,
       status,
     } = req.body;
 
-    const resolvedEmployeeId = employeeProfileId ?? employee_id;
-    const resolvedKpiId = kpiId ?? kpi_id;
+    const resolvedEmployeeId = employeeProfileId;
+    const resolvedKpiId = kpiId;
 
     if (!resolvedEmployeeId || !resolvedKpiId) {
       return res.status(400).json({ error: 'employeeProfileId and kpiId required' });
@@ -527,10 +671,10 @@ router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       data: {
         employeeProfileId: Number(resolvedEmployeeId),
         kpiId: Number(resolvedKpiId),
-        targetValue: targetValue ?? target_value ? Number(targetValue ?? target_value) : undefined,
-        weight: weight ?? weight_percentage ? Number(weight ?? weight_percentage) : undefined,
-        periodStart: periodStart ?? period_start ? new Date(periodStart ?? period_start) : undefined,
-        periodEnd: periodEnd ?? period_end ? new Date(periodEnd ?? period_end) : undefined,
+        targetValue: targetValue ? Number(targetValue) : undefined,
+        weight: weight ? Number(weight) : undefined,
+        periodStart: periodStart ? new Date(periodStart) : undefined,
+        periodEnd: periodEnd ? new Date(periodEnd) : undefined,
         status,
       },
       include: {
@@ -543,8 +687,14 @@ router.post('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     await createAudit({
       action: 'employee_kpi_assignment:create',
       entity_type: 'employee_kpi_assignment',
+      entity_id: assignment.id,
       user_id: performedBy,
       ip_address: req.ip,
+      metadata: {
+        actorProfileId: req.profile?.id ?? null,
+        kpiId: assignment.kpiId,
+        employeeProfileId: assignment.employeeProfileId,
+      },
     });
 
     await NotificationService.createNotification(
@@ -578,7 +728,7 @@ router.post('/:id/progress', authMiddleware, loadProfile, async (req: AuthReques
       return res.status(400).json({ error: 'Invalid assignment id' });
     }
 
-    const value = req.body.value ?? req.body.achievedValue ?? req.body.achieved_value;
+    const value = req.body.value ?? req.body.achievedValue;
     if (value === undefined || value === null || value === '') {
       return res.status(400).json({ error: 'Progress value is required' });
     }
@@ -590,7 +740,7 @@ router.post('/:id/progress', authMiddleware, loadProfile, async (req: AuthReques
 
     const current = await prisma.employeeKpiAssignment.findUnique({
       where: { id: assignmentId },
-      select: { employeeProfileId: true },
+      select: { employeeProfileId: true, achievedValue: true },
     });
     if (!current) {
       return res.status(404).json({ error: 'KPI assignment not found' });
@@ -612,11 +762,28 @@ router.post('/:id/progress', authMiddleware, loadProfile, async (req: AuthReques
     });
 
     const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;
+    const notes =
+      typeof req.body?.notes === 'string'
+        ? req.body.notes.trim()
+        : typeof req.body?.note === 'string'
+        ? req.body.note.trim()
+        : '';
     await createAudit({
       action: 'employee_kpi_assignment:progress',
       entity_type: 'employee_kpi_assignment',
+      entity_id: assignment.id,
       user_id: performedBy,
       ip_address: req.ip,
+      metadata: {
+        actorProfileId: req.profile?.id ?? null,
+        previousAchievedValue:
+          current.achievedValue !== null && current.achievedValue !== undefined
+            ? Number(current.achievedValue)
+            : null,
+        newAchievedValue: parsedValue,
+        value: parsedValue,
+        notes: notes || null,
+      },
     });
 
     const [tracked] = await withTracking([assignment]);
@@ -662,8 +829,13 @@ router.post('/:id/close', authMiddleware, loadProfile, async (req: AuthRequest, 
     await createAudit({
       action: 'employee_kpi_assignment:close',
       entity_type: 'employee_kpi_assignment',
+      entity_id: assignment.id,
       user_id: performedBy,
       ip_address: req.ip,
+      metadata: {
+        actorProfileId: req.profile?.id ?? null,
+        status: 'closed',
+      },
     });
 
     const [tracked] = await withTracking([assignment]);
@@ -679,13 +851,9 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     const { id } = req.params;
     const {
       targetValue,
-      target_value,
       weight,
-      weight_percentage,
       periodStart,
-      period_start,
       periodEnd,
-      period_end,
       status,
     } = req.body;
 
@@ -704,10 +872,10 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     const assignment = await prisma.employeeKpiAssignment.update({
       where: { id: parseInt(id) },
       data: {
-        targetValue: targetValue ?? target_value ? Number(targetValue ?? target_value) : undefined,
-        weight: weight ?? weight_percentage ? Number(weight ?? weight_percentage) : undefined,
-        periodStart: periodStart ?? period_start ? new Date(periodStart ?? period_start) : undefined,
-        periodEnd: periodEnd ?? period_end ? new Date(periodEnd ?? period_end) : undefined,
+        targetValue: targetValue ? Number(targetValue) : undefined,
+        weight: weight ? Number(weight) : undefined,
+        periodStart: periodStart ? new Date(periodStart) : undefined,
+        periodEnd: periodEnd ? new Date(periodEnd) : undefined,
         status,
       },
       include: {
@@ -720,8 +888,21 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     await createAudit({
       action: 'employee_kpi_assignment:update',
       entity_type: 'employee_kpi_assignment',
+      entity_id: assignment.id,
       user_id: performedBy,
       ip_address: req.ip,
+      metadata: {
+        actorProfileId: req.profile?.id ?? null,
+        status: assignment.status,
+        targetValue:
+          assignment.targetValue !== null && assignment.targetValue !== undefined
+            ? Number(assignment.targetValue)
+            : null,
+        weight:
+          assignment.weight !== null && assignment.weight !== undefined
+            ? Number(assignment.weight)
+            : null,
+      },
     });
 
     await NotificationService.createNotification(
@@ -772,8 +953,12 @@ router.delete('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res)
     await createAudit({
       action: 'employee_kpi_assignment:delete',
       entity_type: 'employee_kpi_assignment',
+      entity_id: parseInt(id),
       user_id: performedBy,
       ip_address: req.ip,
+      metadata: {
+        actorProfileId: req.profile?.id ?? null,
+      },
     });
 
     return res.json({ ok: true });

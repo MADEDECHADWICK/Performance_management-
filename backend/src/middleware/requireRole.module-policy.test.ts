@@ -115,6 +115,58 @@ describe("requireRole module-policy bridge", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
+  it("uses module policy as source of truth when module context exists even if role name matches", async () => {
+    mockedPrisma.userAuthRole.findMany.mockResolvedValue([
+      roleRow("manager", true, ["module.users.read"]),
+    ]);
+
+    const middleware = requireRole("manager");
+    const req = createReq({
+      currentModuleAccess: { moduleKey: "users", action: "read" },
+    });
+    const res = createRes();
+    const next = jest.fn() as NextFunction;
+
+    await middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Forbidden - insufficient module access",
+        module: "users",
+        action: "approve",
+      })
+    );
+  });
+
+  it("applies user override precedence for module-context role checks", async () => {
+    mockedPrisma.userAuthRole.findMany.mockResolvedValue([
+      roleRow("manager", true, ["module.time_entries.approve"]),
+      roleRow("user_override_1", true, ["module.time_entries.read"]),
+    ]);
+
+    const middleware = requireRole("manager", "partner", "admin");
+    const req = createReq({
+      method: "POST",
+      currentModuleAccess: { moduleKey: "time_entries", action: "read" },
+    });
+    const res = createRes();
+    const next = jest.fn() as NextFunction;
+
+    await middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "Forbidden - insufficient module access",
+        module: "time_entries",
+        action: "approve",
+      })
+    );
+  });
+
   it("falls back to legacy role intersection when no module context exists", async () => {
     mockedPrisma.userAuthRole.findMany.mockResolvedValue([
       roleRow("manager", true, []),

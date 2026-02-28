@@ -120,7 +120,7 @@ export default function FrameworkAlignmentCard({
           <CardTitle className="text-base">{title}</CardTitle>
           <Badge variant="outline">{coverage.label}</Badge>
           <Badge variant="secondary">Cadence: {coverage.cadence}</Badge>
-          <Badge variant="outline">Owner: {coverage.primaryRoleOwner.replaceAll('_', ' ')}</Badge>
+          <Badge variant="outline">Owner: {coverage.primaryRoleOwner.replace(/_/g, ' ')}</Badge>
           {moduleMismatch && (
             <Badge variant="destructive">
               Resolved role maps to {resolved?.module?.toUpperCase()}

@@ -21,38 +21,39 @@ const isPrivileged = (roles: string[]) =>
 
 const isManagerRole = (roles: string[]) => roles.includes('manager');
 
-// GET /employee_evaluations?employee_id=3 or ?employee_ids=1,2,3
+// GET /employee_evaluations?employeeId=3 or ?employeeIds=1,2,3
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const { employee_id, employee_ids } = req.query;
+    const { employeeId, employeeIds } = req.query;
     
     if (!req.profile?.id) {
       return res.status(401).json({ error: 'Profile not found' });
     }
+    const requesterProfileId = req.profile.id;
 
     let ids: number[] = [];
-    if (employee_id) {
-      ids = [parseInt(employee_id as string)];
-    } else if (employee_ids) {
-      ids = (employee_ids as string).split(',').map(id => parseInt(id.trim()));
+    if (employeeId) {
+      ids = [parseInt(employeeId as string)];
+    } else if (employeeIds) {
+      ids = (employeeIds as string).split(',').map(id => parseInt(id.trim()));
     }
 
     const roles = resolveRoles(req);
     const privileged = isPrivileged(roles);
     if (!privileged) {
       if (ids.length === 0) {
-        ids = [req.profile.id];
+        ids = [requesterProfileId];
       } else {
         if (isManagerRole(roles)) {
           const reports = await prisma.profile.findMany({
-            where: { managerId: req.profile.id, status: 'active' },
+            where: { managerId: requesterProfileId, status: 'active' },
             select: { id: true },
           });
           const reportIds = new Set(reports.map((report) => report.id));
-          if (!ids.every((id) => id === req.profile.id || reportIds.has(id))) {
+          if (!ids.every((id) => id === requesterProfileId || reportIds.has(id))) {
             return res.status(403).json({ error: 'Access denied' });
           }
-        } else if (!ids.every((id) => id === req.profile.id)) {
+        } else if (!ids.every((id) => id === requesterProfileId)) {
           return res.status(403).json({ error: 'Access denied' });
         }
       }
@@ -100,23 +101,24 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
     if (!req.profile?.id) {
       return res.status(401).json({ error: 'Profile not found' });
     }
+    const requesterProfileId = req.profile.id;
 
     const roles = resolveRoles(req);
     const privileged = isPrivileged(roles);
     if (!privileged) {
       if (isManagerRole(roles)) {
         const reports = await prisma.profile.findMany({
-          where: { managerId: req.profile.id, status: 'active' },
+          where: { managerId: requesterProfileId, status: 'active' },
           select: { id: true },
         });
         const allowedIds = new Set(reports.map((report) => report.id));
         if (
-          evaluation.evaluateeProfileId !== req.profile.id &&
+          evaluation.evaluateeProfileId !== requesterProfileId &&
           !allowedIds.has(evaluation.evaluateeProfileId)
         ) {
           return res.status(403).json({ error: 'Access denied' });
         }
-      } else if (evaluation.evaluateeProfileId !== req.profile.id) {
+      } else if (evaluation.evaluateeProfileId !== requesterProfileId) {
         return res.status(403).json({ error: 'Access denied' });
       }
     }

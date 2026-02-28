@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { MessageSquare, Plus, Star, User } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { useAuth } from "@/contexts/AuthContext";
 
 interface Profile {
@@ -49,16 +50,7 @@ const Feedback = () => {
     is_anonymous: false,
   });
 
-  useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      navigate("/auth");
-      return;
-    }
-    loadData();
-  }, [authLoading, user, navigate]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       if (!user) {
         navigate("/auth");
@@ -66,16 +58,16 @@ const Feedback = () => {
       }
 
       // Load colleagues
-      const profilesData = await apiFetch(`/profiles?exclude_id=${user.id}&limit=50`);
-      setColleagues(profilesData || []);
+      const profilesData = await apiFetch('GET', `/profiles?exclude_id=${user.id}&limit=50`);
+      setColleagues(profilesData?.data ?? profilesData ?? []);
 
       // Load received feedback
-      const receivedData = await apiFetch(`/feedback?subject_id=${user.id}`);
-      setReceivedFeedback(receivedData || []);
+      const receivedData = await apiFetch('GET', `/feedback?subject_id=${user.id}`);
+      setReceivedFeedback(receivedData?.data ?? receivedData ?? []);
 
       // Load given feedback
-      const givenData = await apiFetch(`/feedback?reviewer_id=${user.id}`);
-      setGivenFeedback(givenData || []);
+      const givenData = await apiFetch('GET', `/feedback?reviewer_id=${user.id}`);
+      setGivenFeedback(givenData?.data ?? givenData ?? []);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -85,7 +77,16 @@ const Feedback = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [navigate, toast, user]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/auth");
+      return;
+    }
+    loadData();
+  }, [authLoading, user, navigate, loadData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,10 +97,7 @@ const Feedback = () => {
         return;
       }
 
-      await apiFetch('/feedback', {
-        method: 'POST',
-        body: JSON.stringify({ ...formData, reviewer_id: user.id })
-      });
+      await apiFetch('POST', '/feedback', { ...formData, reviewer_id: user.id });
 
       toast({ title: "Success", description: "Feedback submitted successfully" });
       setDialogOpen(false);
@@ -136,9 +134,7 @@ const Feedback = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }

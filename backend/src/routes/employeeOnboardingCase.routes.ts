@@ -9,6 +9,9 @@ import {
   getOnboardingCaseValidators,
   updateOnboardingStageValidators,
   initializeOnboardingStagesValidators,
+  assignOnboardingPoliciesValidators,
+  listOnboardingPoliciesValidators,
+  acknowledgeOnboardingPolicyValidators,
 } from "../validators/employeeOnboardingCase.validators";
 
 const router = Router();
@@ -77,6 +80,39 @@ router.post(
   validateRequest(initializeOnboardingStagesValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.initializeStages
+);
+
+/**
+ * GET /onboarding-cases/:caseId/policies
+ */
+router.get(
+  "/:caseId/policies",
+  authenticated(),
+  validateRequest(listOnboardingPoliciesValidators),
+  handleValidationErrors,
+  EmployeeOnboardingCaseController.listPolicies
+);
+
+/**
+ * POST /onboarding-cases/:caseId/policies (HR/Admin)
+ */
+router.post(
+  "/:caseId/policies",
+  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  validateRequest(assignOnboardingPoliciesValidators),
+  handleValidationErrors,
+  EmployeeOnboardingCaseController.assignPolicies
+);
+
+/**
+ * POST /onboarding-cases/:caseId/policies/:documentId/acknowledge
+ */
+router.post(
+  "/:caseId/policies/:documentId/acknowledge",
+  authenticated(),
+  validateRequest(acknowledgeOnboardingPolicyValidators),
+  handleValidationErrors,
+  EmployeeOnboardingCaseController.acknowledgePolicy
 );
 
 export default router;

@@ -1,55 +1,12 @@
 import { NextFunction, Response } from "express";
-import prisma from "../prisma";
 import { AuthRequest } from "./auth";
 import {
   ModuleAction,
   ModuleKey,
-  RoleModulePolicyInput,
   hasModuleAccess,
   methodToModuleAction,
 } from "../services/moduleAccess.service";
-
-const ensureRolePolicies = async (req: AuthRequest): Promise<RoleModulePolicyInput[]> => {
-  if (req.userRolePolicies) {
-    return req.userRolePolicies;
-  }
-  if (!req.user?.userId) return [];
-
-  const rows = await prisma.userAuthRole.findMany({
-    where: { userId: req.user.userId },
-    include: {
-      role: {
-        select: {
-          name: true,
-          isActive: true,
-          permissions: {
-            select: {
-              permission: { select: { key: true } },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const rolePolicies = rows
-    .filter((row) => row.role.isActive)
-    .map((row) => ({
-      roleName: row.role.name.toLowerCase(),
-      permissionKeys: row.role.permissions.map((permissionRow) => permissionRow.permission.key),
-    }));
-
-  req.userRolePolicies = rolePolicies;
-  req.userRoles = rolePolicies.map((rolePolicy) => rolePolicy.roleName);
-
-  const permissionSet = new Set<string>();
-  rolePolicies.forEach((rolePolicy) => {
-    rolePolicy.permissionKeys.forEach((permissionKey) => permissionSet.add(permissionKey));
-  });
-  req.userPermissions = Array.from(permissionSet);
-
-  return rolePolicies;
-};
+import { ensureAuthorizationContext } from "../services/authorizationContext.service";
 
 export const requireModuleAccess =
   (moduleKey: ModuleKey, actionOverride?: ModuleAction) =>
@@ -61,12 +18,12 @@ export const requireModuleAccess =
       }
 
       const action = actionOverride ?? methodToModuleAction(req.method);
-      const rolePolicies = await ensureRolePolicies(req);
+      const authz = await ensureAuthorizationContext(req);
 
       const allowed = hasModuleAccess({
         moduleKey,
         action,
-        rolePolicies,
+        rolePolicies: authz.moduleRolePolicies,
       });
 
       if (!allowed) {
@@ -86,6 +43,56 @@ export const requireModuleAccess =
       next();
     } catch (error) {
       console.error("requireModuleAccess failed:", error);
+      res.status(500).json({ error: "Module access check failed" });
+    }
+  };
+
+export const requireAnyModuleAccess =
+  (options: Array<{ moduleKey: ModuleKey; action?: ModuleAction }>) =>
+  async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.user?.userId) {
+        res.status(401).json({ error: "User not authenticated" });
+        return;
+      }
+
+      if (!Array.isArray(options) || options.length === 0) {
+        res.status(500).json({ error: "Module access check failed - no module options provided" });
+        return;
+      }
+
+      const authz = await ensureAuthorizationContext(req);
+      const resolvedOptions = options.map((option) => ({
+        moduleKey: option.moduleKey,
+        action: option.action ?? methodToModuleAction(req.method),
+      }));
+
+      const allowedOption = resolvedOptions.find((option) =>
+        hasModuleAccess({
+          moduleKey: option.moduleKey,
+          action: option.action,
+          rolePolicies: authz.moduleRolePolicies,
+        })
+      );
+
+      if (!allowedOption) {
+        res.status(403).json({
+          error: "Forbidden - insufficient module access",
+          module: resolvedOptions[0]?.moduleKey,
+          action: resolvedOptions[0]?.action,
+          requiredAnyOf: resolvedOptions,
+        });
+        return;
+      }
+
+      req.currentModuleAccess = {
+        moduleKey: allowedOption.moduleKey,
+        action: allowedOption.action,
+      };
+
+      next();
+    } catch (error) {
+      console.error("requireAnyModuleAccess failed:", error);
       res.status(500).json({ error: "Module access check failed" });
     }
   };

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { createAudit } from "../utils/audit";
 import {
   EXPLICIT_NONE_PERMISSION_KEY,
@@ -14,10 +14,27 @@ import {
   matrixToPermissionKeys,
   moduleCatalog,
 } from "../services/moduleAccess.service";
+import {
+  MODULE_REQUIREMENTS_BY_MODULE,
+  ROUTE_MODULE_REQUIREMENTS,
+} from "./moduleRouteRequirements";
 
 const router = Router();
 
-const canManageModulePolicies = requireRole("hr", "hr_manager", "admin", "super_admin");
+const canManageModulePolicies = requireModuleAccess("access_control", "admin");
+
+const toSnakeCase = (value: string) =>
+  value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/-/g, "_")
+    .toLowerCase();
+
+const normalizeModuleKeyInput = (value: unknown): ModuleKey | null => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const snake = toSnakeCase(raw);
+  return isModuleKey(snake) ? snake : null;
+};
 
 const normalizeModuleActions = (value: unknown): ModuleAction[] => {
   if (!Array.isArray(value)) return [];
@@ -36,8 +53,8 @@ const normalizeModuleAccessPayload = (
 
   const result: Partial<Record<ModuleKey, ModuleAction[]>> = {};
   Object.entries(payload as Record<string, unknown>).forEach(([moduleKey, actions]) => {
-    const normalizedModuleKey = String(moduleKey).toLowerCase();
-    if (!isModuleKey(normalizedModuleKey)) return;
+    const normalizedModuleKey = normalizeModuleKeyInput(moduleKey);
+    if (!normalizedModuleKey) return;
     result[normalizedModuleKey] = normalizeModuleActions(actions);
   });
   return result;
@@ -100,10 +117,27 @@ const toRoleSummary = (
   };
 };
 
+const getUserOverrideRoleName = (userId: number) =>
+  `user_override_${userId}`.toLowerCase();
+
 router.get("/modules", async (_req, res) => {
   res.json({
     modules: moduleCatalog,
     actions: ["read", "write", "approve", "admin"],
+    permissionLevels: {
+      no_access: [],
+      view_only: ["read"],
+      view_edit: ["read", "write"],
+      create: ["write"],
+      delete: ["write"],
+    },
+  });
+});
+
+router.get("/requirements", canManageModulePolicies, async (_req, res) => {
+  res.json({
+    byRoute: ROUTE_MODULE_REQUIREMENTS,
+    byModule: MODULE_REQUIREMENTS_BY_MODULE,
   });
 });
 
@@ -279,8 +313,16 @@ router.get("/users/:userId", canManageModulePolicies, async (req, res) => {
     }
 
     const activeRoleEntries = user.roles.filter((entry) => entry.role.isActive);
-    const roleNames = activeRoleEntries.map((entry) => entry.role.name);
-    const rolePolicies: RoleModulePolicyInput[] = activeRoleEntries.map((entry) => ({
+    const overrideRoleName = getUserOverrideRoleName(userId);
+    const overrideRoleEntry = activeRoleEntries.find(
+      (entry) => entry.role.name.toLowerCase() === overrideRoleName
+    );
+    const effectiveRoleEntries = overrideRoleEntry ? [overrideRoleEntry] : activeRoleEntries;
+
+    const roleNames = activeRoleEntries
+      .filter((entry) => entry.role.name.toLowerCase() !== overrideRoleName)
+      .map((entry) => entry.role.name);
+    const rolePolicies: RoleModulePolicyInput[] = effectiveRoleEntries.map((entry) => ({
       roleName: entry.role.name,
       permissionKeys: entry.role.permissions.map((permissionEntry) => permissionEntry.permission.key),
     }));
@@ -293,6 +335,15 @@ router.get("/users/:userId", canManageModulePolicies, async (req, res) => {
         )
       )
     );
+    const overridePermissionKeys = overrideRoleEntry
+      ? Array.from(
+          new Set(
+            overrideRoleEntry.role.permissions
+              .map((permissionEntry) => permissionEntry.permission.key)
+              .filter((key) => key.toLowerCase().startsWith("module."))
+          )
+        )
+      : [];
 
     const explicitAccess = buildModuleAccessMatrix({ permissionKeys });
     const effectiveAccess = buildModuleAccessMatrix({
@@ -313,13 +364,161 @@ router.get("/users/:userId", canManageModulePolicies, async (req, res) => {
           : null,
       },
       roles: roleNames,
+      effectiveRoles: effectiveRoleEntries.map((entry) => entry.role.name),
       permissionKeys,
       explicitAccess,
       effectiveAccess,
+      override: {
+        active: Boolean(overrideRoleEntry),
+        roleName: overrideRoleEntry?.role.name ?? null,
+        permissionKeys: overridePermissionKeys,
+        explicitAccess: buildModuleAccessMatrix({ permissionKeys: overridePermissionKeys }),
+      },
     });
   } catch (error) {
     console.error("Failed to load user module access:", error);
     res.status(500).json({ error: "Failed to load user module access" });
+  }
+});
+
+router.put("/users/:userId/override", canManageModulePolicies, async (req: AuthRequest, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ error: "Invalid userId" });
+    }
+
+    const overrideRoleName = getUserOverrideRoleName(userId);
+    const clearOverride = req.body?.clear === true;
+
+    const access = normalizeModuleAccessPayload(req.body?.access ?? req.body?.modules);
+    const hasAccessMatrixPayload =
+      req.body?.access !== undefined || req.body?.modules !== undefined;
+    let permissionKeys = matrixToPermissionKeys(access);
+
+    if (permissionKeys.length === 0) {
+      permissionKeys = normalizePermissionKeys(req.body?.permissionKeys);
+    }
+
+    if (permissionKeys.length === 0 && hasAccessMatrixPayload && !clearOverride) {
+      permissionKeys = [EXPLICIT_NONE_PERMISSION_KEY];
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true },
+    });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existingRole = await tx.authRole.findUnique({
+        where: { name: overrideRoleName },
+        select: { id: true },
+      });
+
+      if (clearOverride) {
+        if (!existingRole) {
+          return { mode: "cleared", permissionKeys: [] as string[] };
+        }
+
+        await tx.authRolePermission.deleteMany({
+          where: { roleId: existingRole.id },
+        });
+        await tx.userAuthRole.deleteMany({
+          where: { userId, roleId: existingRole.id },
+        });
+        await tx.authRole.update({
+          where: { id: existingRole.id },
+          data: { isActive: false },
+        });
+        return { mode: "cleared", permissionKeys: [] as string[] };
+      }
+
+      const role = await tx.authRole.upsert({
+        where: { name: overrideRoleName },
+        update: {
+          description: "Per-user module access override",
+          isActive: true,
+        },
+        create: {
+          name: overrideRoleName,
+          description: "Per-user module access override",
+          isActive: true,
+        },
+        select: { id: true, name: true },
+      });
+
+      await tx.userAuthRole.createMany({
+        data: [{ userId, roleId: role.id }],
+        skipDuplicates: true,
+      });
+
+      await tx.authRolePermission.deleteMany({
+        where: {
+          roleId: role.id,
+          permission: {
+            key: {
+              startsWith: "module.",
+            },
+          },
+        },
+      });
+
+      if (permissionKeys.length > 0) {
+        const permissions = await Promise.all(
+          permissionKeys.map((key) =>
+            tx.permission.upsert({
+              where: { key },
+              update: {},
+              create: {
+                key,
+                description: `Module permission: ${key}`,
+              },
+            })
+          )
+        );
+
+        await tx.authRolePermission.createMany({
+          data: permissions.map((permission) => ({
+            roleId: role.id,
+            permissionId: permission.id,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return { mode: "set", permissionKeys };
+    });
+
+    await createAudit({
+      action: clearOverride
+        ? "module_access.user_override_cleared"
+        : "module_access.user_override_updated",
+      entity_type: "user",
+      entity_id: userId,
+      user_id: req.user?.userId ? Number(req.user.userId) : undefined,
+      ip_address: req.ip,
+      metadata: {
+        userId,
+        overrideRoleName,
+        clearOverride,
+        permissionKeys: result.permissionKeys,
+      },
+    });
+
+    // IMPLEMENTED: Granular RBAC user overrides - override role can define a per-user module policy that takes precedence over base roles.
+    return res.json({
+      userId,
+      overrideRoleName,
+      clearOverride,
+      permissionKeys: result.permissionKeys,
+      explicitAccess: buildModuleAccessMatrix({ permissionKeys: result.permissionKeys }),
+    });
+  } catch (error) {
+    console.error("Failed to update user module override:", error);
+    return res.status(500).json({ error: "Failed to update user module override" });
   }
 });
 
@@ -348,8 +547,16 @@ router.get("/me", async (req: AuthRequest, res) => {
     });
 
     const activeRoleEntries = userRoles.filter((entry) => entry.role.isActive);
-    const roleNames = activeRoleEntries.map((entry) => entry.role.name);
-    const rolePolicies: RoleModulePolicyInput[] = activeRoleEntries.map((entry) => ({
+    const overrideRoleName = getUserOverrideRoleName(userId);
+    const overrideRoleEntry = activeRoleEntries.find(
+      (entry) => entry.role.name.toLowerCase() === overrideRoleName
+    );
+    const effectiveRoleEntries = overrideRoleEntry ? [overrideRoleEntry] : activeRoleEntries;
+
+    const roleNames = activeRoleEntries
+      .filter((entry) => entry.role.name.toLowerCase() !== overrideRoleName)
+      .map((entry) => entry.role.name);
+    const rolePolicies: RoleModulePolicyInput[] = effectiveRoleEntries.map((entry) => ({
       roleName: entry.role.name,
       permissionKeys: entry.role.permissions.map((permissionEntry) => permissionEntry.permission.key),
     }));
@@ -370,8 +577,13 @@ router.get("/me", async (req: AuthRequest, res) => {
     res.json({
       userId,
       roles: roleNames,
+      effectiveRoles: effectiveRoleEntries.map((entry) => entry.role.name),
       permissionKeys,
       effectiveAccess,
+      override: {
+        active: Boolean(overrideRoleEntry),
+        roleName: overrideRoleEntry?.role.name ?? null,
+      },
     });
   } catch (error) {
     console.error("Failed to load current user module access:", error);

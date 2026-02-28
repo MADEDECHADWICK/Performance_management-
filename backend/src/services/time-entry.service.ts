@@ -28,10 +28,55 @@ interface ListOptions {
 }
 
 export class TimeEntryService {
-  private static resolveJobBudgetHours(job: {
-    budgetHours?: any;
-    jobCosting?: { budgetCap?: { totalAllocatedHours?: any }; totalEstimatedHours?: any } | null;
-  }) {
+  private static normalizeRole(roleName?: string): string {
+    return String(roleName || '').toLowerCase().trim();
+  }
+
+  private static isAdminRole(roleName?: string): boolean {
+    const normalized = TimeEntryService.normalizeRole(roleName);
+    return normalized === 'admin' || normalized === 'super_admin';
+  }
+
+  private static hasScopedManagerAccess(
+    roleName: string | undefined,
+    requesterProfileId: number,
+    ctx: { jobManagerProfileId?: number | null; employeeManagerId?: number | null }
+  ): boolean {
+    if (TimeEntryService.normalizeRole(roleName) !== 'manager') {
+      return false;
+    }
+    return (
+      ctx.jobManagerProfileId === requesterProfileId ||
+      ctx.employeeManagerId === requesterProfileId
+    );
+  }
+
+  private static hasPartnerAccess(
+    roleName: string | undefined,
+    requesterProfileId: number,
+    jobPartnerProfileId?: number | null
+  ): boolean {
+    return (
+      TimeEntryService.normalizeRole(roleName) === 'partner' &&
+      jobPartnerProfileId === requesterProfileId
+    );
+  }
+
+  private static resolveJobBudgetHours(
+    job:
+      | {
+          budgetHours?: any;
+          jobCosting?:
+            | {
+                budgetCap?: { totalAllocatedHours?: any } | null;
+                totalEstimatedHours?: any;
+              }
+            | null;
+        }
+      | null
+      | undefined
+  ) {
+    if (!job) return 0;
     const fromBudgetCap = Number(
       job.jobCosting?.budgetCap?.totalAllocatedHours ??
         job.jobCosting?.totalEstimatedHours ??
@@ -96,6 +141,271 @@ export class TimeEntryService {
     };
   }
 
+  private static readonly LUNCH_BREAK_START_HOUR = 13;
+  private static readonly LUNCH_BREAK_END_HOUR = 14;
+
+  private static parseDateInput(value: unknown): Date | null {
+    if (value === undefined || value === null || value === '') return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    const parsed = new Date(String(value));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private static calculateLunchBreakOverlapHours(start: Date, end: Date): number {
+    if (end <= start) return 0;
+
+    let overlapMs = 0;
+    const dayCursor = new Date(start);
+    dayCursor.setHours(0, 0, 0, 0);
+
+    const endDay = new Date(end);
+    endDay.setHours(0, 0, 0, 0);
+
+    while (dayCursor.getTime() <= endDay.getTime()) {
+      const lunchStart = new Date(dayCursor);
+      lunchStart.setHours(TimeEntryService.LUNCH_BREAK_START_HOUR, 0, 0, 0);
+      const lunchEnd = new Date(dayCursor);
+      lunchEnd.setHours(TimeEntryService.LUNCH_BREAK_END_HOUR, 0, 0, 0);
+
+      const overlapStart = Math.max(start.getTime(), lunchStart.getTime());
+      const overlapEnd = Math.min(end.getTime(), lunchEnd.getTime());
+      if (overlapEnd > overlapStart) {
+        overlapMs += overlapEnd - overlapStart;
+      }
+
+      dayCursor.setDate(dayCursor.getDate() + 1);
+    }
+
+    return overlapMs / (1000 * 60 * 60);
+  }
+
+  private static calculateTrackedHours(start: Date, end: Date) {
+    const rawHours = Math.max(0, (end.getTime() - start.getTime()) / (1000 * 60 * 60));
+    const lunchBreakHours = TimeEntryService.calculateLunchBreakOverlapHours(start, end);
+    const netHours = Math.max(0, rawHours - lunchBreakHours);
+    return {
+      hours: Number(netHours.toFixed(2)),
+      lunchBreakHours: Number(lunchBreakHours.toFixed(2)),
+      rawHours: Number(rawHours.toFixed(2)),
+    };
+  }
+
+  private static resolveTimeInput(
+    input: { hours?: unknown; startedAt?: unknown; endedAt?: unknown },
+    opts?: { fallbackHours?: number; fallbackStartedAt?: Date | null; fallbackEndedAt?: Date | null }
+  ) {
+    const providedStartedAt = TimeEntryService.parseDateInput(input.startedAt);
+    const providedEndedAt = TimeEntryService.parseDateInput(input.endedAt);
+    const hasRangeInput = input.startedAt !== undefined || input.endedAt !== undefined;
+
+    if (hasRangeInput) {
+      if (!providedStartedAt || !providedEndedAt) {
+        throw { statusCode: 400, message: 'Both startedAt and endedAt are required' };
+      }
+      if (providedEndedAt <= providedStartedAt) {
+        throw { statusCode: 400, message: 'endedAt must be after startedAt' };
+      }
+
+      const tracked = TimeEntryService.calculateTrackedHours(providedStartedAt, providedEndedAt);
+      if (!Number.isFinite(tracked.hours) || tracked.hours <= 0) {
+        throw { statusCode: 400, message: 'Tracked hours must be greater than zero' };
+      }
+
+      return {
+        hours: tracked.hours,
+        startedAt: providedStartedAt,
+        endedAt: providedEndedAt,
+        lunchBreakHours: tracked.lunchBreakHours,
+      };
+    }
+
+    if (input.hours !== undefined && input.hours !== null && input.hours !== '') {
+      const parsedHours = Number(input.hours);
+      if (!Number.isFinite(parsedHours) || parsedHours <= 0) {
+        throw { statusCode: 400, message: 'Invalid hours value' };
+      }
+      return {
+        hours: parsedHours,
+        startedAt: null as Date | null,
+        endedAt: null as Date | null,
+        lunchBreakHours: 0,
+      };
+    }
+
+    if (opts?.fallbackHours !== undefined) {
+      const fallbackHours = Number(opts.fallbackHours);
+      if (!Number.isFinite(fallbackHours) || fallbackHours <= 0) {
+        throw { statusCode: 400, message: 'Invalid hours value' };
+      }
+      return {
+        hours: fallbackHours,
+        startedAt: opts.fallbackStartedAt ?? null,
+        endedAt: opts.fallbackEndedAt ?? null,
+        lunchBreakHours: 0,
+      };
+    }
+
+    throw { statusCode: 400, message: 'Invalid hours value' };
+  }
+
+  private static readonly HARD_CAP_OPTIONS = [
+    { key: 'mark_task_complete', label: 'Mark Task as Complete' },
+    { key: 'request_additional_time', label: 'Request Additional Time' },
+    { key: 'dismiss', label: 'Dismiss' },
+  ] as const;
+
+  private static throwHardCapExceeded(params: {
+    capType: 'employee' | 'job' | 'task';
+    jobId: number;
+    taskId?: number | null;
+    availableHours: number;
+    attemptedHours: number;
+  }): never {
+    const availableHours = Number(Math.max(0, params.availableHours).toFixed(2));
+    const attemptedHours = Number(Math.max(0, params.attemptedHours).toFixed(2));
+    const capLabel =
+      params.capType === 'employee'
+        ? 'your allocation'
+        : params.capType === 'task'
+          ? 'your task allocation'
+          : 'job allocation';
+
+    // IMPLEMENTED: Timesheet hard cap action contract — return explicit UI actions when cap is reached.
+    throw {
+      statusCode: 409,
+      message: `Time entry exceeds ${capLabel}. Available: ${availableHours.toFixed(2)} hours`,
+      details: {
+        code: 'TIME_ENTRY_HARD_CAP_REACHED',
+        hardCap: true,
+        capType: params.capType,
+        jobId: params.jobId,
+        taskId: params.taskId ?? null,
+        availableHours,
+        attemptedHours,
+        options: TimeEntryService.HARD_CAP_OPTIONS,
+      },
+    };
+  }
+
+  private static readonly APPROVAL_META_PREFIX = '[[RG_APPROVAL_META]]';
+
+  private static parseApprovalMetadata(approvalNotes: string | null | undefined) {
+    const raw = String(approvalNotes || '');
+    if (!raw.startsWith(TimeEntryService.APPROVAL_META_PREFIX)) {
+      return { meta: {} as Record<string, any>, note: raw.trim() || null };
+    }
+
+    const payload = raw.slice(TimeEntryService.APPROVAL_META_PREFIX.length);
+    const newlineIndex = payload.indexOf('\n');
+    const metaRaw = (newlineIndex === -1 ? payload : payload.slice(0, newlineIndex)).trim();
+    const noteRaw = newlineIndex === -1 ? '' : payload.slice(newlineIndex + 1).trim();
+
+    try {
+      return {
+        meta: metaRaw ? (JSON.parse(metaRaw) as Record<string, any>) : {},
+        note: noteRaw || null,
+      };
+    } catch (_error) {
+      return { meta: {}, note: noteRaw || null };
+    }
+  }
+
+  private static serializeApprovalMetadata(
+    meta: Record<string, any>,
+    note?: string | null
+  ) {
+    const notePart = String(note || '').trim();
+    return `${TimeEntryService.APPROVAL_META_PREFIX}${JSON.stringify(meta)}${
+      notePart ? `\n${notePart}` : ''
+    }`;
+  }
+
+  private static readonly NON_BILLABLE_CATEGORIES = new Set([
+    'leave',
+    'public_holiday',
+    'internal',
+    'training',
+    'other',
+  ]);
+
+  private static readonly NON_BILLABLE_PREFIX = '[[RG_NON_BILLABLE_CATEGORY]]';
+
+  private static normalizeNonBillableCategory(value: unknown) {
+    if (value === undefined || value === null || value === '') return null;
+    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, '_');
+    if (!TimeEntryService.NON_BILLABLE_CATEGORIES.has(normalized)) {
+      throw {
+        statusCode: 400,
+        message:
+          'nonBillableCategory must be one of: leave, public_holiday, internal, training, other',
+      };
+    }
+    return normalized;
+  }
+
+  private static applyNonBillableCategoryToDescription(
+    description: unknown,
+    category: string | null
+  ) {
+    const raw = String(description || '').trim();
+    if (!category) return raw || null;
+    if (raw.startsWith(TimeEntryService.NON_BILLABLE_PREFIX)) {
+      return raw;
+    }
+    return `${TimeEntryService.NON_BILLABLE_PREFIX}${category}${raw ? `\n${raw}` : ''}`;
+  }
+
+  private static async resolveAdditionalHoursRisk(
+    jobId: number,
+    employeeProfileId: number,
+    additionalHours: number
+  ) {
+    const [job, rates, billableAgg] = await Promise.all([
+      prisma.job.findUnique({
+        where: { id: jobId },
+        select: {
+          id: true,
+          billingType: true,
+          fixedFeeAmount: true,
+          jobCosting: { select: { jobFee: true } },
+        },
+      }),
+      TimeEntryService.resolveRates(jobId, employeeProfileId),
+      prisma.timeEntry.aggregate({
+        where: {
+          jobId,
+          billable: true,
+          status: { in: ['pending', 'submitted', 'approved'] },
+        },
+        _sum: { billableAmount: true },
+      }),
+    ]);
+
+    const jobFee = Number(
+      job?.jobCosting?.jobFee ||
+        (job?.billingType === 'fixed_fee' ? job?.fixedFeeAmount : 0) ||
+        0
+    );
+    const currentBillableAmount = Number(billableAgg._sum.billableAmount || 0);
+    const billingRate = Number(rates.billingRate || 0);
+    const projectedAdditionalCost = Number(additionalHours || 0) * billingRate;
+    const projectedTotalBillable = currentBillableAmount + projectedAdditionalCost;
+    const wouldExceedFeeCap = jobFee > 0 && projectedTotalBillable > jobFee + 0.0001;
+    const excessCost = wouldExceedFeeCap ? projectedTotalBillable - jobFee : 0;
+
+    return {
+      jobFee,
+      billingRate,
+      currentBillableAmount,
+      projectedAdditionalCost,
+      projectedTotalBillable,
+      wouldExceedFeeCap,
+      excessCost,
+    };
+  }
+
   private static async getAllocationSummary(jobId: number, employeeProfileId: number) {
     const jobCosting = await prisma.jobCosting.findUnique({
       where: { jobId },
@@ -151,8 +461,8 @@ export class TimeEntryService {
       throw { statusCode: 404, message: 'Job not found' };
     }
 
-    const roleName = auth.roleName || '';
-    const isAdmin = roleName === 'admin';
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isHr = roleName === 'hr' || roleName === 'hr_manager';
     const isPartner = roleName === 'partner' && job.partnerProfileId === auth.profileId;
     const isManager = roleName === 'manager' && job.managerProfileId === auth.profileId;
@@ -273,15 +583,19 @@ export class TimeEntryService {
     }
 
     // Access control based on role
-    if (!['admin', 'manager', 'partner'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isElevated =
+      TimeEntryService.isAdminRole(roleName) || roleName === 'manager' || roleName === 'partner';
+
+    if (!isElevated) {
       // Regular employees only see their own entries
       where.employeeProfileId = auth.profileId;
-    } else if (auth.roleName === 'partner') {
+    } else if (roleName === 'partner') {
       // Partners only see their own jobs' time entries
       where.job = {
         partnerProfileId: auth.profileId,
       };
-    } else if (auth.roleName === 'manager') {
+    } else if (roleName === 'manager') {
       // Managers only see their own jobs' time entries
       where.job = {
         managerProfileId: auth.profileId,
@@ -336,10 +650,17 @@ export class TimeEntryService {
    * Create a new time entry
    */
   static async createTimeEntry(input: any, auth: AuthContext) {
-    const { jobId, taskId, dateWorked, hours, description } = input;
-    const entryHours = Number(hours);
-    if (Number.isNaN(entryHours) || entryHours <= 0) {
-      throw { statusCode: 400, message: 'Invalid hours value' };
+    const { jobId, taskId, dateWorked, description: rawDescription } = input;
+    const resolvedTimeInput = TimeEntryService.resolveTimeInput({
+      hours: input.hours,
+      startedAt: input.startedAt,
+      endedAt: input.endedAt,
+    });
+    const entryHours = resolvedTimeInput.hours;
+    const resolvedDateWorked =
+      TimeEntryService.parseDateInput(dateWorked) ?? resolvedTimeInput.startedAt;
+    if (!resolvedDateWorked) {
+      throw { statusCode: 400, message: 'dateWorked is required' };
     }
 
     // ✅ VERIFY JOB EXISTS
@@ -365,8 +686,8 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY USER IS ASSIGNED TO THIS JOB (unless admin)
-    const roleName = auth.roleName || '';
-    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
     if (!isAdmin && job.staffing.length === 0) {
       throw {
         statusCode: 403,
@@ -394,10 +715,18 @@ export class TimeEntryService {
       };
     }
 
+    let taskContext: { id: number; estimatedHours: number; assignedToProfileId: number | null } | null =
+      null;
     // ✅ VERIFY TASK EXISTS IF PROVIDED
     if (taskId) {
       const task = await prisma.task.findUnique({
         where: { id: Number(taskId) },
+        select: {
+          id: true,
+          jobId: true,
+          estimatedHours: true,
+          assignedToProfileId: true,
+        },
       });
 
       if (!task || task.jobId !== Number(jobId)) {
@@ -406,9 +735,37 @@ export class TimeEntryService {
           message: 'Task not found or does not belong to this job',
         };
       }
+
+      if (!isAdmin && task.assignedToProfileId && task.assignedToProfileId !== auth.profileId) {
+        throw {
+          statusCode: 403,
+          message: 'You can only log time against tasks assigned to you',
+        };
+      }
+
+      taskContext = {
+        id: task.id,
+        estimatedHours: Number(task.estimatedHours || 0),
+        assignedToProfileId: task.assignedToProfileId,
+      };
     }
 
     const requestedBillable = input.billable ?? true;
+    const requestedNonBillableCategory = TimeEntryService.normalizeNonBillableCategory(
+      input.nonBillableCategory
+    );
+    if (!requestedBillable && !requestedNonBillableCategory) {
+      // IMPLEMENTED: Non-billable time categories — non-billable entries now require a category.
+      throw {
+        statusCode: 400,
+        message:
+          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, other)',
+      };
+    }
+    const normalizedDescription = TimeEntryService.applyNonBillableCategoryToDescription(
+      rawDescription,
+      requestedBillable ? null : requestedNonBillableCategory
+    );
     const rates = await TimeEntryService.resolveRates(Number(jobId), auth.profileId);
 
     const jobFee = Number(
@@ -485,15 +842,40 @@ export class TimeEntryService {
       const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
       const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
 
+      if (taskContext?.estimatedHours && taskContext.estimatedHours > 0) {
+        const loggedTaskHoursResult = await tx.timeEntry.aggregate({
+          where: {
+            jobId: Number(jobId),
+            taskId: taskContext.id,
+            employeeProfileId: auth.profileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+          },
+          _sum: { hours: true },
+        });
+        const loggedTaskHours = Number(loggedTaskHoursResult._sum.hours || 0);
+        if (loggedTaskHours + entryHours > taskContext.estimatedHours) {
+          TimeEntryService.throwHardCapExceeded({
+            capType: 'task',
+            jobId: Number(jobId),
+            taskId: taskContext.id,
+            availableHours: taskContext.estimatedHours - loggedTaskHours,
+            attemptedHours: entryHours,
+          });
+        }
+      }
+
       if (
         Number.isFinite(effectiveEmployeeAllocation) &&
         effectiveEmployeeAllocation > 0 &&
         loggedEmployeeHours + entryHours > effectiveEmployeeAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Time entry exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'employee',
+          jobId: Number(jobId),
+          taskId: taskId ? Number(taskId) : null,
+          availableHours: effectiveEmployeeAllocation - loggedEmployeeHours,
+          attemptedHours: entryHours,
+        });
       }
 
       if (
@@ -501,10 +883,13 @@ export class TimeEntryService {
         effectiveJobAllocation > 0 &&
         loggedJobHours + entryHours > effectiveJobAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Time entry exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'job',
+          jobId: Number(jobId),
+          taskId: taskId ? Number(taskId) : null,
+          availableHours: effectiveJobAllocation - loggedJobHours,
+          attemptedHours: entryHours,
+        });
       }
 
       const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
@@ -563,8 +948,10 @@ export class TimeEntryService {
               jobId: Number(jobId),
               employeeProfileId: auth.profileId,
               hours: entryHours,
-              description,
-              dateWorked: new Date(dateWorked),
+              description: normalizedDescription,
+              dateWorked: resolvedDateWorked,
+              startedAt: resolvedTimeInput.startedAt,
+              endedAt: resolvedTimeInput.endedAt,
               taskId: taskId ? Number(taskId) : null,
               billable: finalBillable,
               billableAmount: amounts.billableAmount,
@@ -608,8 +995,10 @@ export class TimeEntryService {
               jobId: Number(jobId),
               employeeProfileId: auth.profileId,
               hours: billableHours,
-              description,
-              dateWorked: new Date(dateWorked),
+              description: normalizedDescription,
+              dateWorked: resolvedDateWorked,
+              startedAt: resolvedTimeInput.startedAt,
+              endedAt: resolvedTimeInput.endedAt,
               taskId: taskId ? Number(taskId) : null,
               billable: true,
               billableAmount: billableAmounts.billableAmount,
@@ -627,8 +1016,11 @@ export class TimeEntryService {
               jobId: Number(jobId),
               employeeProfileId: auth.profileId,
               hours: nonBillableHours,
-              description,
-              dateWorked: new Date(dateWorked),
+              description: TimeEntryService.applyNonBillableCategoryToDescription(
+                normalizedDescription,
+                requestedNonBillableCategory || 'other'
+              ),
+              dateWorked: resolvedDateWorked,
               taskId: taskId ? Number(taskId) : null,
               billable: false,
               billableAmount: nonBillableAmounts.billableAmount,
@@ -656,8 +1048,13 @@ export class TimeEntryService {
           jobId: Number(jobId),
           employeeProfileId: auth.profileId,
           hours: entryHours,
-          description,
-          dateWorked: new Date(dateWorked),
+          description: TimeEntryService.applyNonBillableCategoryToDescription(
+            normalizedDescription,
+            finalBillable ? null : requestedNonBillableCategory || 'other'
+          ),
+          dateWorked: resolvedDateWorked,
+          startedAt: resolvedTimeInput.startedAt,
+          endedAt: resolvedTimeInput.endedAt,
           taskId: taskId ? Number(taskId) : null,
           billable: finalBillable,
           billableAmount: amounts.billableAmount,
@@ -692,6 +1089,7 @@ export class TimeEntryService {
             jobName: true,
             budgetHours: true,
             clientId: true,
+            managerProfileId: true,
             partnerProfileId: true,
           },
         },
@@ -700,6 +1098,7 @@ export class TimeEntryService {
             id: true,
             firstName: true,
             lastName: true,
+            managerId: true,
             user: { select: { email: true } },
           },
         },
@@ -728,9 +1127,16 @@ export class TimeEntryService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
-      auth.roleName === 'manager' ||
-      (auth.roleName === 'partner' && timeEntry.job.partnerProfileId === auth.profileId) ||
+      TimeEntryService.isAdminRole(auth.roleName) ||
+      TimeEntryService.hasScopedManagerAccess(auth.roleName, auth.profileId, {
+        jobManagerProfileId: timeEntry.job.managerProfileId,
+        employeeManagerId: timeEntry.employee?.managerId,
+      }) ||
+      TimeEntryService.hasPartnerAccess(
+        auth.roleName,
+        auth.profileId,
+        timeEntry.job.partnerProfileId
+      ) ||
       timeEntry.employeeProfileId === auth.profileId;
 
     if (!canView) {
@@ -751,7 +1157,7 @@ export class TimeEntryService {
     input: any,
     auth: AuthContext
   ) {
-    const { hours, description, billable } = input;
+    const { description: rawDescription, billable } = input;
 
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
@@ -772,18 +1178,16 @@ export class TimeEntryService {
     }
 
     // ✅ VERIFY OWNERSHIP
-    if (
-      timeEntry.employeeProfileId !== auth.profileId &&
-      auth.roleName !== 'admin'
-    ) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
+
+    if (timeEntry.employeeProfileId !== auth.profileId && !isAdmin) {
       throw {
         statusCode: 403,
         message: 'You can only update your own time entries',
       };
     }
 
-    const roleName = auth.roleName || '';
-    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
     if (!timeEntry.job?.jobCosting && !isAdmin) {
       throw {
         statusCode: 400,
@@ -799,9 +1203,40 @@ export class TimeEntryService {
       };
     }
 
-    const updatedHours = typeof hours === 'number' ? hours : Number(timeEntry.hours || 0);
-    if (Number.isNaN(updatedHours) || updatedHours <= 0) {
-      throw { statusCode: 400, message: 'Invalid hours value' };
+    const resolvedTimeInput = TimeEntryService.resolveTimeInput(
+      {
+        hours: input.hours,
+        startedAt: input.startedAt,
+        endedAt: input.endedAt,
+      },
+      {
+        fallbackHours: Number(timeEntry.hours || 0),
+        fallbackStartedAt: timeEntry.startedAt,
+        fallbackEndedAt: timeEntry.endedAt,
+      }
+    );
+    const updatedHours = resolvedTimeInput.hours;
+    let taskContext: { id: number; estimatedHours: number } | null = null;
+
+    if (timeEntry.taskId) {
+      const task = await prisma.task.findUnique({
+        where: { id: timeEntry.taskId },
+        select: {
+          id: true,
+          estimatedHours: true,
+          assignedToProfileId: true,
+        },
+      });
+      if (!task) {
+        throw { statusCode: 404, message: 'Task linked to time entry was not found' };
+      }
+      if (!isAdmin && task.assignedToProfileId && task.assignedToProfileId !== auth.profileId) {
+        throw {
+          statusCode: 403,
+          message: 'You can only log time against tasks assigned to you',
+        };
+      }
+      taskContext = { id: task.id, estimatedHours: Number(task.estimatedHours || 0) };
     }
 
     const allocationSummary = await TimeEntryService.getAllocationSummary(
@@ -829,6 +1264,20 @@ export class TimeEntryService {
 
     const requestedBillable =
       typeof billable === 'boolean' ? billable : Boolean(timeEntry.billable);
+    const requestedNonBillableCategory = TimeEntryService.normalizeNonBillableCategory(
+      input.nonBillableCategory
+    );
+    if (billable === false && !requestedNonBillableCategory) {
+      throw {
+        statusCode: 400,
+        message:
+          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, other)',
+      };
+    }
+    const normalizedDescription = TimeEntryService.applyNonBillableCategoryToDescription(
+      rawDescription ?? timeEntry.description,
+      requestedBillable ? null : requestedNonBillableCategory
+    );
 
     return TimeEntryService.runSerializable(async (tx) => {
       const [approvedExtraJob, approvedExtraEmployee] = await Promise.all([
@@ -900,15 +1349,41 @@ export class TimeEntryService {
       const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
       const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
 
+      if (taskContext?.estimatedHours && taskContext.estimatedHours > 0) {
+        const loggedTaskHoursResult = await tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            taskId: taskContext.id,
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        });
+        const loggedTaskHours = Number(loggedTaskHoursResult._sum.hours || 0);
+        if (loggedTaskHours + updatedHours > taskContext.estimatedHours) {
+          TimeEntryService.throwHardCapExceeded({
+            capType: 'task',
+            jobId: timeEntry.jobId,
+            taskId: taskContext.id,
+            availableHours: taskContext.estimatedHours - loggedTaskHours,
+            attemptedHours: updatedHours,
+          });
+        }
+      }
+
       if (
         Number.isFinite(effectiveEmployeeAllocation) &&
         effectiveEmployeeAllocation > 0 &&
         loggedEmployeeHours + updatedHours > effectiveEmployeeAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Time entry exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'employee',
+          jobId: timeEntry.jobId,
+          taskId: timeEntry.taskId,
+          availableHours: effectiveEmployeeAllocation - loggedEmployeeHours,
+          attemptedHours: updatedHours,
+        });
       }
 
       if (
@@ -916,10 +1391,13 @@ export class TimeEntryService {
         effectiveJobAllocation > 0 &&
         loggedJobHours + updatedHours > effectiveJobAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Time entry exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'job',
+          jobId: timeEntry.jobId,
+          taskId: timeEntry.taskId,
+          availableHours: effectiveJobAllocation - loggedJobHours,
+          attemptedHours: updatedHours,
+        });
       }
 
       const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
@@ -979,7 +1457,12 @@ export class TimeEntryService {
             where: { id: timeEntryId },
             data: {
               hours: updatedHours,
-              description: description || timeEntry.description,
+              description: TimeEntryService.applyNonBillableCategoryToDescription(
+                normalizedDescription,
+                finalBillable ? null : requestedNonBillableCategory || 'other'
+              ),
+              startedAt: resolvedTimeInput.startedAt,
+              endedAt: resolvedTimeInput.endedAt,
               billable: finalBillable,
               billableAmount: amounts.billableAmount,
               costAmount: amounts.costAmount,
@@ -1021,7 +1504,9 @@ export class TimeEntryService {
             where: { id: timeEntryId },
             data: {
               hours: billableHours,
-              description: description || timeEntry.description,
+              description: normalizedDescription,
+              startedAt: resolvedTimeInput.startedAt,
+              endedAt: resolvedTimeInput.endedAt,
               billable: true,
               billableAmount: billableAmounts.billableAmount,
               costAmount: billableAmounts.costAmount,
@@ -1038,9 +1523,14 @@ export class TimeEntryService {
               jobId: timeEntry.jobId,
               employeeProfileId: timeEntry.employeeProfileId,
               hours: nonBillableHours,
-              description: description || timeEntry.description,
+              description: TimeEntryService.applyNonBillableCategoryToDescription(
+                normalizedDescription,
+                requestedNonBillableCategory || 'other'
+              ),
               dateWorked: timeEntry.dateWorked,
               taskId: timeEntry.taskId,
+              startedAt: null,
+              endedAt: null,
               billable: false,
               billableAmount: nonBillableAmounts.billableAmount,
               costAmount: nonBillableAmounts.costAmount,
@@ -1066,7 +1556,12 @@ export class TimeEntryService {
         where: { id: timeEntryId },
         data: {
           hours: updatedHours,
-          description: description || timeEntry.description,
+          description: TimeEntryService.applyNonBillableCategoryToDescription(
+            normalizedDescription,
+            finalBillable ? null : requestedNonBillableCategory || 'other'
+          ),
+          startedAt: resolvedTimeInput.startedAt,
+          endedAt: resolvedTimeInput.endedAt,
           billable: finalBillable,
           billableAmount: amounts.billableAmount,
           costAmount: amounts.costAmount,
@@ -1105,7 +1600,7 @@ export class TimeEntryService {
     // ✅ VERIFY OWNERSHIP
     if (
       timeEntry.employeeProfileId !== auth.profileId &&
-      auth.roleName !== 'admin'
+      !TimeEntryService.isAdminRole(auth.roleName)
     ) {
       throw {
         statusCode: 403,
@@ -1146,7 +1641,7 @@ export class TimeEntryService {
     // ✅ VERIFY OWNERSHIP
     if (
       timeEntry.employeeProfileId !== auth.profileId &&
-      auth.roleName !== 'admin'
+      !TimeEntryService.isAdminRole(auth.roleName)
     ) {
       throw {
         statusCode: 403,
@@ -1205,8 +1700,8 @@ export class TimeEntryService {
     approvalNotes: string,
     auth: AuthContext
   ) {
-    // ✅ VERIFY USER IS MANAGER/PARTNER
-    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can approve time entries',
@@ -1215,7 +1710,15 @@ export class TimeEntryService {
 
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
-      include: { job: true },
+      include: {
+        job: true,
+        employee: {
+          select: {
+            id: true,
+            managerId: true,
+          },
+        },
+      },
     });
 
     if (!timeEntry) {
@@ -1225,21 +1728,22 @@ export class TimeEntryService {
       };
     }
 
-    // ✅ VERIFY ACCESS TO JOB
-    if (auth.roleName === 'partner') {
-      const isPartnerOfJob = await prisma.job.findFirst({
-        where: {
-          id: timeEntry.jobId,
-          partnerProfileId: auth.profileId,
-        },
-      });
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
+    const isScopedManager = TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
+      jobManagerProfileId: timeEntry.job.managerProfileId,
+      employeeManagerId: timeEntry.employee?.managerId,
+    });
+    const isPartnerOfJob = TimeEntryService.hasPartnerAccess(
+      roleName,
+      auth.profileId,
+      timeEntry.job.partnerProfileId
+    );
 
-      if (!isPartnerOfJob) {
-        throw {
-          statusCode: 403,
-          message: 'You do not have permission to approve this time entry',
-        };
-      }
+    if (!isAdmin && !isScopedManager && !isPartnerOfJob) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to approve this time entry',
+      };
     }
 
     // ✅ VERIFY STATUS
@@ -1319,8 +1823,8 @@ export class TimeEntryService {
     rejectionReason: string,
     auth: AuthContext
   ) {
-    // ✅ VERIFY USER IS MANAGER/PARTNER
-    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can reject time entries',
@@ -1329,7 +1833,15 @@ export class TimeEntryService {
 
     const timeEntry = await prisma.timeEntry.findUnique({
       where: { id: timeEntryId },
-      include: { job: true },
+      include: {
+        job: true,
+        employee: {
+          select: {
+            id: true,
+            managerId: true,
+          },
+        },
+      },
     });
 
     if (!timeEntry) {
@@ -1339,21 +1851,22 @@ export class TimeEntryService {
       };
     }
 
-    // ✅ VERIFY ACCESS TO JOB
-    if (auth.roleName === 'partner') {
-      const isPartnerOfJob = await prisma.job.findFirst({
-        where: {
-          id: timeEntry.jobId,
-          partnerProfileId: auth.profileId,
-        },
-      });
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
+    const isScopedManager = TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
+      jobManagerProfileId: timeEntry.job.managerProfileId,
+      employeeManagerId: timeEntry.employee?.managerId,
+    });
+    const isPartnerOfJob = TimeEntryService.hasPartnerAccess(
+      roleName,
+      auth.profileId,
+      timeEntry.job.partnerProfileId
+    );
 
-      if (!isPartnerOfJob) {
-        throw {
-          statusCode: 403,
-          message: 'You do not have permission to reject this time entry',
-        };
-      }
+    if (!isAdmin && !isScopedManager && !isPartnerOfJob) {
+      throw {
+        statusCode: 403,
+        message: 'You do not have permission to reject this time entry',
+      };
     }
 
     // ✅ VERIFY STATUS
@@ -1432,7 +1945,7 @@ export class TimeEntryService {
     // ✅ VERIFY OWNERSHIP
     if (
       timeEntry.employeeProfileId !== auth.profileId &&
-      auth.roleName !== 'admin'
+      !TimeEntryService.isAdminRole(auth.roleName)
     ) {
       throw {
         statusCode: 403,
@@ -1449,7 +1962,7 @@ export class TimeEntryService {
     }
 
     // ✅ CHECK IF TIMER ALREADY RUNNING
-    if (timeEntry.startedAt) {
+    if (timeEntry.startedAt && !timeEntry.endedAt) {
       throw {
         statusCode: 400,
         message: 'Timer is already running for this entry',
@@ -1491,7 +2004,7 @@ export class TimeEntryService {
     // ✅ VERIFY OWNERSHIP
     if (
       timeEntry.employeeProfileId !== auth.profileId &&
-      auth.roleName !== 'admin'
+      !TimeEntryService.isAdminRole(auth.roleName)
     ) {
       throw {
         statusCode: 403,
@@ -1499,17 +2012,21 @@ export class TimeEntryService {
       };
     }
 
-    // ✅ VERIFY TIMER WAS STARTED
-    if (!timeEntry.startedAt) {
+    // ✅ VERIFY TIMER WAS STARTED AND STILL RUNNING
+    if (!timeEntry.startedAt || timeEntry.endedAt) {
       throw {
         statusCode: 400,
         message: 'Timer was not started for this entry',
       };
     }
 
-    // ✅ CALCULATE ELAPSED TIME
-    const elapsedMs = new Date().getTime() - new Date(timeEntry.startedAt).getTime();
-    const elapsedHours = elapsedMs / (1000 * 60 * 60);
+    // ✅ CALCULATE ELAPSED TIME (excluding lunch overlap)
+    const stoppedAt = new Date();
+    const elapsedTracking = TimeEntryService.calculateTrackedHours(
+      new Date(timeEntry.startedAt),
+      stoppedAt
+    );
+    const elapsedHours = elapsedTracking.hours;
     const totalHours = Number((Number(timeEntry.hours) + elapsedHours).toFixed(2));
 
     const job = await prisma.job.findUnique({
@@ -1517,8 +2034,8 @@ export class TimeEntryService {
       include: { jobCosting: { include: { budgetCap: true } } },
     });
 
-    const roleName = auth.roleName || '';
-    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
     if (!job?.jobCosting && !isAdmin) {
       throw {
         statusCode: 400,
@@ -1550,6 +2067,24 @@ export class TimeEntryService {
     const allowOverage = allocationSummary?.allowOverage ?? false;
     const maxOveragePercent = Number(allocationSummary?.maxOveragePercent ?? 0);
     const requestedBillable = Boolean(timeEntry.billable);
+    let taskContext: { id: number; estimatedHours: number } | null = null;
+
+    if (timeEntry.taskId) {
+      const task = await prisma.task.findUnique({
+        where: { id: timeEntry.taskId },
+        select: { id: true, estimatedHours: true, assignedToProfileId: true },
+      });
+      if (!task) {
+        throw { statusCode: 404, message: 'Task linked to time entry was not found' };
+      }
+      if (!isAdmin && task.assignedToProfileId && task.assignedToProfileId !== auth.profileId) {
+        throw {
+          statusCode: 403,
+          message: 'You can only log time against tasks assigned to you',
+        };
+      }
+      taskContext = { id: task.id, estimatedHours: Number(task.estimatedHours || 0) };
+    }
 
     return TimeEntryService.runSerializable(async (tx) => {
       const [approvedExtraJob, approvedExtraEmployee] = await Promise.all([
@@ -1619,15 +2154,41 @@ export class TimeEntryService {
       const loggedJobHours = Number(loggedJobHoursResult._sum.hours || 0);
       const loggedEmployeeHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
 
+      if (taskContext?.estimatedHours && taskContext.estimatedHours > 0) {
+        const loggedTaskHoursResult = await tx.timeEntry.aggregate({
+          where: {
+            jobId: timeEntry.jobId,
+            taskId: taskContext.id,
+            employeeProfileId: timeEntry.employeeProfileId,
+            status: { in: ['pending', 'submitted', 'approved'] },
+            id: { not: timeEntryId },
+          },
+          _sum: { hours: true },
+        });
+        const loggedTaskHours = Number(loggedTaskHoursResult._sum.hours || 0);
+        if (loggedTaskHours + totalHours > taskContext.estimatedHours) {
+          TimeEntryService.throwHardCapExceeded({
+            capType: 'task',
+            jobId: timeEntry.jobId,
+            taskId: taskContext.id,
+            availableHours: taskContext.estimatedHours - loggedTaskHours,
+            attemptedHours: totalHours,
+          });
+        }
+      }
+
       if (
         Number.isFinite(effectiveEmployeeAllocation) &&
         effectiveEmployeeAllocation > 0 &&
         loggedEmployeeHours + totalHours > effectiveEmployeeAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Adding timer duration exceeds your allocation. Available: ${(effectiveEmployeeAllocation - loggedEmployeeHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'employee',
+          jobId: timeEntry.jobId,
+          taskId: timeEntry.taskId,
+          availableHours: effectiveEmployeeAllocation - loggedEmployeeHours,
+          attemptedHours: totalHours,
+        });
       }
 
       if (
@@ -1635,10 +2196,13 @@ export class TimeEntryService {
         effectiveJobAllocation > 0 &&
         loggedJobHours + totalHours > effectiveJobAllocation
       ) {
-        throw {
-          statusCode: 400,
-          message: `Adding timer duration exceeds job allocation. Available: ${(effectiveJobAllocation - loggedJobHours).toFixed(2)} hours`,
-        };
+        TimeEntryService.throwHardCapExceeded({
+          capType: 'job',
+          jobId: timeEntry.jobId,
+          taskId: timeEntry.taskId,
+          availableHours: effectiveJobAllocation - loggedJobHours,
+          attemptedHours: totalHours,
+        });
       }
 
       const remainingEmployeeAllocation = Number.isFinite(effectiveEmployeeAllocation)
@@ -1697,7 +2261,8 @@ export class TimeEntryService {
           const updated = await tx.timeEntry.update({
             where: { id: timeEntryId },
             data: {
-              startedAt: null,
+              startedAt: timeEntry.startedAt,
+              endedAt: stoppedAt,
               hours: totalHours,
               billable: finalBillable,
               billableAmount: amounts.billableAmount,
@@ -1740,7 +2305,8 @@ export class TimeEntryService {
           tx.timeEntry.update({
             where: { id: timeEntryId },
             data: {
-              startedAt: null,
+              startedAt: timeEntry.startedAt,
+              endedAt: stoppedAt,
               hours: billableHours,
               billable: true,
               billableAmount: billableAmounts.billableAmount,
@@ -1759,9 +2325,14 @@ export class TimeEntryService {
               jobId: timeEntry.jobId,
               employeeProfileId: timeEntry.employeeProfileId,
               hours: nonBillableHours,
-              description: timeEntry.description,
+              description: TimeEntryService.applyNonBillableCategoryToDescription(
+                timeEntry.description,
+                'other'
+              ),
               dateWorked: timeEntry.dateWorked,
               taskId: timeEntry.taskId,
+              startedAt: null,
+              endedAt: null,
               billable: false,
               billableAmount: nonBillableAmounts.billableAmount,
               costAmount: nonBillableAmounts.costAmount,
@@ -1786,8 +2357,13 @@ export class TimeEntryService {
       const updated = await tx.timeEntry.update({
         where: { id: timeEntryId },
         data: {
-          startedAt: null,
+          startedAt: timeEntry.startedAt,
+          endedAt: stoppedAt,
           hours: totalHours,
+          description: TimeEntryService.applyNonBillableCategoryToDescription(
+            timeEntry.description,
+            finalBillable ? null : 'other'
+          ),
           billable: finalBillable,
           billableAmount: amounts.billableAmount,
           costAmount: amounts.costAmount,
@@ -1824,7 +2400,7 @@ export class TimeEntryService {
     });
 
     // Verify ownership for non-admin users
-    if (auth.roleName !== 'admin') {
+    if (!TimeEntryService.isAdminRole(auth.roleName)) {
       const unauthorized = entries.filter(
         e => e.employeeProfileId !== auth.profileId
       );
@@ -1861,24 +2437,47 @@ export class TimeEntryService {
     timeEntryIds: number[],
     auth: AuthContext
   ) {
-    // ✅ VERIFY USER IS MANAGER/PARTNER
-    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can approve time entries',
       };
     }
 
-    // Get all entries to verify access if partner
-    if (auth.roleName === 'partner') {
-      const entries = await prisma.timeEntry.findMany({
-        where: {
-          id: { in: timeEntryIds },
+    const entriesWithAccessContext = await prisma.timeEntry.findMany({
+      where: {
+        id: { in: timeEntryIds },
+      },
+      include: {
+        job: {
+          select: {
+            id: true,
+            managerProfileId: true,
+            partnerProfileId: true,
+          },
         },
-        include: { job: true },
+        employee: {
+          select: {
+            id: true,
+            managerId: true,
+          },
+        },
+      },
+    });
+
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
+    if (!isAdmin) {
+      const unauthorized = entriesWithAccessContext.filter((entry) => {
+        if (roleName === 'partner') {
+          return entry.job.partnerProfileId !== auth.profileId;
+        }
+        return !TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
+          jobManagerProfileId: entry.job.managerProfileId,
+          employeeManagerId: entry.employee?.managerId,
+        });
       });
 
-      const unauthorized = entries.filter(e => e.job.partnerProfileId !== auth.profileId);
       if (unauthorized.length > 0) {
         throw {
           statusCode: 403,
@@ -1887,12 +2486,7 @@ export class TimeEntryService {
       }
     }
 
-    const entries = await prisma.timeEntry.findMany({
-      where: {
-        id: { in: timeEntryIds },
-        status: 'submitted',
-      },
-    });
+    const entries = entriesWithAccessContext.filter((entry) => entry.status === 'submitted');
 
     const results = await Promise.all(
       entries.map(async (entry) => {
@@ -1953,8 +2547,8 @@ export class TimeEntryService {
       throw { statusCode: 404, message: 'Job not found' };
     }
 
-    const roleName = auth.roleName || '';
-    const isAdmin = roleName === 'admin' || roleName === 'super_admin';
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
 
     if (!isAdmin && job.staffing.length === 0) {
       throw { statusCode: 403, message: 'You are not assigned to this job' };
@@ -1975,10 +2569,6 @@ export class TimeEntryService {
       throw { statusCode: 400, message: 'No time allocation assigned for this job' };
     }
 
-    if (allocationSummary?.capEnforced && allocationSummary?.allowOverage === false) {
-      throw { statusCode: 409, message: 'Overage is not allowed for this job' };
-    }
-
     const loggedEmployeeHoursResult = await prisma.timeEntry.aggregate({
       where: {
         jobId: input.jobId,
@@ -1989,6 +2579,12 @@ export class TimeEntryService {
     });
 
     const currentLoggedHours = Number(loggedEmployeeHoursResult._sum.hours || 0);
+    const risk = await TimeEntryService.resolveAdditionalHoursRisk(
+      input.jobId,
+      auth.profileId,
+      Number(input.additionalHours || 0)
+    );
+    const requestRequiresPartnerApproval = Boolean(risk.wouldExceedFeeCap);
 
     // Allow requests even if some allocated hours remain (manager can still approve/deny).
 
@@ -2003,6 +2599,25 @@ export class TimeEntryService {
           justification: input.justification,
           requestType,
           status: 'pending',
+          approvalNotes: TimeEntryService.serializeApprovalMetadata(
+            {
+              requiresPartnerApproval: requestRequiresPartnerApproval,
+              managerApproved: false,
+              managerApprovedByProfileId: null,
+              managerApprovedAt: null,
+              partnerApproved: false,
+              feeRisk: {
+                jobFee: risk.jobFee,
+                billingRate: risk.billingRate,
+                currentBillableAmount: risk.currentBillableAmount,
+                projectedAdditionalCost: risk.projectedAdditionalCost,
+                projectedTotalBillable: risk.projectedTotalBillable,
+                wouldExceedFeeCap: risk.wouldExceedFeeCap,
+                excessCost: risk.excessCost,
+              },
+            },
+            null
+          ),
         },
       });
 
@@ -2011,13 +2626,16 @@ export class TimeEntryService {
         entity_type: 'time_entry_approval_request',
         entity_id: request.id,
         user_id: auth.userId,
-        metadata: {
-          jobId: input.jobId,
-          employeeProfileId: auth.profileId,
-          additionalHours: input.additionalHours,
-          requestType,
-        },
-      });
+          metadata: {
+            jobId: input.jobId,
+            employeeProfileId: auth.profileId,
+            additionalHours: input.additionalHours,
+            requestType,
+            requiresPartnerApproval: requestRequiresPartnerApproval,
+            wouldExceedFeeCap: risk.wouldExceedFeeCap,
+            projectedAdditionalCost: risk.projectedAdditionalCost,
+          },
+        });
 
     const wouldExceedJobAllocation =
       allocationSummary?.requiresAllocation &&
@@ -2057,7 +2675,9 @@ export class TimeEntryService {
     }
 
     const requestTitle = `Additional hours requested for ${job.jobName}`;
-    const requestMessage = `A team member requested ${input.additionalHours} more hours for "${job.jobName}".`;
+    const requestMessage = requestRequiresPartnerApproval
+      ? `A team member requested ${input.additionalHours} more hours for "${job.jobName}". This request may exceed fee cap and needs manager + partner approval.`
+      : `A team member requested ${input.additionalHours} more hours for "${job.jobName}". Manager approval is required.`;
 
     if (job.managerProfileId) {
       await NotificationService.createNotification(
@@ -2068,13 +2688,13 @@ export class TimeEntryService {
           message: requestMessage,
           actionRequired: true,
           jobId: job.id,
-          link: `/workload-management?jobId=${job.id}`,
+          link: `/timesheets?tab=approvals&jobId=${job.id}&approvalRequestId=${request.id}`,
         },
         { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
       );
     }
 
-    if (job.partnerProfileId) {
+    if (job.partnerProfileId && requestRequiresPartnerApproval) {
       await NotificationService.createNotification(
         {
           recipientProfileId: job.partnerProfileId,
@@ -2089,7 +2709,12 @@ export class TimeEntryService {
       );
     }
 
-    return request;
+    return {
+      ...request,
+      requiresPartnerApproval: requestRequiresPartnerApproval,
+      projectedAdditionalCost: risk.projectedAdditionalCost,
+      wouldExceedFeeCap: risk.wouldExceedFeeCap,
+    };
   }
 
   /**
@@ -2103,17 +2728,19 @@ export class TimeEntryService {
     if (filters.jobId) where.jobId = filters.jobId;
     if (filters.status) where.status = filters.status;
 
-    const isElevated = ['admin', 'manager', 'partner'].includes(auth.roleName || '');
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    const isElevated =
+      TimeEntryService.isAdminRole(roleName) || roleName === 'manager' || roleName === 'partner';
 
     if (!isElevated) {
       where.employeeProfileId = auth.profileId;
     } else if (filters.employeeProfileId) {
       where.employeeProfileId = filters.employeeProfileId;
     }
-    if (auth.roleName === 'manager') {
+    if (roleName === 'manager') {
       where.job = { managerProfileId: auth.profileId };
     }
-    if (auth.roleName === 'partner') {
+    if (roleName === 'partner') {
       where.job = { partnerProfileId: auth.profileId };
     }
 
@@ -2127,7 +2754,19 @@ export class TimeEntryService {
       },
     });
 
-    return requests;
+    return requests.map((request) => {
+      const { meta, note } = TimeEntryService.parseApprovalMetadata(request.approvalNotes);
+      return {
+        ...request,
+        approvalNotes: note,
+        requiresPartnerApproval: Boolean(meta.requiresPartnerApproval),
+        managerApproved: Boolean(meta.managerApproved),
+        pendingPartnerApproval:
+          request.status === 'pending' &&
+          Boolean(meta.requiresPartnerApproval) &&
+          Boolean(meta.managerApproved),
+      };
+    });
   }
 
   /**
@@ -2138,7 +2777,8 @@ export class TimeEntryService {
     approvalNotes: string | undefined,
     auth: AuthContext
   ) {
-    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to approve requests' };
     }
 
@@ -2153,50 +2793,179 @@ export class TimeEntryService {
 
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
-    const isAdmin = auth.roleName === 'admin';
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
 
     if (!isAdmin && !isJobManager && !isJobPartner) {
       throw { statusCode: 403, message: 'Not authorized to approve this request' };
     }
 
-      const updated = await prisma.timeEntryApprovalRequest.update({
+    if (request.status !== 'pending') {
+      throw { statusCode: 409, message: 'Only pending requests can be approved' };
+    }
+
+    const now = new Date();
+    const { meta, note: existingNote } = TimeEntryService.parseApprovalMetadata(
+      request.approvalNotes
+    );
+    const risk = await TimeEntryService.resolveAdditionalHoursRisk(
+      request.jobId,
+      request.employeeProfileId,
+      Number(request.additionalHoursRequested || 0)
+    );
+    const requiresPartnerApproval = Boolean(
+      meta.requiresPartnerApproval ?? risk.wouldExceedFeeCap
+    );
+
+    const mergedNote = String(approvalNotes || existingNote || '').trim() || null;
+
+    if (requiresPartnerApproval && !isAdmin && isJobManager && !isJobPartner) {
+      // IMPLEMENTED: Additional-time staged approval — manager first stage is recorded, partner must finalize.
+      const stagedMeta = {
+        ...meta,
+        requiresPartnerApproval: true,
+        managerApproved: true,
+        managerApprovedByProfileId: auth.profileId,
+        managerApprovedAt: now.toISOString(),
+        partnerApproved: false,
+        feeRisk: {
+          jobFee: risk.jobFee,
+          billingRate: risk.billingRate,
+          currentBillableAmount: risk.currentBillableAmount,
+          projectedAdditionalCost: risk.projectedAdditionalCost,
+          projectedTotalBillable: risk.projectedTotalBillable,
+          wouldExceedFeeCap: risk.wouldExceedFeeCap,
+          excessCost: risk.excessCost,
+        },
+      };
+
+      const staged = await prisma.timeEntryApprovalRequest.update({
         where: { id: requestId },
         data: {
-          status: 'approved',
+          status: 'pending',
           approvedByProfileId: auth.profileId,
-          approvalNotes,
-          approvedAt: new Date(),
+          approvedAt: now,
+          approvalNotes: TimeEntryService.serializeApprovalMetadata(stagedMeta, mergedNote),
         },
       });
 
-        await createAudit({
-          action: `approval_request_approved:job_${request.jobId}`,
-          entity_type: 'time_entry_approval_request',
-          entity_id: request.id,
-          user_id: auth.userId,
-          metadata: {
-            jobId: request.jobId,
-            employeeProfileId: request.employeeProfileId,
-            approvedByProfileId: auth.profileId,
-            approvalNotes: approvalNotes || null,
-          },
-        });
-
+      if (request.job.partnerProfileId) {
         await NotificationService.createNotification(
           {
-            recipientProfileId: request.employeeProfileId,
-            type: 'info',
-            title: 'Additional hours approved',
-            message: `Your additional hours request for "${request.job.jobName}" was approved.`,
-          actionRequired: false,
-          jobId: request.jobId,
-          link: `/timesheets`,
-        },
-        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
-      );
+            recipientProfileId: request.job.partnerProfileId,
+            type: 'action',
+            title: `Partner approval required: ${request.job.jobName}`,
+            message: `Manager approved an additional-hours request that may exceed fee cap for "${request.job.jobName}".`,
+            actionRequired: true,
+            jobId: request.jobId,
+            link: `/partner-dashboard?tab=approvals`,
+          },
+          { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+        );
+      }
 
-      return updated;
+      await createAudit({
+        action: `approval_request_manager_stage_approved:job_${request.jobId}`,
+        entity_type: 'time_entry_approval_request',
+        entity_id: request.id,
+        user_id: auth.userId,
+        metadata: {
+          jobId: request.jobId,
+          employeeProfileId: request.employeeProfileId,
+          approvedByProfileId: auth.profileId,
+          requiresPartnerApproval: true,
+          approvalNotes: mergedNote,
+        },
+      });
+
+      return {
+        ...staged,
+        requiresPartnerApproval: true,
+        pendingPartnerApproval: true,
+      };
     }
+
+    if (requiresPartnerApproval && !isAdmin) {
+      if (!isJobPartner) {
+        throw {
+          statusCode: 403,
+          message: 'Partner approval is required for this additional-hours request',
+        };
+      }
+
+      const managerApproved = Boolean(meta.managerApproved);
+      if (!managerApproved && request.job.managerProfileId && request.job.managerProfileId !== auth.profileId) {
+        throw {
+          statusCode: 409,
+          message: 'Manager approval is required before partner final approval',
+        };
+      }
+    }
+
+    const finalMeta = {
+      ...meta,
+      requiresPartnerApproval,
+      partnerApproved: requiresPartnerApproval ? true : meta.partnerApproved ?? false,
+      partnerApprovedByProfileId: requiresPartnerApproval ? auth.profileId : meta.partnerApprovedByProfileId,
+      partnerApprovedAt: requiresPartnerApproval ? now.toISOString() : meta.partnerApprovedAt,
+      managerApproved: requiresPartnerApproval ? Boolean(meta.managerApproved) : true,
+      managerApprovedByProfileId:
+        requiresPartnerApproval ? meta.managerApprovedByProfileId : auth.profileId,
+      managerApprovedAt:
+        requiresPartnerApproval ? meta.managerApprovedAt : now.toISOString(),
+      feeRisk: {
+        jobFee: risk.jobFee,
+        billingRate: risk.billingRate,
+        currentBillableAmount: risk.currentBillableAmount,
+        projectedAdditionalCost: risk.projectedAdditionalCost,
+        projectedTotalBillable: risk.projectedTotalBillable,
+        wouldExceedFeeCap: risk.wouldExceedFeeCap,
+        excessCost: risk.excessCost,
+      },
+    };
+
+    const updated = await prisma.timeEntryApprovalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'approved',
+        approvedByProfileId: auth.profileId,
+        approvalNotes: TimeEntryService.serializeApprovalMetadata(finalMeta, mergedNote),
+        approvedAt: now,
+      },
+    });
+
+    await createAudit({
+      action: `approval_request_approved:job_${request.jobId}`,
+      entity_type: 'time_entry_approval_request',
+      entity_id: request.id,
+      user_id: auth.userId,
+      metadata: {
+        jobId: request.jobId,
+        employeeProfileId: request.employeeProfileId,
+        approvedByProfileId: auth.profileId,
+        requiresPartnerApproval,
+        approvalNotes: mergedNote,
+      },
+    });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: request.employeeProfileId,
+        type: 'action',
+        title: 'Additional hours approved',
+        message: `Your additional hours request for "${request.job.jobName}" was approved. You can continue logging time on this job.`,
+        actionRequired: true,
+        jobId: request.jobId,
+        link: `/timesheets?tab=by-job&jobId=${request.jobId}&approvedRequestId=${request.id}`,
+      },
+      { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+    );
+
+    return {
+      ...updated,
+      requiresPartnerApproval,
+      pendingPartnerApproval: false,
+    };
+  }
 
   /**
    * Reject additional hours request
@@ -2206,7 +2975,8 @@ export class TimeEntryService {
     approvalNotes: string | undefined,
     auth: AuthContext
   ) {
-    if (!['manager', 'partner', 'admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to reject requests' };
     }
 
@@ -2221,50 +2991,86 @@ export class TimeEntryService {
 
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
-    const isAdmin = auth.roleName === 'admin';
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
 
     if (!isAdmin && !isJobManager && !isJobPartner) {
       throw { statusCode: 403, message: 'Not authorized to reject this request' };
     }
 
-      const updated = await prisma.timeEntryApprovalRequest.update({
-        where: { id: requestId },
-        data: {
-          status: 'rejected',
-          approvedByProfileId: auth.profileId,
-          approvalNotes,
-          approvedAt: new Date(),
-        },
-      });
-
-        await createAudit({
-          action: `approval_request_rejected:job_${request.jobId}`,
-          entity_type: 'time_entry_approval_request',
-          entity_id: request.id,
-          user_id: auth.userId,
-          metadata: {
-            jobId: request.jobId,
-            employeeProfileId: request.employeeProfileId,
-            approvedByProfileId: auth.profileId,
-            approvalNotes: approvalNotes || null,
-          },
-        });
-
-        await NotificationService.createNotification(
-          {
-            recipientProfileId: request.employeeProfileId,
-            type: 'action',
-            title: 'Additional hours rejected',
-            message: `Your additional hours request for "${request.job.jobName}" was rejected.`,
-          actionRequired: true,
-          jobId: request.jobId,
-          link: `/timesheets`,
-        },
-        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
-      );
-
-      return updated;
+    if (request.status !== 'pending') {
+      throw { statusCode: 409, message: 'Only pending requests can be rejected' };
     }
+
+    const now = new Date();
+    const { meta, note: existingNote } = TimeEntryService.parseApprovalMetadata(
+      request.approvalNotes
+    );
+    const risk = await TimeEntryService.resolveAdditionalHoursRisk(
+      request.jobId,
+      request.employeeProfileId,
+      Number(request.additionalHoursRequested || 0)
+    );
+    const requiresPartnerApproval = Boolean(
+      meta.requiresPartnerApproval ?? risk.wouldExceedFeeCap
+    );
+    const mergedNote = String(approvalNotes || existingNote || '').trim() || null;
+
+    const rejectionMeta = {
+      ...meta,
+      requiresPartnerApproval,
+      rejectedByProfileId: auth.profileId,
+      rejectedAt: now.toISOString(),
+      rejectedByRole: roleName,
+      feeRisk: {
+        jobFee: risk.jobFee,
+        billingRate: risk.billingRate,
+        currentBillableAmount: risk.currentBillableAmount,
+        projectedAdditionalCost: risk.projectedAdditionalCost,
+        projectedTotalBillable: risk.projectedTotalBillable,
+        wouldExceedFeeCap: risk.wouldExceedFeeCap,
+        excessCost: risk.excessCost,
+      },
+    };
+
+    const updated = await prisma.timeEntryApprovalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'rejected',
+        approvedByProfileId: auth.profileId,
+        approvalNotes: TimeEntryService.serializeApprovalMetadata(rejectionMeta, mergedNote),
+        approvedAt: now,
+      },
+    });
+
+    await createAudit({
+      action: `approval_request_rejected:job_${request.jobId}`,
+      entity_type: 'time_entry_approval_request',
+      entity_id: request.id,
+      user_id: auth.userId,
+      metadata: {
+        jobId: request.jobId,
+        employeeProfileId: request.employeeProfileId,
+        approvedByProfileId: auth.profileId,
+        requiresPartnerApproval,
+        approvalNotes: mergedNote,
+      },
+    });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: request.employeeProfileId,
+        type: 'action',
+        title: 'Additional hours rejected',
+        message: `Your additional hours request for "${request.job.jobName}" was rejected.`,
+        actionRequired: true,
+        jobId: request.jobId,
+        link: `/timesheets`,
+      },
+      { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
+    );
+
+    return updated;
+  }
 
   /**
    * Approve over-budget request (manager stage or partner final stage)
@@ -2274,7 +3080,8 @@ export class TimeEntryService {
     approvalNotes: string | undefined,
     auth: AuthContext
   ) {
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to approve over-budget requests' };
     }
 
@@ -2287,7 +3094,7 @@ export class TimeEntryService {
       throw { statusCode: 404, message: 'Over-budget request not found' };
     }
 
-    const isAdmin = ['admin', 'super_admin'].includes(auth.roleName || '');
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
 
@@ -2361,12 +3168,12 @@ export class TimeEntryService {
       await NotificationService.createNotification(
         {
           recipientProfileId: request.employeeProfileId,
-          type: 'info',
+          type: 'action',
           title: 'Over-budget request approved',
-          message: `Your over-budget request for "${request.job.jobName}" was approved.`,
-          actionRequired: false,
+          message: `Your over-budget request for "${request.job.jobName}" was approved. You can continue logging time on this job.`,
+          actionRequired: true,
           jobId: request.job.id,
-          link: `/timesheets`,
+          link: `/timesheets?tab=by-job&jobId=${request.job.id}`,
         },
         { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
       );
@@ -2383,7 +3190,8 @@ export class TimeEntryService {
     approvalNotes: string | undefined,
     auth: AuthContext
   ) {
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(auth.roleName || '')) {
+    const roleName = TimeEntryService.normalizeRole(auth.roleName);
+    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to reject over-budget requests' };
     }
 
@@ -2396,7 +3204,7 @@ export class TimeEntryService {
       throw { statusCode: 404, message: 'Over-budget request not found' };
     }
 
-    const isAdmin = ['admin', 'super_admin'].includes(auth.roleName || '');
+    const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
 
@@ -2481,9 +3289,11 @@ export class TimeEntryService {
     }
 
     const canView =
-      auth.roleName === 'admin' ||
-      auth.roleName === 'manager' ||
-      (auth.roleName === 'partner' && job.partnerProfileId === auth.profileId);
+      TimeEntryService.isAdminRole(auth.roleName) ||
+      TimeEntryService.hasScopedManagerAccess(auth.roleName, auth.profileId, {
+        jobManagerProfileId: job.managerProfileId,
+      }) ||
+      TimeEntryService.hasPartnerAccess(auth.roleName, auth.profileId, job.partnerProfileId);
 
     if (!canView) {
       throw {
@@ -2563,5 +3373,6 @@ export class TimeEntryService {
     return summary;
   }
 }
+
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ export default function PositionsRates() {
 
   useEffect(() => {
     loadRoles();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCreate = () => {
     setEditingRole(null);
@@ -112,7 +112,7 @@ export default function PositionsRates() {
       if (editingRole) {
         await api.patch(`/position-rates/${editingRole.id}`, {
           billing_rate: Number(form.billingRate),
-          is_active: form.isActive,
+          isActive: form.isActive,
         });
         toast({
           title: "Updated",
@@ -122,7 +122,7 @@ export default function PositionsRates() {
         await api.post("/position-rates", {
           position_level: form.name.trim(),
           billing_rate: Number(form.billingRate),
-          is_active: form.isActive,
+          isActive: form.isActive,
         });
         toast({
           title: "Created",

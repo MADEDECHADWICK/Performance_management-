@@ -54,3 +54,22 @@ export const updateOnboardingStageValidators = [
 export const initializeOnboardingStagesValidators = [
   param("caseId").isInt({ min: 1 }),
 ];
+
+export const assignOnboardingPoliciesValidators = [
+  param("caseId").isInt({ min: 1 }),
+  body("documentIds")
+    .isArray({ min: 1 })
+    .withMessage("documentIds must be a non-empty array"),
+  body("documentIds.*")
+    .isInt({ min: 1 })
+    .withMessage("Each document id must be a positive integer"),
+];
+
+export const listOnboardingPoliciesValidators = [
+  param("caseId").isInt({ min: 1 }),
+];
+
+export const acknowledgeOnboardingPolicyValidators = [
+  param("caseId").isInt({ min: 1 }),
+  param("documentId").isInt({ min: 1 }),
+];

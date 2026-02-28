@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { apiFetch, documentsAPI } from "@/lib/api";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -39,7 +40,7 @@ export default function CompleteEvaluation() {
 
   useEffect(() => {
     loadAssignment();
-  }, [assignmentId]);
+  }, [assignmentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAssignment = async () => {
     try {
@@ -244,9 +245,7 @@ export default function CompleteEvaluation() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="h-8 w-8 animate-spin" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }

@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,7 @@ const ManagerEvaluation = () => {
       return;
     }
     loadTeamEvaluations();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTeamEvaluations = async () => {
     try {
@@ -242,7 +243,7 @@ const ManagerEvaluation = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="text-center py-8">Loading...</div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -307,7 +308,7 @@ const ManagerEvaluation = () => {
                   {selectedEval.employee.first_name} {selectedEval.employee.last_name}
                 </CardTitle>
                 <CardDescription>
-                  {selectedEval.cycle.name} • {selectedEval.employee.email}
+                  {selectedEval.cycle.name} â€¢ {selectedEval.employee.email}
                 </CardDescription>
               </CardHeader>
             </Card>

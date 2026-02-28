@@ -190,6 +190,20 @@ class EmployeeOffboardingCaseServiceImpl {
         },
       });
 
+      // IMPLEMENTED: Offboarding account deactivation - completed offboarding now disables user login while retaining all historical records.
+      await prisma.user.updateMany({
+        where: {
+          profile: {
+            is: {
+              id: existing.profileId,
+            },
+          },
+        },
+        data: {
+          isActive: false,
+        },
+      });
+
       await NotificationService.createNotification(
         {
           recipientProfileId: existing.profileId,
@@ -208,6 +222,78 @@ class EmployeeOffboardingCaseServiceImpl {
     }
 
     return updated;
+  }
+
+  async reactivate(caseId: number, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const existing = await prisma.employeeOffboardingCase.findUnique({
+      where: { id: caseId },
+      select: { id: true, profileId: true, status: true },
+    });
+    if (!existing || !existing.profileId) {
+      const err = new Error("Offboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const [profile] = await prisma.$transaction([
+      prisma.profile.update({
+        where: { id: existing.profileId },
+        data: {
+          status: EmployeeStatus.active,
+          separationDate: null,
+        },
+        select: { id: true, firstName: true, lastName: true, userId: true },
+      }),
+      prisma.employeeOffboardingCase.update({
+        where: { id: caseId },
+        data: {
+          notes: "Account reactivated by HR/admin",
+        },
+      }),
+    ]);
+
+    if (profile.userId) {
+      await prisma.user.update({
+        where: { id: profile.userId },
+        data: { isActive: true },
+      });
+    }
+
+    await createAudit({
+      action: "offboarding_account_reactivated",
+      entity_type: "EmployeeOffboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { profileId: existing.profileId },
+    }).catch(() => null);
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: existing.profileId,
+        type: "info",
+        title: "Account reactivated",
+        message: "Your account has been reactivated by HR.",
+        actionRequired: false,
+        link: "/profile",
+      },
+      {
+        userId: auth.userId,
+        profileId: auth.profileId,
+        roleName: auth.roles?.[0],
+      }
+    );
+
+    return {
+      caseId,
+      profileId: existing.profileId,
+      reactivated: true,
+    };
   }
 }
 

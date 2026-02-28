@@ -44,6 +44,16 @@ export const SYSTEM_MODULES = [
     description: "Financial summaries, profitability, collections, and allocations.",
   },
   {
+    key: "finance_collections",
+    label: "Finance Collections",
+    description: "Collections capture, payment logging, and receivables tracking actions.",
+  },
+  {
+    key: "finance_projections",
+    label: "Finance Projections",
+    description: "Projection planning, updates, and projection-vs-actual variance maintenance.",
+  },
+  {
     key: "proposals",
     label: "Business Development",
     description: "Proposals, pipeline, and conversion tracking.",
@@ -57,6 +67,11 @@ export const SYSTEM_MODULES = [
     key: "documents",
     label: "Documents",
     description: "Upload, verification, and controlled document access.",
+  },
+  {
+    key: "knowledge_hub",
+    label: "Knowledge Hub",
+    description: "Shared accounting, tax, and audit resources across all modules.",
   },
   {
     key: "notifications",
@@ -102,29 +117,25 @@ const IMPLIED_ACTIONS: Record<ModuleAction, ModuleAction[]> = {
 
 const ALL_MODULE_ACTIONS: ModuleAction[] = ["read", "write", "approve", "admin"];
 
+// Baseline personal workspace access that every authenticated role should retain.
+// This keeps "My Performance" and personal evaluation workflows available
+// across all role dashboards even when role module policies are narrowed.
+const SELF_SERVICE_BASELINE_ACCESS: Partial<Record<ModuleKey, ModuleAction[]>> = {
+  dashboard: ["read"],
+  users: ["read"],
+  time_entries: ["write"],
+  evaluations: ["write"],
+  kpis: ["write"],
+  knowledge_hub: ["read"],
+};
+
+const FULL_SYSTEM_ACCESS_ROLES = new Set(["super_admin", "admin", "hr", "hr_manager"]);
+
 const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", ModuleAction[]>>> = {
   super_admin: { "*": ["admin"] },
   admin: { "*": ["admin"] },
-  hr: {
-    dashboard: ["read"],
-    users: ["admin"],
-    evaluations: ["admin"],
-    kpis: ["admin"],
-    documents: ["admin"],
-    reports: ["read"],
-    notifications: ["write"],
-    access_control: ["admin"],
-  },
-  hr_manager: {
-    dashboard: ["read"],
-    users: ["admin"],
-    evaluations: ["admin"],
-    kpis: ["admin"],
-    documents: ["admin"],
-    reports: ["read"],
-    notifications: ["write"],
-    access_control: ["admin"],
-  },
+  hr: { "*": ["admin"] },
+  hr_manager: { "*": ["admin"] },
   gmp: {
     dashboard: ["admin"],
     reports: ["admin"],
@@ -134,6 +145,7 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     evaluations: ["read"],
     proposals: ["read"],
     surveys: ["read"],
+    knowledge_hub: ["read"],
     notifications: ["write"],
   },
   group_managing_partner: {
@@ -145,6 +157,7 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     evaluations: ["read"],
     proposals: ["read"],
     surveys: ["read"],
+    knowledge_hub: ["read"],
     notifications: ["write"],
   },
   partner: {
@@ -158,6 +171,7 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     proposals: ["read"],
     surveys: ["read"],
     documents: ["read"],
+    knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
   },
@@ -169,18 +183,22 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     evaluations: ["write"],
     kpis: ["read"],
     documents: ["read"],
+    knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
   },
   finance: {
     dashboard: ["read"],
     finance: ["admin"],
+    finance_collections: ["admin"],
+    finance_projections: ["admin"],
     reports: ["admin"],
     clients: ["read"],
     jobs: ["read"],
     proposals: ["read"],
     surveys: ["read"],
     documents: ["read"],
+    knowledge_hub: ["read"],
     notifications: ["write"],
   },
   marketing: {
@@ -189,6 +207,7 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     proposals: ["admin"],
     surveys: ["write"],
     documents: ["read"],
+    knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
   },
@@ -198,6 +217,7 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     evaluations: ["write"],
     kpis: ["write"],
     documents: ["write"],
+    knowledge_hub: ["read"],
     notifications: ["write"],
   },
 };
@@ -305,6 +325,26 @@ const applyFallbackRoleAccess = (
   });
 };
 
+const applySelfServiceBaselineAccess = (matrix: ModuleAccessMatrix) => {
+  Object.entries(SELF_SERVICE_BASELINE_ACCESS).forEach(([moduleName, actions]) => {
+    if (!isModuleKey(moduleName)) return;
+    if (!actions || actions.length === 0) return;
+    actions.forEach((action) => {
+      if (!isModuleAction(action)) return;
+      addActionToMatrix(matrix, moduleName, action);
+    });
+  });
+};
+
+const shouldApplySelfServiceBaseline = (input: {
+  roles?: string[] | null;
+  rolePolicies?: RoleModulePolicyInput[] | null;
+}) =>
+  Boolean(
+    (Array.isArray(input.rolePolicies) && input.rolePolicies.length > 0) ||
+      (Array.isArray(input.roles) && input.roles.length > 0)
+  );
+
 const applyRolePolicyAccess = (
   matrix: ModuleAccessMatrix,
   rolePolicies: RoleModulePolicyInput[]
@@ -312,6 +352,10 @@ const applyRolePolicyAccess = (
   rolePolicies.forEach((rolePolicy) => {
     const roleName = normalizeRole(rolePolicy.roleName);
     if (!roleName) return;
+    if (FULL_SYSTEM_ACCESS_ROLES.has(roleName)) {
+      applyFallbackRoleAccess(matrix, [roleName]);
+      return;
+    }
 
     const modulePermissionKeys = normalizeModulePermissionKeys(rolePolicy.permissionKeys);
     const explicitNone = modulePermissionKeys.includes(EXPLICIT_NONE_PERMISSION_KEY);
@@ -352,9 +396,13 @@ export const buildModuleAccessMatrix = (input: {
   rolePolicies?: RoleModulePolicyInput[] | null;
 }): ModuleAccessMatrix => {
   const matrix = createEmptyMatrix();
+  const applySelfServiceBaseline = shouldApplySelfServiceBaseline(input);
 
   if (input.rolePolicies && input.rolePolicies.length > 0) {
     applyRolePolicyAccess(matrix, input.rolePolicies);
+    if (applySelfServiceBaseline) {
+      applySelfServiceBaselineAccess(matrix);
+    }
     return matrix;
   }
 
@@ -366,6 +414,9 @@ export const buildModuleAccessMatrix = (input: {
   });
 
   applyFallbackRoleAccess(matrix, input.roles || []);
+  if (applySelfServiceBaseline) {
+    applySelfServiceBaselineAccess(matrix);
+  }
   return matrix;
 };
 

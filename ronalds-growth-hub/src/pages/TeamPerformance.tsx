@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -203,12 +204,7 @@ const TeamPerformance = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto" />
-            <p className="mt-4 text-gray-600">Loading team performance data...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -327,7 +323,7 @@ const TeamPerformance = () => {
                     </Avatar>
                     <div>
                       <h3 className="font-medium">{member.name}</h3>
-                      <p className="text-sm text-gray-600">{member.role} • {member.department}</p>
+                      <p className="text-sm text-gray-600">{member.role} ï¿½ {member.department}</p>
                     </div>
                   </div>
 

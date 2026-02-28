@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { apiFetch } from "@/lib/api";
@@ -109,13 +109,13 @@ const EvaluationManagement = () => {
     loadEmployees();
     loadKPIs();
     loadDepartments();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDepartmentId && evaluationTarget === "department") {
       loadDepartmentEmployees(selectedDepartmentId);
     }
-  }, [selectedDepartmentId, evaluationTarget]);
+  }, [selectedDepartmentId, evaluationTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadCycles = async () => {
     try {
@@ -152,7 +152,7 @@ const EvaluationManagement = () => {
 
   const loadKPIs = async () => {
     try {
-      const data = await apiFetch('GET', "/kpis?is_active=true");
+      const data = await apiFetch('GET', "/kpis?isActive=true");
       setKpis(extractItems(data));
     } catch (error: any) {
       if (error?.status === 401) {
@@ -383,7 +383,7 @@ const EvaluationManagement = () => {
       const evaluationResponse = await apiFetch("POST", "/evaluation-definitions", {
         name: evaluationName,
         description: evaluationTarget === "department" ? "Department evaluation" : "Individual evaluation",
-        cycleId: selectedCycleId ? Number(selectedCycleId) : null,
+        cycleId: null,
         departmentId: evaluationTarget === "department" ? Number(selectedDepartmentId) : null,
         enableSelfEvaluation: enableSelf,
         enablePeerEvaluation: enablePeer,
@@ -395,7 +395,7 @@ const EvaluationManagement = () => {
         hideFromDashboard: hideFromDashboard,
         excludeFromScore: excludeFromScore,
         requireEvaluatorSignature: requireEvaluatorSignature,
-        requireEvaluateeSignature: requireEvaluateeSignature,
+        requireEvaluateeSignature: sendSignatureToEvaluatee,
         status: "published",
         scoringConfig: {
           evaluationTarget,
@@ -535,7 +535,8 @@ const EvaluationManagement = () => {
                   <Button onClick={() => {
                     setEditingCycle(null);
                     setCycleFormData({
-                      name: "",
+                      cycle_name: "",
+                      description: "",
                       cycle_type: "quarterly",
                       start_date: "",
                       end_date: "",
@@ -744,7 +745,7 @@ const EvaluationManagement = () => {
                             {cycle.name}
                           </CardTitle>
                           <CardDescription>
-                            {getCycleTypeLabel(cycle.cycle_type)} • {" "}
+                            {getCycleTypeLabel(cycle.cycle_type)} â€¢ {" "}
                             {format(new Date(cycle.start_date), "MMM d, yyyy")} - {" "}
                             {format(new Date(cycle.end_date), "MMM d, yyyy")}
                           </CardDescription>
@@ -962,7 +963,7 @@ const EvaluationManagement = () => {
                         return (
                           <div key={id} className="bg-secondary px-3 py-1 rounded-md text-sm flex items-center gap-2">
                             {emp?.first_name} {emp?.last_name}
-                            <button onClick={() => setSelectedEvaluators(selectedEvaluators.filter(e => e !== id))}>×</button>
+                            <button onClick={() => setSelectedEvaluators(selectedEvaluators.filter(e => e !== id))}>Ã—</button>
                           </div>
                         );
                       })}
@@ -1000,7 +1001,7 @@ const EvaluationManagement = () => {
                         return (
                           <div key={id} className="bg-secondary px-3 py-1 rounded-md text-sm flex items-center gap-2">
                             {emp?.first_name} {emp?.last_name}
-                            <button onClick={() => setSelectedEvaluatees(selectedEvaluatees.filter(e => e !== id))}>×</button>
+                            <button onClick={() => setSelectedEvaluatees(selectedEvaluatees.filter(e => e !== id))}>Ã—</button>
                           </div>
                         );
                       })}

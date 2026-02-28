@@ -6,7 +6,7 @@ import { errorResponse, successResponse } from "../utils/response";
 export class NotificationTemplateController {
   static async listTemplates(req: AuthRequest, res: Response) {
     try {
-      const isActiveParam = req.query.is_active ?? req.query.isActive;
+      const isActiveParam = req.query.isActive;
       const isActive =
         typeof isActiveParam === "string"
           ? isActiveParam === "true"
@@ -37,8 +37,8 @@ export class NotificationTemplateController {
           title: req.body.title,
           message: req.body.message,
           type: req.body.type,
-          actionRequired: req.body.actionRequired ?? req.body.action_required,
-          isActive: req.body.isActive ?? req.body.is_active,
+          actionRequired: req.body.actionRequired,
+          isActive: req.body.isActive,
         },
         auth
       );
@@ -59,8 +59,8 @@ export class NotificationTemplateController {
         title: req.body.title,
         message: req.body.message,
         type: req.body.type,
-        actionRequired: req.body.actionRequired ?? req.body.action_required,
-        isActive: req.body.isActive ?? req.body.is_active,
+        actionRequired: req.body.actionRequired,
+        isActive: req.body.isActive,
       });
       res.json(successResponse(template, "Template updated"));
     } catch (error: any) {

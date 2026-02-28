@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+ï»¿import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch, proposalsAPI, surveysAPI } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -92,6 +93,39 @@ type TeamAllocationRow = {
   employeeLoss: number;
 };
 
+const EMPTY_PARTNER_SUMMARY: PartnerSummary = {
+  portfolio: {
+    totalJobs: 0,
+    activeJobs: 0,
+    completedJobs: 0,
+    totalRevenueCollected: 0,
+    totalProfit: 0,
+    totalCost: 0,
+    totalFee: 0,
+    averageEfficiency: 0,
+    averageMargin: 0,
+    totalTeamSize: 0,
+  },
+  clientFeedback: {
+    totalSurveys: 0,
+    completedSurveys: 0,
+    responseRate: 0,
+    avgOverallSatisfaction: 0,
+  },
+  topJobs: [],
+  pendingTimeEntriesCount: 0,
+};
+
+const EMPTY_ALLOCATION_PAYLOAD: AllocationPayload = {
+  totals: {
+    collectedAmount: 0,
+    allocatedAmount: 0,
+    totalProfit: 0,
+    totalLoss: 0,
+  },
+  allocations: [],
+};
+
 const PartnerMetrics = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -120,10 +154,16 @@ const PartnerMetrics = () => {
       if (surveyResult.status === "fulfilled") setSurveyAnalytics(surveyResult.value);
 
       if (notificationsResult.status === "fulfilled") {
-        const payload = notificationsResult.value?.data ?? notificationsResult.value ?? {};
-        const items = Array.isArray(payload.items)
-          ? payload.items
-          : payload.items?.items ?? payload.notifications ?? payload.data ?? [];
+        const payload: any = notificationsResult.value ?? {};
+        const items = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload.data)
+            ? payload.data
+            : Array.isArray(payload.items)
+              ? payload.items
+              : Array.isArray(payload.notifications)
+                ? payload.notifications
+                : [];
 
         const lossAlerts = (Array.isArray(items) ? items : []).filter((item: any) => {
           const title = String(item?.title || "").toLowerCase();
@@ -151,15 +191,15 @@ const PartnerMetrics = () => {
   }, []);
 
   const kpis = useMemo(() => {
-    if (!summary) return null;
+    const baseSummary = summary ?? EMPTY_PARTNER_SUMMARY;
 
-    const revenueCurrent = Number(summary.portfolio.totalRevenueCollected || 0);
-    const revenueTarget = Number(summary.portfolio.totalFee || 0);
-    const previousYear = Number(summary.portfolio.totalRevenueCollected || 0);
+    const revenueCurrent = Number(baseSummary.portfolio.totalRevenueCollected || 0);
+    const revenueTarget = Number(baseSummary.portfolio.totalFee || 0);
+    const previousYear = Number(baseSummary.portfolio.totalRevenueCollected || 0);
     const growth = previousYear > 0 ? ((revenueCurrent - previousYear) / previousYear) * 100 : 0;
 
-    const billableCurrent = summary.topJobs.reduce((sum, job) => sum + Number(job.billableHours || 0), 0);
-    const billableTarget = summary.topJobs.reduce((sum, job) => sum + Number(job.estimatedHours || 0), 0);
+    const billableCurrent = baseSummary.topJobs.reduce((sum, job) => sum + Number(job.billableHours || 0), 0);
+    const billableTarget = baseSummary.topJobs.reduce((sum, job) => sum + Number(job.estimatedHours || 0), 0);
     const billableUtilization = billableTarget > 0 ? (billableCurrent / billableTarget) * 100 : 0;
 
     return {
@@ -175,14 +215,14 @@ const PartnerMetrics = () => {
         utilization: billableUtilization,
       },
       clientMetrics: {
-        totalClients: new Set((summary.topJobs || []).map((job) => job.jobCode || `${job.jobId}`)).size,
+        totalClients: new Set((baseSummary.topJobs || []).map((job) => job.jobCode || `${job.jobId}`)).size,
         newClients: Number(proposalMetrics?.wonThisMonth || 0),
-        retention: Number(summary.clientFeedback?.responseRate || 0) * 100,
-        satisfaction: Number(summary.clientFeedback?.avgOverallSatisfaction || 0),
+        retention: Number(baseSummary.clientFeedback?.responseRate || 0) * 100,
+        satisfaction: Number(baseSummary.clientFeedback?.avgOverallSatisfaction || 0),
       },
       teamMetrics: {
-        teamSize: Number(summary.portfolio.totalTeamSize || 0),
-        averageUtilization: Number(summary.portfolio.averageEfficiency || 0),
+        teamSize: Number(baseSummary.portfolio.totalTeamSize || 0),
+        averageUtilization: Number(baseSummary.portfolio.averageEfficiency || 0),
         developmentScore: Number(surveyAnalytics?.averageRatings?.overall || 0),
       },
       businessDevelopment: {
@@ -194,7 +234,7 @@ const PartnerMetrics = () => {
   }, [summary, proposalMetrics, surveyAnalytics]);
 
   const monthlyPoints = useMemo<MonthlyPoint[]>(() => {
-    const allocations = allocationAudit?.allocations || [];
+    const allocations = (allocationAudit ?? EMPTY_ALLOCATION_PAYLOAD).allocations || [];
     const now = new Date();
 
     const monthsToInclude =
@@ -237,7 +277,7 @@ const PartnerMetrics = () => {
       revenue: revenueByMonth.get(item.key) || 0,
       satisfaction: surveyTrendMap.get(item.label) || Number(summary?.clientFeedback?.avgOverallSatisfaction || 0),
     }));
-  }, [allocationAudit?.allocations, selectedPeriod, surveyAnalytics?.trends, summary?.clientFeedback?.avgOverallSatisfaction]);
+  }, [allocationAudit?.allocations, selectedPeriod, surveyAnalytics?.trends, summary?.clientFeedback?.avgOverallSatisfaction]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const teamRows = useMemo(() => {
     const rows = allocationAudit?.allocations || [];
@@ -314,30 +354,12 @@ const PartnerMetrics = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-            <p className="mt-2">Loading partner metrics...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
 
-  if (!summary || !kpis) {
-    return (
-      <DashboardLayout>
-        <Card className="border-dashed">
-          <CardHeader>
-            <CardTitle>Partner metrics unavailable</CardTitle>
-            <CardDescription>
-              No portfolio metrics are available yet. Start by creating jobs, allocations, and collections.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </DashboardLayout>
-    );
-  }
+  const summaryData = summary ?? EMPTY_PARTNER_SUMMARY;
 
   return (
     <DashboardLayout>
@@ -407,7 +429,7 @@ const PartnerMetrics = () => {
             <CardContent>
               <div className="text-2xl font-bold">{kpis.clientMetrics.satisfaction.toFixed(2)} / 5</div>
               <p className="text-xs text-muted-foreground mt-1">
-                {summary.clientFeedback?.completedSurveys || 0} completed surveys
+                {summaryData.clientFeedback?.completedSurveys || 0} completed surveys
               </p>
             </CardContent>
           </Card>
@@ -420,7 +442,7 @@ const PartnerMetrics = () => {
             <CardContent>
               <div className="text-2xl font-bold">KES {(kpis.businessDevelopment.pipelineValue / 1000000).toFixed(2)}M</div>
               <p className="text-xs text-muted-foreground mt-1">
-                Conversion {kpis.businessDevelopment.conversionRate.toFixed(1)}% • Hot leads {kpis.businessDevelopment.newOpportunities}
+                Conversion {kpis.businessDevelopment.conversionRate.toFixed(1)}% - Hot leads {kpis.businessDevelopment.newOpportunities}
               </p>
             </CardContent>
           </Card>
@@ -442,10 +464,10 @@ const PartnerMetrics = () => {
                   <CardDescription>Portfolio-level collections, cost and margin.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="flex justify-between"><span>Collected Revenue</span><span className="font-semibold">KES {summary.portfolio.totalRevenueCollected.toLocaleString()}</span></div>
-                  <div className="flex justify-between"><span>Total Cost</span><span className="font-semibold">KES {summary.portfolio.totalCost.toLocaleString()}</span></div>
-                  <div className="flex justify-between"><span>Total Profit</span><span className="font-semibold">KES {summary.portfolio.totalProfit.toLocaleString()}</span></div>
-                  <div className="flex justify-between"><span>Average Margin</span><span className="font-semibold">{summary.portfolio.averageMargin.toFixed(2)}%</span></div>
+                  <div className="flex justify-between"><span>Collected Revenue</span><span className="font-semibold">KES {summaryData.portfolio.totalRevenueCollected.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>Total Cost</span><span className="font-semibold">KES {summaryData.portfolio.totalCost.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>Total Profit</span><span className="font-semibold">KES {summaryData.portfolio.totalProfit.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>Average Margin</span><span className="font-semibold">{summaryData.portfolio.averageMargin.toFixed(2)}%</span></div>
                 </CardContent>
               </Card>
 
@@ -455,10 +477,10 @@ const PartnerMetrics = () => {
                   <CardDescription>Open jobs, completion and pending approvals.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="flex justify-between"><span>Total Jobs</span><span className="font-semibold">{summary.portfolio.totalJobs}</span></div>
-                  <div className="flex justify-between"><span>Active Jobs</span><span className="font-semibold">{summary.portfolio.activeJobs}</span></div>
-                  <div className="flex justify-between"><span>Completed Jobs</span><span className="font-semibold">{summary.portfolio.completedJobs}</span></div>
-                  <div className="flex justify-between"><span>Pending Time Approvals</span><span className="font-semibold">{summary.pendingTimeEntriesCount}</span></div>
+                  <div className="flex justify-between"><span>Total Jobs</span><span className="font-semibold">{summaryData.portfolio.totalJobs}</span></div>
+                  <div className="flex justify-between"><span>Active Jobs</span><span className="font-semibold">{summaryData.portfolio.activeJobs}</span></div>
+                  <div className="flex justify-between"><span>Completed Jobs</span><span className="font-semibold">{summaryData.portfolio.completedJobs}</span></div>
+                  <div className="flex justify-between"><span>Pending Time Approvals</span><span className="font-semibold">{summaryData.pendingTimeEntriesCount}</span></div>
                 </CardContent>
               </Card>
             </div>
@@ -483,7 +505,14 @@ const PartnerMetrics = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {summary.topJobs.map((job) => (
+                    {summaryData.topJobs.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground">
+                          No job data yet.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {summaryData.topJobs.map((job) => (
                       <TableRow key={job.jobId}>
                         <TableCell>
                           <div>
@@ -590,3 +619,4 @@ const PartnerMetrics = () => {
 };
 
 export default PartnerMetrics;
+

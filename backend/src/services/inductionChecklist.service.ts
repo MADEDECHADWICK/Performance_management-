@@ -100,7 +100,7 @@ class InductionChecklistServiceClass {
         title: "Onboarding checklist assigned",
         message: `A new induction checklist "${checklist.checklistName}" has been assigned to you.`,
         actionRequired: true,
-        link: `/onboarding`,
+        link: "/profile",
       },
       {
         userId: auth.userId,
@@ -283,7 +283,7 @@ class InductionChecklistServiceClass {
           ? `Reminder: "${checklist.checklistName}" is due on ${checklist.dueDate.toDateString()}.`
           : `Reminder: Please complete your onboarding checklist "${checklist.checklistName}".`,
         actionRequired: true,
-        link: "/onboarding",
+        link: "/profile",
       },
       {
         userId: auth.userId,

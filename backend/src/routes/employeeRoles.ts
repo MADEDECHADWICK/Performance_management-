@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
-const canManageEmployeeRoles = requireRole('hr', 'hr_manager', 'admin', 'super_admin');
+const canManageEmployeeRoles = requireModuleAccess('users', 'admin');
 
 // GET /employees - List all employees with their current roles
 router.get('/', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
@@ -57,7 +57,7 @@ router.get('/:employeeId', authMiddleware, canManageEmployeeRoles, async (req: A
 router.put('/:employeeId/role', authMiddleware, canManageEmployeeRoles, async (req: AuthRequest, res) => {
   try {
     const { employeeId } = req.params;
-    const roleId = req.body.roleId ?? req.body.role_id;
+    const roleId = req.body.roleId;
     const { notes } = req.body;
     
     // Validate inputs

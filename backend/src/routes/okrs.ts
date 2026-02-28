@@ -1,7 +1,7 @@
 import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { createAudit } from "../utils/audit";
 import { OkrApprovalStatus, OkrStatus } from "@prisma/client";
 
@@ -186,7 +186,6 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       description,
       ownerProfileId,
       kpiId,
-      kpi_id,
       departmentId,
       cycleId,
       startDate,
@@ -206,7 +205,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const resolvedOwnerProfileId =
-      parseOptionalInt(ownerProfileId) ?? parseOptionalInt((req.body as any)?.owner_profile_id) ?? requesterId;
+      parseOptionalInt(ownerProfileId) ?? requesterId;
     if (!resolvedOwnerProfileId) {
       return res.status(400).json({ error: "ownerProfileId required" });
     }
@@ -223,7 +222,7 @@ router.post("/", authMiddleware, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: "Owner profile not found" });
     }
 
-    const resolvedKpiId = parseOptionalInt(kpiId ?? kpi_id);
+    const resolvedKpiId = parseOptionalInt(kpiId);
     if (resolvedKpiId) {
       const kpi = await prisma.kpi.findUnique({
         where: { id: resolvedKpiId },
@@ -300,7 +299,6 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
       title,
       description,
       kpiId,
-      kpi_id,
       departmentId,
       cycleId,
       startDate,
@@ -321,7 +319,7 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
     const existing = await prisma.okrObjective.findUnique({
       where: { id: objectiveId },
     });
-    const resolvedKpiId = parseOptionalInt(kpiId ?? kpi_id);
+    const resolvedKpiId = parseOptionalInt(kpiId);
     if (resolvedKpiId) {
       const kpi = await prisma.kpi.findUnique({
         where: { id: resolvedKpiId },
@@ -335,7 +333,7 @@ router.patch("/:id", authMiddleware, async (req: AuthRequest, res) => {
       }
     }
     const shouldClearKpiLink =
-      (kpiId !== undefined || kpi_id !== undefined) && !resolvedKpiId;
+      kpiId !== undefined && !resolvedKpiId;
 
     const objective = await prisma.okrObjective.update({
       where: { id: objectiveId },
@@ -459,7 +457,7 @@ router.post("/:id/submit", authMiddleware, async (req: AuthRequest, res) => {
 router.post(
   "/:id/approve",
   authMiddleware,
-  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  requireModuleAccess("kpis", "approve"),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
@@ -527,7 +525,7 @@ router.post(
 router.post(
   "/:id/reject",
   authMiddleware,
-  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  requireModuleAccess("kpis", "approve"),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
@@ -760,7 +758,7 @@ router.get("/:id/history", authMiddleware, async (req: AuthRequest, res) => {
 router.get(
   "/history/all",
   authMiddleware,
-  requireRole("manager", "partner", "hr", "hr_manager", "admin", "super_admin"),
+  requireModuleAccess("kpis", "approve"),
   async (req: AuthRequest, res) => {
   try {
     const limit = req.query.limit ? Number(req.query.limit) : 20;

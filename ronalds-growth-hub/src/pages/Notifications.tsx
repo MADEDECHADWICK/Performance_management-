@@ -28,6 +28,10 @@ type NotificationItem = {
   link?: string | null;
   createdAt?: string;
   jobId?: number | null;
+  clientId?: number | null;
+  evaluationDefinitionId?: number | null;
+  timeEntryId?: number | null;
+  workflowAssignmentId?: number | null;
 };
 
 const PAGE_SIZE = 12;
@@ -35,7 +39,7 @@ const PAGE_SIZE = 12;
 const Notifications = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { isHR, isAdmin } = useAuth();
+  const { isHR, isAdmin, hasModuleAccess } = useAuth();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -141,12 +145,27 @@ const Notifications = () => {
       if ((isHR || isAdmin) && scope === "all") params.set("scope", "all");
 
       const response = await apiFetch("GET", `/notifications?${params.toString()}`);
-      const payload = response?.data ?? response ?? {};
-      const list = Array.isArray(payload.items) ? payload.items : payload.items?.items ?? [];
-      const pagination = payload.pagination ?? payload.items?.pagination ?? {};
+      const payload: any = response ?? {};
+      const list = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.items)
+            ? payload.items
+            : Array.isArray(payload?.data?.items)
+              ? payload.data.items
+              : [];
+      const totalCount =
+        typeof payload.total === "number"
+          ? payload.total
+          : typeof payload?.pagination?.total === "number"
+            ? payload.pagination.total
+            : typeof payload?.data?.pagination?.total === "number"
+              ? payload.data.pagination.total
+              : list.length;
 
-      setItems(list);
-      setTotal(pagination.total ?? list.length ?? 0);
+      setItems(list as NotificationItem[]);
+      setTotal(totalCount);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -160,13 +179,13 @@ const Notifications = () => {
 
   useEffect(() => {
     loadNotifications();
-  }, [page, statusFilter, typeFilter, scope]);
+  }, [page, statusFilter, typeFilter, scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     loadTemplates();
     loadUsers();
     loadAuditLogs();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sendNotification = async () => {
     if (!createForm.recipientProfileId || !createForm.title || !createForm.message) {
@@ -371,10 +390,126 @@ const Notifications = () => {
     }
   };
 
-  const openNotification = (item: NotificationItem) => {
-    if (item.link) {
-      navigate(item.link);
+  const mapRawNotificationLink = (item: NotificationItem, rawLink: string) => {
+    const normalized = rawLink.trim();
+    if (!normalized) return null;
+
+    if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+      return normalized;
     }
+
+    const jobMatch = normalized.match(/^\/jobs\/(\d+)(?:\/.*)?$/);
+    if (jobMatch) {
+      const jobId = Number(jobMatch[1]);
+      if (hasModuleAccess("jobs", "read")) {
+        return `/jobs?jobId=${jobId}`;
+      }
+      return `/timesheets?jobId=${jobId}`;
+    }
+
+    const evaluationMatch = normalized.match(/^\/evaluations\/(\d+)$/);
+    if (evaluationMatch) {
+      return `/evaluation/${evaluationMatch[1]}`;
+    }
+
+    if (normalized.startsWith("/complete-evaluation/")) {
+      return normalized.replace("/complete-evaluation/", "/evaluation/");
+    }
+
+    if (normalized === "/onboarding") {
+      return "/profile?tab=onboarding";
+    }
+
+    if (normalized.startsWith("/hr-queue")) {
+      return normalized.replace("/hr-queue", "/client-onboarding-queue");
+    }
+
+    if (normalized === "/profile") {
+      const context = `${item.title} ${item.message}`.toLowerCase();
+      if (context.includes("onboarding") || context.includes("checklist")) {
+        return "/profile?tab=onboarding";
+      }
+    }
+
+    return normalized;
+  };
+
+  const inferNotificationTarget = (item: NotificationItem) => {
+    if (item.link) {
+      return mapRawNotificationLink(item, item.link);
+    }
+
+    if (item.jobId && item.jobId > 0) {
+      return hasModuleAccess("jobs", "read")
+        ? `/jobs?jobId=${item.jobId}`
+        : `/timesheets?jobId=${item.jobId}`;
+    }
+
+    if (item.clientId && item.clientId > 0) {
+      return `/clients/${item.clientId}`;
+    }
+
+    if (item.timeEntryId && item.timeEntryId > 0) {
+      return "/timesheets";
+    }
+
+    if (item.evaluationDefinitionId && item.evaluationDefinitionId > 0) {
+      return "/evaluations?tab=assignments";
+    }
+
+    if (item.workflowAssignmentId && item.workflowAssignmentId > 0) {
+      return null;
+    }
+
+    const context = `${item.type} ${item.title} ${item.message}`.toLowerCase();
+    if (context.includes("onboarding") || context.includes("checklist")) {
+      return "/profile?tab=onboarding";
+    }
+    if (context.includes("offboarding")) {
+      return "/profile";
+    }
+    if (context.includes("evaluation")) {
+      return "/evaluations?tab=assignments";
+    }
+    if (context.includes("timesheet") || context.includes("time entry")) {
+      return "/timesheets";
+    }
+    if (context.includes("kpi") || context.includes("goal")) {
+      return "/goals";
+    }
+    if (context.includes("survey")) {
+      return "/client-surveys";
+    }
+    if (context.includes("collection") || context.includes("receivable") || context.includes("payment")) {
+      return "/finance-balances";
+    }
+    if (context.includes("pipeline") || context.includes("proposal")) {
+      return "/business-development";
+    }
+
+    return null;
+  };
+
+  const openNotification = (item: NotificationItem) => {
+    const target = inferNotificationTarget(item);
+    if (!target) {
+      toast({
+        title: "No destination",
+        description: "This notification does not have a direct task link yet.",
+      });
+      return;
+    }
+
+    if (!item.isRead) {
+      void markRead(item.id);
+    }
+
+    if (target.startsWith("http://") || target.startsWith("https://")) {
+      window.open(target, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    navigate(target);
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -838,7 +973,7 @@ const Notifications = () => {
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {item.link && (
+                        {inferNotificationTarget(item) && (
                           <Button variant="outline" size="sm" onClick={() => openNotification(item)}>
                             <ExternalLink className="h-4 w-4 mr-1" />
                             Open

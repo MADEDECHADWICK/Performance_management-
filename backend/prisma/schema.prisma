@@ -893,6 +893,32 @@ model Document {
   @@map("documents")
 }
 
+model KnowledgeHubResource {
+  id          Int      @id @default(autoincrement())
+  title       String
+  summary     String?
+  domain      String
+  resourceType String   @map("resource_type")
+  submodules  String[] @default([])
+  tags        String[] @default([])
+  linkUrl     String?  @map("link_url")
+  content     String?
+  isFeatured  Boolean  @default(false) @map("is_featured")
+  isPublished Boolean  @default(true) @map("is_published")
+  publishedAt DateTime? @map("published_at")
+
+  createdByProfileId Int? @map("created_by_profile_id")
+  updatedByProfileId Int? @map("updated_by_profile_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([domain])
+  @@index([resourceType])
+  @@index([isPublished])
+  @@index([isFeatured])
+  @@map("knowledge_hub_resources")
+}
+
 // =============================
 // CLIENTS + ONBOARDING
 // =============================

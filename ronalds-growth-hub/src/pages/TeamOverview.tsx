@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -269,12 +270,7 @@ const TeamOverview = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-96">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-            <p className="mt-2">Loading team overview...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -558,7 +554,7 @@ const TeamOverview = () => {
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>{selectedMember.name}</DialogTitle>
-                <DialogDescription>{selectedMember.position} • {selectedMember.department}</DialogDescription>
+                <DialogDescription>{selectedMember.position} ï¿½ {selectedMember.department}</DialogDescription>
               </DialogHeader>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">

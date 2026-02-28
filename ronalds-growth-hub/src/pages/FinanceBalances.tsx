@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 
 type ClientBalance = {
@@ -138,7 +152,7 @@ export default function FinanceBalances() {
     overdue: "Overdue",
   };
 
-  const loadBalances = async () => {
+  const loadBalances = useCallback(async () => {
     try {
       setLoading(true);
       const results = await Promise.allSettled([
@@ -179,11 +193,11 @@ export default function FinanceBalances() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [navigate]);
 
   useEffect(() => {
     loadBalances();
-  }, []);
+  }, [loadBalances]);
 
   const handleUpdateCollectionStage = async (jobId: number, collectionStage: string) => {
     if (!canApproveFinance) {
@@ -452,6 +466,39 @@ export default function FinanceBalances() {
       .slice(0, 5);
   }, [filteredClientBalances]);
 
+  const agingAmountMix = useMemo(() => {
+    return (aging?.buckets || []).map((bucket) => ({
+      name: bucket.label,
+      value: Number(bucket.amount || 0),
+    }));
+  }, [aging]);
+
+  const slaMix = useMemo(() => {
+    const breached = Number(aging?.summary.slaBreachedJobs || 0);
+    const dueSoon = Number(aging?.summary.slaDueSoonJobs || 0);
+    const totalOutstandingJobs = Number(aging?.summary.jobsWithOutstanding || 0);
+    const onTrack = Math.max(0, totalOutstandingJobs - breached - dueSoon);
+
+    return [
+      { name: "On Track", value: onTrack },
+      { name: "Due Soon", value: dueSoon },
+      { name: "Breached", value: breached },
+    ];
+  }, [aging]);
+
+  const ownerExposureChart = useMemo(() => {
+    return (aging?.ownerBreakdown || [])
+      .slice()
+      .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0))
+      .slice(0, 6)
+      .map((owner) => ({
+        owner: owner.ownerName,
+        amount: Number(owner.amount || 0),
+      }));
+  }, [aging]);
+
+  const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
+
   const agingLabelByKey: Record<string, string> = {
     current_0_30: "0-30 days",
     bucket_31_60: "31-60 days",
@@ -474,9 +521,7 @@ export default function FinanceBalances() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -558,6 +603,98 @@ export default function FinanceBalances() {
               </CardContent>
             </Card>
           ))}
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle>Aging Exposure Mix</CardTitle>
+              <CardDescription>Outstanding amount by aging bucket.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {agingAmountMix.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No aging data available.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={agingAmountMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={52}
+                      outerRadius={86}
+                      paddingAngle={2}
+                    >
+                      {agingAmountMix.map((entry, index) => (
+                        <Cell key={`aging-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>SLA Health Mix</CardTitle>
+              <CardDescription>Receivable follow-up SLA distribution.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {Number(aging?.summary.jobsWithOutstanding || 0) <= 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No SLA distribution data yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={slaMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={52}
+                      outerRadius={86}
+                      paddingAngle={2}
+                    >
+                      <Cell fill="#22c55e" />
+                      <Cell fill="#f59e0b" />
+                      <Cell fill="#ef4444" />
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Owner Exposure</CardTitle>
+              <CardDescription>Top receivable owners by balance amount.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {ownerExposureChart.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No owner exposure data yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ownerExposureChart}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="owner" tickLine={false} axisLine={false} fontSize={11} />
+                    <YAxis hide />
+                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
+                    <Bar dataKey="amount" radius={[6, 6, 0, 0]} fill="#0ea5e9" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
@@ -716,7 +853,7 @@ export default function FinanceBalances() {
                       </TableCell>
                       <TableCell>
                         {job.lastFollowUpAt
-                          ? `${new Date(job.lastFollowUpAt).toLocaleDateString()} (${(job.lastFollowUpActionType || "note").replaceAll("_", " ")})`
+                          ? `${new Date(job.lastFollowUpAt).toLocaleDateString()} (${(job.lastFollowUpActionType || "note").replace(/_/g, " ")})`
                           : "--"}
                       </TableCell>
                       <TableCell>
@@ -857,7 +994,7 @@ export default function FinanceBalances() {
                     {followUps.map((log) => (
                       <div key={log.id} className="rounded-md border p-3 text-sm">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="font-medium capitalize">{log.actionType.replaceAll("_", " ")}</p>
+                          <p className="font-medium capitalize">{log.actionType.replace(/_/g, " ")}</p>
                           <p className="text-xs text-muted-foreground">
                             {new Date(log.actionDate).toLocaleString()}
                           </p>

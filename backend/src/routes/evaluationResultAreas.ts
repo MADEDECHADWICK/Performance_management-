@@ -2,32 +2,37 @@ import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
+const toCamelKey = (key: string) => key.replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
+const toCamelRow = (row: any) =>
+  Object.fromEntries(
+    Object.entries(row || {}).map(([key, value]) => [toCamelKey(key), value])
+  );
 
-// GET /evaluation_result_areas?ad_hoc_evaluation_id=xxx
+// GET /evaluation_result_areas?adHocEvaluationId=xxx
 router.get(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req, res) => {
   try {
-    const { ad_hoc_evaluation_id, fields } = req.query;
+    const { adHocEvaluationId } = req.query;
     let query = 'SELECT * FROM evaluation_result_areas';
     const params: any[] = [];
 
-    if (ad_hoc_evaluation_id) {
+    if (adHocEvaluationId) {
       query += ' WHERE ad_hoc_evaluation_id = $1';
-      params.push(ad_hoc_evaluation_id);
+      params.push(adHocEvaluationId);
     }
 
     query += ' ORDER BY "createdAt" DESC';
 
     const rows = await prisma.$queryRawUnsafe(query, ...params);
-    return res.json(rows || []);
+    return res.json((rows as any[] || []).map(toCamelRow));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -38,7 +43,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const { kpis } = req.body;
@@ -48,15 +53,15 @@ router.post(
 
     const created: any[] = [];
     for (const kpi of kpis) {
-      if (!kpi.ad_hoc_evaluation_id || !kpi.kpi_id) {
-        return res.status(400).json({ error: 'ad_hoc_evaluation_id and kpi_id required' });
+      if (!kpi.adHocEvaluationId || !kpi.kpiId) {
+        return res.status(400).json({ error: 'adHocEvaluationId and kpiId required' });
       }
 
       const result = await prisma.$queryRaw`
         INSERT INTO evaluation_result_areas (ad_hoc_evaluation_id, kpi_id, evaluator_type, weight)
-        VALUES (${kpi.ad_hoc_evaluation_id}, ${kpi.kpi_id}, ${kpi.evaluator_type || null}, ${kpi.weight || 0})
+        VALUES (${kpi.adHocEvaluationId}, ${kpi.kpiId}, ${kpi.evaluatorType || null}, ${kpi.weight || 0})
         RETURNING *`;
-      created.push(Array.isArray(result) ? result[0] : result);
+      created.push(toCamelRow(Array.isArray(result) ? result[0] : result));
     }
 
     const performedBy = req.user?.userId ? Number(req.user.userId) : undefined;

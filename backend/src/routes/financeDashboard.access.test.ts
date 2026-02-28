@@ -6,6 +6,7 @@ import financeDashboardRoutes from "./financeDashboard";
 
 jest.mock("../prisma", () => {
   const prismaMock = {
+    $transaction: jest.fn(),
     user: {
       findUnique: jest.fn(),
     },
@@ -38,6 +39,7 @@ jest.mock("../services/notificationRecipients", () => ({
 }));
 
 type PrismaMock = {
+  $transaction: jest.Mock;
   user: { findUnique: jest.Mock };
   userAuthRole: { findMany: jest.Mock };
   clientPayment: { create: jest.Mock };
@@ -121,23 +123,30 @@ describe("finance dashboard permission boundaries", () => {
         action: "write",
       })
     );
-    expect(mockedPrisma.clientPayment.create).not.toHaveBeenCalled();
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("allows collection creation when user has finance.write", async () => {
     const app = createApp();
     const token = createToken();
     setRolePolicy(["module.finance.write"]);
-    mockedPrisma.clientPayment.create.mockResolvedValue({
-      id: 9001,
-      clientId: 10,
+    mockedPrisma.$transaction.mockResolvedValue({
+      reused: false,
+      payment: {
+        id: 9001,
+        clientId: 10,
+        jobId: null,
+        paymentAmount: 1000,
+        currency: "KES",
+        paymentDate: new Date("2026-02-15"),
+        paymentMethod: null,
+        referenceNumber: null,
+        notes: null,
+      },
+      partnerProfileId: null,
+      jobName: null,
       jobId: null,
-      paymentAmount: 1000,
-      currency: "KES",
-      paymentDate: new Date("2026-02-15"),
-      paymentMethod: null,
-      referenceNumber: null,
-      notes: null,
+      riskAlerts: [],
     });
 
     const response = await request(app)
@@ -151,7 +160,96 @@ describe("finance dashboard permission boundaries", () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual(expect.objectContaining({ id: 9001, clientId: 10 }));
-    expect(mockedPrisma.clientPayment.create).toHaveBeenCalledTimes(1);
+    expect(mockedPrisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows collection creation when user has finance_collections.write only", async () => {
+    const app = createApp();
+    const token = createToken();
+    setRolePolicy(["module.finance_collections.write"]);
+    mockedPrisma.$transaction.mockResolvedValue({
+      reused: false,
+      payment: {
+        id: 9010,
+        clientId: 11,
+        jobId: null,
+        paymentAmount: 1500,
+        currency: "KES",
+        paymentDate: new Date("2026-02-16"),
+        paymentMethod: null,
+        referenceNumber: null,
+        notes: null,
+      },
+      partnerProfileId: null,
+      jobName: null,
+      jobId: null,
+      riskAlerts: [],
+    });
+
+    const response = await request(app)
+      .post("/api/finance-dashboard/collections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        clientId: 11,
+        paymentAmount: 1500,
+        paymentDate: "2026-02-16",
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(expect.objectContaining({ id: 9010, clientId: 11 }));
+    expect(mockedPrisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks projection creation when user only has finance_collections.write", async () => {
+    const app = createApp();
+    const token = createToken();
+    setRolePolicy(["module.finance_collections.write"]);
+
+    const response = await request(app)
+      .post("/api/finance-dashboard/projections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        monthYear: "2026-03-01",
+        projectedAmount: 250000,
+      });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        error: "Forbidden - insufficient module access",
+      })
+    );
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("allows projection creation when user has finance_projections.write only", async () => {
+    const app = createApp();
+    const token = createToken();
+    setRolePolicy(["module.finance_projections.write"]);
+    mockedPrisma.$transaction.mockResolvedValue({
+      id: 77,
+      monthYear: new Date("2026-03-01"),
+      projectedAmount: 250000,
+      currency: "KES",
+      actualCollected: 0,
+      variance: -250000,
+      variancePercent: -100,
+      status: "on_track",
+      clientId: null,
+      departmentId: null,
+    });
+
+    const response = await request(app)
+      .post("/api/finance-dashboard/projections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        monthYear: "2026-03-01",
+        projectedAmount: 250000,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(expect.objectContaining({ id: 77 }));
+    expect(mockedPrisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it("blocks collection-stage updates when user only has finance.write", async () => {
@@ -186,7 +284,7 @@ describe("finance dashboard permission boundaries", () => {
       partnerProfileId: null,
       managerProfileId: null,
     });
-    mockedPrisma.job.update.mockResolvedValue({
+    mockedPrisma.$transaction.mockResolvedValue({
       id: 22,
       jobCode: "JOB-022",
       jobName: "Audit FY26",
@@ -237,7 +335,7 @@ describe("finance dashboard permission boundaries", () => {
       jobName: "Audit FY26",
       receivableOwnerProfileId: null,
     });
-    mockedPrisma.job.update.mockResolvedValue({
+    mockedPrisma.$transaction.mockResolvedValue({
       id: 22,
       jobCode: "JOB-022",
       jobName: "Audit FY26",

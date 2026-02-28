@@ -22,7 +22,7 @@ const isPrivileged = (roles: string[]) =>
   roles.includes('partner') ||
   roles.includes('manager');
 
-// GET /client_evaluations?employee_ids=1,2&fields=overall_rating,submitted_at,would_recommend
+// GET /client_evaluations?employeeIds=1,2&fields=overallRating,submittedAt,wouldRecommend
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     if (!req.profile?.id) {
@@ -33,7 +33,7 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     const privileged = isPrivileged(roles);
 
     let ids =
-      (req.query.employee_ids as string | undefined)
+      (req.query.employeeIds as string | undefined)
         ?.split(',')
         .map((s) => s.trim())
         .filter(Boolean) || [];
@@ -43,14 +43,24 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     }
 
     const fieldsRequested = (req.query.fields as string | undefined) || '';
-
-    const allowedFields = ['overall_rating','submitted_at','would_recommend','employee_id'];
-    const fields = fieldsRequested
-      ? fieldsRequested.split(',').map(f => f.trim()).filter(f => allowedFields.includes(f)).join(',')
-      : 'overall_rating,submitted_at,would_recommend,employee_id';
+    const allowedFields = {
+      overallRating: 'overall_rating',
+      submittedAt: 'submitted_at',
+      wouldRecommend: 'would_recommend',
+      employeeId: 'employee_id',
+    } as const;
+    const selectedFields: Array<keyof typeof allowedFields> = fieldsRequested
+      ? fieldsRequested
+          .split(',')
+          .map((f) => f.trim())
+          .filter((f): f is keyof typeof allowedFields => f in allowedFields)
+      : ['overallRating', 'submittedAt', 'wouldRecommend', 'employeeId'];
+    const fieldsSql = selectedFields
+      .map((field) => `${allowedFields[field]} AS "${field}"`)
+      .join(', ');
 
     const where = ids.length > 0 ? Prisma.sql`WHERE employee_id IN (${Prisma.join(ids.map(id => Prisma.sql`${id}`))})` : Prisma.empty;
-    const sql = Prisma.sql`SELECT ${Prisma.raw(fields)} FROM client_evaluations ${where}`;
+    const sql = Prisma.sql`SELECT ${Prisma.raw(fieldsSql)} FROM client_evaluations ${where}`;
     const rows = await prisma.$queryRaw(sql);
     return res.json(rows || []);
   } catch (err: any) {

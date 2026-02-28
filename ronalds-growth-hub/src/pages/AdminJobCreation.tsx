@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+﻿import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,21 +7,32 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import { useToast } from '@/hooks/use-toast';
 import { clientsAPI, employeesAPI, jobsAPI, clientOnboardingsAPI } from '@/lib/api';
 import type { Client, Profile, ClientOnboarding } from '@/lib/api/types';
 import {
-  Calendar,
   FileText,
   Save,
   Users,
   Inbox,
   Search,
   ArrowRight,
+  Check,
   CheckCircle2,
+  ChevronsUpDown,
+  Wallet,
+  Flag,
 } from 'lucide-react';
 
 type BillingType = 'hourly' | 'fixed_fee';
@@ -50,6 +61,15 @@ interface StaffAssignmentInput {
   roleOnJob?: string;
 }
 
+interface MilestoneFormInput {
+  id: string;
+  title: string;
+  targetPercent: string;
+  dueDate: string;
+  requirements: string;
+  assignedToProfileId: string;
+}
+
 const initialFormData: JobFormData = {
   jobName: '',
   description: '',
@@ -65,6 +85,41 @@ const initialFormData: JobFormData = {
   budgetHours: '',
 };
 
+const buildDefaultMilestones = (): MilestoneFormInput[] => [
+  {
+    id: `m-${Date.now()}-25`,
+    title: 'Planning and kickoff completed',
+    targetPercent: '25',
+    dueDate: '',
+    requirements: 'Approved work plan and kickoff sign-off uploaded.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-50`,
+    title: 'Fieldwork midpoint completed',
+    targetPercent: '50',
+    dueDate: '',
+    requirements: 'Interim deliverables and midpoint review approved.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-75`,
+    title: 'Draft report submitted',
+    targetPercent: '75',
+    dueDate: '',
+    requirements: 'Draft report uploaded and manager/partner comments addressed.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-100`,
+    title: 'Final report and closure completed',
+    targetPercent: '100',
+    dueDate: '',
+    requirements: 'Final report uploaded and client closure sign-off recorded.',
+    assignedToProfileId: '',
+  },
+];
+
 export default function AdminJobCreation() {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -74,6 +129,9 @@ export default function AdminJobCreation() {
   const [employees, setEmployees] = useState<Profile[]>([]);
   const [engagementLetters, setEngagementLetters] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<StaffAssignmentInput[]>([]);
+  const [milestones, setMilestones] = useState<MilestoneFormInput[]>(() =>
+    buildDefaultMilestones()
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -86,6 +144,7 @@ export default function AdminJobCreation() {
   const [queueStatus, setQueueStatus] = useState<QueueStatus>('all');
   const [selectionNotice, setSelectionNotice] = useState<{ title: string; description?: string } | null>(null);
   const assignmentsRef = useRef<HTMLDivElement | null>(null);
+  const [staffPickerOpen, setStaffPickerOpen] = useState(false);
 
   const handleSelectQueueItem = useCallback((item: ClientOnboarding) => {
     const clientId = item.client?.id ?? item.clientId;
@@ -142,6 +201,47 @@ export default function AdminJobCreation() {
     [engagementLetters]
   );
 
+  const selectedAssignmentIds = useMemo(
+    () => new Set(assignments.map((assignment) => assignment.employeeProfileId)),
+    [assignments]
+  );
+
+  const selectedStaffProfiles = useMemo(
+    () => employees.filter((employee) => selectedAssignmentIds.has(employee.id)),
+    [employees, selectedAssignmentIds]
+  );
+
+  const selectedAssignmentRows = useMemo(
+    () =>
+      assignments
+        .map((assignment) => ({
+          assignment,
+          employee: employees.find((employee) => employee.id === assignment.employeeProfileId),
+        }))
+        .filter(
+          (
+            row
+          ): row is {
+            assignment: StaffAssignmentInput;
+            employee: Profile;
+          } => Boolean(row.employee)
+        ),
+    [assignments, employees]
+  );
+
+  const staffPickerOptions = useMemo(
+    () =>
+      [...employees].sort((a, b) =>
+        `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)
+      ),
+    [employees]
+  );
+
+  const milestonesWithOwnerCount = useMemo(
+    () => milestones.filter((milestone) => Boolean(milestone.assignedToProfileId)).length,
+    [milestones]
+  );
+
   const filteredQueue = queueItems.filter((item) => {
     const normalizedStatus: QueueStatus =
       item.status === 'approved' || item.status === 'client_created' ? 'approved' : 'waiting';
@@ -159,6 +259,26 @@ export default function AdminJobCreation() {
     return matchesStatus && matchesSearch;
   });
 
+  const stepStatus = useMemo(
+    () => ({
+      details: Boolean(formData.jobName.trim() && formData.clientId && formData.engagementLetterId),
+      ownership: Boolean(
+        formData.partnerProfileId &&
+          formData.managerProfileId &&
+          formData.startDate &&
+          formData.dueDate
+      ),
+      billing: Boolean(
+        formData.billingType === 'fixed_fee'
+          ? Number(formData.fixedFeeAmount || 0) > 0
+          : Number(formData.budgetHours || 0) > 0
+      ),
+      staff: assignments.length > 0,
+      milestones: milestones.length > 0 && milestonesWithOwnerCount === milestones.length,
+    }),
+    [formData, assignments.length, milestones.length, milestonesWithOwnerCount]
+  );
+
   useEffect(() => {
     const presetClientId = searchParams.get('clientId');
     if (presetClientId) {
@@ -169,7 +289,7 @@ export default function AdminJobCreation() {
   useEffect(() => {
     loadInitialData();
     loadQueue();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadInitialData = async () => {
     try {
@@ -358,6 +478,9 @@ export default function AdminJobCreation() {
 
     setAssignments((prev) => {
       if (isChecked) {
+        if (prev.some((assignment) => assignment.employeeProfileId === employee.id)) {
+          return prev;
+        }
         return [
           ...prev,
           {
@@ -370,6 +493,16 @@ export default function AdminJobCreation() {
 
       return prev.filter((assignment) => assignment.employeeProfileId !== employee.id);
     });
+
+    if (!isChecked) {
+      setMilestones((prev) =>
+        prev.map((milestone) =>
+          milestone.assignedToProfileId === String(employee.id)
+            ? { ...milestone, assignedToProfileId: '' }
+            : milestone
+        )
+      );
+    }
   };
 
   const updateAssignmentRate = (employeeProfileId: number, rate: string) => {
@@ -383,6 +516,84 @@ export default function AdminJobCreation() {
           : assignment
       )
     );
+  };
+
+  const updateMilestoneField = (
+    milestoneId: string,
+    field: keyof Omit<MilestoneFormInput, 'id'>,
+    value: string
+  ) => {
+    setMilestones((prev) =>
+      prev.map((milestone) =>
+        milestone.id === milestoneId ? { ...milestone, [field]: value } : milestone
+      )
+    );
+  };
+
+  const addMilestone = () => {
+    setMilestones((prev) => [
+      ...prev,
+      {
+        id: `m-${Date.now()}-${prev.length + 1}`,
+        title: '',
+        targetPercent: '',
+        dueDate: '',
+        requirements: '',
+        assignedToProfileId: assignments[0]
+          ? String(assignments[0].employeeProfileId)
+          : '',
+      },
+    ]);
+  };
+
+  const removeMilestone = (milestoneId: string) => {
+    setMilestones((prev) => prev.filter((milestone) => milestone.id !== milestoneId));
+  };
+
+  const validateMilestones = () => {
+    if (milestones.length === 0) {
+      return 'Add at least one milestone before creating the job.';
+    }
+
+    const seenPercents = new Set<number>();
+    let hasFinalHundred = false;
+    const assignmentIds = new Set(assignments.map((assignment) => assignment.employeeProfileId));
+
+    for (let index = 0; index < milestones.length; index += 1) {
+      const milestone = milestones[index];
+      const title = milestone.title.trim();
+      const targetPercent = Number(milestone.targetPercent);
+
+      if (!title) {
+        return `Milestone #${index + 1} needs a title.`;
+      }
+
+      if (!Number.isFinite(targetPercent) || targetPercent <= 0 || targetPercent > 100) {
+        return `Milestone "${title}" needs a target percentage between 1 and 100.`;
+      }
+
+      if (seenPercents.has(targetPercent)) {
+        return `Duplicate milestone percentage detected: ${targetPercent}%.`;
+      }
+      seenPercents.add(targetPercent);
+
+      if (targetPercent === 100) {
+        hasFinalHundred = true;
+      }
+
+      if (milestone.assignedToProfileId) {
+        const ownerId = Number(milestone.assignedToProfileId);
+        if (!assignmentIds.has(ownerId)) {
+          return `Milestone "${title}" owner must be selected from assigned staff.`;
+        }
+      }
+    }
+
+    if (!hasFinalHundred) {
+      return 'Include a 100% milestone for final payment.';
+    }
+
+    return null;
   };
 
   const validateForm = () => {
@@ -424,6 +635,19 @@ export default function AdminJobCreation() {
       toast({ title: 'Validation Error', description: 'Due date is required', variant: 'destructive' });
       return false;
     }
+    if (assignments.length === 0) {
+      toast({
+        title: 'Validation Error',
+        description: 'Assign at least one staff member before setting milestones.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+    const milestoneValidationError = validateMilestones();
+    if (milestoneValidationError) {
+      toast({ title: 'Validation Error', description: milestoneValidationError, variant: 'destructive' });
+      return false;
+    }
     return true;
   };
 
@@ -446,6 +670,17 @@ export default function AdminJobCreation() {
         dueDate: formData.dueDate,
         priority: formData.priority,
         budgetHours: formData.budgetHours ? Number(formData.budgetHours) : undefined,
+        milestones: milestones
+          .map((milestone) => ({
+            title: milestone.title.trim(),
+            targetPercent: Number(milestone.targetPercent),
+            dueDate: milestone.dueDate || undefined,
+            requirements: milestone.requirements.trim() || undefined,
+            assignedToProfileId: milestone.assignedToProfileId
+              ? Number(milestone.assignedToProfileId)
+              : undefined,
+          }))
+          .sort((a, b) => a.targetPercent - b.targetPercent),
       };
 
       const job = await jobsAPI.createFromOnboarding(selectedQueueId, jobPayload);
@@ -462,6 +697,7 @@ export default function AdminJobCreation() {
       await loadQueue();
       setFormData(initialFormData);
       setAssignments([]);
+      setMilestones(buildDefaultMilestones());
       setSelectedQueueId(null);
       navigate(`/client-onboarding-queue?jobCreated=1&onboardingId=${selectedQueueId}`);
     } catch (error) {
@@ -588,7 +824,7 @@ export default function AdminJobCreation() {
                             ? `${currency} ${Number(feeAmount).toLocaleString()}`
                             : 'Fee pending'}
                         </span>
-                        <span>?</span>
+                        <span>|</span>
                         <span>{startDate || 'Dates pending'}</span>
                       </div>
                       <div className="mt-3 flex items-center text-xs text-primary">
@@ -603,11 +839,53 @@ export default function AdminJobCreation() {
           </Card>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-4">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+                  <div
+                    className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
+                      stepStatus.details ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                    }`}
+                  >
+                    1. Job Details
+                  </div>
+                  <div
+                    className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
+                      stepStatus.ownership ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                    }`}
+                  >
+                    2. Ownership
+                  </div>
+                  <div
+                    className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
+                      stepStatus.billing ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                    }`}
+                  >
+                    3. Billing
+                  </div>
+                  <div
+                    className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
+                      stepStatus.staff ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                    }`}
+                  >
+                    4. Staff Assignment
+                  </div>
+                  <div
+                    className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
+                      stepStatus.milestones ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                    }`}
+                  >
+                    5. Milestones by Owner
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <FileText className="h-5 w-5" />
-                  Job Details
+                  Step 1. Job Details
                 </CardTitle>
                 <CardDescription>Core job information and client link</CardDescription>
               </CardHeader>
@@ -689,8 +967,11 @@ export default function AdminJobCreation() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Users className="h-5 w-5" />
-                  Ownership and Timeline
+                  Step 2. Ownership and Timeline
                 </CardTitle>
+                <CardDescription>
+                  Set accountable leaders and timeline commitments before staffing.
+                </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -774,9 +1055,12 @@ export default function AdminJobCreation() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Calendar className="h-5 w-5" />
-                  Billing
+                  <Wallet className="h-5 w-5" />
+                  Step 3. Billing
                 </CardTitle>
+                <CardDescription>
+                  Billing values are anchored to the selected engagement letter when available.
+                </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
@@ -835,50 +1119,261 @@ export default function AdminJobCreation() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Users className="h-5 w-5" />
-                  Staff Assignment
+                  Step 4. Staff Assignment
                 </CardTitle>
-                <CardDescription>Select staff to assign to this job</CardDescription>
+                <CardDescription>
+                  Select your job team first. Milestones can then be assigned to these team members.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {employees.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No employees available.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {employees.map((employee) => {
-                      const isChecked = assignments.some(
-                        (assignment) => assignment.employeeProfileId === employee.id
-                      );
-                      return (
-                        <div key={employee.id} className="flex items-center gap-3">
-                          <Checkbox
-                            checked={isChecked}
-                            onCheckedChange={(checked) => toggleAssignment(employee, Boolean(checked))}
-                          />
-                          <div className="flex-1">
-                            <div className="font-medium">
-                              {employee.firstName} {employee.lastName}
-                            </div>
-                            <div className="text-sm text-muted-foreground">
-                              {employee.role?.name || 'No role assigned'}
-                            </div>
-                          </div>
-                          {isChecked && (
-                            <div className="w-32">
-                              <Input
-                                type="number"
-                                value={
-                                  assignments.find((assignment) => assignment.employeeProfileId === employee.id)
-                                    ?.assignedHourlyRate || 0
-                                }
-                                onChange={(e) => updateAssignmentRate(employee.id, e.target.value)}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                  <div className="space-y-2">
+                    <Label>Assign Staff *</Label>
+                    {/* IMPLEMENTED: Scalable staff assignment dropdown â€” searchable multi-select for large employee lists. */}
+                    <Popover open={staffPickerOpen} onOpenChange={setStaffPickerOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={staffPickerOpen}
+                          className="w-full justify-between"
+                        >
+                          {assignments.length > 0
+                            ? `${assignments.length} staff selected`
+                            : 'Search and select staff'}
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder="Search by name, position, or role..." />
+                          <CommandList>
+                            <CommandEmpty>No staff found.</CommandEmpty>
+                            <CommandGroup>
+                              {staffPickerOptions.map((employee) => {
+                                const isChecked = selectedAssignmentIds.has(employee.id);
+                                const hasAssignableRole = Boolean(
+                                  employee.role?.id && employee.role?.billingRate
+                                );
+                                const roleLabel =
+                                  employee.role?.name || employee.positionTitle || 'No role assigned';
+
+                                return (
+                                  <CommandItem
+                                    key={employee.id}
+                                    value={`${employee.firstName} ${employee.lastName} ${roleLabel}`}
+                                    disabled={!hasAssignableRole}
+                                    onSelect={() => toggleAssignment(employee, !isChecked)}
+                                    className="flex items-center gap-2 py-2"
+                                  >
+                                    <Check
+                                      className={`h-4 w-4 ${
+                                        isChecked ? 'opacity-100' : 'opacity-0'
+                                      }`}
+                                    />
+                                    <div className="flex-1">
+                                      <div className="text-sm font-medium">
+                                        {employee.firstName} {employee.lastName}
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">{roleLabel}</div>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {hasAssignableRole
+                                        ? `${Number(employee.role?.billingRate || 0).toLocaleString()}/hr`
+                                        : 'Missing billing role'}
+                                    </div>
+                                  </CommandItem>
+                                );
+                              })}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                    Selected: <span className="font-semibold">{assignments.length}</span>
+                  </div>
+                </div>
+
+                {selectedStaffProfiles.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedStaffProfiles.map((staff) => (
+                      <Badge key={staff.id} variant="secondary" className="px-2 py-1">
+                        {staff.firstName} {staff.lastName}
+                      </Badge>
+                    ))}
                   </div>
                 )}
+
+                {selectedAssignmentRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No staff selected yet. Use the dropdown above to assign staff.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {selectedAssignmentRows.map(({ assignment, employee }) => (
+                      <div
+                        key={assignment.employeeProfileId}
+                        className="grid grid-cols-1 gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_180px_auto] md:items-end"
+                      >
+                        <div>
+                          <div className="font-medium">
+                            {employee.firstName} {employee.lastName}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {employee.role?.name || employee.positionTitle || 'No role assigned'}
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">Hourly Rate</Label>
+                          <Input
+                            type="number"
+                            value={assignment.assignedHourlyRate}
+                            onChange={(event) =>
+                              updateAssignmentRate(employee.id, event.target.value)
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => toggleAssignment(employee, false)}
+                          className="md:self-center"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Flag className="h-5 w-5" />
+                  Step 5. Job Milestones & Invoice Triggers
+                </CardTitle>
+                <CardDescription>
+                  Define payment milestones and assign a responsible team member for each one.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {assignments.length === 0 && (
+                  <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+                    Assign staff first to enable milestone owner selection.
+                  </div>
+                )}
+
+                {milestones.map((milestone, index) => (
+                  <div key={milestone.id} className="rounded-lg border p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-sm">Milestone {index + 1}</p>
+                      {milestones.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => removeMilestone(milestone.id)}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Milestone Title *</Label>
+                        <Input
+                          value={milestone.title}
+                          onChange={(event) =>
+                            updateMilestoneField(milestone.id, 'title', event.target.value)
+                          }
+                          placeholder="e.g. Draft report submitted"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Payment % *</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={milestone.targetPercent}
+                          onChange={(event) =>
+                            updateMilestoneField(
+                              milestone.id,
+                              'targetPercent',
+                              event.target.value
+                            )
+                          }
+                          placeholder="25"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label>Due Date (optional)</Label>
+                        <Input
+                          type="date"
+                          value={milestone.dueDate}
+                          onChange={(event) =>
+                            updateMilestoneField(milestone.id, 'dueDate', event.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Milestone Owner</Label>
+                        <Select
+                          value={milestone.assignedToProfileId || 'unassigned'}
+                          onValueChange={(value) =>
+                            updateMilestoneField(
+                              milestone.id,
+                              'assignedToProfileId',
+                              value === 'unassigned' ? '' : value
+                            )
+                          }
+                          disabled={assignments.length === 0}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select assigned staff" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unassigned">Unassigned</SelectItem>
+                            {selectedStaffProfiles.map((staff) => (
+                              <SelectItem key={staff.id} value={String(staff.id)}>
+                                {staff.firstName} {staff.lastName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Condition / Requirement</Label>
+                      <Textarea
+                        rows={2}
+                        value={milestone.requirements}
+                        onChange={(event) =>
+                          updateMilestoneField(
+                            milestone.id,
+                            'requirements',
+                            event.target.value
+                          )
+                        }
+                        placeholder="List what must be completed/uploaded before invoicing this milestone."
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                <Button type="button" variant="outline" onClick={addMilestone}>
+                  Add Milestone
+                </Button>
               </CardContent>
             </Card>
 
@@ -892,6 +1387,12 @@ export default function AdminJobCreation() {
                   <div className="flex items-center justify-between text-sm mt-2">
                     <span className="text-muted-foreground">Billing type</span>
                     <span className="font-medium">{formData.billingType === 'fixed_fee' ? 'Fixed fee' : 'Hourly'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm mt-2">
+                    <span className="text-muted-foreground">Milestones with owner</span>
+                    <span className="font-medium">
+                      {milestonesWithOwnerCount}/{milestones.length}
+                    </span>
                   </div>
                 </CardContent>
               </Card>

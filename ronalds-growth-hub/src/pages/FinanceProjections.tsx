@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,9 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 
 type Projection = {
@@ -99,7 +103,7 @@ export default function FinanceProjections() {
 
   useEffect(() => {
     loadProjections();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const monthChart = useMemo(() => {
     const map = new Map<string, { month: string; projected: number; collected: number }>();
@@ -170,6 +174,29 @@ export default function FinanceProjections() {
     [filteredProjections]
   );
 
+  const attainmentMix = useMemo(() => {
+    const achieved = Math.min(totalCollected, totalProjected);
+    const gap = Math.max(0, totalProjected - totalCollected);
+    return [
+      { name: "Achieved", value: achieved },
+      { name: "Gap", value: gap },
+    ];
+  }, [totalCollected, totalProjected]);
+
+  const statusMix = useMemo(() => {
+    const counts = new Map<string, number>();
+    filteredProjections.forEach((projection) => {
+      const status = String(projection.status || "unknown")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+      counts.set(status, (counts.get(status) || 0) + 1);
+    });
+
+    return Array.from(counts.entries()).map(([name, value]) => ({ name, value }));
+  }, [filteredProjections]);
+
+  const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
+
   const topVariance = useMemo(() => {
     return [...filteredProjections]
       .sort((a, b) => (a.variance || 0) - (b.variance || 0))
@@ -217,9 +244,7 @@ export default function FinanceProjections() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -258,6 +283,73 @@ export default function FinanceProjections() {
             <CardContent>
               <div className="metric-value">{projections.length}</div>
               <p className="text-xs text-muted-foreground">Active projection entries</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Projection Attainment</CardTitle>
+              <CardDescription>Collected value against projected target.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {totalProjected <= 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No projection totals yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={attainmentMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={88}
+                      paddingAngle={2}
+                    >
+                      <Cell fill="#22c55e" />
+                      <Cell fill="#f97316" />
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Projection Status Mix</CardTitle>
+              <CardDescription>Count of projection records by status.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-64">
+              {statusMix.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No status data available.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={88}
+                      paddingAngle={2}
+                    >
+                      {statusMix.map((entry, index) => (
+                        <Cell key={`status-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -395,7 +487,7 @@ export default function FinanceProjections() {
                   <div>
                     <p className="font-medium">{projection.clientName || "All clients"}</p>
                     <p className="text-xs text-muted-foreground">
-                      {projection.departmentName || "Firm-wide"} ·{" "}
+                      {projection.departmentName || "Firm-wide"} Â·{" "}
                       {new Date(projection.monthYear).toLocaleString("en-KE", {
                         month: "short",
                         year: "numeric",

@@ -106,6 +106,14 @@ export class DepartmentService {
     );
   }
 
+  private isManagerScoped(auth: AuthContext): boolean {
+    if (this.isPrivileged(auth)) return false;
+    const roles = this.normalizeRoles(auth);
+    return Array.from(roles).some(
+      (role) => role.includes("manager") && role !== "hr_manager"
+    );
+  }
+
   private requireAdminOrHr(auth: AuthContext) {
     if (!this.isPrivileged(auth)) {
       const err = new Error("Forbidden");
@@ -114,14 +122,10 @@ export class DepartmentService {
     }
   }
 
-  private async assertDepartmentAccess(departmentId: number, auth?: AuthContext) {
-    if (!auth) return;
-    if (this.isPrivileged(auth)) return;
-
+  private async getScopedDepartmentIds(auth: AuthContext): Promise<Set<number>> {
     const profile = await prisma.profile.findUnique({
       where: { id: auth.profileId },
       select: {
-        id: true,
         departmentId: true,
         departmentsHeaded: { select: { id: true } },
         departmentsAsPartner: { select: { id: true } },
@@ -134,23 +138,25 @@ export class DepartmentService {
       throw err;
     }
 
-    const headedIds = new Set(profile.departmentsHeaded.map((department) => department.id));
-    const partnerIds = new Set(profile.departmentsAsPartner.map((department) => department.id));
-    if (
-      profile.departmentId === departmentId ||
-      headedIds.has(departmentId) ||
-      partnerIds.has(departmentId)
-    ) {
-      return;
+    if (this.isManagerScoped(auth)) {
+      const managerPrimaryDeptId =
+        profile.departmentId ?? profile.departmentsHeaded[0]?.id ?? null;
+      return managerPrimaryDeptId ? new Set([managerPrimaryDeptId]) : new Set<number>();
     }
 
-    const directReportsInDepartment = await prisma.profile.count({
-      where: {
-        managerId: auth.profileId,
-        departmentId,
-      },
-    });
-    if (directReportsInDepartment > 0) return;
+    const scopedIds = new Set<number>();
+    if (profile.departmentId) scopedIds.add(profile.departmentId);
+    profile.departmentsHeaded.forEach((department) => scopedIds.add(department.id));
+    profile.departmentsAsPartner.forEach((department) => scopedIds.add(department.id));
+    return scopedIds;
+  }
+
+  private async assertDepartmentAccess(departmentId: number, auth?: AuthContext) {
+    if (!auth) return;
+    if (this.isPrivileged(auth)) return;
+
+    const scopedIds = await this.getScopedDepartmentIds(auth);
+    if (scopedIds.has(departmentId)) return;
 
     const err = new Error("Forbidden");
     (err as any).statusCode = 403;
@@ -295,33 +301,8 @@ export class DepartmentService {
     let where: Prisma.DepartmentWhereInput | undefined;
 
     if (auth && !this.isPrivileged(auth)) {
-      const profile = await prisma.profile.findUnique({
-        where: { id: auth.profileId },
-        select: {
-          departmentId: true,
-          departmentsHeaded: { select: { id: true } },
-          departmentsAsPartner: { select: { id: true } },
-        },
-      });
-
-      const scopedIds = new Set<number>();
-      if (profile?.departmentId) scopedIds.add(profile.departmentId);
-      profile?.departmentsHeaded.forEach((department) => scopedIds.add(department.id));
-      profile?.departmentsAsPartner.forEach((department) => scopedIds.add(department.id));
-
-      const scopedConditions: Prisma.DepartmentWhereInput[] = [];
-      if (scopedIds.size > 0) {
-        scopedConditions.push({ id: { in: Array.from(scopedIds) } });
-      }
-      scopedConditions.push({
-        profiles: {
-          some: {
-            managerId: auth.profileId,
-          },
-        },
-      });
-
-      where = { OR: scopedConditions };
+      const scopedIds = await this.getScopedDepartmentIds(auth);
+      where = scopedIds.size > 0 ? { id: { in: Array.from(scopedIds) } } : { id: -1 };
     }
 
     const [departments, total] = await Promise.all([
@@ -399,7 +380,7 @@ export class DepartmentService {
    */
   async getDepartmentEmployees(departmentId: number, auth: AuthContext) {
     await this.assertDepartmentAccess(departmentId, auth);
-    return this.listDepartmentEmployees(departmentId);
+    return this.listDepartmentEmployees(departmentId, {}, auth);
   }
 
   /**
@@ -559,8 +540,12 @@ export class DepartmentService {
   /**
    * List department employees (Profiles)
    */
-  async listDepartmentEmployees(departmentId: number, options: ListDepartmentEmployeesOptions = {}) {
-    await this.getDepartmentById(departmentId);
+  async listDepartmentEmployees(
+    departmentId: number,
+    options: ListDepartmentEmployeesOptions = {},
+    auth?: AuthContext
+  ) {
+    await this.getDepartmentById(departmentId, auth);
 
     const {
       page = 1,
@@ -969,22 +954,22 @@ export class DepartmentService {
     const statusFilter = opts.status && opts.status !== "all" ? opts.status : undefined;
 
     const teams = await prisma.$queryRaw<
-      { id: number; team_name: string; description: string | null }[]
-    >`SELECT id, team_name, description FROM evaluation_teams WHERE department_id = ${departmentId}`;
+      { id: number; teamName: string; description: string | null }[]
+    >`SELECT id, team_name AS "teamName", description FROM evaluation_teams WHERE department_id = ${departmentId}`;
 
     if (!teams.length) return [];
 
     const teamIds = teams.map((team) => team.id);
     const members = await prisma.$queryRaw<
-      { team_id: number; employee_id: number }[]
-    >`SELECT team_id, employee_id FROM evaluation_team_members WHERE team_id IN (${Prisma.join(
+      { teamId: number; employeeId: number }[]
+    >`SELECT team_id AS "teamId", employee_id AS "employeeId" FROM evaluation_team_members WHERE team_id IN (${Prisma.join(
       teamIds
     )})`;
 
     const membersByTeam = members.reduce((map, row) => {
-      const key = row.team_id;
+      const key = row.teamId;
       if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(row.employee_id);
+      map.get(key)!.push(row.employeeId);
       return map;
     }, new Map<number, number[]>());
 
@@ -995,7 +980,7 @@ export class DepartmentService {
       if (memberIds.length === 0) {
         results.push({
           teamId: team.id,
-          teamName: team.team_name,
+          teamName: team.teamName,
           description: team.description,
           memberCount: 0,
           activeCount: 0,
@@ -1022,7 +1007,7 @@ export class DepartmentService {
       if (filteredIds.length === 0) {
         results.push({
           teamId: team.id,
-          teamName: team.team_name,
+          teamName: team.teamName,
           description: team.description,
           memberCount: profiles.length,
           activeCount,
@@ -1091,7 +1076,7 @@ export class DepartmentService {
 
       results.push({
         teamId: team.id,
-        teamName: team.team_name,
+        teamName: team.teamName,
         description: team.description,
         memberCount: profiles.length,
         activeCount,

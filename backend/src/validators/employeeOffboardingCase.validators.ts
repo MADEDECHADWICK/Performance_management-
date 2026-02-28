@@ -24,3 +24,7 @@ export const updateOffboardingCaseValidators = [
   body("notes").optional().isString(),
   body("separationDate").optional().isISO8601(),
 ];
+
+export const reactivateOffboardingCaseValidators = [
+  param("caseId").isInt().withMessage("caseId must be an integer"),
+];

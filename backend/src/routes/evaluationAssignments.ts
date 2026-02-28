@@ -2,7 +2,7 @@ import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 import { NotificationService } from '../services/notifications.service';
 import { emitWebhook } from '../services/webhook.service';
@@ -271,18 +271,10 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     const roles = resolveRoles(req);
     const rawStatus = req.query.status as string | undefined;
     const status = normalizeEvaluationAssignmentStatus(rawStatus);
-    const evaluatorId =
-      (req.query.evaluatorProfileId as string | undefined) ||
-      (req.query.evaluator_id as string | undefined);
-    const evaluateeId =
-      (req.query.evaluateeProfileId as string | undefined) ||
-      (req.query.evaluatee_id as string | undefined);
-    const evaluationType =
-      (req.query.evaluatorType as string | undefined) ||
-      (req.query.evaluation_type as string | undefined);
-    const evaluationDefinitionId =
-      (req.query.evaluationDefinitionId as string | undefined) ||
-      (req.query.evaluation_definition_id as string | undefined);
+    const evaluatorId = req.query.evaluatorProfileId as string | undefined;
+    const evaluateeId = req.query.evaluateeProfileId as string | undefined;
+    const evaluationType = req.query.evaluatorType as string | undefined;
+    const evaluationDefinitionId = req.query.evaluationDefinitionId as string | undefined;
     const include = req.query.include as string | undefined;
     const limit = Math.min(1000, Number(req.query.limit as string) || 200);
     
@@ -403,8 +395,8 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       const evaluatee = assignment.evaluatee
         ? {
             ...assignment.evaluatee,
-            first_name: assignment.evaluatee.firstName ?? assignment.evaluatee.first_name,
-            last_name: assignment.evaluatee.lastName ?? assignment.evaluatee.last_name,
+            firstName: assignment.evaluatee.firstName,
+            lastName: assignment.evaluatee.lastName,
             position: assignment.evaluatee.positionTitle ?? assignment.evaluatee.position,
             email: assignment.evaluatee.user?.email,
           }
@@ -413,8 +405,8 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       const evaluator = assignment.evaluator
         ? {
             ...assignment.evaluator,
-            first_name: assignment.evaluator.firstName ?? assignment.evaluator.first_name,
-            last_name: assignment.evaluator.lastName ?? assignment.evaluator.last_name,
+            firstName: assignment.evaluator.firstName,
+            lastName: assignment.evaluator.lastName,
             position: assignment.evaluator.positionTitle ?? assignment.evaluator.position,
             email: assignment.evaluator.user?.email,
           }
@@ -426,8 +418,8 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
         evaluator: shouldHideEvaluator
           ? {
               id: null,
-              first_name: "Anonymous",
-              last_name: "Evaluator",
+              firstName: "Anonymous",
+              lastName: "Evaluator",
               position: null,
               email: null,
             }
@@ -447,7 +439,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const payload = req.body;
@@ -459,11 +451,11 @@ router.post(
     if (Array.isArray(payload)) {
       const assignments = payload.map((p: any) => ({
         evaluationDefinitionId:
-          p.evaluationDefinitionId ?? p.evaluation_definition_id ?? p.ad_hoc_evaluation_id,
-        evaluatorProfileId: p.evaluatorProfileId ?? p.evaluator_id,
-        evaluateeProfileId: p.evaluateeProfileId ?? p.evaluatee_id,
+          p.evaluationDefinitionId ?? p.adHocEvaluationId,
+        evaluatorProfileId: p.evaluatorProfileId,
+        evaluateeProfileId: p.evaluateeProfileId,
         evaluatorType: (() => {
-          const raw = p.evaluatorType ?? p.evaluation_type ?? 'manager';
+          const raw = p.evaluatorType ?? 'manager';
           if (raw === 'downward') return 'manager';
           if (raw === 'upward') return 'direct_report';
           return raw;
@@ -533,12 +525,12 @@ router.post(
     
     // Single insert
     const p = payload;
-    if (!p.evaluationDefinitionId && !p.evaluation_definition_id && !p.ad_hoc_evaluation_id) {
+    if (!p.evaluationDefinitionId && !p.adHocEvaluationId) {
       return res.status(400).json({ error: 'evaluationDefinitionId is required' });
     }
 
     const definitionId =
-      p.evaluationDefinitionId ?? p.evaluation_definition_id ?? p.ad_hoc_evaluation_id;
+      p.evaluationDefinitionId ?? p.adHocEvaluationId;
     const definition = await prisma.evaluationDefinition.findUnique({
       where: { id: Number(definitionId) },
       select: { id: true, status: true, cycleId: true },
@@ -565,10 +557,10 @@ router.post(
     const created = await prisma.evaluationAssignment.create({
       data: {
         evaluationDefinitionId: Number(definitionId),
-        evaluatorProfileId: p.evaluatorProfileId ?? p.evaluator_id,
-        evaluateeProfileId: p.evaluateeProfileId ?? p.evaluatee_id,
+        evaluatorProfileId: p.evaluatorProfileId,
+        evaluateeProfileId: p.evaluateeProfileId,
         evaluatorType: (() => {
-          const raw = p.evaluatorType ?? p.evaluation_type ?? 'manager';
+          const raw = p.evaluatorType ?? 'manager';
           if (raw === 'downward') return 'manager';
           if (raw === 'upward') return 'direct_report';
           return raw;
@@ -652,8 +644,8 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
     const evaluatee = assignment.evaluatee
       ? {
           ...assignment.evaluatee,
-          first_name: assignment.evaluatee.firstName,
-          last_name: assignment.evaluatee.lastName,
+          firstName: assignment.evaluatee.firstName,
+          lastName: assignment.evaluatee.lastName,
           position: assignment.evaluatee.positionTitle,
           email: assignment.evaluatee.user?.email,
         }
@@ -661,8 +653,8 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
     const evaluator = assignment.evaluator
       ? {
           ...assignment.evaluator,
-          first_name: assignment.evaluator.firstName,
-          last_name: assignment.evaluator.lastName,
+          firstName: assignment.evaluator.firstName,
+          lastName: assignment.evaluator.lastName,
           position: assignment.evaluator.positionTitle,
           email: assignment.evaluator.user?.email,
         }
@@ -677,8 +669,8 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
       evaluator: shouldHideEvaluator
         ? {
             id: null,
-            first_name: "Anonymous",
-            last_name: "Evaluator",
+            firstName: "Anonymous",
+            lastName: "Evaluator",
             position: null,
             email: null,
           }
@@ -694,7 +686,7 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
 router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { responses, evidenceUrls, evidence_urls, evaluatorComments, evaluator_comments, status, submittedAt, submitted_at } = req.body;
+    const { responses, evidenceUrls, evaluatorComments, status, submittedAt } = req.body;
     const userId = req.user?.userId ? Number(req.user.userId) : undefined;
 
     if (!req.profile?.id) {
@@ -735,9 +727,7 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     const updateData: any = {};
     if (responses !== undefined) updateData.responses = responses;
     if (evidenceUrls !== undefined) updateData.evidenceUrls = evidenceUrls;
-    if (evidence_urls !== undefined) updateData.evidenceUrls = evidence_urls;
     if (evaluatorComments !== undefined) updateData.evaluatorComments = evaluatorComments;
-    if (evaluator_comments !== undefined) updateData.evaluatorComments = evaluator_comments;
 
     const nextStatus = status ?? undefined;
     if (nextStatus !== undefined) {
@@ -767,13 +757,12 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     }
 
     if (!updateData.status && existing.status === 'pending') {
-      if (responses !== undefined || evaluatorComments !== undefined || evaluator_comments !== undefined) {
+      if (responses !== undefined || evaluatorComments !== undefined) {
         updateData.status = 'in_progress';
       }
     }
 
     if (submittedAt !== undefined) updateData.submittedAt = new Date(submittedAt);
-    if (submitted_at !== undefined) updateData.submittedAt = new Date(submitted_at);
 
     const assignment = await prisma.evaluationAssignment.update({
       where: { id: parseInt(id) },

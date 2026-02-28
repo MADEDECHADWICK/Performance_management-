@@ -14,7 +14,16 @@
 import prisma from '../prisma';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
-import { JobStatus } from '@prisma/client';
+import { JobStatus, TaskStatus } from '@prisma/client';
+import { createClientSurveyForJobCompletion } from './surveyRouting.service';
+
+export interface JobMilestoneInput {
+  title: string;
+  targetPercent: number;
+  dueDate?: Date | string;
+  requirements?: string;
+  assignedToProfileId?: number;
+}
 
 export interface JobCreateInput {
   jobName: string;
@@ -30,6 +39,7 @@ export interface JobCreateInput {
   startDate?: Date;
   dueDate?: Date;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
+  milestones?: JobMilestoneInput[];
 }
 
 export interface JobCreateFromOnboardingInput {
@@ -42,6 +52,7 @@ export interface JobCreateFromOnboardingInput {
   startDate?: Date;
   dueDate?: Date;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
+  milestones?: JobMilestoneInput[];
 }
 
 export interface JobUpdateInput {
@@ -62,6 +73,12 @@ export interface JobStaffAssignmentInput {
   roleOnJob?: string;
 }
 
+export interface JobStaffAssignmentUpdateInput {
+  assignedRoleId?: number;
+  assignedHourlyRate?: number;
+  roleOnJob?: string;
+}
+
 export interface JobCostingInput {
   jobFee: number;
   allocations: Array<{
@@ -76,6 +93,52 @@ export interface JobCostingInput {
   capEnforced?: boolean;
   allowOverage?: boolean;
   maxOveragePercent?: number;
+  submitForApproval?: boolean;
+  partnerApprove?: boolean;
+}
+
+type NormalizedJobMilestone = {
+  title: string;
+  targetPercent: number;
+  dueDate?: Date;
+  requirements?: string;
+  assignedToProfileId?: number;
+  orderIndex: number;
+};
+
+type MilestoneTaskMetadata = {
+  targetPercent: number;
+  requirements?: string | null;
+  orderIndex?: number;
+};
+
+export interface JobInvoiceMilestoneTrackingItem {
+  taskId: number;
+  title: string;
+  targetPercent: number;
+  dueDate: Date | null;
+  requirements: string | null;
+  conditionStatus: TaskStatus;
+  conditionCompleted: boolean;
+  milestoneAmount: number;
+  expectedCumulativeAmount: number;
+  amountRemainingToMilestone: number;
+  milestonePaid: boolean;
+  readyForInvoice: boolean;
+  invoiceNumberSuggestion: string;
+}
+
+export interface JobInvoiceMilestoneTrackingSummary {
+  jobId: number;
+  jobCode: string | null;
+  jobName: string;
+  feeAmount: number;
+  collectedAmount: number;
+  outstandingAmount: number;
+  milestoneCount: number;
+  completedConditionCount: number;
+  nextReadyMilestone: JobInvoiceMilestoneTrackingItem | null;
+  milestones: JobInvoiceMilestoneTrackingItem[];
 }
 
 const coerceDate = (value?: unknown): Date | undefined => {
@@ -83,6 +146,76 @@ const coerceDate = (value?: unknown): Date | undefined => {
   if (value instanceof Date) return value;
   const parsed = new Date(String(value));
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+const JOB_MILESTONE_META_PREFIX = '[[RG_JOB_MILESTONE]]';
+
+const roundCurrency = (value: number) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const normalizeDocumentType = (value: unknown) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+
+type WorkflowDocumentRequirement = {
+  key: string;
+  label: string;
+  matches: string[];
+};
+
+const STAGE_DOCUMENT_REQUIREMENTS: Partial<
+  Record<JobStatus, WorkflowDocumentRequirement[]>
+> = {
+  in_progress: [
+    {
+      key: 'work_plan',
+      label: 'Work plan document',
+      matches: ['workplan', 'jobworkplan', 'workplandocument', 'workpaper'],
+    },
+    {
+      key: 'budget',
+      label: 'Budget document',
+      matches: ['budget', 'jobbudget', 'approvedbudget', 'budgetplan'],
+    },
+  ],
+  completed: [
+    {
+      key: 'work_plan',
+      label: 'Work plan document',
+      matches: ['workplan', 'jobworkplan', 'workplandocument', 'workpaper'],
+    },
+    {
+      key: 'budget',
+      label: 'Budget document',
+      matches: ['budget', 'jobbudget', 'approvedbudget', 'budgetplan'],
+    },
+    {
+      key: 'draft_report',
+      label: 'Draft report document',
+      matches: ['draftreport', 'jobdraftreport', 'reportdraft'],
+    },
+    {
+      key: 'final_report',
+      label: 'Final report document',
+      matches: [
+        'finalreport',
+        'jobreportfinal',
+        'reportfinal',
+        'auditreport',
+        'managementletter',
+        'deliverable',
+      ],
+    },
+  ],
+};
+
+const documentTypeMatchesRequirement = (
+  documentType: unknown,
+  requirement: WorkflowDocumentRequirement
+) => {
+  const normalized = normalizeDocumentType(documentType);
+  return requirement.matches.some((token) => normalized.includes(token));
 };
 
 export interface ListJobsOptions {
@@ -109,6 +242,369 @@ export interface AuthContext {
 }
 
 class JobService {
+  private withDerivedOverdueStatus<T extends { dueDate?: Date | null; status: JobStatus }>(job: T) {
+    const now = new Date();
+    const isOverdue =
+      Boolean(job.dueDate) &&
+      new Date(job.dueDate as Date).getTime() < now.getTime() &&
+      !['completed', 'cancelled'].includes(String(job.status));
+
+    // IMPLEMENTED: Overdue job auto-flagging — expose computed overdue state without mutating persisted lifecycle status.
+    return {
+      ...job,
+      isOverdue,
+      effectiveStatus: isOverdue ? 'overdue' : job.status,
+    };
+  }
+
+  private async getWorkflowDocumentsForJob(jobId: number) {
+    return prisma.document.findMany({
+      where: {
+        entityId: jobId,
+        OR: [{ entityType: 'Job' }, { entityType: 'job' }],
+      },
+      select: { id: true, documentType: true },
+    });
+  }
+
+  private async getMissingStageDocuments(
+    jobId: number,
+    targetStatus: JobStatus
+  ): Promise<WorkflowDocumentRequirement[]> {
+    const required = STAGE_DOCUMENT_REQUIREMENTS[targetStatus] || [];
+    if (!required.length) return [];
+
+    const uploaded = await this.getWorkflowDocumentsForJob(jobId);
+
+    return required.filter(
+      (requirement) =>
+        !uploaded.some((doc) =>
+          documentTypeMatchesRequirement(doc.documentType, requirement)
+        )
+    );
+  }
+
+  private normalizeMilestonesInput(
+    milestones?: JobMilestoneInput[]
+  ): NormalizedJobMilestone[] {
+    if (!Array.isArray(milestones) || milestones.length === 0) {
+      return [];
+    }
+
+    if (milestones.length > 20) {
+      throw new Error('A maximum of 20 milestones is allowed per job.');
+    }
+
+    const normalized: NormalizedJobMilestone[] = milestones.map((milestone, index) => {
+      const title = String(milestone?.title || '').trim();
+      if (!title) {
+        throw new Error(`Milestone #${index + 1} requires a title.`);
+      }
+
+      const targetPercent = Number(milestone?.targetPercent);
+      if (!Number.isFinite(targetPercent) || targetPercent <= 0 || targetPercent > 100) {
+        throw new Error(
+          `Milestone "${title}" has an invalid targetPercent. Use a value between 1 and 100.`
+        );
+      }
+
+      const dueDate = coerceDate(milestone?.dueDate);
+      const requirements = String(milestone?.requirements || '').trim() || undefined;
+      let assignedToProfileId: number | undefined;
+      if (
+        milestone?.assignedToProfileId !== undefined &&
+        milestone?.assignedToProfileId !== null &&
+        String(milestone?.assignedToProfileId).trim() !== ''
+      ) {
+        const parsedAssignee = Number(milestone?.assignedToProfileId);
+        if (!Number.isFinite(parsedAssignee) || parsedAssignee <= 0) {
+          throw new Error(
+            `Milestone "${title}" has an invalid assignedToProfileId. Use a valid employee profile id.`
+          );
+        }
+        assignedToProfileId = Math.trunc(parsedAssignee);
+      }
+
+      return {
+        title,
+        targetPercent: roundCurrency(targetPercent),
+        dueDate,
+        requirements,
+        assignedToProfileId,
+        orderIndex: index + 1,
+      };
+    });
+
+    const percentSet = new Set<number>();
+    for (const milestone of normalized) {
+      if (percentSet.has(milestone.targetPercent)) {
+        throw new Error(
+          `Duplicate milestone percentage detected: ${milestone.targetPercent}%.`
+        );
+      }
+      percentSet.add(milestone.targetPercent);
+    }
+
+    if (!percentSet.has(100)) {
+      throw new Error(
+        'Milestones must include a final 100% payment point.'
+      );
+    }
+
+    return normalized.sort((a, b) => {
+      if (a.targetPercent === b.targetPercent) {
+        return a.orderIndex - b.orderIndex;
+      }
+      return a.targetPercent - b.targetPercent;
+    });
+  }
+
+  private buildMilestoneTaskDescription(milestone: NormalizedJobMilestone) {
+    const metadata: MilestoneTaskMetadata = {
+      targetPercent: milestone.targetPercent,
+      requirements: milestone.requirements || null,
+      orderIndex: milestone.orderIndex,
+    };
+    const metadataLine = `${JOB_MILESTONE_META_PREFIX}${JSON.stringify(metadata)}`;
+    if (!milestone.requirements) {
+      return metadataLine;
+    }
+    return `${metadataLine}\n${milestone.requirements}`;
+  }
+
+  private parseMilestoneTask(task: {
+    id: number;
+    title: string;
+    description: string | null;
+    status: TaskStatus;
+    dueDate: Date | null;
+  }) {
+    const description = String(task.description || '');
+    if (!description.startsWith(JOB_MILESTONE_META_PREFIX)) {
+      return null;
+    }
+
+    const metadataWithBody = description.slice(JOB_MILESTONE_META_PREFIX.length);
+    const firstNewline = metadataWithBody.indexOf('\n');
+    const metadataRaw =
+      firstNewline === -1
+        ? metadataWithBody.trim()
+        : metadataWithBody.slice(0, firstNewline).trim();
+    const fallbackRequirements =
+      firstNewline === -1
+        ? ''
+        : metadataWithBody.slice(firstNewline + 1).trim();
+
+    try {
+      const metadata = JSON.parse(metadataRaw) as MilestoneTaskMetadata;
+      const targetPercent = Number(metadata?.targetPercent);
+      if (!Number.isFinite(targetPercent) || targetPercent <= 0 || targetPercent > 100) {
+        return null;
+      }
+
+      const requirements =
+        String(metadata?.requirements || '').trim() || fallbackRequirements || null;
+      const orderIndex = Number(metadata?.orderIndex || 0) || 0;
+
+      return {
+        taskId: task.id,
+        title: task.title,
+        targetPercent: roundCurrency(targetPercent),
+        dueDate: task.dueDate,
+        requirements,
+        conditionStatus: task.status,
+        conditionCompleted: task.status === 'completed',
+        orderIndex,
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  private buildInvoiceNumberSuggestion(
+    jobCode: string | null | undefined,
+    jobId: number,
+    targetPercent: number
+  ) {
+    const baseCode = String(jobCode || `JOB-${jobId}`)
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '');
+    const pct = String(Math.round(targetPercent)).padStart(3, '0');
+    return `INV-${baseCode}-${pct}`;
+  }
+
+  private resolveJobFeeForTracking(job: {
+    billingType: 'hourly' | 'fixed_fee';
+    fixedFeeAmount: unknown;
+    jobCosting?: { jobFee: unknown } | null;
+  }) {
+    const costingFee = Number(job.jobCosting?.jobFee || 0);
+    if (costingFee > 0) return roundCurrency(costingFee);
+    if (job.billingType === 'fixed_fee') {
+      return roundCurrency(Number(job.fixedFeeAmount || 0));
+    }
+    return 0;
+  }
+
+  private async createMilestoneTasksForJob(
+    jobId: number,
+    milestones: NormalizedJobMilestone[],
+    defaultAssigneeProfileId?: number | null,
+    dbClient: any = prisma
+  ) {
+    if (!milestones.length) return;
+
+    await dbClient.task.createMany({
+      data: milestones.map((milestone) => ({
+        jobId,
+        title: milestone.title,
+        description: this.buildMilestoneTaskDescription(milestone),
+        assignedToProfileId: milestone.assignedToProfileId ?? defaultAssigneeProfileId ?? null,
+        estimatedHours: null,
+        billable: false,
+        status: 'pending',
+        priority: 'medium',
+        dueDate: milestone.dueDate ?? null,
+      })),
+    });
+  }
+
+  private async notifyInvoiceReadyForMilestone(
+    jobId: number,
+    milestone: JobInvoiceMilestoneTrackingItem,
+    authContext?: AuthContext
+  ) {
+    const alreadyNotified = await prisma.statusTransition.findFirst({
+      where: {
+        entityType: 'JobInvoiceMilestone',
+        entityId: milestone.taskId,
+        toStatus: 'ready_notified',
+      },
+      select: { id: true },
+    });
+
+    if (alreadyNotified) {
+      return;
+    }
+
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        jobName: true,
+        jobCode: true,
+        managerProfileId: true,
+        partnerProfileId: true,
+      },
+    });
+
+    if (!job) {
+      return;
+    }
+
+    const financeProfiles = await prisma.profile.findMany({
+      where: {
+        user: {
+          roles: {
+            some: {
+              role: { name: { in: ['finance', 'finance_manager'] } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    const recipients = new Set<number>();
+    financeProfiles.forEach((profile) => recipients.add(profile.id));
+    if (job.managerProfileId) recipients.add(job.managerProfileId);
+    if (job.partnerProfileId) recipients.add(job.partnerProfileId);
+
+    const invoiceAmount = roundCurrency(milestone.milestoneAmount);
+    const changedByProfileId =
+      authContext?.profileId && authContext.profileId > 0
+        ? authContext.profileId
+        : job.managerProfileId ?? null;
+    const notificationMessage = [
+      `Milestone ${milestone.targetPercent}% is complete for "${job.jobName}".`,
+      `Invoice ${milestone.invoiceNumberSuggestion} is ready for issuance.`,
+      `Amount due: KES ${invoiceAmount.toLocaleString()}.`,
+    ].join(' ');
+
+    await Promise.all(
+      Array.from(recipients).map((recipientProfileId) =>
+        NotificationService.createNotification(
+          {
+            recipientProfileId,
+            type: 'action',
+            title: `Invoice milestone ready: ${job.jobCode || job.jobName}`,
+            message: notificationMessage,
+            actionRequired: true,
+            jobId: job.id,
+            link: `/finance-collections`,
+          },
+          {
+            userId: authContext?.userId ?? 0,
+            profileId: changedByProfileId ?? 0,
+            roleName: authContext?.roles?.[0] ?? 'system',
+          }
+        )
+      )
+    );
+
+    await prisma.statusTransition.create({
+      data: {
+        entityType: 'JobInvoiceMilestone',
+        entityId: milestone.taskId,
+        jobId: job.id,
+        fromStatus: 'condition_completed',
+        toStatus: 'ready_notified',
+        changedByProfileId,
+        reason: 'Invoice readiness notification sent automatically',
+        metadata: {
+          targetPercent: milestone.targetPercent,
+          milestoneAmount: invoiceAmount,
+          expectedCumulativeAmount: milestone.expectedCumulativeAmount,
+          invoiceNumberSuggestion: milestone.invoiceNumberSuggestion,
+        },
+      },
+    });
+  }
+
+  private async completeFinalMilestoneOnJobCompletion(
+    jobId: number,
+    authContext?: AuthContext
+  ) {
+    const tracking = await this.getJobInvoiceMilestoneTracking(jobId);
+    if (!tracking.milestones.length) {
+      return;
+    }
+
+    const finalMilestone = tracking.milestones.reduce((latest, current) => {
+      if (!latest) return current;
+      if (current.targetPercent > latest.targetPercent) return current;
+      return latest;
+    }, null as JobInvoiceMilestoneTrackingItem | null);
+
+    if (!finalMilestone || finalMilestone.conditionCompleted) {
+      return;
+    }
+
+    await prisma.task.update({
+      where: { id: finalMilestone.taskId },
+      data: { status: 'completed' },
+    });
+
+    const refreshed = await this.getJobInvoiceMilestoneTracking(jobId);
+    const refreshedFinal = refreshed.milestones.find(
+      (milestone) => milestone.taskId === finalMilestone.taskId
+    );
+
+    if (refreshedFinal?.readyForInvoice) {
+      await this.notifyInvoiceReadyForMilestone(jobId, refreshedFinal, authContext);
+    }
+  }
+
   /**
    * Create a new job
    * 
@@ -118,6 +614,7 @@ class JobService {
     // Authorization: manager creating their own job, or admin
     const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
     const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
+    const normalizedMilestones = this.normalizeMilestonesInput(input.milestones);
 
     if (!isAdmin && !isHr) {
       throw new Error('Not authorized to create jobs');
@@ -135,6 +632,7 @@ class JobService {
         id: true,
         status: true,
         clientId: true,
+        documentId: true,
         feeAmount: true,
         currency: true,
         jobTitle: true,
@@ -156,6 +654,10 @@ class JobService {
 
     if (!engagementLetter.feeAmount) {
       throw new Error('Engagement letter must include a fee amount');
+    }
+
+    if (!engagementLetter.documentId) {
+      throw new Error('Engagement letter must have an uploaded signed document before job creation');
     }
 
     const onboarding = await prisma.clientOnboarding.findFirst({
@@ -215,6 +717,12 @@ class JobService {
         },
       });
     }
+
+    await this.createMilestoneTasksForJob(
+      job.id,
+      normalizedMilestones,
+      job.managerProfileId ?? null
+    );
 
     const notificationPayload = {
       title: `Job created: ${job.jobName}`,
@@ -286,6 +794,7 @@ class JobService {
     input: JobCreateFromOnboardingInput,
     authContext: AuthContext
   ) {
+    const normalizedMilestones = this.normalizeMilestonesInput(input.milestones);
     const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
     const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
 
@@ -301,6 +810,7 @@ class JobService {
             id: true,
             status: true,
             clientId: true,
+            documentId: true,
             feeAmount: true,
             currency: true,
             jobTitle: true,
@@ -336,6 +846,10 @@ class JobService {
 
     if (!engagementLetter.feeAmount) {
       throw new Error('Engagement letter must include a fee amount');
+    }
+
+    if (!engagementLetter.documentId) {
+      throw new Error('Engagement letter must have an uploaded signed document before job creation');
     }
 
     const jobName = input.jobName?.trim() || engagementLetter.jobTitle?.trim();
@@ -380,6 +894,13 @@ class JobService {
           status: 'job_created',
         },
       });
+
+      await this.createMilestoneTasksForJob(
+        created.id,
+        normalizedMilestones,
+        created.managerProfileId ?? null,
+        tx
+      );
 
       return created;
     });
@@ -504,12 +1025,41 @@ class JobService {
       }
     }
 
+    const appendAndCondition = (current: any, condition: any) => {
+      if (!current || Object.keys(current).length === 0) return condition;
+      if (current.AND) {
+        return { ...current, AND: [...current.AND, condition] };
+      }
+      return { AND: [current, condition] };
+    };
+
     // Apply filters
     if (filters.status) {
-      if (Array.isArray(filters.status)) {
-        whereClause.status = { in: filters.status };
-      } else {
-        whereClause.status = filters.status;
+      const statuses = (Array.isArray(filters.status) ? filters.status : [filters.status])
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
+      const includeOverdue = statuses.includes('overdue');
+      const concreteStatuses = statuses.filter((value) => value !== 'overdue');
+
+      if (includeOverdue) {
+        const overdueCondition = {
+          dueDate: { lt: new Date() },
+          status: { notIn: ['completed', 'cancelled'] },
+        };
+
+        if (concreteStatuses.length > 0) {
+          whereClause = appendAndCondition(whereClause, {
+            OR: [{ status: { in: concreteStatuses } }, overdueCondition],
+          });
+        } else {
+          whereClause = appendAndCondition(whereClause, overdueCondition);
+        }
+      } else if (concreteStatuses.length > 0) {
+        if (concreteStatuses.length === 1) {
+          whereClause = appendAndCondition(whereClause, { status: concreteStatuses[0] });
+        } else {
+          whereClause = appendAndCondition(whereClause, { status: { in: concreteStatuses } });
+        }
       }
     }
     if (filters.clientId) whereClause.clientId = filters.clientId;
@@ -561,7 +1111,7 @@ class JobService {
       prisma.job.count({ where: whereClause }),
     ]);
 
-    return { jobs, total };
+    return { jobs: jobs.map((job) => this.withDerivedOverdueStatus(job as any)), total };
   }
 
   /**
@@ -608,7 +1158,224 @@ class JobService {
       throw new Error('Job not found');
     }
 
-    return job;
+    return this.withDerivedOverdueStatus(job as any);
+  }
+
+  async getJobInvoiceMilestoneTracking(
+    jobId: number
+  ): Promise<JobInvoiceMilestoneTrackingSummary> {
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        jobCode: true,
+        jobName: true,
+        billingType: true,
+        fixedFeeAmount: true,
+        jobCosting: {
+          select: { jobFee: true },
+        },
+        payments: {
+          select: { paymentAmount: true },
+        },
+        tasks: {
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            status: true,
+            dueDate: true,
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      throw new Error('Job not found');
+    }
+
+    const parsedMilestones = job.tasks
+      .map((task) => this.parseMilestoneTask(task as any))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((a, b) => {
+        if (a.targetPercent === b.targetPercent) {
+          if (a.orderIndex === b.orderIndex) {
+            return a.taskId - b.taskId;
+          }
+          return a.orderIndex - b.orderIndex;
+        }
+        return a.targetPercent - b.targetPercent;
+      });
+
+    const feeAmount = this.resolveJobFeeForTracking(job as any);
+    const collectedAmount = roundCurrency(
+      job.payments.reduce(
+        (sum, payment) => sum + Number(payment.paymentAmount || 0),
+        0
+      )
+    );
+
+    let previousExpected = 0;
+    const milestones: JobInvoiceMilestoneTrackingItem[] = parsedMilestones.map(
+      (milestone, index) => {
+        const expectedCumulativeAmount = roundCurrency(
+          (feeAmount * milestone.targetPercent) / 100
+        );
+        const milestoneAmount = roundCurrency(
+          Math.max(0, expectedCumulativeAmount - previousExpected)
+        );
+        const milestonePaid = collectedAmount + 0.0001 >= expectedCumulativeAmount;
+        const previousMilestonesPaid =
+          index === 0 || collectedAmount + 0.0001 >= previousExpected;
+        const readyForInvoice =
+          milestone.conditionCompleted && !milestonePaid && previousMilestonesPaid;
+        const amountRemainingToMilestone = roundCurrency(
+          Math.max(0, expectedCumulativeAmount - collectedAmount)
+        );
+
+        const item: JobInvoiceMilestoneTrackingItem = {
+          taskId: milestone.taskId,
+          title: milestone.title,
+          targetPercent: milestone.targetPercent,
+          dueDate: milestone.dueDate ?? null,
+          requirements: milestone.requirements || null,
+          conditionStatus: milestone.conditionStatus,
+          conditionCompleted: milestone.conditionCompleted,
+          milestoneAmount,
+          expectedCumulativeAmount,
+          amountRemainingToMilestone,
+          milestonePaid,
+          readyForInvoice,
+          invoiceNumberSuggestion: this.buildInvoiceNumberSuggestion(
+            job.jobCode,
+            job.id,
+            milestone.targetPercent
+          ),
+        };
+
+        previousExpected = expectedCumulativeAmount;
+        return item;
+      }
+    );
+
+    const completedConditionCount = milestones.filter(
+      (milestone) => milestone.conditionCompleted
+    ).length;
+    const nextReadyMilestone =
+      milestones.find((milestone) => milestone.readyForInvoice) || null;
+    const outstandingAmount = roundCurrency(Math.max(0, feeAmount - collectedAmount));
+
+    return {
+      jobId: job.id,
+      jobCode: job.jobCode,
+      jobName: job.jobName,
+      feeAmount,
+      collectedAmount,
+      outstandingAmount,
+      milestoneCount: milestones.length,
+      completedConditionCount,
+      nextReadyMilestone,
+      milestones,
+    };
+  }
+
+  async notifyNextReadyInvoiceMilestone(jobId: number, authContext?: AuthContext) {
+    const tracking = await this.getJobInvoiceMilestoneTracking(jobId);
+    if (tracking.nextReadyMilestone) {
+      await this.notifyInvoiceReadyForMilestone(
+        jobId,
+        tracking.nextReadyMilestone,
+        authContext
+      );
+    }
+    return tracking;
+  }
+
+  async updateInvoiceMilestoneStatus(
+    jobId: number,
+    milestoneTaskId: number,
+    status: TaskStatus,
+    authContext: AuthContext
+  ) {
+    const job = await this.getJobById(jobId);
+
+    const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
+    const isAdmin =
+      roleSet.has('admin') ||
+      roleSet.has('super_admin') ||
+      roleSet.has('hr') ||
+      roleSet.has('hr_manager') ||
+      roleSet.has('gmp') ||
+      roleSet.has('group_managing_partner');
+    const isJobManager = job.managerProfileId === authContext.profileId;
+    const isPartner = job.partnerProfileId === authContext.profileId;
+
+    if (!isAdmin && !isJobManager && !isPartner) {
+      throw new Error('Not authorized to update invoice milestones for this job');
+    }
+
+    const allowedStatuses: TaskStatus[] = [
+      'pending',
+      'in_progress',
+      'blocked',
+      'completed',
+      'cancelled',
+    ];
+    if (!allowedStatuses.includes(status)) {
+      throw new Error(`Invalid milestone status: ${status}`);
+    }
+
+    const task = await prisma.task.findFirst({
+      where: { id: milestoneTaskId, jobId },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        status: true,
+        dueDate: true,
+      },
+    });
+
+    if (!task) {
+      throw new Error('Milestone task not found for this job');
+    }
+
+    const parsed = this.parseMilestoneTask(task as any);
+    if (!parsed) {
+      throw new Error('Selected task is not a billing milestone');
+    }
+
+    const updatedTask = await prisma.task.update({
+      where: { id: milestoneTaskId },
+      data: { status },
+      select: {
+        id: true,
+        jobId: true,
+        title: true,
+        description: true,
+        status: true,
+        dueDate: true,
+        updatedAt: true,
+      },
+    });
+
+    const tracking = await this.getJobInvoiceMilestoneTracking(jobId);
+    const updatedMilestone = tracking.milestones.find(
+      (milestone) => milestone.taskId === milestoneTaskId
+    );
+
+    if (status === 'completed' && updatedMilestone?.readyForInvoice) {
+      await this.notifyInvoiceReadyForMilestone(
+        jobId,
+        updatedMilestone,
+        authContext
+      );
+    }
+
+    return {
+      milestoneTask: updatedTask,
+      tracking,
+    };
   }
 
   /**
@@ -651,9 +1418,12 @@ class JobService {
     jobId: number,
     status: JobStatus,
     reason?: string,
-    authContext?: AuthContext
+    authContext?: AuthContext,
+    options?: {
+      allowIncompleteTasksOverride?: boolean;
+    }
   ) {
-    const job = await this.getJobById(jobId);
+    const job = await this.getJobById(jobId, ['costing']);
 
     // Validate status transition
     const validTransitions: Record<JobStatus, JobStatus[]> = {
@@ -664,8 +1434,9 @@ class JobService {
       cancelled: [],
     };
 
-    if (!validTransitions[job.status]?.includes(status)) {
-      throw new Error(`Cannot transition from ${job.status} to ${status}`);
+    const currentStatus = job.status as JobStatus;
+    if (!validTransitions[currentStatus]?.includes(status)) {
+      throw new Error(`Cannot transition from ${currentStatus} to ${status}`);
     }
 
     // Authorization
@@ -675,6 +1446,67 @@ class JobService {
 
     if (!isAdmin && !isJobManager && !isPartner) {
       throw new Error('Not authorized to update job status');
+    }
+
+    if (job.status === 'planned' && status === 'in_progress') {
+      if (!job.teamAssigned) {
+        throw new Error('Cannot move to in-progress until team assignment is completed.');
+      }
+      if (!job.costingCompleted || !job.jobCosting) {
+        throw new Error('Cannot move to in-progress until job costing is completed.');
+      }
+      if (job.jobCosting.costingStatus !== 'approved') {
+        // IMPLEMENTED: Partner approval gate before execution — in-progress now requires approved job costing.
+        throw new Error(
+          'Cannot move to in-progress until partner approves job costing, work plan, and budget.'
+        );
+      }
+    }
+
+    const missingStageDocuments = await this.getMissingStageDocuments(
+      jobId,
+      status
+    );
+
+    if (missingStageDocuments.length > 0) {
+      const stageName = status.replace(/_/g, ' ');
+      const missingLabels = missingStageDocuments.map((item) => item.label);
+      // CONFIRMED: Final report upload gate on completion — stage document checks already block completion when required reports are missing.
+      throw new Error(
+        `Cannot move this job to ${stageName} until these documents are uploaded: ${missingLabels.join(
+          ', '
+        )}.`
+      );
+    }
+
+    let incompleteTasks: Array<{ id: number; title: string; status: string }> = [];
+    if (status === 'completed') {
+      incompleteTasks = await prisma.task.findMany({
+        where: {
+          jobId,
+          status: { notIn: ['completed', 'cancelled'] },
+        },
+        select: { id: true, title: true, status: true },
+        orderBy: { id: 'asc' },
+      });
+
+      const allowIncompleteTasksOverride = Boolean(options?.allowIncompleteTasksOverride);
+      if (incompleteTasks.length > 0 && !allowIncompleteTasksOverride) {
+        const pendingTitles = incompleteTasks
+          .slice(0, 8)
+          .map((task) => `"${task.title}"`)
+          .join(', ');
+        // IMPLEMENTED: Task-completion gate on job closure — completion now blocks until tasks complete unless manager/partner explicitly overrides.
+        throw new Error(
+          `Cannot complete job with ${incompleteTasks.length} incomplete task(s): ${pendingTitles}. Set allowIncompleteTasksOverride=true and provide reason to override.`
+        );
+      }
+
+      if (incompleteTasks.length > 0 && !String(reason || '').trim()) {
+        throw new Error(
+          'A completion override reason is required when closing a job with incomplete tasks.'
+        );
+      }
     }
 
     // Record status transition
@@ -687,56 +1519,49 @@ class JobService {
         toStatus: status,
         reason: reason || null,
         changedByProfileId: authContext?.profileId!,
+        metadata:
+          status === 'completed'
+            ? {
+                incompleteTaskOverrideApplied: incompleteTasks.length > 0,
+                incompleteTaskCount: incompleteTasks.length,
+                incompleteTaskIds: incompleteTasks.map((task) => task.id),
+              }
+            : undefined,
       },
     });
 
     const updated = await prisma.job.update({
       where: { id: jobId },
-      data: { status },
+      data: {
+        status,
+        completionDate: status === 'completed' ? new Date() : job.completionDate,
+      },
       include: {
         manager: { select: { id: true, firstName: true, lastName: true } },
         partner: { select: { id: true, firstName: true, lastName: true } },
       },
     });
 
-    if (
-      job.status === 'planned' &&
-      status === 'in_progress' &&
-      (!job.teamAssigned || !job.costingCompleted)
-    ) {
-      const gmpProfiles = await prisma.profile.findMany({
-        where: {
-          user: {
-            roles: {
-              some: {
-                role: { name: { in: ['gmp', 'group_managing_partner'] } },
-              },
-            },
-          },
-        },
-        select: { id: true },
-      });
+    if (status === 'completed') {
+      await this.completeFinalMilestoneOnJobCompletion(jobId, authContext);
 
-      await Promise.all(
-        gmpProfiles.map((profile) =>
-          NotificationService.createNotification(
-            {
-              recipientProfileId: profile.id,
-              type: 'warning',
-              title: 'Procurement gap on job start',
-              message: `Job "${job.jobName}" moved to in-progress without full staffing/costing.`,
-              actionRequired: true,
-              jobId: job.id,
-              link: `/jobs/${job.id}`,
-            },
-            {
-              userId: authContext?.userId ?? 0,
-              profileId: authContext?.profileId ?? 0,
-              roleName: authContext?.roles?.[0] ?? 'system',
-            }
-          )
-        )
-      );
+      try {
+        const syntheticAuth = {
+          user: {
+            userId: authContext?.userId ?? 0,
+            profileId: authContext?.profileId ?? 0,
+          },
+          profile: {
+            id: authContext?.profileId ?? 0,
+            role: { name: authContext?.roles?.[0] ?? 'system' },
+          },
+        } as any;
+
+        // IMPLEMENTED: Client satisfaction survey post-job trigger — when a job is marked complete, create a one-time tokenized survey if one does not already exist.
+        await createClientSurveyForJobCompletion(jobId, syntheticAuth, 30);
+      } catch (surveyError) {
+        console.error(`Failed to auto-create client survey for completed job ${jobId}:`, surveyError);
+      }
     }
 
     return updated;
@@ -849,15 +1674,40 @@ class JobService {
       });
     }
 
+    // Ensure each newly assigned employee has at least one actionable to-do for this job.
+    const existingTodo = await prisma.task.findFirst({
+      where: {
+        jobId,
+        assignedToProfileId: assignment.employeeProfileId,
+      },
+      select: { id: true },
+    });
+
+    if (!existingTodo) {
+      await prisma.task.create({
+        data: {
+          jobId,
+          title: `Assigned job: ${job.jobName}`,
+          description:
+            "Auto-created from staffing assignment. Start tracking time in Timesheets and update this to-do as work progresses.",
+          assignedToProfileId: assignment.employeeProfileId,
+          status: 'pending',
+          priority: 'medium',
+          billable: true,
+          dueDate: job.dueDate ?? undefined,
+        },
+      });
+    }
+
     await NotificationService.createNotification(
       {
         recipientProfileId: assignment.employeeProfileId,
         type: 'action',
         title: `Assigned to job: ${job.jobName}`,
-        message: 'You have been added to a new job. Review the details and start tracking time when ready.',
+        message: 'You have been added to a new job. Open Timesheets to start tracking time when ready.',
         actionRequired: true,
         jobId: job.id,
-        link: `/jobs/${job.id}`,
+        link: `/timesheets?jobId=${job.id}`,
       },
       {
         userId: authContext.userId,
@@ -877,7 +1727,7 @@ class JobService {
     input: JobCostingInput,
     authContext: AuthContext
   ) {
-    const job = await this.getJobById(jobId);
+    const job = (await this.getJobById(jobId, ['costing'])) as any;
 
     const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
     const isAdmin =
@@ -1024,6 +1874,29 @@ class JobService {
 
     const jobFee = baseJobFee;
     const remainingBudget = jobFee - totalEstimatedBillable;
+    const submitForApproval = input.submitForApproval !== false;
+    const partnerApprove = Boolean(input.partnerApprove);
+    const canPartnerApprove = isPartner || isAdmin;
+    const now = new Date();
+
+    let nextCostingStatus: 'draft' | 'submitted' | 'partner_review' | 'approved' = 'draft';
+    let approvedByPartnerProfileId: number | null = null;
+    let approvedAt: Date | null = null;
+
+    if (partnerApprove && !canPartnerApprove) {
+      throw new Error('Only partner/admin can approve job costing');
+    }
+
+    if (partnerApprove && canPartnerApprove) {
+      // IMPLEMENTED: Costing approval before execution — costing can be explicitly partner-approved and is required for in-progress transition.
+      nextCostingStatus = 'approved';
+      approvedByPartnerProfileId = authContext.profileId;
+      approvedAt = now;
+    } else if (isJobManager && submitForApproval) {
+      nextCostingStatus = 'submitted';
+    } else if (canPartnerApprove && submitForApproval) {
+      nextCostingStatus = 'partner_review';
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const costing = await tx.jobCosting.upsert({
@@ -1037,7 +1910,9 @@ class JobService {
           remainingBudget,
           totalEstimatedHours,
           totalEstimatedCost,
-          costingStatus: 'draft',
+          costingStatus: nextCostingStatus,
+          approvedByPartnerProfileId,
+          approvedAt,
           notes: input.notes,
         },
         update: {
@@ -1047,7 +1922,9 @@ class JobService {
           remainingBudget,
           totalEstimatedHours,
           totalEstimatedCost,
-          costingStatus: 'draft',
+          costingStatus: nextCostingStatus,
+          approvedByPartnerProfileId,
+          approvedAt,
           notes: input.notes,
         },
       });
@@ -1104,8 +1981,48 @@ class JobService {
         jobFee,
         allowOverage,
         maxOveragePercent,
+        costingStatus: nextCostingStatus,
+        partnerApproved: partnerApprove,
       },
     });
+
+    if (nextCostingStatus === 'submitted' && job.partnerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.partnerProfileId,
+          type: 'action',
+          title: `Job costing submitted for approval: ${job.jobName}`,
+          message: `Manager submitted job costing for "${job.jobName}". Partner approval is required before execution.`,
+          actionRequired: true,
+          jobId: job.id,
+          link: `/jobs/${job.id}`,
+        },
+        {
+          userId: authContext.userId,
+          profileId: authContext.profileId,
+          roleName: authContext.roles?.[0],
+        }
+      );
+    }
+
+    if (nextCostingStatus === 'approved' && job.managerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.managerProfileId,
+          type: 'info',
+          title: `Job costing approved: ${job.jobName}`,
+          message: `Partner approved costing for "${job.jobName}". The job can now move to in-progress.`,
+          actionRequired: false,
+          jobId: job.id,
+          link: `/jobs/${job.id}`,
+        },
+        {
+          userId: authContext.userId,
+          profileId: authContext.profileId,
+          roleName: authContext.roles?.[0],
+        }
+      );
+    }
 
     return result.costingResult;
   }
@@ -1131,6 +2048,210 @@ class JobService {
     });
 
     return staffing;
+  }
+
+  /**
+   * Update an existing job staff assignment
+   */
+  async updateJobStaffAssignment(
+    jobId: number,
+    assignmentId: number,
+    input: JobStaffAssignmentUpdateInput,
+    authContext: AuthContext
+  ) {
+    const assignment = await prisma.jobStaffAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        job: {
+          select: {
+            id: true,
+            jobName: true,
+            managerProfileId: true,
+            partnerProfileId: true,
+          },
+        },
+      },
+    });
+
+    if (!assignment || assignment.jobId !== jobId) {
+      throw { statusCode: 404, message: 'Staff assignment not found for this job' };
+    }
+
+    const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
+    const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
+    const isJobManager = assignment.job.managerProfileId === authContext.profileId;
+    const isPartner = assignment.job.partnerProfileId === authContext.profileId;
+
+    if (!isAdmin && !isJobManager && !isPartner) {
+      throw { statusCode: 403, message: 'Not authorized to update team assignment for this job' };
+    }
+
+    const hasAnyUpdatableField =
+      input.assignedRoleId !== undefined ||
+      input.assignedHourlyRate !== undefined ||
+      input.roleOnJob !== undefined;
+
+    if (!hasAnyUpdatableField) {
+      throw {
+        statusCode: 400,
+        message: 'At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob',
+      };
+    }
+
+    const nextRoleId = input.assignedRoleId ?? assignment.assignedRoleId;
+
+    const role = await prisma.positionRole.findUnique({
+      where: { id: nextRoleId },
+      select: { id: true, name: true, billingRate: true },
+    });
+
+    if (!role) {
+      throw { statusCode: 404, message: 'Assigned role not found' };
+    }
+
+    let nextHourlyRate: number;
+    if (input.assignedHourlyRate !== undefined && input.assignedHourlyRate !== null) {
+      nextHourlyRate = Number(input.assignedHourlyRate);
+    } else if (input.assignedRoleId !== undefined) {
+      nextHourlyRate = Number(role.billingRate || 0);
+    } else {
+      nextHourlyRate = Number(assignment.assignedHourlyRate || 0);
+    }
+
+    if (!Number.isFinite(nextHourlyRate) || nextHourlyRate <= 0) {
+      throw { statusCode: 400, message: 'Assigned hourly rate must be greater than 0' };
+    }
+
+    const roleSnapshot = {
+      id: role.id,
+      name: role.name,
+      billingRate: Number(role.billingRate || 0),
+      costRate: Number(role.billingRate || 0),
+      assignedHourlyRate: nextHourlyRate,
+    };
+
+    const updated = await prisma.jobStaffAssignment.update({
+      where: { id: assignmentId },
+      data: {
+        assignedRoleId: nextRoleId,
+        assignedHourlyRate: nextHourlyRate,
+        roleOnJob:
+          input.roleOnJob !== undefined
+            ? String(input.roleOnJob || '').trim() || null
+            : assignment.roleOnJob,
+        roleSnapshot,
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            user: { select: { email: true } },
+            isPartner: true,
+          },
+        },
+        role: { select: { id: true, name: true } },
+      },
+    });
+
+    await createAudit({
+      action: `job_staff_assignment_updated:job_${jobId}`,
+      entity_type: 'job_staff_assignment',
+      entity_id: updated.id,
+      user_id: authContext.userId,
+      metadata: {
+        jobId,
+        assignmentId: updated.id,
+        employeeProfileId: updated.employeeProfileId,
+        assignedRoleId: updated.assignedRoleId,
+        assignedHourlyRate: Number(updated.assignedHourlyRate),
+      },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Remove a staff assignment from a job
+   */
+  async removeJobStaffAssignment(jobId: number, assignmentId: number, authContext: AuthContext) {
+    const assignment = await prisma.jobStaffAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        job: {
+          select: {
+            id: true,
+            jobName: true,
+            managerProfileId: true,
+            partnerProfileId: true,
+          },
+        },
+      },
+    });
+
+    if (!assignment || assignment.jobId !== jobId) {
+      throw { statusCode: 404, message: 'Staff assignment not found for this job' };
+    }
+
+    const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
+    const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
+    const isJobManager = assignment.job.managerProfileId === authContext.profileId;
+    const isPartner = assignment.job.partnerProfileId === authContext.profileId;
+
+    if (!isAdmin && !isJobManager && !isPartner) {
+      throw { statusCode: 403, message: 'Not authorized to remove team assignment for this job' };
+    }
+
+    const jobCosting = await prisma.jobCosting.findUnique({
+      where: { jobId },
+      select: { id: true },
+    });
+
+    if (jobCosting) {
+      const hasAllocation = await prisma.jobTimeAllocation.findFirst({
+        where: {
+          jobCostingId: jobCosting.id,
+          employeeProfileId: assignment.employeeProfileId,
+        },
+        select: { id: true },
+      });
+
+      if (hasAllocation) {
+        throw {
+          statusCode: 409,
+          message:
+            'Cannot remove staff assignment while costing allocations exist for this employee on the job',
+        };
+      }
+    }
+
+    await prisma.jobStaffAssignment.delete({
+      where: { id: assignmentId },
+    });
+
+    const remainingAssignments = await prisma.jobStaffAssignment.count({
+      where: { jobId },
+    });
+
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { teamAssigned: remainingAssignments > 0 },
+    });
+
+    await createAudit({
+      action: `job_staff_assignment_removed:job_${jobId}`,
+      entity_type: 'job_staff_assignment',
+      entity_id: assignmentId,
+      user_id: authContext.userId,
+      metadata: {
+        jobId,
+        assignmentId,
+        employeeProfileId: assignment.employeeProfileId,
+      },
+    });
+
+    return { assignmentId, jobId, removed: true };
   }
 
   /**
@@ -1354,3 +2475,4 @@ class JobService {
 }
 
 export default new JobService();
+

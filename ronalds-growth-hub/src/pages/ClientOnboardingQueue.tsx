@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Search, ClipboardCheck } from "lucide-react";
+import { Search, ClipboardCheck, FileText } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -50,6 +50,15 @@ export default function ClientOnboardingQueue() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canReview = isHR || isAdmin;
+  const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+  const resolveDocumentUrl = (filePath?: string | null) => {
+    if (!filePath) return null;
+    if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+      return filePath;
+    }
+    return `${baseUrl}${filePath}`;
+  };
 
   const { data: onboardingsData, isLoading } = useQuery({
     queryKey: ["client-onboardings", filterStatus],
@@ -61,7 +70,7 @@ export default function ClientOnboardingQueue() {
       }),
   });
 
-  const onboardings = onboardingsData?.data || [];
+  const onboardings = useMemo(() => onboardingsData?.data ?? [], [onboardingsData]);
 
   const summary = useMemo(() => {
     return onboardings.reduce(
@@ -262,6 +271,23 @@ export default function ClientOnboardingQueue() {
                             <Badge variant={LETTER_STATUS_VARIANTS[item.engagementLetter.status] || "outline"}>
                               {LETTER_STATUS_LABELS[item.engagementLetter.status] || item.engagementLetter.status}
                             </Badge>
+                          </div>
+                        )}
+                        {item.engagementLetter?.document?.filePath ? (
+                          <div className="mt-2">
+                            <a
+                              href={resolveDocumentUrl(item.engagementLetter.document.filePath)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              <FileText className="h-3 w-3" />
+                              View engagement letter
+                            </a>
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            No engagement letter file uploaded
                           </div>
                         )}
                       </TableCell>

@@ -45,7 +45,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }
@@ -74,7 +74,7 @@ export class TimeEntryController {
       res.json(successResponse(requests, "Approval requests retrieved"));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }
@@ -96,7 +96,7 @@ export class TimeEntryController {
       res.status(201).json(successResponse(request, "Approval request created", 201));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -124,7 +124,7 @@ export class TimeEntryController {
       res.json(successResponse(request, "Approval request approved"));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -152,7 +152,7 @@ export class TimeEntryController {
       res.json(successResponse(request, "Approval request rejected"));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -180,7 +180,7 @@ export class TimeEntryController {
       res.json(successResponse(request, "Over-budget request approved"));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -208,7 +208,7 @@ export class TimeEntryController {
       res.json(successResponse(request, "Over-budget request rejected"));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -232,7 +232,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -256,7 +256,7 @@ export class TimeEntryController {
       res.json(successResponse(timeEntry, 'Time entry retrieved'));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }
@@ -286,7 +286,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -310,7 +310,7 @@ export class TimeEntryController {
       res.json(successResponse(null, 'Time entry deleted successfully'));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -339,7 +339,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -351,7 +351,7 @@ export class TimeEntryController {
   static async approveTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const { approval_notes } = req.body;
+      const { approvalNotes } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -361,7 +361,7 @@ export class TimeEntryController {
 
       const timeEntry = await TimeEntryService.approveTimeEntry(
         timeEntryId,
-        approval_notes || '',
+        approvalNotes || '',
         auth
       );
 
@@ -370,7 +370,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -382,7 +382,7 @@ export class TimeEntryController {
   static async rejectTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
-      const { rejection_reason } = req.body;
+      const { rejectionReason } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -392,14 +392,14 @@ export class TimeEntryController {
 
       const timeEntry = await TimeEntryService.rejectTimeEntry(
         timeEntryId,
-        rejection_reason,
+        rejectionReason,
         auth
       );
 
       res.json(successResponse(timeEntry, 'Time entry rejected'));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -423,7 +423,7 @@ export class TimeEntryController {
       res.json(successResponse(timeEntry, 'Timer started', 200));
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -449,7 +449,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -460,7 +460,7 @@ export class TimeEntryController {
    */
   static async batchSubmitTimeEntries(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { time_entry_ids } = req.body;
+      const { timeEntryIds } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -469,7 +469,7 @@ export class TimeEntryController {
       };
 
       const result = await TimeEntryService.batchSubmitTimeEntries(
-        time_entry_ids,
+        timeEntryIds,
         auth
       );
 
@@ -478,7 +478,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -489,7 +489,7 @@ export class TimeEntryController {
    */
   static async batchApproveTimeEntries(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { time_entry_ids } = req.body;
+      const { timeEntryIds } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -498,7 +498,7 @@ export class TimeEntryController {
       };
 
       const result = await TimeEntryService.batchApproveTimeEntries(
-        time_entry_ids,
+        timeEntryIds,
         auth
       );
 
@@ -507,7 +507,7 @@ export class TimeEntryController {
       );
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
+        errorResponse(error.message, error.statusCode || 400, error.details)
       );
     }
   }
@@ -531,7 +531,7 @@ export class TimeEntryController {
       res.json(successResponse(summary, 'Job time summary retrieved'));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }
@@ -555,8 +555,9 @@ export class TimeEntryController {
       res.json(successResponse(summary, 'Job allocation summary retrieved'));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }
 }
+

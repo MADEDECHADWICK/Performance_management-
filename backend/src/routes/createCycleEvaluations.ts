@@ -2,7 +2,7 @@ import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 
 const router = Router();
 
@@ -11,7 +11,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     console.log('Creating cycle evaluations with body:', req.body);

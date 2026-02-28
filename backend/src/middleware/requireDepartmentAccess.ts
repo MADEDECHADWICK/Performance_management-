@@ -6,8 +6,7 @@
  * - HR/HR Manager: full access
  * - Assigned Partner: access to departments they own
  * - Department Head: access to their department
- * - Managers: access to departments where they manage direct reports
- * - Others: access only to their own department
+ * - Managers/Employees: access only to departments directly linked to their profile
  *
  * Expects department id from:
  * - req.params.departmentId OR req.query.departmentId
@@ -25,6 +24,8 @@ const isAdmin = (roles: string[]) =>
   roles.includes("admin") || roles.includes("super_admin");
 const isHR = (roles: string[]) =>
   roles.includes("hr") || roles.includes("hr_manager");
+const isManagerRole = (roles: string[]) =>
+  roles.some((role) => role.includes("manager") && role !== "hr_manager");
 
 export const requireDepartmentAccess = async (
   req: AuthRequest,
@@ -78,23 +79,23 @@ export const requireDepartmentAccess = async (
     const partnerDeptIds = profile.departmentsAsPartner.map((department) => department.id);
     const isAssignedPartner = partnerDeptIds.includes(departmentId);
 
+    if (isManagerRole(roles)) {
+      const managerPrimaryDeptId = profile.departmentId ?? headedDeptIds[0] ?? null;
+      if (managerPrimaryDeptId === departmentId) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Forbidden. Department scope violation." });
+      return;
+    }
+
     // Allow department head / assigned partner access to their department
     if (isDeptHead || isAssignedPartner) {
       next();
       return;
     }
 
-    const directReportsInDepartment = await prisma.profile.count({
-      where: { managerId: profileId, departmentId },
-    });
-
-    // Allow managers who have direct reports in this department
-    if (directReportsInDepartment > 0) {
-      next();
-      return;
-    }
-
-    // Optional: allow ordinary users only for their own department
+    // Allow ordinary users only for their own department
     if (profile.departmentId === departmentId) {
       next();
       return;

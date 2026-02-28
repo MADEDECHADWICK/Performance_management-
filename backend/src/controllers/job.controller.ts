@@ -59,14 +59,88 @@ export class JobController {
     try {
       const jobId = Number(req.params.jobId);
 
-      const job = await jobService.getJobById(jobId);
+      const [job, invoiceTracking] = await Promise.all([
+        jobService.getJobById(jobId),
+        jobService.getJobInvoiceMilestoneTracking(jobId),
+      ]);
 
       if (!job) {
         res.status(404).json(errorResponse("Job not found", 404));
         return;
       }
 
-      res.json(successResponse(job, "Job retrieved successfully"));
+      res.json(
+        successResponse(
+          {
+            ...job,
+            invoiceTracking,
+          },
+          "Job retrieved successfully"
+        )
+      );
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * GET /jobs/:jobId/invoice-milestones
+   * Get milestone-based invoice tracking for a job
+   */
+  static async getInvoiceMilestones(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      const tracking = await jobService.getJobInvoiceMilestoneTracking(jobId);
+      res.json(successResponse(tracking, "Job invoice milestones retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * PATCH /jobs/:jobId/invoice-milestones/:milestoneTaskId/status
+   * Update job invoice milestone condition status
+   */
+  static async updateInvoiceMilestoneStatus(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const milestoneTaskId = Number(req.params.milestoneTaskId);
+      const status = String(req.body?.status || "").trim();
+
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      if (!Number.isFinite(milestoneTaskId) || milestoneTaskId <= 0) {
+        res.status(400).json(errorResponse("Valid milestoneTaskId is required", 400));
+        return;
+      }
+
+      if (!status) {
+        res.status(400).json(errorResponse("status is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: (req as any).userRoles || req.user?.authRoles || [],
+      };
+
+      const result = await jobService.updateInvoiceMilestoneStatus(
+        jobId,
+        milestoneTaskId,
+        status as any,
+        auth
+      );
+
+      res.json(successResponse(result, "Invoice milestone status updated"));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -176,7 +250,7 @@ export class JobController {
   static async updateJobStatus(req: AuthRequest, res: Response): Promise<void> {
     try {
       const jobId = Number(req.params.jobId);
-      const { status, reason } = req.body;
+      const { status, reason, allowIncompleteTasksOverride } = req.body;
 
       const auth = {
         userId: req.user!.userId,
@@ -184,7 +258,9 @@ export class JobController {
         roles: (req as any).userRoles || req.user?.authRoles || [],
       };
 
-      const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth);
+      const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth, {
+        allowIncompleteTasksOverride: Boolean(allowIncompleteTasksOverride),
+      });
       if (status === "completed") {
         await notifyJobCompletion(updatedJob, req);
         await createClientSurveyForJobCompletion(jobId, req);
@@ -284,11 +360,30 @@ export class JobController {
 
   /**
    * PATCH /jobs/:jobId/staff/:assignmentId
-   * Update staff assignment - simplified for now
+   * Update staff assignment
    */
   static async updateStaffAssignment(req: AuthRequest, res: Response): Promise<void> {
     try {
-      res.status(501).json(errorResponse("Not implemented - use assignStaff to reassign", 501));
+      const jobId = Number(req.params.jobId);
+      const assignmentId = Number(req.params.assignmentId);
+
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      if (!Number.isFinite(assignmentId) || assignmentId <= 0) {
+        res.status(400).json(errorResponse("Valid assignmentId is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: (req as any).userRoles || req.user?.authRoles || [],
+      };
+
+      const updated = await jobService.updateJobStaffAssignment(jobId, assignmentId, req.body || {}, auth);
+      res.json(successResponse(updated, "Staff assignment updated"));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -297,11 +392,30 @@ export class JobController {
 
   /**
    * DELETE /jobs/:jobId/staff/:assignmentId
-   * Remove staff assignment - simplified for now
+   * Remove staff assignment
    */
   static async removeStaffAssignment(req: AuthRequest, res: Response): Promise<void> {
     try {
-      res.status(501).json(errorResponse("Not implemented", 501));
+      const jobId = Number(req.params.jobId);
+      const assignmentId = Number(req.params.assignmentId);
+
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      if (!Number.isFinite(assignmentId) || assignmentId <= 0) {
+        res.status(400).json(errorResponse("Valid assignmentId is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: (req as any).userRoles || req.user?.authRoles || [],
+      };
+
+      const result = await jobService.removeJobStaffAssignment(jobId, assignmentId, auth);
+      res.json(successResponse(result, "Staff assignment removed"));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));

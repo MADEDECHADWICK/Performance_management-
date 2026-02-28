@@ -146,17 +146,17 @@ const getScoringConfigForEmployee = async (
  */
 router.post('/training-records', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { employee_id, course_name, provider, hours, completed_at, certificate_url, training_type } = req.body;
+    const { employeeId, courseName, provider, hours, completedAt, certificateUrl, trainingType } = req.body;
 
     const trainingRecord = {
       id: 0,
-      employeeId: employee_id,
-      courseName: course_name,
+      employeeId,
+      courseName,
       provider,
       hours: Number(hours || 0),
-      completedAt: completed_at ? new Date(completed_at) : null,
-      certificateUrl: certificate_url ?? null,
-      trainingType: training_type || 'external',
+      completedAt: completedAt ? new Date(completedAt) : null,
+      certificateUrl: certificateUrl ?? null,
+      trainingType: trainingType || 'external',
       status: 'completed',
     };
 
@@ -191,7 +191,7 @@ router.put('/training-records/:id', authMiddleware, async (req: Request, res: Re
       id: Number(id),
       ...updates,
       hours: updates.hours ? Number(updates.hours) : undefined,
-      completedAt: updates.completed_at ? new Date(updates.completed_at) : undefined,
+      completedAt: updates.completedAt ? new Date(updates.completedAt) : undefined,
     };
 
     res.json(trainingRecord);
@@ -208,18 +208,27 @@ router.put('/training-records/:id', authMiddleware, async (req: Request, res: Re
  */
 router.post('/knowledge-sessions', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { presenter_id, title, topic_area, session_date, duration_hours, attendee_count, session_type, materials_url } = req.body;
+    const {
+      presenterId,
+      title,
+      topicArea,
+      sessionDate,
+      durationHours,
+      attendeeCount,
+      sessionType,
+      materialsUrl,
+    } = req.body;
 
     const knowledgeSession = {
       id: 0,
-      presenterId: presenter_id,
+      presenterId,
       title,
-      topicArea: topic_area,
-      sessionDate: session_date ? new Date(session_date) : null,
-      durationHours: Number(duration_hours || 0),
-      attendeeCount: attendee_count || 0,
-      sessionType: session_type || 'presentation',
-      materialsUrl: materials_url ?? null,
+      topicArea,
+      sessionDate: sessionDate ? new Date(sessionDate) : null,
+      durationHours: Number(durationHours || 0),
+      attendeeCount: attendeeCount || 0,
+      sessionType: sessionType || 'presentation',
+      materialsUrl: materialsUrl ?? null,
     };
 
     res.json(knowledgeSession);
@@ -252,8 +261,8 @@ router.put('/knowledge-sessions/:id', authMiddleware, async (req: Request, res: 
     const session = {
       id: Number(id),
       ...updates,
-      durationHours: updates.duration_hours ? Number(updates.duration_hours) : undefined,
-      sessionDate: updates.session_date ? new Date(updates.session_date) : undefined,
+      durationHours: updates.durationHours ? Number(updates.durationHours) : undefined,
+      sessionDate: updates.sessionDate ? new Date(updates.sessionDate) : undefined,
     };
 
     res.json(session);
@@ -271,22 +280,31 @@ router.put('/knowledge-sessions/:id', authMiddleware, async (req: Request, res: 
 router.post('/quality-reviews', authMiddleware, async (req: Request, res: Response) => {
   try {
     const { 
-      job_id, employee_id, reviewer_id, accuracy_score, completeness_score, 
-      timeliness_score, innovation_score, overall_score, feedback, areas_for_improvement, strengths 
+      jobId,
+      employeeId,
+      reviewerId,
+      accuracyScore,
+      completenessScore,
+      timelinessScore,
+      innovationScore,
+      overallScore,
+      feedback,
+      areasForImprovement,
+      strengths,
     } = req.body;
 
     const qualityReview = {
       id: 0,
-      jobId: job_id,
-      employeeId: employee_id,
-      reviewerId: reviewer_id,
-      accuracyScore: Number(accuracy_score || 0),
-      completenessScore: Number(completeness_score || 0),
-      timelinessScore: Number(timeliness_score || 0),
-      innovationScore: innovation_score ? Number(innovation_score) : undefined,
-      overallScore: Number(overall_score || 0),
+      jobId,
+      employeeId,
+      reviewerId,
+      accuracyScore: Number(accuracyScore || 0),
+      completenessScore: Number(completenessScore || 0),
+      timelinessScore: Number(timelinessScore || 0),
+      innovationScore: innovationScore ? Number(innovationScore) : undefined,
+      overallScore: Number(overallScore || 0),
       feedback,
-      areasForImprovement: areas_for_improvement,
+      areasForImprovement,
       strengths,
     };
 
@@ -320,11 +338,11 @@ router.put('/quality-reviews/:id', authMiddleware, async (req: Request, res: Res
     const review = {
       id: Number(id),
       ...updates,
-      accuracyScore: updates.accuracy_score ? Number(updates.accuracy_score) : undefined,
-      completenessScore: updates.completeness_score ? Number(updates.completeness_score) : undefined,
-      timelinessScore: updates.timeliness_score ? Number(updates.timeliness_score) : undefined,
-      innovationScore: updates.innovation_score ? Number(updates.innovation_score) : undefined,
-      overallScore: updates.overall_score ? Number(updates.overall_score) : undefined,
+      accuracyScore: updates.accuracyScore ? Number(updates.accuracyScore) : undefined,
+      completenessScore: updates.completenessScore ? Number(updates.completenessScore) : undefined,
+      timelinessScore: updates.timelinessScore ? Number(updates.timelinessScore) : undefined,
+      innovationScore: updates.innovationScore ? Number(updates.innovationScore) : undefined,
+      overallScore: updates.overallScore ? Number(updates.overallScore) : undefined,
     };
 
     res.json(review);
@@ -341,17 +359,17 @@ router.put('/quality-reviews/:id', authMiddleware, async (req: Request, res: Res
  */
 router.post('/improvement-ideas', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { submitted_by, title, description, category, priority, impact_area, estimated_savings } = req.body;
+    const { submittedBy, title, description, category, priority, impactArea, estimatedSavings } = req.body;
 
     const idea = {
       id: 0,
-      submittedBy: submitted_by,
+      submittedBy,
       title,
       description,
       category,
       priority: priority || 'medium',
-      impactArea: impact_area,
-      estimatedSavings: estimated_savings ? Number(estimated_savings) : undefined,
+      impactArea,
+      estimatedSavings: estimatedSavings ? Number(estimatedSavings) : undefined,
       status: 'pending',
     };
 
@@ -380,13 +398,13 @@ router.get('/improvement-ideas', authMiddleware, async (req: Request, res: Respo
 router.put('/improvement-ideas/:id', authMiddleware, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { status, feedback, reviewed_by } = req.body;
+    const { status, feedback, reviewedBy } = req.body;
 
     const idea = {
       id: Number(id),
       status,
       feedback,
-      reviewedBy: reviewed_by,
+      reviewedBy,
       reviewedAt: status && ['approved', 'implemented', 'rejected'].includes(status)
         ? new Date()
         : null,

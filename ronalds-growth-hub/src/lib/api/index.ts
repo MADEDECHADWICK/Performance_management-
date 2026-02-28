@@ -28,6 +28,7 @@ export { default as recruitmentCandidatesAPI } from './recruitmentCandidates';
 export { default as notificationTemplatesAPI } from './notificationTemplates';
 export { default as performanceFrameworkAPI } from './performanceFramework';
 export { default as moduleAccessAPI } from './moduleAccess';
+export { default as knowledgeHubAPI } from './knowledgeHub';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -49,6 +50,7 @@ import recruitmentCandidatesAPI from './recruitmentCandidates';
 import notificationTemplatesAPI from './notificationTemplates';
 import performanceFrameworkAPI from './performanceFramework';
 import moduleAccessAPI from './moduleAccess';
+import knowledgeHubAPI from './knowledgeHub';
 
 const API = {
   auth: authAPI,
@@ -70,6 +72,7 @@ const API = {
   notificationTemplates: notificationTemplatesAPI,
   performanceFramework: performanceFrameworkAPI,
   moduleAccess: moduleAccessAPI,
+  knowledgeHub: knowledgeHubAPI,
 };
 
 export default API;

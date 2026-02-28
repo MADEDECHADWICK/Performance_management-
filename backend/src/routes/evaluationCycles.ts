@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { EvaluationCycleStatus } from '@prisma/client';
 import prisma from '../prisma';
 
@@ -89,7 +89,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const {
@@ -135,7 +135,7 @@ router.patch(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
@@ -172,7 +172,7 @@ router.delete(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;

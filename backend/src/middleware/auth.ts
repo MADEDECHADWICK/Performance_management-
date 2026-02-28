@@ -11,6 +11,8 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "../prisma";
+import { getJwtSecret } from "../config/jwt";
+import type { AuthorizationContext } from "../services/authorizationContext.service";
 
 /**
  * Minimal profile shape injected later by loadProfile
@@ -37,6 +39,7 @@ export interface AuthRequest extends Request {
     email: string;       // User.email (set by authMiddleware)
     profileId?: number;  // Profile.id (ALWAYS set by loadProfile before using resource access)
     authRoles?: string[];
+    sessionToken?: string;
   };
   profile?: RequestProfile; // populated by loadProfile (user profile data)
   token?: string;       // JWT token (set by authMiddleware)
@@ -45,7 +48,8 @@ export interface AuthRequest extends Request {
   // Use these directly instead of casting to 'any'
   userRoles?: string[]; // Set by requireRole - array of role names
   userPermissions?: string[]; // Set by requirePermission - array of permission strings
-  userRolePolicies?: Array<{ roleName: string; permissionKeys: string[] }>; // Set by module access middleware
+  userRolePolicies?: Array<{ roleName: string; permissionKeys?: string[] | null }>; // Set by module access middleware
+  authorizationContext?: AuthorizationContext; // Shared authz context cache for middleware chain
   currentModuleAccess?: { moduleKey: string; action: string }; // Set by requireModuleAccess for downstream action checks
   job?: any; // Set by requireJobAccess - Job entity with access checks done
   timeEntry?: any; // Set by requireTimeEntryAccess - TimeEntry entity with access checks done
@@ -82,6 +86,7 @@ type AccessTokenPayload = {
   sub?: number;
   email: string;
   authRoles?: string[];
+  sessionToken?: string;
   iat: number;
   exp: number;
 };
@@ -102,7 +107,7 @@ export async function authMiddleware(
     }
 
     const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret") as AccessTokenPayload;
+    const decoded = jwt.verify(token, getJwtSecret()) as AccessTokenPayload;
     const resolvedUserId = decoded.userId ?? decoded.sub;
 
     if (!resolvedUserId) {
@@ -110,6 +115,25 @@ export async function authMiddleware(
         success: false,
         message: "Unauthorized - Invalid token payload",
       });
+    }
+
+    if (decoded.sessionToken) {
+      const activeSession = await prisma.session.findFirst({
+        where: {
+          token: decoded.sessionToken,
+          userId: resolvedUserId,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      });
+
+      if (!activeSession) {
+        return res.status(401).json({
+          success: false,
+          message: "Session expired. Please sign in again.",
+        });
+      }
     }
 
     // Verify user still exists
@@ -140,6 +164,7 @@ export async function authMiddleware(
       email: decoded.email,
       profileId: user.profile?.id,
       authRoles: decoded.authRoles || [],
+      sessionToken: decoded.sessionToken,
     };
 
     next();

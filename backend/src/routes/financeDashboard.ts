@@ -1,15 +1,34 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { requireModuleAccess } from '../middleware/requireModuleAccess';
+import { requireAnyModuleAccess, requireModuleAccess } from '../middleware/requireModuleAccess';
 import { notifyProfile, notifyProfilesByRoles } from '../services/notificationRecipients';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
+import jobService from '../services/jobs.service';
 
 const router = Router();
 const canReadFinance = requireModuleAccess('finance', 'read');
 const canWriteFinance = requireModuleAccess('finance', 'write');
 const canApproveFinance = requireModuleAccess('finance', 'approve');
 const canAdminFinance = requireModuleAccess('finance', 'admin');
+// IMPLEMENTED: Finance projection/collection permission split — these flows now accept either legacy finance module access or dedicated split-module permissions.
+const canReadCollections = requireAnyModuleAccess([
+  { moduleKey: 'finance', action: 'read' },
+  { moduleKey: 'finance_collections', action: 'read' },
+]);
+const canWriteCollections = requireAnyModuleAccess([
+  { moduleKey: 'finance', action: 'write' },
+  { moduleKey: 'finance_collections', action: 'write' },
+]);
+const canReadProjections = requireAnyModuleAccess([
+  { moduleKey: 'finance', action: 'read' },
+  { moduleKey: 'finance_projections', action: 'read' },
+]);
+const canWriteProjections = requireAnyModuleAccess([
+  { moduleKey: 'finance', action: 'write' },
+  { moduleKey: 'finance_projections', action: 'write' },
+]);
 
 const jobCollectionStages = new Set([
   'not_ready',
@@ -29,6 +48,57 @@ const receivableActionTypes = new Set([
   'dispute',
   'note',
 ]);
+
+const COLLECTION_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
+const collectionResponseCache = new Map<
+  string,
+  { expiresAt: number; payload: Record<string, unknown> }
+>();
+const collectionInFlight = new Map<string, Promise<{ statusCode: number; payload: Record<string, unknown> }>>();
+
+const pruneCollectionIdempotencyCache = () => {
+  const now = Date.now();
+  collectionResponseCache.forEach((entry, key) => {
+    if (entry.expiresAt <= now) {
+      collectionResponseCache.delete(key);
+    }
+  });
+};
+
+const parseIsoDate = (value: unknown): Date | null => {
+  if (!value) return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+};
+
+const buildCollectionFingerprint = (input: {
+  actorProfileId: number | null;
+  clientId: number;
+  jobId: number | null;
+  paymentAmount: number;
+  currency: string;
+  paymentDateIso: string;
+  paymentMethod: string | null;
+  referenceNumber: string | null;
+  invoiceNumber: string | null;
+}) =>
+  crypto
+    .createHash('sha256')
+    .update(
+      [
+        input.actorProfileId ?? 'none',
+        input.clientId,
+        input.jobId ?? 'none',
+        input.paymentAmount.toFixed(2),
+        input.currency,
+        input.paymentDateIso,
+        input.paymentMethod ?? 'none',
+        input.referenceNumber ?? 'none',
+        input.invoiceNumber ?? 'none',
+      ].join('|')
+    )
+    .digest('hex');
 
 const getFinanceContext = async (req: AuthRequest) => {
   const userId = req.user?.userId;
@@ -234,7 +304,7 @@ router.get('/overview', authMiddleware, canReadFinance, async (req: AuthRequest,
 });
 
 // GET /finance-dashboard/collections
-router.get('/collections', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+router.get('/collections', authMiddleware, canReadCollections, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -264,6 +334,7 @@ router.get('/collections', authMiddleware, canReadFinance, async (req: AuthReque
         paymentDate: payment.paymentDate,
         paymentMethod: payment.paymentMethod,
         referenceNumber: payment.referenceNumber,
+        invoiceNumber: payment.invoiceNumber,
         notes: payment.notes,
       }))
     );
@@ -274,7 +345,9 @@ router.get('/collections', authMiddleware, canReadFinance, async (req: AuthReque
 });
 
 // POST /finance-dashboard/collections
-router.post('/collections', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
+router.post('/collections', authMiddleware, canWriteCollections, async (req: AuthRequest, res) => {
+  let activeIdempotencyKey: string | null = null;
+  let registeredInFlight = false;
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -291,259 +364,440 @@ router.post('/collections', authMiddleware, canWriteFinance, async (req: AuthReq
       referenceNumber,
       notes,
       invoiceNumber,
+      idempotencyKey: bodyIdempotencyKey,
     } = req.body;
 
-    if (!clientId || !paymentAmount || !paymentDate) {
+    if (!clientId || paymentAmount === undefined || paymentDate === undefined) {
       return res.status(400).json({ error: 'clientId, paymentAmount, and paymentDate are required' });
     }
 
-    const paymentDateValue = new Date(paymentDate);
-    const payment = await prisma.clientPayment.create({
-      data: {
-        clientId: Number(clientId),
-        jobId: jobId ? Number(jobId) : null,
-        paymentAmount,
-        currency: currency || 'KES',
-        paymentDate: paymentDateValue,
-        paymentMethod: paymentMethod || null,
-        referenceNumber: referenceNumber || null,
-        notes: notes || null,
-        invoiceNumber: invoiceNumber || null,
-        recordedByProfileId: context.profileId,
-      },
-    });
+    const resolvedClientId = Number(clientId);
+    if (!Number.isFinite(resolvedClientId) || resolvedClientId <= 0) {
+      return res.status(400).json({ error: 'Invalid clientId' });
+    }
 
-    if (payment.jobId) {
-      const job = await prisma.job.findUnique({
-        where: { id: payment.jobId },
-        select: {
-          id: true,
-          jobName: true,
-          departmentId: true,
-          partnerProfileId: true,
-          managerProfileId: true,
-          billingType: true,
-          fixedFeeAmount: true,
-          jobCosting: {
-            include: { allocations: true },
-          },
-          timeEntries: {
-            where: { status: 'approved' },
-            select: {
-              employeeProfileId: true,
-              hours: true,
-              billableAmount: true,
-              billable: true,
-            },
-          },
-        },
+    const resolvedJobId =
+      jobId === undefined || jobId === null || jobId === '' ? null : Number(jobId);
+    if (resolvedJobId !== null && (!Number.isFinite(resolvedJobId) || resolvedJobId <= 0)) {
+      return res.status(400).json({ error: 'Invalid jobId' });
+    }
+
+    const paymentAmountNumber = Number(paymentAmount);
+    if (!Number.isFinite(paymentAmountNumber) || paymentAmountNumber <= 0) {
+      return res.status(400).json({ error: 'paymentAmount must be a positive number' });
+    }
+
+    const paymentDateValue = parseIsoDate(paymentDate);
+    if (!paymentDateValue) {
+      return res.status(400).json({ error: 'Invalid paymentDate' });
+    }
+
+    const normalizedCurrency = String(currency || 'KES').trim().toUpperCase() || 'KES';
+    const normalizedPaymentMethod = paymentMethod ? String(paymentMethod).trim() : null;
+    const normalizedReferenceNumber = referenceNumber ? String(referenceNumber).trim() : null;
+    const normalizedInvoiceNumber = invoiceNumber ? String(invoiceNumber).trim() : null;
+    const normalizedNotes = notes ? String(notes).trim() : null;
+
+    const requestIdempotencyKey = String(
+      req.headers['x-idempotency-key'] || bodyIdempotencyKey || ''
+    ).trim();
+    const idempotencyKey =
+      requestIdempotencyKey ||
+      buildCollectionFingerprint({
+        actorProfileId: context.profileId,
+        clientId: resolvedClientId,
+        jobId: resolvedJobId,
+        paymentAmount: paymentAmountNumber,
+        currency: normalizedCurrency,
+        paymentDateIso: paymentDateValue.toISOString(),
+        paymentMethod: normalizedPaymentMethod,
+        referenceNumber: normalizedReferenceNumber,
+        invoiceNumber: normalizedInvoiceNumber,
       });
+    activeIdempotencyKey = idempotencyKey;
 
-      if (job) {
-        const allocationMonth = new Date(paymentDateValue.getFullYear(), paymentDateValue.getMonth(), 1);
+    pruneCollectionIdempotencyCache();
+    const cached = collectionResponseCache.get(idempotencyKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return res.status(200).json(cached.payload);
+    }
 
-        const employeeTotals = new Map<
-          number,
-          {
-            billable: number;
-            profit: number;
-            loss: number;
-            base: number;
-            allocatedHours: number;
-            allocatedCost: number;
-            actualHours: number;
-          }
-        >();
+    const existingInFlight = collectionInFlight.get(idempotencyKey);
+    if (existingInFlight) {
+      const inFlightResult = await existingInFlight;
+      return res.status(inFlightResult.statusCode).json(inFlightResult.payload);
+    }
 
-        const allocations = job.jobCosting?.allocations || [];
-        allocations.forEach((alloc) => {
-          const current = employeeTotals.get(alloc.employeeProfileId) || {
-            billable: 0,
-            profit: 0,
-            loss: 0,
-            base: 0,
-            allocatedHours: 0,
-            allocatedCost: 0,
-            actualHours: 0,
-          };
-          const allocHours = Number(alloc.allocatedHours || 0);
-          const allocRate = Number(alloc.hourlyRate || 0);
-          current.allocatedHours += allocHours;
-          current.allocatedCost += allocHours * allocRate;
-          employeeTotals.set(alloc.employeeProfileId, current);
-        });
-
-        job.timeEntries.forEach((entry) => {
-          const current = employeeTotals.get(entry.employeeProfileId) || {
-            billable: 0,
-            profit: 0,
-            loss: 0,
-            base: 0,
-            allocatedHours: 0,
-            allocatedCost: 0,
-            actualHours: 0,
-          };
-          current.actualHours += Number(entry.hours || 0);
-          current.billable += Number(entry.billableAmount || 0);
-          employeeTotals.set(entry.employeeProfileId, current);
-        });
-
-        employeeTotals.forEach((value) => {
-          if (value.actualHours <= 0 || value.allocatedHours <= 0) {
-            return;
-          }
-          const effectiveRate =
-            value.allocatedHours > 0 ? value.allocatedCost / value.allocatedHours : 0;
-          const varianceHours = value.allocatedHours - value.actualHours;
-          if (varianceHours >= 0) {
-            value.profit = varianceHours * effectiveRate;
-          } else {
-            value.loss = Math.abs(varianceHours) * effectiveRate;
-          }
-        });
-
-        let totalJobBillable = 0;
-        employeeTotals.forEach((value) => {
-          totalJobBillable += value.billable;
-        });
-
-        const paymentAmountNumber = Number(payment.paymentAmount || 0);
-        const billableBasis =
-          totalJobBillable > 0 ? totalJobBillable : resolveJobFee(job);
-        const paymentRatio =
-          billableBasis > 0 ? Math.min(1, paymentAmountNumber / billableBasis) : 0;
-
-        totalJobBillable = billableBasis;
-
-        let totalBaseScaled = 0;
-        employeeTotals.forEach((value) => {
-          const scaledBillable = value.billable * paymentRatio;
-          const scaledProfit = value.profit * paymentRatio;
-          const scaledLoss = value.loss * paymentRatio;
-          const base = Math.max(0, scaledBillable + scaledProfit - scaledLoss);
-          value.base = base;
-          totalBaseScaled += base;
-        });
-
-        const allocationTotal = totalBaseScaled > 0 ? totalBaseScaled : totalJobBillable * paymentRatio;
-
-        if (allocationTotal > 0) {
-          await Promise.all(
-            Array.from(employeeTotals.entries()).map(([employeeProfileId, value]) =>
-              prisma.revenueAllocation.upsert({
-                where: {
-                  jobId_clientPaymentId_employeeProfileId: {
-                    jobId: job.id,
-                    clientPaymentId: payment.id,
-                    employeeProfileId,
-                  },
-                },
-                update: {
-                  employeeBillable: value.billable * paymentRatio,
-                  employeeProfit: value.profit * paymentRatio,
-                  employeeLoss: value.loss * paymentRatio,
-                  totalJobBillable,
-                  allocationPercentage: allocationTotal > 0 ? value.base / allocationTotal : 0,
-                  allocatedAmount:
-                    allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
-                  allocationMonth,
-                  currency: payment.currency || 'KES',
-                },
-                create: {
-                  jobId: job.id,
-                  clientPaymentId: payment.id,
-                  employeeProfileId,
-                  employeeBillable: value.billable * paymentRatio,
-                  employeeProfit: value.profit * paymentRatio,
-                  employeeLoss: value.loss * paymentRatio,
-                  totalJobBillable,
-                  allocationPercentage: allocationTotal > 0 ? value.base / allocationTotal : 0,
-                  allocatedAmount:
-                    allocationTotal > 0 ? (value.base / allocationTotal) * paymentAmountNumber : 0,
-                  allocationMonth,
-                  currency: payment.currency || 'KES',
-                },
-              })
-            )
-          );
-        }
-
-        if (job.partnerProfileId) {
-          await notifyProfile(
-            job.partnerProfileId,
-            {
-              title: 'Revenue allocation updated',
-              message: `Payment recorded for "${job.jobName}". Revenue allocations have been refreshed.`,
-              link: `/jobs/${job.id}`,
-              relatedEntityId: job.id,
-              actionRequired: false,
-            },
-            req
-          );
-        }
-
-        const projectionMonthStart = allocationMonth;
-        const projectionMonthEnd = new Date(
-          projectionMonthStart.getFullYear(),
-          projectionMonthStart.getMonth() + 1,
-          1
-        );
-
-        const projectionTargets = await prisma.revenueProjection.findMany({
+    const operation = (async () => {
+      const txResult = await prisma.$transaction(async (tx) => {
+        const existingPayment = await tx.clientPayment.findFirst({
           where: {
-            monthYear: { gte: projectionMonthStart, lt: projectionMonthEnd },
-            OR: [
-              { clientId: payment.clientId },
-              job.departmentId ? { departmentId: job.departmentId } : undefined,
-            ].filter(Boolean) as any,
+            clientId: resolvedClientId,
+            jobId: resolvedJobId,
+            paymentAmount: paymentAmountNumber,
+            currency: normalizedCurrency,
+            paymentDate: paymentDateValue,
+            paymentMethod: normalizedPaymentMethod,
+            referenceNumber: normalizedReferenceNumber,
+            invoiceNumber: normalizedInvoiceNumber,
+            recordedByProfileId: context.profileId,
+          },
+          orderBy: { id: 'desc' },
+        });
+
+        if (existingPayment) {
+          return {
+            reused: true,
+            payment: existingPayment,
+            partnerProfileId: null as number | null,
+            jobName: null as string | null,
+            jobId: existingPayment.jobId,
+            riskAlerts: [] as Array<{ month: string; variancePercent: number; jobId: number }>,
+          };
+        }
+
+        const payment = await tx.clientPayment.create({
+          data: {
+            clientId: resolvedClientId,
+            jobId: resolvedJobId,
+            paymentAmount: paymentAmountNumber,
+            currency: normalizedCurrency,
+            paymentDate: paymentDateValue,
+            paymentMethod: normalizedPaymentMethod,
+            referenceNumber: normalizedReferenceNumber,
+            notes: normalizedNotes,
+            invoiceNumber: normalizedInvoiceNumber,
+            recordedByProfileId: context.profileId,
           },
         });
 
-        await Promise.all(
-          projectionTargets.map(async (projection) => {
-            const actualCollected = Number(projection.actualCollected || 0) + Number(payment.paymentAmount);
-            const variance = actualCollected - Number(projection.projectedAmount || 0);
-            const variancePercent =
-              Number(projection.projectedAmount || 0) > 0
-                ? (variance / Number(projection.projectedAmount || 0)) * 100
-                : 0;
+        await tx.auditLog.create({
+          data: {
+            action: 'finance_collection_recorded',
+            entityType: 'client_payment',
+            entityId: payment.id,
+            userId: context.userId,
+            ipAddress: req.ip || null,
+            metadata: {
+              clientId: payment.clientId,
+              jobId: payment.jobId,
+              paymentAmount: paymentAmountNumber,
+              currency: payment.currency,
+              paymentDate: paymentDateValue.toISOString(),
+              idempotencyKey,
+              referenceNumber: normalizedReferenceNumber,
+              invoiceNumber: normalizedInvoiceNumber,
+            },
+          },
+        });
 
-            if (variancePercent <= -20) {
-              await notifyProfilesByRoles(
-                ['gmp'],
-                {
-                  title: 'Collection risk detected',
-                  message: `Collections are ${Math.abs(variancePercent).toFixed(1)}% below projection for ${projection.monthYear.toISOString().slice(0, 7)}.`,
-                  link: `/finance-dashboard?month=${projection.monthYear.toISOString().slice(0, 7)}`,
-                  relatedEntityId: job.id,
-                  actionRequired: false,
+        let partnerProfileId: number | null = null;
+        let jobName: string | null = null;
+        let targetJobId: number | null = payment.jobId;
+        const riskAlerts: Array<{ month: string; variancePercent: number; jobId: number }> = [];
+
+        if (payment.jobId) {
+          const job = await tx.job.findUnique({
+            where: { id: payment.jobId },
+            select: {
+              id: true,
+              jobName: true,
+              departmentId: true,
+              partnerProfileId: true,
+              managerProfileId: true,
+              billingType: true,
+              fixedFeeAmount: true,
+              jobCosting: {
+                include: { allocations: true },
+              },
+              timeEntries: {
+                where: { status: 'approved' },
+                select: {
+                  employeeProfileId: true,
+                  hours: true,
+                  billableAmount: true,
+                  billable: true,
                 },
-                req
+              },
+            },
+          });
+
+          if (job) {
+            partnerProfileId = job.partnerProfileId ?? null;
+            jobName = job.jobName;
+            targetJobId = job.id;
+
+            const allocationMonth = new Date(
+              paymentDateValue.getFullYear(),
+              paymentDateValue.getMonth(),
+              1
+            );
+
+            const employeeTotals = new Map<
+              number,
+              {
+                billableHours: number;
+                profitHours: number;
+                lossHours: number;
+                adjustedHours: number;
+                ratioBase: number;
+                allocatedHours: number;
+                allocatedCost: number;
+                effectiveRate: number;
+              }
+            >();
+
+            const allocations = job.jobCosting?.allocations || [];
+            allocations.forEach((alloc) => {
+              const current = employeeTotals.get(alloc.employeeProfileId) || {
+                billableHours: 0,
+                profitHours: 0,
+                lossHours: 0,
+                adjustedHours: 0,
+                ratioBase: 0,
+                allocatedHours: 0,
+                allocatedCost: 0,
+                effectiveRate: 0,
+              };
+              const allocHours = Number(alloc.allocatedHours || 0);
+              const allocRate = Number(alloc.hourlyRate || 0);
+              current.allocatedHours += allocHours;
+              current.allocatedCost += allocHours * allocRate;
+              employeeTotals.set(alloc.employeeProfileId, current);
+            });
+
+            job.timeEntries.forEach((entry) => {
+              const current = employeeTotals.get(entry.employeeProfileId) || {
+                billableHours: 0,
+                profitHours: 0,
+                lossHours: 0,
+                adjustedHours: 0,
+                ratioBase: 0,
+                allocatedHours: 0,
+                allocatedCost: 0,
+                effectiveRate: 0,
+              };
+              if (entry.billable) {
+                current.billableHours += Number(entry.hours || 0);
+              }
+              employeeTotals.set(entry.employeeProfileId, current);
+            });
+
+            // IMPLEMENTED: Collections revenue allocation formula — per-payment allocation now uses adjusted billable hours (billable +/- profit/loss hours).
+            employeeTotals.forEach((value) => {
+              value.effectiveRate =
+                value.allocatedHours > 0 ? value.allocatedCost / value.allocatedHours : 0;
+              const varianceHours = value.allocatedHours - value.billableHours;
+              value.profitHours = varianceHours > 0 ? varianceHours : 0;
+              value.lossHours = varianceHours < 0 ? Math.abs(varianceHours) : 0;
+              value.adjustedHours = Math.max(
+                0,
+                value.billableHours + value.profitHours - value.lossHours
+              );
+              value.ratioBase = value.adjustedHours;
+            });
+
+            let totalAdjustedJobBillableHours = 0;
+            employeeTotals.forEach((value) => {
+              totalAdjustedJobBillableHours += value.ratioBase;
+            });
+
+            if (totalAdjustedJobBillableHours <= 0) {
+              employeeTotals.forEach((value) => {
+                value.ratioBase = value.allocatedHours > 0 ? value.allocatedHours : value.billableHours;
+              });
+              totalAdjustedJobBillableHours = Array.from(employeeTotals.values()).reduce(
+                (sum, value) => sum + Number(value.ratioBase || 0),
+                0
               );
             }
 
-            return prisma.revenueProjection.update({
-              where: { id: projection.id },
-              data: {
-                actualCollected,
-                variance,
-                variancePercent,
+            if (totalAdjustedJobBillableHours > 0) {
+              await Promise.all(
+                Array.from(employeeTotals.entries()).map(([employeeProfileId, value]) =>
+                  tx.revenueAllocation.upsert({
+                    where: {
+                      jobId_clientPaymentId_employeeProfileId: {
+                        jobId: job.id,
+                        clientPaymentId: payment.id,
+                        employeeProfileId,
+                      },
+                    },
+                    update: {
+                      employeeBillable: value.billableHours,
+                      employeeProfit: value.profitHours * value.effectiveRate,
+                      employeeLoss: value.lossHours * value.effectiveRate,
+                      totalJobBillable: totalAdjustedJobBillableHours,
+                      allocationPercentage:
+                        totalAdjustedJobBillableHours > 0
+                          ? value.ratioBase / totalAdjustedJobBillableHours
+                          : 0,
+                      allocatedAmount:
+                        totalAdjustedJobBillableHours > 0
+                          ? (value.ratioBase / totalAdjustedJobBillableHours) * paymentAmountNumber
+                          : 0,
+                      allocationMonth,
+                      currency: payment.currency || 'KES',
+                    },
+                    create: {
+                      jobId: job.id,
+                      clientPaymentId: payment.id,
+                      employeeProfileId,
+                      employeeBillable: value.billableHours,
+                      employeeProfit: value.profitHours * value.effectiveRate,
+                      employeeLoss: value.lossHours * value.effectiveRate,
+                      totalJobBillable: totalAdjustedJobBillableHours,
+                      allocationPercentage:
+                        totalAdjustedJobBillableHours > 0
+                          ? value.ratioBase / totalAdjustedJobBillableHours
+                          : 0,
+                      allocatedAmount:
+                        totalAdjustedJobBillableHours > 0
+                          ? (value.ratioBase / totalAdjustedJobBillableHours) * paymentAmountNumber
+                          : 0,
+                      allocationMonth,
+                      currency: payment.currency || 'KES',
+                    },
+                  })
+                )
+              );
+            }
+
+            const projectionMonthStart = allocationMonth;
+            const projectionMonthEnd = new Date(
+              projectionMonthStart.getFullYear(),
+              projectionMonthStart.getMonth() + 1,
+              1
+            );
+
+            const projectionTargets = await tx.revenueProjection.findMany({
+              where: {
+                monthYear: { gte: projectionMonthStart, lt: projectionMonthEnd },
+                OR: [
+                  { clientId: payment.clientId },
+                  job.departmentId ? { departmentId: job.departmentId } : undefined,
+                ].filter(Boolean) as any,
               },
             });
-          })
-        );
-      }
-    }
 
-    res.status(201).json(payment);
+            await Promise.all(
+              projectionTargets.map(async (projection) => {
+                const actualCollected =
+                  Number(projection.actualCollected || 0) + Number(payment.paymentAmount);
+                const variance = actualCollected - Number(projection.projectedAmount || 0);
+                const variancePercent =
+                  Number(projection.projectedAmount || 0) > 0
+                    ? (variance / Number(projection.projectedAmount || 0)) * 100
+                    : 0;
+
+                if (variancePercent <= -20) {
+                  riskAlerts.push({
+                    month: projection.monthYear.toISOString().slice(0, 7),
+                    variancePercent,
+                    jobId: job.id,
+                  });
+                }
+
+                return tx.revenueProjection.update({
+                  where: { id: projection.id },
+                  data: {
+                    actualCollected,
+                    variance,
+                    variancePercent,
+                  },
+                });
+              })
+            );
+          }
+        }
+
+        return {
+          reused: false,
+          payment,
+          partnerProfileId,
+          jobName,
+          jobId: targetJobId,
+          riskAlerts,
+        };
+      });
+
+      if (!txResult.reused) {
+        try {
+          if (txResult.partnerProfileId && txResult.jobName && txResult.jobId) {
+            await notifyProfile(
+              txResult.partnerProfileId,
+              {
+                title: 'Revenue allocation updated',
+                message: `Payment recorded for "${txResult.jobName}". Revenue allocations have been refreshed.`,
+                link: `/jobs/${txResult.jobId}`,
+                relatedEntityId: txResult.jobId,
+                actionRequired: false,
+              },
+              req
+            );
+          }
+
+          await Promise.all(
+            txResult.riskAlerts.map((alert) =>
+              notifyProfilesByRoles(
+                ['gmp'],
+                {
+                  title: 'Collection risk detected',
+                  message: `Collections are ${Math.abs(alert.variancePercent).toFixed(1)}% below projection for ${alert.month}.`,
+                  link: `/finance-dashboard?month=${alert.month}`,
+                  relatedEntityId: alert.jobId,
+                  actionRequired: false,
+                },
+                req
+              )
+            )
+          );
+
+          if (txResult.jobId) {
+            await jobService.notifyNextReadyInvoiceMilestone(txResult.jobId, {
+              userId: context.userId,
+              profileId: context.profileId ?? 0,
+              roles: [],
+            });
+          }
+        } catch (notifyError) {
+          console.error('Finance collections post-commit notification error:', notifyError);
+        }
+      }
+
+      const payload = {
+        ...txResult.payment,
+        idempotency: {
+          key: idempotencyKey,
+          reused: txResult.reused,
+        },
+      };
+      const statusCode = txResult.reused ? 200 : 201;
+
+      collectionResponseCache.set(idempotencyKey, {
+        expiresAt: Date.now() + COLLECTION_IDEMPOTENCY_TTL_MS,
+        payload,
+      });
+
+      return { statusCode, payload };
+    })();
+
+    collectionInFlight.set(idempotencyKey, operation);
+    registeredInFlight = true;
+    const result = await operation;
+    res.status(result.statusCode).json(result.payload);
   } catch (error: any) {
     console.error('Finance collections create error:', error);
     res.status(500).json({ error: 'Failed to record payment' });
+  } finally {
+    if (activeIdempotencyKey && registeredInFlight) {
+      collectionInFlight.delete(activeIdempotencyKey);
+    }
   }
 });
 
 // GET /finance-dashboard/projections
-router.get('/projections', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+router.get('/projections', authMiddleware, canReadProjections, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -582,7 +836,7 @@ router.get('/projections', authMiddleware, canReadFinance, async (req: AuthReque
 });
 
 // POST /finance-dashboard/projections
-router.post('/projections', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
+router.post('/projections', authMiddleware, canWriteProjections, async (req: AuthRequest, res) => {
   try {
     const context = await getFinanceContext(req);
     if (context.error) {
@@ -596,27 +850,66 @@ router.post('/projections', authMiddleware, canWriteFinance, async (req: AuthReq
 
     const resolvedClientId = clientId ? Number(clientId) : undefined;
     const resolvedDepartmentId = departmentId ? Number(departmentId) : undefined;
+    const monthYearDate = parseIsoDate(monthYear);
+    if (!monthYearDate) {
+      return res.status(400).json({ error: 'Invalid monthYear' });
+    }
+    const projectedAmountNumber = Number(projectedAmount);
+    if (!Number.isFinite(projectedAmountNumber) || projectedAmountNumber <= 0) {
+      return res.status(400).json({ error: 'projectedAmount must be a positive number' });
+    }
+    if (resolvedClientId !== undefined && (!Number.isFinite(resolvedClientId) || resolvedClientId <= 0)) {
+      return res.status(400).json({ error: 'Invalid clientId' });
+    }
+    if (
+      resolvedDepartmentId !== undefined &&
+      (!Number.isFinite(resolvedDepartmentId) || resolvedDepartmentId <= 0)
+    ) {
+      return res.status(400).json({ error: 'Invalid departmentId' });
+    }
 
-    const projection = await prisma.revenueProjection.upsert({
-      where: {
-        clientId_departmentId_monthYear: {
-          clientId: (resolvedClientId ?? null) as any,
-          departmentId: (resolvedDepartmentId ?? null) as any,
-          monthYear: new Date(monthYear),
+    const projection = await prisma.$transaction(async (tx) => {
+      const savedProjection = await tx.revenueProjection.upsert({
+        where: {
+          clientId_departmentId_monthYear: {
+            clientId: (resolvedClientId ?? null) as any,
+            departmentId: (resolvedDepartmentId ?? null) as any,
+            monthYear: monthYearDate,
+          },
         },
-      },
-      update: {
-        projectedAmount,
-        currency: currency || 'KES',
-      },
-      create: {
-        clientId: resolvedClientId,
-        departmentId: resolvedDepartmentId,
-        monthYear: new Date(monthYear),
-        projectedAmount,
-        currency: currency || 'KES',
-        createdByProfileId: context.profileId,
-      },
+        update: {
+          projectedAmount: projectedAmountNumber,
+          currency: currency || 'KES',
+        },
+        create: {
+          clientId: resolvedClientId,
+          departmentId: resolvedDepartmentId,
+          monthYear: monthYearDate,
+          projectedAmount: projectedAmountNumber,
+          currency: currency || 'KES',
+          createdByProfileId: context.profileId,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_projection_upserted',
+          entityType: 'revenue_projection',
+          entityId: savedProjection.id,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: {
+            projectionId: savedProjection.id,
+            clientId: savedProjection.clientId,
+            departmentId: savedProjection.departmentId,
+            monthYear: savedProjection.monthYear.toISOString(),
+            projectedAmount: Number(savedProjection.projectedAmount),
+            currency: savedProjection.currency,
+          },
+        },
+      });
+
+      return savedProjection;
     });
 
     res.status(201).json(projection);
@@ -848,26 +1141,45 @@ router.patch('/job-balances/:jobId/owner', authMiddleware, canAdminFinance, asyn
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const updated = await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        receivableOwnerProfileId: ownerProfileId,
-        receivableOwnerAssignedAt: ownerProfileId ? new Date() : null,
-      },
-      select: {
-        id: true,
-        jobCode: true,
-        jobName: true,
-        receivableOwnerProfileId: true,
-        receivableOwnerAssignedAt: true,
-        receivableOwner: {
-          select: {
-            firstName: true,
-            lastName: true,
-            positionTitle: true,
+    const updated = await prisma.$transaction(async (tx) => {
+      const nextValue = await tx.job.update({
+        where: { id: jobId },
+        data: {
+          receivableOwnerProfileId: ownerProfileId,
+          receivableOwnerAssignedAt: ownerProfileId ? new Date() : null,
+        },
+        select: {
+          id: true,
+          jobCode: true,
+          jobName: true,
+          receivableOwnerProfileId: true,
+          receivableOwnerAssignedAt: true,
+          receivableOwner: {
+            select: {
+              firstName: true,
+              lastName: true,
+              positionTitle: true,
+            },
           },
         },
-      },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_receivable_owner_assigned',
+          entityType: 'job',
+          entityId: nextValue.id,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: {
+            jobId: nextValue.id,
+            previousOwnerProfileId: existingJob.receivableOwnerProfileId,
+            ownerProfileId: nextValue.receivableOwnerProfileId,
+          },
+        },
+      });
+
+      return nextValue;
     });
 
     if (
@@ -1060,7 +1372,7 @@ router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, 
         });
       }
 
-      return tx.receivableFollowUpAction.create({
+      const createdFollowUp = await tx.receivableFollowUpAction.create({
         data: {
           jobId: existingJob.id,
           clientId: existingJob.clientId ?? null,
@@ -1092,6 +1404,27 @@ router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, 
           },
         },
       });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_receivable_follow_up_logged',
+          entityType: 'receivable_follow_up_action',
+          entityId: createdFollowUp.id,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: {
+            jobId: createdFollowUp.jobId,
+            ownerProfileId: createdFollowUp.ownerProfileId,
+            actionType: createdFollowUp.actionType,
+            isResolved: createdFollowUp.isResolved,
+            nextFollowUpDate: createdFollowUp.nextFollowUpDate?.toISOString() || null,
+            promisedPaymentDate: createdFollowUp.promisedPaymentDate?.toISOString() || null,
+            promisedPaymentAmount: Number(createdFollowUp.promisedPaymentAmount || 0),
+          },
+        },
+      });
+
+      return createdFollowUp;
     });
 
     if (followUp.ownerProfileId && followUp.ownerProfileId !== actorProfileId) {
@@ -1217,7 +1550,7 @@ router.post('/job-balances/:jobId/escalate', authMiddleware, canApproveFinance, 
         });
       }
 
-      return tx.receivableFollowUpAction.create({
+      const createdFollowUp = await tx.receivableFollowUpAction.create({
         data: {
           jobId: existingJob.id,
           clientId: existingJob.clientId ?? null,
@@ -1237,6 +1570,25 @@ router.post('/job-balances/:jobId/escalate', authMiddleware, canApproveFinance, 
           },
         },
       });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_receivable_escalated',
+          entityType: 'receivable_follow_up_action',
+          entityId: createdFollowUp.id,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: {
+            jobId: createdFollowUp.jobId,
+            ownerProfileId: createdFollowUp.ownerProfileId,
+            escalationLevel,
+            balance,
+            nextFollowUpDate: createdFollowUp.nextFollowUpDate?.toISOString() || null,
+          },
+        },
+      });
+
+      return createdFollowUp;
     });
 
     const notificationTitle = `Receivable escalation: ${existingJob.jobName}`;
@@ -1526,19 +1878,39 @@ router.patch('/job-balances/:jobId/collection-stage', authMiddleware, canApprove
       readyForCollectionAt = job.readyForCollectionAt ?? new Date();
     }
 
-    const updated = await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        collectionStage: requestedStage as any,
-        readyForCollectionAt,
-      },
-      select: {
-        id: true,
-        jobCode: true,
-        jobName: true,
-        collectionStage: true,
-        readyForCollectionAt: true,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const nextValue = await tx.job.update({
+        where: { id: jobId },
+        data: {
+          collectionStage: requestedStage as any,
+          readyForCollectionAt,
+        },
+        select: {
+          id: true,
+          jobCode: true,
+          jobName: true,
+          collectionStage: true,
+          readyForCollectionAt: true,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_collection_stage_updated',
+          entityType: 'job',
+          entityId: nextValue.id,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: {
+            jobId: nextValue.id,
+            previousStage: job.collectionStage,
+            collectionStage: nextValue.collectionStage,
+            readyForCollectionAt: nextValue.readyForCollectionAt?.toISOString() || null,
+          },
+        },
+      });
+
+      return nextValue;
     });
 
     if (requestedStage === 'ready_for_collection' && job.collectionStage !== 'ready_for_collection') {
@@ -1663,3 +2035,4 @@ router.get('/revenue-allocations', authMiddleware, canReadFinance, async (req: A
 });
 
 export default router;
+

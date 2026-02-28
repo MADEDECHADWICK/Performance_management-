@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
@@ -161,7 +163,7 @@ export default function FinanceDashboard() {
 
   useEffect(() => {
     loadFinanceDashboard();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const monthChart = useMemo(() => {
     const map = new Map<string, { month: string; projected: number; collected: number }>();
@@ -215,9 +217,7 @@ export default function FinanceDashboard() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -264,6 +264,7 @@ export default function FinanceDashboard() {
                 {formatCompactCurrency(overview.projectedMonth)}
               </div>
               <p className="text-xs text-muted-foreground">Current month plan</p>
+              <MiniStatGraph value={overview.projectedMonth} />
             </CardContent>
           </Card>
           <Card>
@@ -276,6 +277,10 @@ export default function FinanceDashboard() {
                 {formatCompactCurrency(overview.collectedMonth)}
               </div>
               <p className="text-xs text-muted-foreground">Current month actual</p>
+              <MiniStatGraph
+                value={overview.collectedMonth}
+                baseline={overview.projectedMonth}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -288,6 +293,7 @@ export default function FinanceDashboard() {
                 {formatCompactCurrency(overview.varianceMonth)}
               </div>
               <p className="text-xs text-muted-foreground">Projected vs collected</p>
+              <MiniStatGraph value={overview.varianceMonth} baseline={0} />
             </CardContent>
           </Card>
           <Card>
@@ -300,6 +306,7 @@ export default function FinanceDashboard() {
                 {formatCompactCurrency(overview.totalOutstanding)}
               </div>
               <p className="text-xs text-muted-foreground">Across all jobs</p>
+              <MiniStatGraph value={overview.totalOutstanding} baseline={0} inverse />
             </CardContent>
           </Card>
           <Card>
@@ -310,6 +317,7 @@ export default function FinanceDashboard() {
             <CardContent>
               <div className="metric-value">{overview.collectionRate.toFixed(1)}%</div>
               <p className="text-xs text-muted-foreground">Collected vs fees</p>
+              <MiniStatGraph value={overview.collectionRate} baseline={70} />
             </CardContent>
           </Card>
         </div>

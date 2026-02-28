@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
-import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
+import {
+  LineChart,
+  Line,
+  ResponsiveContainer,
+  XAxis,
+  YAxis,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
 
 
@@ -111,7 +123,7 @@ export default function FinanceCollections() {
 
   useEffect(() => {
     loadCollections();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredJobs = useMemo(() => {
     if (!paymentForm.clientId) return jobs;
@@ -141,6 +153,33 @@ export default function FinanceCollections() {
         label: new Date(date).toLocaleDateString("en-KE", { month: "short", day: "numeric" }),
       }));
   }, [collections]);
+
+  const paymentMethodMix = useMemo(() => {
+    const totals = new Map<string, number>();
+    collections.forEach((payment) => {
+      const method = (payment.paymentMethod || "Unspecified").trim() || "Unspecified";
+      totals.set(method, (totals.get(method) || 0) + Number(payment.paymentAmount || 0));
+    });
+
+    return Array.from(totals.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [collections]);
+
+  const linkageMix = useMemo(() => {
+    const jobLinked = collections.reduce(
+      (count, payment) => count + (payment.jobId ? 1 : 0),
+      0
+    );
+    const clientOnly = Math.max(0, collections.length - jobLinked);
+    return [
+      { name: "Job-linked", value: jobLinked },
+      { name: "Client-only", value: clientOnly },
+    ];
+  }, [collections]);
+
+  const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
+  const hasPaymentMethodMix = paymentMethodMix.some((item) => item.value > 0);
 
   const handlePaymentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -191,9 +230,7 @@ export default function FinanceCollections() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -240,37 +277,104 @@ export default function FinanceCollections() {
           </Card>
         </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Recent Collections</CardTitle>
-            <CardDescription>Last 7 payment days</CardDescription>
-          </CardHeader>
-          <CardContent className="h-32">
-            {recentCollections.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                No recent collections yet.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={recentCollections}>
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
-                  <YAxis hide />
-                  <Tooltip
-                    formatter={(value: number) => [`KES ${value.toLocaleString()}`, "Collected"]}
-                    labelFormatter={(label) => `Date: ${label}`}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="amount"
-                    stroke="hsl(var(--chart-1))"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Payment Method Mix</CardTitle>
+              <CardDescription>How collections are received.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-56">
+              {hasPaymentMethodMix ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={paymentMethodMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={48}
+                      outerRadius={82}
+                      paddingAngle={2}
+                    >
+                      {paymentMethodMix.map((item, index) => (
+                        <Cell key={`method-${item.name}`} fill={chartPalette[index % chartPalette.length]} />
+                      ))}
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No method distribution data yet.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Collection Linkage</CardTitle>
+              <CardDescription>Payments tied to jobs vs direct client receipts.</CardDescription>
+            </CardHeader>
+            <CardContent className="h-56">
+              {collections.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No linkage data yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={linkageMix}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={48}
+                      outerRadius={82}
+                      paddingAngle={2}
+                    >
+                      <Cell fill="#22c55e" />
+                      <Cell fill="#94a3b8" />
+                    </Pie>
+                    <Legend verticalAlign="bottom" height={18} />
+                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Recent Collections</CardTitle>
+              <CardDescription>Last 7 payment days</CardDescription>
+            </CardHeader>
+            <CardContent className="h-56">
+              {recentCollections.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  No recent collections yet.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={recentCollections}>
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
+                    <YAxis hide />
+                    <Tooltip
+                      formatter={(value: number) => [`KES ${value.toLocaleString()}`, "Collected"]}
+                      labelFormatter={(label) => `Date: ${label}`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="#0ea5e9"
+                      strokeWidth={2.5}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>

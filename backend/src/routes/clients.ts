@@ -221,6 +221,7 @@ router.post("/", async (req: AuthRequest, res) => {
       managerProfileId,
       departmentId,
       status,
+      engagementLetter,
     } = req.body;
 
     if (!clientName || typeof clientName !== "string") {
@@ -228,29 +229,152 @@ router.post("/", async (req: AuthRequest, res) => {
       return;
     }
 
-    const client = await prisma.client.create({
-      data: {
-        clientName,
-        clientCode,
-        industry,
-        contactPerson,
-        contactEmail,
-        contactPhone,
-        address,
-        location,
-        partnerProfileId: partnerProfileId ? Number(partnerProfileId) : undefined,
-        managerProfileId: managerProfileId ? Number(managerProfileId) : undefined,
-        departmentId: departmentId ? Number(departmentId) : undefined,
-        status,
-      },
-      include: {
-        partner: { select: { id: true, firstName: true, lastName: true } },
-        manager: { select: { id: true, firstName: true, lastName: true } },
-        department: { select: { id: true, name: true } },
-      },
+    const letterPayload = engagementLetter && typeof engagementLetter === "object" ? engagementLetter : null;
+    const documentId = letterPayload?.documentId ? Number(letterPayload.documentId) : NaN;
+    const engagementType =
+      typeof letterPayload?.engagementType === "string" ? letterPayload.engagementType.trim() : "";
+    const feeAmountRaw = letterPayload?.feeAmount;
+    const feeAmount = feeAmountRaw === undefined || feeAmountRaw === null || feeAmountRaw === ""
+      ? NaN
+      : Number(feeAmountRaw);
+
+    // IMPLEMENTED: Engagement letter enforcement gate — client creation now requires a signed letter payload + uploaded document.
+    if (!letterPayload) {
+      res.status(400).json(
+        errorResponse("engagementLetter payload is required when creating a client", 400)
+      );
+      return;
+    }
+    if (!Number.isFinite(documentId) || documentId <= 0) {
+      res.status(400).json(errorResponse("engagementLetter.documentId is required", 400));
+      return;
+    }
+    if (!engagementType) {
+      res.status(400).json(errorResponse("engagementLetter.engagementType is required", 400));
+      return;
+    }
+    if (!Number.isFinite(feeAmount) || feeAmount <= 0) {
+      res.status(400).json(errorResponse("engagementLetter.feeAmount must be greater than 0", 400));
+      return;
+    }
+
+    const existingDocument = await prisma.document.findUnique({
+      where: { id: documentId },
+      select: { id: true },
+    });
+    if (!existingDocument) {
+      res.status(404).json(errorResponse("Engagement letter document not found", 404));
+      return;
+    }
+
+    const existingLetterWithDocument = await prisma.engagementLetter.findFirst({
+      where: { documentId },
+      select: { id: true },
+    });
+    if (existingLetterWithDocument) {
+      res.status(409).json(errorResponse("This document is already linked to an engagement letter", 409));
+      return;
+    }
+
+    const created = await prisma.$transaction(async (tx) => {
+      const client = await tx.client.create({
+        data: {
+          clientName,
+          clientCode,
+          industry,
+          contactPerson,
+          contactEmail,
+          contactPhone,
+          address,
+          location,
+          partnerProfileId: partnerProfileId ? Number(partnerProfileId) : undefined,
+          managerProfileId: managerProfileId ? Number(managerProfileId) : undefined,
+          departmentId: departmentId ? Number(departmentId) : undefined,
+          status,
+        },
+        include: {
+          partner: { select: { id: true, firstName: true, lastName: true } },
+          manager: { select: { id: true, firstName: true, lastName: true } },
+          department: { select: { id: true, name: true } },
+        },
+      });
+
+      const letter = await tx.engagementLetter.create({
+        data: {
+          clientId: client.id,
+          documentId,
+          jobTitle: typeof letterPayload?.jobTitle === "string" ? letterPayload.jobTitle : undefined,
+          engagementType,
+          feeAmount,
+          currency:
+            typeof letterPayload?.currency === "string" && letterPayload.currency.trim()
+              ? letterPayload.currency.trim().toUpperCase()
+              : "KES",
+          startDate: letterPayload?.startDate ? new Date(letterPayload.startDate) : undefined,
+          endDate: letterPayload?.endDate ? new Date(letterPayload.endDate) : undefined,
+          scopeDescription:
+            typeof letterPayload?.scopeDescription === "string"
+              ? letterPayload.scopeDescription
+              : undefined,
+          termsConditions:
+            typeof letterPayload?.termsConditions === "string"
+              ? letterPayload.termsConditions
+              : undefined,
+          uploadedByProfileId: req.user?.profileId,
+          status: EngagementLetterStatus.pending_review,
+        },
+        include: {
+          document: { select: { id: true, fileName: true, filePath: true } },
+        },
+      });
+
+      const existingClientOnboarding = await tx.clientOnboarding.findFirst({
+        where: { clientId: client.id },
+        select: { id: true },
+      });
+
+      // IMPLEMENTED: Multi-job onboarding support — additional letters for same client keep queue entries without violating unique clientId.
+      const onboarding = await tx.clientOnboarding.create({
+        data: {
+          engagementLetterId: letter.id,
+          clientId: existingClientOnboarding ? null : client.id,
+          clientName: client.clientName,
+          industry: client.industry || "",
+          contactPerson: client.contactPerson || "",
+          contactEmail: client.contactEmail || "",
+          contactPhone: client.contactPhone || "",
+          location: client.location || "",
+          departmentId: client.departmentId,
+          uploadedByProfileId: req.user?.profileId!,
+          status: ClientOnboardingStatus.pending_hr_review,
+        },
+      });
+
+      return { client, letter, onboarding };
     });
 
-    res.status(201).json(successResponse(client, "Client created", 201));
+    await notifyProfilesByRoles(
+      ["hr", "hr_manager"],
+      {
+        title: "New client onboarding submitted",
+        message: `Client "${created.client.clientName}" and engagement letter are awaiting HR review for job setup.`,
+        link: `/client-onboarding-queue`,
+        relatedEntityId: created.onboarding.id,
+      },
+      req
+    );
+
+    res.status(201).json(
+      successResponse(
+        {
+          ...created.client,
+          initialEngagementLetter: created.letter,
+          onboardingId: created.onboarding.id,
+        },
+        "Client created",
+        201
+      )
+    );
   } catch (error: any) {
     console.error("Error creating client:", error);
     res.status(500).json(errorResponse("Failed to create client", 500));
@@ -384,6 +508,13 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
       termsConditions,
     } = req.body;
 
+    // IMPLEMENTED: Engagement letter enforcement gate — each letter requires an uploaded signed document reference.
+    const parsedDocumentId = Number(documentId);
+    if (!Number.isFinite(parsedDocumentId) || parsedDocumentId <= 0) {
+      res.status(400).json(errorResponse("documentId is required", 400));
+      return;
+    }
+
     if (!engagementType) {
       res.status(400).json(errorResponse("engagementType is required", 400));
       return;
@@ -395,10 +526,28 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
       return;
     }
 
+    const existingDocument = await prisma.document.findUnique({
+      where: { id: parsedDocumentId },
+      select: { id: true },
+    });
+    if (!existingDocument) {
+      res.status(404).json(errorResponse("Engagement letter document not found", 404));
+      return;
+    }
+
+    const existingLetterWithDocument = await prisma.engagementLetter.findFirst({
+      where: { documentId: parsedDocumentId },
+      select: { id: true },
+    });
+    if (existingLetterWithDocument) {
+      res.status(409).json(errorResponse("This document is already linked to an engagement letter", 409));
+      return;
+    }
+
     const letter = await prisma.engagementLetter.create({
       data: {
         clientId,
-        documentId: documentId ? Number(documentId) : undefined,
+        documentId: parsedDocumentId,
         jobTitle,
         engagementType,
         feeAmount,
@@ -420,10 +569,16 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
     });
 
     if (!existingOnboarding) {
+      const existingClientOnboarding = await prisma.clientOnboarding.findFirst({
+        where: { clientId: client.id },
+        select: { id: true },
+      });
+
       await prisma.clientOnboarding.create({
         data: {
           engagementLetterId: letter.id,
-          clientId: client.id,
+          // IMPLEMENTED: Multi-job onboarding support — keep client linkage on first onboarding, allow additional pending jobs for same client.
+          clientId: existingClientOnboarding ? null : client.id,
           clientName: client.clientName,
           industry: client.industry || "",
           contactPerson: client.contactPerson || "",
@@ -445,3 +600,4 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
 });
 
 export default router;
+

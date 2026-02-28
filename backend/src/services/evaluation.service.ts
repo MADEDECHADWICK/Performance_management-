@@ -1,9 +1,11 @@
 /**
- * Performance Evaluation Service (Phase 5)
- * Complex evaluation calculations and scoring
+ * Legacy evaluation analytics compatibility service.
+ *
+ * Uses current schema entities (EvaluationAssignment, KPI assignments)
+ * while preserving historical method names.
  */
 
-import { prisma } from '../prisma';
+import { prisma } from "../prisma";
 
 interface AuthContext {
   userId: number;
@@ -12,484 +14,378 @@ interface AuthContext {
 }
 
 interface EvaluationScoreInput {
-  evaluatee_profile_id: number;
-  evaluator_profile_id: number;
-  evaluation_cycle_id: number;
-  scores: Record<string, number>; // { category: score }
+  evaluateeProfileId: number;
+  evaluatorProfileId: number;
+  evaluationCycleId: number;
+  scores: Record<string, number>;
   comments?: string;
-  evaluation_type: string;
+  evaluationType: string;
 }
 
 interface EvaluationAggregationInput {
-  evaluatee_profile_id: number;
-  evaluation_cycle_id: number;
+  evaluateeProfileId: number;
+  evaluationCycleId: number;
 }
 
+const privilegedRoles = new Set(["admin", "super_admin", "hr", "hr_manager"]);
+
+const normalizeRole = (value?: string) => String(value || "").toLowerCase().trim();
+
+const toNumber = (value: unknown): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof value === "object" && value && "toString" in value) {
+    const parsed = Number(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
 export class EvaluationService {
-  /**
-   * Submit evaluation with score calculation
-   */
-  static async submitEvaluation(
-    input: EvaluationScoreInput,
-    auth: AuthContext
-  ) {
-    // ✅ VERIFY AUTHORIZATION
+  static async submitEvaluation(input: EvaluationScoreInput, auth: AuthContext) {
+    const role = normalizeRole(auth.roleName);
     if (
-      input.evaluator_profile_id !== auth.profileId &&
-      auth.roleName !== 'admin'
+      input.evaluatorProfileId !== auth.profileId &&
+      !privilegedRoles.has(role)
     ) {
       throw {
         statusCode: 403,
-        message: 'You can only submit your own evaluations',
+        message: "You can only submit your own evaluations",
       };
     }
 
-    // ✅ VERIFY CYCLE EXISTS
-    const cycle = await prisma.evaluationCycle.findUnique({
-      where: { id: input.evaluation_cycle_id },
+    const definition = await prisma.evaluationDefinition.findFirst({
+      where: { cycleId: input.evaluationCycleId },
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
     });
 
-    if (!cycle) {
+    if (!definition) {
       throw {
         statusCode: 404,
-        message: 'Evaluation cycle not found',
+        message: "No evaluation definition found for the requested cycle",
       };
     }
 
-    // ✅ VERIFY EVALUATEE EXISTS
-    const evaluatee = await prisma.profile.findUnique({
-      where: { id: input.evaluatee_profile_id },
-    });
-
-    if (!evaluatee) {
-      throw {
-        statusCode: 404,
-        message: 'Evaluatee profile not found',
-      };
-    }
-
-    // ✅ VALIDATE SCORES
-    const validScores = Object.values(input.scores);
-    const invalidScores = validScores.filter(
-      score => score < 1 || score > 5
-    );
-
-    if (invalidScores.length > 0) {
-      throw {
-        statusCode: 400,
-        message: 'All scores must be between 1-5',
-      };
-    }
-
-    // ✅ CALCULATE AVERAGE SCORE
+    const scoreValues = Object.values(input.scores || {}).map((value) => toNumber(value));
     const averageScore =
-      validScores.reduce((sum, score) => sum + score, 0) / validScores.length;
+      scoreValues.length > 0
+        ? scoreValues.reduce((sum, value) => sum + value, 0) / scoreValues.length
+        : 0;
 
-    // ✅ DETERMINE RATING
-    const rating =
-      averageScore >= 4.5
-        ? 'Excellent'
-        : averageScore >= 3.5
-          ? 'Good'
-          : averageScore >= 2.5
-            ? 'Satisfactory'
-            : averageScore >= 1.5
-              ? 'Needs Improvement'
-              : 'Unsatisfactory';
-
-    // ✅ CREATE EVALUATION
-    const evaluation = await prisma.evaluation.create({
+    const evaluation = await prisma.evaluationAssignment.create({
       data: {
-        evaluatee_profile_id: input.evaluatee_profile_id,
-        evaluator_profile_id: input.evaluator_profile_id,
-        evaluation_cycle_id: input.evaluation_cycle_id,
-        scores: input.scores,
-        average_score: averageScore,
-        rating,
-        comments: input.comments || null,
-        evaluation_type: input.evaluation_type,
-        submitted_at: new Date(),
+        evaluationDefinitionId: definition.id,
+        evaluatorProfileId: input.evaluatorProfileId,
+        evaluateeProfileId: input.evaluateeProfileId,
+        evaluatorType: input.evaluationType as any,
+        responses: input.scores as any,
+        evaluatorComments: input.comments || null,
+        score: averageScore,
+        status: "submitted",
+        submittedAt: new Date(),
       },
       include: {
-        evaluatee: { select: { id: true, first_name: true, last_name: true } },
-        evaluator: { select: { id: true, first_name: true, last_name: true } },
+        evaluatee: { select: { id: true, firstName: true, lastName: true } },
+        evaluator: { select: { id: true, firstName: true, lastName: true } },
       },
     });
 
     return evaluation;
   }
 
-  /**
-   * Get aggregated evaluation scores for employee
-   */
   static async getAggregatedEvaluationScores(
     input: EvaluationAggregationInput,
     auth: AuthContext
   ) {
-    // ✅ VERIFY AUTHORIZATION
-    if (
-      input.evaluatee_profile_id !== auth.profileId &&
-      auth.roleName !== 'admin'
-    ) {
+    const role = normalizeRole(auth.roleName);
+    const canViewOwn = input.evaluateeProfileId === auth.profileId;
+    const canViewAll = privilegedRoles.has(role) || role === "manager";
+    if (!canViewOwn && !canViewAll) {
       throw {
         statusCode: 403,
-        message: 'You can only view your own evaluations',
+        message: "You can only view your own evaluations",
       };
     }
 
-    const evaluations = await prisma.evaluation.findMany({
+    const evaluations = await prisma.evaluationAssignment.findMany({
       where: {
-        evaluatee_profile_id: input.evaluatee_profile_id,
-        evaluation_cycle_id: input.evaluation_cycle_id,
+        evaluateeProfileId: input.evaluateeProfileId,
+        definition: { cycleId: input.evaluationCycleId },
       },
       include: {
-        evaluator: { select: { id: true, first_name: true, last_name: true } },
+        evaluator: { select: { id: true, firstName: true, lastName: true } },
       },
+      orderBy: { createdAt: "desc" },
     });
 
-    if (evaluations.length === 0) {
+    if (!evaluations.length) {
       throw {
         statusCode: 404,
-        message: 'No evaluations found for this cycle',
+        message: "No evaluations found for this cycle",
       };
     }
 
-    // ✅ AGGREGATE SCORES
-    const allScores = evaluations.flatMap(e => Object.values(e.scores));
-    const overallAverageScore =
-      allScores.reduce((sum, score) => sum + score, 0) / allScores.length;
+    const scores = evaluations.map((evaluation) => toNumber(evaluation.score));
+    const overallAverage =
+      scores.reduce((sum, value) => sum + value, 0) / Math.max(scores.length, 1);
 
-    // ✅ CALCULATE BY EVALUATOR TYPE
-    const byEvaluatorType: Record<string, any> = {};
+    const byEvaluatorType: Record<
+      string,
+      { count: number; scores: number[]; averageScore: number }
+    > = {};
 
-    evaluations.forEach(evaluation => {
-      const type = evaluation.evaluation_type;
+    evaluations.forEach((evaluation) => {
+      const type = String(evaluation.evaluatorType || "unknown");
       if (!byEvaluatorType[type]) {
-        byEvaluatorType[type] = {
-          count: 0,
-          scores: [],
-          averageScore: 0,
-        };
+        byEvaluatorType[type] = { count: 0, scores: [], averageScore: 0 };
       }
-      byEvaluatorType[type].count++;
-      byEvaluatorType[type].scores.push(evaluation.average_score);
+      byEvaluatorType[type].count += 1;
+      byEvaluatorType[type].scores.push(toNumber(evaluation.score));
     });
 
-    // ✅ CALCULATE AVERAGES FOR EACH TYPE
-    Object.keys(byEvaluatorType).forEach(type => {
-      const scores = byEvaluatorType[type].scores;
+    Object.keys(byEvaluatorType).forEach((type) => {
+      const values = byEvaluatorType[type].scores;
       byEvaluatorType[type].averageScore =
-        scores.reduce((sum, s) => sum + s, 0) / scores.length;
+        values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
     });
-
-    // ✅ DETERMINE OVERALL RATING
-    const overallRating =
-      overallAverageScore >= 4.5
-        ? 'Excellent'
-        : overallAverageScore >= 3.5
-          ? 'Good'
-          : overallAverageScore >= 2.5
-            ? 'Satisfactory'
-            : overallAverageScore >= 1.5
-              ? 'Needs Improvement'
-              : 'Unsatisfactory';
 
     return {
-      evaluateeId: input.evaluatee_profile_id,
-      cycleId: input.evaluation_cycle_id,
+      evaluateeId: input.evaluateeProfileId,
+      cycleId: input.evaluationCycleId,
       summary: {
         totalEvaluators: evaluations.length,
-        overallAverageScore: overallAverageScore.toFixed(2),
-        overallRating,
+        overallAverageScore: Number(overallAverage.toFixed(2)),
+        overallRating:
+          overallAverage >= 4.5
+            ? "Excellent"
+            : overallAverage >= 3.5
+              ? "Good"
+              : overallAverage >= 2.5
+                ? "Satisfactory"
+                : "Needs Improvement",
       },
       byEvaluatorType,
-      individualEvaluations: evaluations.map(e => ({
-        evaluatorName: `${e.evaluator.first_name} ${e.evaluator.last_name}`,
-        evaluationType: e.evaluation_type,
-        averageScore: e.average_score.toFixed(2),
-        rating: e.rating,
-        scores: e.scores,
-        comments: e.comments,
+      individualEvaluations: evaluations.map((evaluation) => ({
+        evaluatorName: `${evaluation.evaluator.firstName} ${evaluation.evaluator.lastName}`.trim(),
+        evaluationType: evaluation.evaluatorType,
+        averageScore: Number(toNumber(evaluation.score).toFixed(2)),
+        comments: evaluation.evaluatorComments,
       })),
       trend: {
-        lowestScore: Math.min(...allScores),
-        highestScore: Math.max(...allScores),
-        standardDeviation: this.calculateStandardDeviation(allScores),
+        lowestScore: Math.min(...scores),
+        highestScore: Math.max(...scores),
+        standardDeviation: this.calculateStandardDeviation(scores),
       },
     };
   }
 
-  /**
-   * Get evaluation comparison across employees
-   */
   static async getEvaluationComparison(
     cycleId: number,
-    departmentId?: number,
+    departmentId: number | undefined,
     auth: AuthContext
   ) {
-    // ✅ VERIFY AUTHORIZATION
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    const role = normalizeRole(auth.roleName);
+    if (!["admin", "super_admin", "manager", "hr", "hr_manager"].includes(role)) {
       throw {
         statusCode: 403,
-        message: 'Only admins/managers can view comparisons',
+        message: "Only admins/managers can view comparisons",
       };
     }
 
-    const where: any = { evaluation_cycle_id: cycleId };
-
-    if (departmentId) {
-      where.evaluatee = { department_id: departmentId };
-    }
-
-    const evaluations = await prisma.evaluation.findMany({
-      where,
+    const evaluations = await prisma.evaluationAssignment.findMany({
+      where: {
+        definition: { cycleId },
+        ...(departmentId ? { evaluatee: { departmentId } } : {}),
+      },
       include: {
         evaluatee: {
           select: {
             id: true,
-            first_name: true,
-            last_name: true,
-            department_id: true,
+            firstName: true,
+            lastName: true,
           },
         },
       },
+      orderBy: { createdAt: "desc" },
     });
 
-    // ✅ GROUP BY EVALUATEE
-    const byEmployee: Record<number, any> = {};
+    const byEmployee = new Map<
+      number,
+      { employeeName: string; scores: number[]; count: number }
+    >();
 
-    evaluations.forEach(evaluation => {
-      const employeeId = evaluation.evaluatee_profile_id;
-      if (!byEmployee[employeeId]) {
-        byEmployee[employeeId] = {
-          name: `${evaluation.evaluatee.first_name} ${evaluation.evaluatee.last_name}`,
-          evaluations: [],
-        };
-      }
-      byEmployee[employeeId].evaluations.push({
-        score: evaluation.average_score,
-        rating: evaluation.rating,
-        type: evaluation.evaluation_type,
-      });
-    });
-
-    // ✅ CALCULATE AVERAGES
-    const summary = Object.entries(byEmployee).map(([employeeId, data]) => {
-      const scores = data.evaluations.map((e: any) => e.score);
-      const avgScore = scores.reduce((a: number, b: number) => a + b, 0) / scores.length;
-
-      return {
-        employeeId: parseInt(employeeId),
-        employeeName: data.name,
-        evaluationCount: data.evaluations.length,
-        averageScore: avgScore.toFixed(2),
-        rating:
-          avgScore >= 4.5
-            ? 'Excellent'
-            : avgScore >= 3.5
-              ? 'Good'
-              : avgScore >= 2.5
-                ? 'Satisfactory'
-                : 'Needs Improvement',
+    evaluations.forEach((evaluation) => {
+      const existing = byEmployee.get(evaluation.evaluateeProfileId) || {
+        employeeName: `${evaluation.evaluatee.firstName} ${evaluation.evaluatee.lastName}`.trim(),
+        scores: [],
+        count: 0,
       };
+      existing.scores.push(toNumber(evaluation.score));
+      existing.count += 1;
+      byEmployee.set(evaluation.evaluateeProfileId, existing);
     });
+
+    const summary = Array.from(byEmployee.entries())
+      .map(([employeeId, info]) => {
+        const averageScore =
+          info.scores.reduce((sum, value) => sum + value, 0) /
+          Math.max(info.scores.length, 1);
+        return {
+          employeeId,
+          employeeName: info.employeeName,
+          evaluationCount: info.count,
+          averageScore: Number(averageScore.toFixed(2)),
+          rating:
+            averageScore >= 4.5
+              ? "Excellent"
+              : averageScore >= 3.5
+                ? "Good"
+                : averageScore >= 2.5
+                  ? "Satisfactory"
+                  : "Needs Improvement",
+        };
+      })
+      .sort((a, b) => b.averageScore - a.averageScore);
 
     return {
       cycleId,
-      departmentId: departmentId || 'All',
-      totalEmployees: Object.keys(byEmployee).length,
-      summary: summary.sort(
-        (a, b) => parseFloat(b.averageScore) - parseFloat(a.averageScore)
-      ),
+      departmentId: departmentId || "All",
+      totalEmployees: summary.length,
+      summary,
       statistics: {
-        averageScore: (
-          summary.reduce((sum, e) => sum + parseFloat(e.averageScore), 0) /
-          summary.length
-        ).toFixed(2),
-        highestScore: Math.max(...summary.map(e => parseFloat(e.averageScore))),
-        lowestScore: Math.min(...summary.map(e => parseFloat(e.averageScore))),
-        topPerformers: summary.slice(0, 5),
-        needsImprovement: summary.filter(
-          e => e.rating === 'Needs Improvement' || e.rating === 'Satisfactory'
-        ),
+        averageScore:
+          summary.length > 0
+            ? Number(
+                (
+                  summary.reduce((sum, item) => sum + item.averageScore, 0) / summary.length
+                ).toFixed(2)
+              )
+            : 0,
+        highestScore: summary.length ? Math.max(...summary.map((item) => item.averageScore)) : 0,
+        lowestScore: summary.length ? Math.min(...summary.map((item) => item.averageScore)) : 0,
       },
     };
   }
 
-  /**
-   * Get KPI achievement against evaluations
-   */
   static async getKPIVsEvaluationAnalysis(
     employeeId: number,
     cycleId: number,
     auth: AuthContext
   ) {
-    // ✅ VERIFY AUTHORIZATION
-    if (employeeId !== auth.profileId && auth.roleName !== 'admin') {
+    const role = normalizeRole(auth.roleName);
+    if (employeeId !== auth.profileId && !privilegedRoles.has(role) && role !== "manager") {
       throw {
         statusCode: 403,
-        message: 'You can only view your own analysis',
+        message: "You can only view your own analysis",
       };
     }
 
-    // ✅ GET EVALUATIONS
-    const evaluations = await prisma.evaluation.findMany({
+    const evaluations = await prisma.evaluationAssignment.findMany({
       where: {
-        evaluatee_profile_id: employeeId,
-        evaluation_cycle_id: cycleId,
+        evaluateeProfileId: employeeId,
+        definition: { cycleId },
+      },
+      select: {
+        score: true,
+        evaluatorType: true,
+        evaluatorComments: true,
       },
     });
 
-    // ✅ GET KPI ASSIGNMENTS
-    const kpiAssignments = await prisma.kpiAssignment.findMany({
-      where: { employee_profile_id: employeeId },
+    const assignments = await prisma.employeeKpiAssignment.findMany({
+      where: { employeeProfileId: employeeId },
       include: {
-        kpi: true,
-        performances: true,
+        kpi: {
+          select: {
+            id: true,
+            name: true,
+            measurementUnit: true,
+          },
+        },
       },
+      orderBy: { createdAt: "desc" },
+      take: 30,
     });
 
-    // ✅ CALCULATE METRICS
-    const avgEvaluationScore =
+    const averageEvaluationScore =
       evaluations.length > 0
-        ? evaluations.reduce((sum, e) => sum + e.average_score, 0) /
+        ? evaluations.reduce((sum, evaluation) => sum + toNumber(evaluation.score), 0) /
           evaluations.length
         : 0;
 
-    const kpiAchievements = kpiAssignments.map(assignment => {
-      const performances = assignment.performances || [];
-      const achieved = performances.filter(
-        p => p.actual_value >= assignment.kpi.target_value
-      ).length;
-
+    const kpiAchievements = assignments.map((assignment) => {
+      const target = toNumber(assignment.targetValue);
+      const achieved = toNumber(assignment.achievedValue);
+      const achievementPercent = target > 0 ? (achieved / target) * 100 : 0;
       return {
+        kpiId: assignment.kpiId,
         kpiName: assignment.kpi.name,
-        target: assignment.kpi.target_value,
-        achieved: achieved / Math.max(performances.length, 1),
-        performances: performances.length,
+        unit: assignment.kpi.measurementUnit,
+        target,
+        achieved,
+        achievementPercent: Number(achievementPercent.toFixed(2)),
       };
     });
 
-    const averageKPIAchievement =
-      kpiAchievements.length > 0
-        ? kpiAchievements.reduce((sum, k) => sum + k.achieved, 0) /
-          kpiAchievements.length
-        : 0;
-
     return {
-      employee: { id: employeeId },
-      cycle: { id: cycleId },
-      evaluation: {
-        count: evaluations.length,
-        averageScore: avgEvaluationScore.toFixed(2),
-      },
-      kpiPerformance: {
-        assignmentCount: kpiAssignments.length,
-        averageAchievement: (averageKPIAchievement * 100).toFixed(2) + '%',
-        kpis: kpiAchievements,
-      },
-      correlation: {
-        evaluationScore: avgEvaluationScore.toFixed(2),
-        kpiAchievement: (averageKPIAchievement * 100).toFixed(2) + '%',
-        alignment:
-          Math.abs(
-            avgEvaluationScore - averageKPIAchievement * 5
-          ) < 1
-            ? 'Strong'
-            : 'Moderate',
-      },
+      employeeId,
+      cycleId,
+      averageEvaluationScore: Number(averageEvaluationScore.toFixed(2)),
+      evaluationCount: evaluations.length,
+      kpiCount: kpiAchievements.length,
+      kpiAchievements,
     };
   }
 
-  /**
-   * Generate performance improvement plan
-   */
   static async generatePerformanceImprovementPlan(
     employeeId: number,
     cycleId: number,
     auth: AuthContext
   ) {
-    // ✅ VERIFY AUTHORIZATION
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    const role = normalizeRole(auth.roleName);
+    if (!["admin", "super_admin", "manager", "hr", "hr_manager"].includes(role)) {
       throw {
         statusCode: 403,
-        message: 'Only managers/admins can generate PIP',
+        message: "Only admins/managers can generate improvement plans",
       };
     }
 
-    // ✅ GET EVALUATION DATA
-    const evaluations = await prisma.evaluation.findMany({
-      where: {
-        evaluatee_profile_id: employeeId,
-        evaluation_cycle_id: cycleId,
-      },
-    });
+    const analysis = await this.getKPIVsEvaluationAnalysis(employeeId, cycleId, auth);
+    const weakAreas = analysis.kpiAchievements.filter(
+      (item) => item.achievementPercent < 70
+    );
 
-    if (evaluations.length === 0) {
-      throw {
-        statusCode: 404,
-        message: 'No evaluations found for this employee',
-      };
-    }
-
-    // ✅ IDENTIFY WEAK AREAS
-    const scoreFrequency: Record<string, number[]> = {};
-
-    evaluations.forEach(evaluation => {
-      Object.entries(evaluation.scores).forEach(([category, score]) => {
-        if (!scoreFrequency[category]) {
-          scoreFrequency[category] = [];
-        }
-        scoreFrequency[category].push(score as number);
-      });
-    });
-
-    const weakAreas = Object.entries(scoreFrequency)
-      .map(([category, scores]) => ({
-        category,
-        averageScore:
-          scores.reduce((a, b) => a + b, 0) / scores.length,
-      }))
-      .filter(area => area.averageScore < 3)
-      .sort((a, b) => a.averageScore - b.averageScore);
-
-    const pip = await prisma.performanceImprovementPlan.create({
-      data: {
-        employee_profile_id: employeeId,
-        evaluation_cycle_id: cycleId,
-        weak_areas: weakAreas,
-        start_date: new Date(),
-        expected_end_date: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days
-        status: 'active',
-        created_by_profile_id: auth.profileId,
-      },
-    });
+    const createdAt = new Date();
+    const expectedEndDate = new Date(createdAt);
+    expectedEndDate.setDate(createdAt.getDate() + 90);
 
     return {
-      pipId: pip.id,
+      pipId: `PIP-${employeeId}-${cycleId}-${createdAt.getTime()}`,
       employee: { id: employeeId },
       weakAreas,
       timeline: {
-        startDate: pip.start_date,
-        expectedEndDate: pip.expected_end_date,
-        duration: '90 days',
+        startDate: createdAt,
+        expectedEndDate,
+        duration: "90 days",
       },
-      recommendations: weakAreas.map(area => ({
-        area: area.category,
-        action: `Focus on improving ${area.category}`,
-        timeline: '30 days',
+      recommendations: weakAreas.map((area) => ({
+        area: area.kpiName,
+        action: `Improve KPI performance for "${area.kpiName}" to at least 70%`,
+        timeline: "30 days",
       })),
     };
   }
 
-  /**
-   * Helper: Calculate standard deviation
-   */
   private static calculateStandardDeviation(values: number[]): number {
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const squaredDifferences = values.map(value => Math.pow(value - mean, 2));
-    const variance =
-      squaredDifferences.reduce((a, b) => a + b, 0) / values.length;
+    if (!values.length) return 0;
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const squaredDiffs = values.map((value) => Math.pow(value - mean, 2));
+    const variance = squaredDiffs.reduce((sum, value) => sum + value, 0) / values.length;
     return Math.sqrt(variance);
   }
 }

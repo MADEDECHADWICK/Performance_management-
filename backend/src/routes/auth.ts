@@ -6,10 +6,10 @@ import { Prisma } from "@prisma/client";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
-import { requireRole } from "../middleware/reqiureRole";
 import { buildModuleAccessMatrix } from "../services/moduleAccess.service";
 import { sendOnboardingEmail } from "../services/onboardingEmail.service";
 import { sendEmail } from "../services/emailService";
+import { getJwtSecret } from "../config/jwt";
 
 const router = Router();
 
@@ -17,11 +17,27 @@ const ONBOARDING_MARKER_PREFIX = "onboarding";
 const TEMP_PASSWORD_VALID_HOURS = Number(process.env.TEMP_PASSWORD_VALID_HOURS || 72);
 const SETUP_TOKEN_VALID_MINUTES = Number(process.env.SETUP_TOKEN_VALID_MINUTES || 15);
 const MIN_PASSWORD_LENGTH = 8;
+const ACCESS_TOKEN_VALID_HOURS = Math.max(
+  1,
+  Number(process.env.ACCESS_TOKEN_VALID_HOURS || 12)
+);
+const SESSION_VALID_DAYS = Math.max(1, Number(process.env.SESSION_VALID_DAYS || 7));
 
 type PasswordSetupTokenPayload = {
   userId?: number;
   email?: string;
   purpose?: string;
+  iat?: number;
+  exp?: number;
+};
+
+type AccessTokenPayload = {
+  userId?: number;
+  sub?: number;
+  email?: string;
+  authRoles?: string[];
+  sessionToken?: string;
+  profileId?: number;
   iat?: number;
   exp?: number;
 };
@@ -46,6 +62,7 @@ const resolveEmployeeStatus = (value: unknown): "active" | "inactive" | "separat
   return "active";
 };
 
+//Creating the temporary password to the user
 const createTemporaryPassword = () => {
   const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const lower = "abcdefghijkmnopqrstuvwxyz";
@@ -100,9 +117,41 @@ const createPasswordSetupToken = (userId: number, email: string) =>
       email,
       purpose: "password_setup",
     },
-    process.env.JWT_SECRET || "change-me",
+    getJwtSecret(),
     { expiresIn: `${SETUP_TOKEN_VALID_MINUTES}m` }
   );
+
+const createSessionToken = () => crypto.randomBytes(32).toString("hex");
+
+const createSession = async (userId: number) => {
+  const token = createSessionToken();
+  const expiresAt = new Date(
+    Date.now() + SESSION_VALID_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  await prisma.session.create({
+    data: {
+      userId,
+      token,
+      expiresAt,
+    },
+  });
+
+  return { token, expiresAt };
+};
+
+const revokeSession = async (sessionToken?: string) => {
+  if (!sessionToken) return;
+  await prisma.session.updateMany({
+    where: {
+      token: sessionToken,
+      revokedAt: null,
+    },
+    data: {
+      revokedAt: new Date(),
+    },
+  });
+};
 
 const buildAuthSnapshot = (user: any) => {
   const activeRoleEntries = (user.roles || []).filter((entry: any) => entry.role?.isActive);
@@ -176,7 +225,11 @@ const loadAuthUser = async (email: string) =>
     },
   });
 
-const buildAccessToken = (user: any, authRoles: string[]) =>
+const buildAccessToken = (
+  user: any,
+  authRoles: string[],
+  sessionToken?: string
+) =>
   jwt.sign(
     {
       userId: user.id,
@@ -184,16 +237,23 @@ const buildAccessToken = (user: any, authRoles: string[]) =>
       email: user.email,
       profileId: user.profile?.id,
       authRoles,
+      sessionToken,
     },
-    process.env.JWT_SECRET || "change-me",
-    { expiresIn: "7d" }
+    getJwtSecret(),
+    { expiresIn: `${ACCESS_TOKEN_VALID_HOURS}h` }
   );
+
+const getBearerToken = (headerValue?: string | null) => {
+  if (!headerValue?.startsWith("Bearer ")) return null;
+  const token = headerValue.substring(7).trim();
+  return token || null;
+};
 
 const canOnboardUsers = [
   authMiddleware,
   requireModuleAccess("users", "admin"),
-  requireRole("hr", "hr_manager", "admin", "super_admin"),
 ] as const;
+
 
 const onboardUser = async (req: AuthRequest, res: any) => {
   const {
@@ -412,7 +472,8 @@ router.post("/login", async (req, res) => {
     }
 
     const { authRoles } = buildAuthSnapshot(user);
-    const token = buildAccessToken(user, authRoles);
+    const session = await createSession(user.id);
+    const token = buildAccessToken(user, authRoles, session.token);
 
     await prisma.user.update({
       where: { id: user.id },
@@ -424,11 +485,86 @@ router.post("/login", async (req, res) => {
 
     res.json({
       token,
+      sessionExpiresAt: session.expiresAt.toISOString(),
       user: buildAuthUserPayload(user),
     });
   } catch (err: any) {
     console.error("Login error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/logout", authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    await revokeSession(req.user?.sessionToken);
+    return res.json({ success: true, message: "Logged out" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    return res.status(500).json({ error: "Failed to logout cleanly" });
+  }
+});
+
+router.post("/refresh", async (req, res) => {
+  const authorizationToken = getBearerToken(req.headers.authorization);
+  const providedToken =
+    authorizationToken || String(req.body?.token || "").trim() || null;
+
+  if (!providedToken) {
+    return res.status(400).json({ error: "Refresh token is required" });
+  }
+
+  try {
+    const decoded = jwt.verify(providedToken, getJwtSecret(), {
+      ignoreExpiration: true,
+    }) as AccessTokenPayload;
+
+    if ((decoded as any).purpose) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const userId = decoded.userId ?? decoded.sub;
+    const email = String(decoded.email || "").toLowerCase();
+    const sessionToken = String(decoded.sessionToken || "");
+
+    if (!userId || !email || !sessionToken) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const session = await prisma.session.findFirst({
+      where: {
+        token: sessionToken,
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true, expiresAt: true },
+    });
+
+    if (!session) {
+      return res.status(401).json({ error: "Session expired. Please sign in again." });
+    }
+
+    const user = await loadAuthUser(email);
+    if (!user || user.id !== userId) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    if (isUserBlockedFromLogin(user)) {
+      return res.status(403).json({
+        error: "Account is inactive. Contact HR to reactivate your account.",
+      });
+    }
+
+    const { authRoles } = buildAuthSnapshot(user);
+    const token = buildAccessToken(user, authRoles, sessionToken);
+
+    return res.json({
+      token,
+      sessionExpiresAt: session.expiresAt.toISOString(),
+      user: buildAuthUserPayload(user),
+    });
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid refresh token" });
   }
 });
 
@@ -446,7 +582,7 @@ router.post("/set-password", async (req, res) => {
   try {
     const decoded = jwt.verify(
       String(setupToken),
-      process.env.JWT_SECRET || "change-me"
+      getJwtSecret()
     ) as PasswordSetupTokenPayload;
 
     if (decoded.purpose !== "password_setup" || !decoded.userId || !decoded.email) {
@@ -499,10 +635,12 @@ router.post("/set-password", async (req, res) => {
     }
 
     const { authRoles } = buildAuthSnapshot(refreshedUser);
-    const token = buildAccessToken(refreshedUser, authRoles);
+    const session = await createSession(refreshedUser.id);
+    const token = buildAccessToken(refreshedUser, authRoles, session.token);
 
     res.json({
       token,
+      sessionExpiresAt: session.expiresAt.toISOString(),
       user: buildAuthUserPayload(refreshedUser),
     });
   } catch (error: any) {

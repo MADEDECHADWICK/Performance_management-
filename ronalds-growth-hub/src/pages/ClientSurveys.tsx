@@ -116,18 +116,12 @@ export default function ClientSurveys() {
     queryKey: ['survey-analytics'],
     queryFn: () => surveysAPI.getAnalytics(),
     retry: false,
-    onError: () => {
-      // swallow analytics errors; page will show empty-state values
-    },
   });
 
   const { data: byClientData } = useQuery({
     queryKey: ['surveys-by-client'],
     queryFn: () => surveysAPI.getByClient(),
     retry: false,
-    onError: () => {
-      // keep UI stable if analytics endpoint is empty
-    },
   });
 
   const { data: clientsData } = useQuery({
@@ -178,7 +172,7 @@ export default function ClientSurveys() {
   });
 
   // Data
-  const surveys = surveysData?.surveys || [];
+  const surveys = useMemo(() => surveysData?.surveys ?? [], [surveysData]);
   const analytics = analyticsData || {
     totalSurveys: 0,
     responseRate: 0,

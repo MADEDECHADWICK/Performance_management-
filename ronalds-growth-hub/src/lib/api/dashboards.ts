@@ -107,6 +107,53 @@ interface HROverview {
   }>;
 }
 
+interface GmpDepartmentBreakdownRow {
+  department_id?: number | string;
+  departmentId?: number | string;
+  department_name?: string;
+  departmentName?: string;
+  department_revenue?: number | string;
+  departmentRevenue?: number | string;
+  department_fees?: number | string;
+  avg_department_performance?: number | string;
+  active_jobs?: number | string;
+  activeJobs?: number | string;
+}
+
+interface GmpPartnerRankingRow {
+  partner_id?: number | string;
+  partnerId?: number | string;
+  name?: string;
+  partnerName?: string;
+  portfolio_revenue?: number | string;
+  portfolioRevenue?: number | string;
+  portfolio_profit?: number | string;
+  portfolioProfit?: number | string;
+  active_jobs?: number | string;
+  activeJobs?: number | string;
+  direct_reports?: number | string;
+  teamSize?: number | string;
+}
+
+interface GmpOverviewPayload {
+  departmentBreakdown?: GmpDepartmentBreakdownRow[];
+  partnerRankings?: GmpPartnerRankingRow[];
+}
+
+interface ProjectionRow {
+  monthYear?: string;
+  projectedAmount?: number | string;
+  actualCollected?: number | string;
+  departmentId?: number | string;
+  departmentName?: string;
+}
+
+interface PartnerClient {
+  id: number;
+  clientName?: string;
+  [key: string]: unknown;
+}
+
 export const dashboardsAPI = {
   // ==================
   // GMP DASHBOARD
@@ -116,7 +163,7 @@ export const dashboardsAPI = {
    * Get GMP (Group Managing Partner) dashboard data
    */
   getGmpDashboard: async (): Promise<GMPOverview> => {
-    return api.get('/gmp-dashboard');
+    return api.get('/gmp-dashboard/overview');
   },
 
   /**
@@ -131,7 +178,17 @@ export const dashboardsAPI = {
     activeJobs: number;
     completedJobs: number;
   }>> => {
-    return api.get('/gmp-dashboard/department-performance');
+    const data = await api.get<GmpOverviewPayload>('/gmp-dashboard/overview');
+    const departments = Array.isArray(data?.departmentBreakdown) ? data.departmentBreakdown : [];
+    return departments.map((department) => ({
+      departmentId: Number(department.department_id ?? department.departmentId ?? 0),
+      departmentName: String(department.department_name ?? department.departmentName ?? ''),
+      revenue: Number(department.department_revenue ?? department.departmentRevenue ?? 0),
+      profit: Number(department.department_revenue ?? 0) - Number(department.department_fees ?? 0),
+      utilization: Number(department.avg_department_performance ?? 0),
+      activeJobs: Number(department.active_jobs ?? department.activeJobs ?? 0),
+      completedJobs: 0,
+    }));
   },
 
   /**
@@ -146,7 +203,17 @@ export const dashboardsAPI = {
     completedJobs: number;
     teamSize: number;
   }>> => {
-    return api.get('/gmp-dashboard/partner-performance');
+    const data = await api.get<GmpOverviewPayload>('/gmp-dashboard/overview');
+    const partners = Array.isArray(data?.partnerRankings) ? data.partnerRankings : [];
+    return partners.map((partner) => ({
+      partnerId: Number(partner.partner_id ?? partner.partnerId ?? 0),
+      partnerName: String(partner.name ?? partner.partnerName ?? ''),
+      revenue: Number(partner.portfolio_revenue ?? partner.portfolioRevenue ?? 0),
+      profit: Number(partner.portfolio_profit ?? partner.portfolioProfit ?? 0),
+      activeJobs: Number(partner.active_jobs ?? partner.activeJobs ?? 0),
+      completedJobs: 0,
+      teamSize: Number(partner.direct_reports ?? partner.teamSize ?? 0),
+    }));
   },
 
   /**
@@ -163,12 +230,41 @@ export const dashboardsAPI = {
       actual: number;
     }>;
   }> => {
-    const params = new URLSearchParams();
-    if (period?.year) params.append('year', String(period.year));
-    if (period?.month) params.append('month', String(period.month));
-    
-    const query = params.toString();
-    return api.get(`/gmp-dashboard/projections${query ? `?${query}` : ''}`);
+    const rows = await api.get<ProjectionRow[]>('/finance-dashboard/projections');
+    const filtered = Array.isArray(rows)
+      ? rows.filter((row) => {
+          const date = new Date(row.monthYear);
+          if (Number.isNaN(date.getTime())) return false;
+          if (period?.year && date.getFullYear() !== period.year) return false;
+          if (period?.month && date.getMonth() + 1 !== period.month) return false;
+          return true;
+        })
+      : [];
+
+    const projected = filtered.reduce((sum, row) => sum + Number(row.projectedAmount || 0), 0);
+    const actual = filtered.reduce((sum, row) => sum + Number(row.actualCollected || 0), 0);
+    const byDepartmentMap = new Map<number, { departmentId: number; departmentName: string; projected: number; actual: number }>();
+
+    filtered.forEach((row) => {
+      const departmentId = Number(row.departmentId || 0);
+      if (!departmentId) return;
+      const existing = byDepartmentMap.get(departmentId) || {
+        departmentId,
+        departmentName: String(row.departmentName || `Department #${departmentId}`),
+        projected: 0,
+        actual: 0,
+      };
+      existing.projected += Number(row.projectedAmount || 0);
+      existing.actual += Number(row.actualCollected || 0);
+      byDepartmentMap.set(departmentId, existing);
+    });
+
+    return {
+      projected,
+      actual,
+      variance: actual - projected,
+      byDepartment: Array.from(byDepartmentMap.values()),
+    };
   },
 
   // ==================
@@ -207,8 +303,8 @@ export const dashboardsAPI = {
   /**
    * Get partner's clients
    */
-  getPartnerClients: async (): Promise<any[]> => {
-    return api.get('/partners/clients');
+  getPartnerClients: async (): Promise<PartnerClient[]> => {
+    return api.get<PartnerClient[]>('/partners/clients');
   },
 
   /**
@@ -269,9 +365,9 @@ export const dashboardsAPI = {
    * Get pending approvals for manager
    */
   getManagerPendingApprovals: async (): Promise<{
-    timeEntries: any[];
-    overBudgetRequests: any[];
-    jobCostings: any[];
+    timeEntries: unknown[];
+    overBudgetRequests: unknown[];
+    jobCostings: unknown[];
   }> => {
     return api.get('/manager-dashboard/pending-approvals');
   },
@@ -295,7 +391,7 @@ export const dashboardsAPI = {
     pending: number;
     inProgress: number;
     completed: number;
-    cases: any[];
+    cases: unknown[];
   }> => {
     return api.get('/onboarding/overview');
   },
@@ -334,7 +430,7 @@ export const dashboardsAPI = {
       overall: number;
     };
     pendingEvaluations: number;
-    notifications: any[];
+    notifications: unknown[];
   }> => {
     return api.get('/profiles/dashboard');
   },

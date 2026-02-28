@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,7 +67,7 @@ const ContinuousFeedback = () => {
       return;
     }
     loadData();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = async () => {
     try {
@@ -168,9 +169,7 @@ const ContinuousFeedback = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -395,7 +394,7 @@ const ContinuousFeedback = () => {
             <EmptyState
               icon={<ThumbsUp className="h-12 w-12" />}
               title="Public feedback feed coming soon"
-              description="We’ll surface approved public praise here."
+              description="Weâ€™ll surface approved public praise here."
             />
           </TabsContent>
         </Tabs>

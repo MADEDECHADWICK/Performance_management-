@@ -1,19 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { rolesAPI } from '@/lib/api';
+import type { Role } from '@/lib/api/roles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-
-interface Role {
-  id: number;
-  name: string;
-  billingRate: number;
-  description?: string;
-  permissions: string[];
-  isActive: boolean;
-  createdAt: string;
-}
+import PageLoader from '@/components/ui/page-loader';
 
 export default function RoleManagement() {
   const { toast } = useToast();
@@ -134,8 +126,8 @@ export default function RoleManagement() {
 
   if (loading) {
     return (
-      <div className="p-6 text-center">
-        <p className="text-gray-600">Loading roles...</p>
+      <div className="p-6">
+        <PageLoader message="Loading..." minHeightClassName="min-h-[220px]" />
       </div>
     );
   }

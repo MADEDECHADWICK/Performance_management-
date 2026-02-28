@@ -3,7 +3,7 @@
  * Handles document uploads, management, and role-based access
  */
 
-import { api, apiFetch } from './client';
+import { api, apiFetch, getToken } from './client';
 
 export interface Document {
   id: number;
@@ -106,6 +106,10 @@ export const DOCUMENT_TYPES = {
     'other',
   ],
   job: [
+    'work_plan',
+    'budget',
+    'draft_report',
+    'final_report',
     'work_paper',
     'audit_report',
     'management_letter',
@@ -167,7 +171,7 @@ const documentsAPI = {
    */
   uploadFile: async (
     file: File,
-    metadata: Omit<UploadDocumentData, 'filePath' | 'fileSize' | 'mimeType'> & {
+    metadata: Omit<UploadDocumentData, 'fileName' | 'filePath' | 'fileSize' | 'mimeType'> & {
       fileName?: string;
     }
   ): Promise<Document> => {
@@ -181,7 +185,7 @@ const documentsAPI = {
     if (metadata.isRequired !== undefined) formData.append('isRequired', metadata.isRequired.toString());
     if (metadata.description) formData.append('description', metadata.description);
 
-    const token = localStorage.getItem('rg_token');
+    const token = getToken();
     const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/documents/upload`, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
@@ -242,7 +246,7 @@ const documentsAPI = {
    * Get document download URL
    */
   getDownloadUrl: (id: number): string => {
-    const token = localStorage.getItem('rg_token');
+    const token = getToken();
     return `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/documents/${id}/download?token=${token}`;
   },
 };

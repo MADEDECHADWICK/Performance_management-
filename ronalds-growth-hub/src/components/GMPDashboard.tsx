@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from "@/components/ui/page-loader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,7 +32,6 @@ import {
   Briefcase,
   Crown,
   Download,
-  Loader2,
   RefreshCw,
   Settings,
   Target,
@@ -59,6 +60,8 @@ interface PartnerRanking {
   position: string;
   portfolio_revenue: number;
   portfolio_fees: number;
+  portfolio_profit?: number;
+  collection_rate?: number;
   utilization_rate?: number;
   active_jobs: number;
   direct_reports: number;
@@ -77,6 +80,11 @@ interface ManagerRanking {
   evaluation_count: number;
   avg_performance: number;
   jobs_managed: number;
+  portfolio_revenue?: number;
+  portfolio_fees?: number;
+  portfolio_profit?: number;
+  utilization_rate?: number;
+  collection_rate?: number;
 }
 
 interface DepartmentData {
@@ -88,8 +96,23 @@ interface DepartmentData {
   manager_count: number;
   department_revenue: number;
   department_fees: number;
+  collection_rate?: number;
+  active_jobs?: number;
   jobs_count: number;
-  avg_department_performance: number;
+  avg_department_performance: number | null;
+}
+
+interface TopClient {
+  client_id: number;
+  client_name: string;
+  total_collected: number;
+  total_fees: number;
+  outstanding_amount: number;
+  active_jobs: number;
+  collection_rate: number;
+  projected_amount?: number;
+  projection_collected?: number;
+  variance?: number;
 }
 
 interface DashboardData {
@@ -110,6 +133,16 @@ interface DashboardData {
   alertsSummary?: {
     engagementsApprovedNotStarted?: number;
     pendingOverBudget?: number;
+    pendingEvaluationsOver30Days?: number;
+    atRiskJobs?: number;
+    atRiskExposure?: number;
+  };
+  topClients?: TopClient[];
+  riskSummary?: {
+    atRiskJobs?: number;
+    atRiskExposure?: number;
+    overdueJobs?: number;
+    onHoldJobs?: number;
   };
 }
 
@@ -137,9 +170,36 @@ interface PersonalData {
 }
 
 interface AlertsData {
-  jobsAtRisk: any[];
-  pendingEvaluations: any[];
-  lowUtilizationPartners: any[];
+  jobsAtRisk: Array<{
+    id: number;
+    jobNumber?: string | null;
+    jobName?: string | null;
+    clientName?: string | null;
+    status?: string;
+    deadlineDate?: string | Date | null;
+    daysOverdue?: number;
+    feeAmount?: number;
+    amountCollected?: number;
+    outstandingAmount?: number;
+    severity?: string;
+  }>;
+  pendingEvaluations: Array<{
+    id: number;
+    employeeName?: string;
+    employeePosition?: string | null;
+    managerName?: string | null;
+    status?: string;
+    daysPending?: number;
+  }>;
+  lowUtilizationPartners: Array<{
+    id: number;
+    name: string;
+    position?: string | null;
+    monthlyHours: number;
+    billableHours?: number;
+    utilizationRate?: number;
+    activeJobs?: number;
+  }>;
 }
 
 export default function GMPDashboard() {
@@ -170,7 +230,7 @@ export default function GMPDashboard() {
       return;
     }
     verifyGMPAccessAndLoadData();
-  }, [authLoading, user, isGMP, navigate, toast]);
+  }, [authLoading, user, isGMP, navigate, toast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const verifyGMPAccessAndLoadData = async () => {
     try {
@@ -245,10 +305,16 @@ export default function GMPDashboard() {
 
       setAlertsData(alerts);
 
-      const payload = notifications?.data ?? notifications ?? {};
-      const items = Array.isArray(payload.items)
-        ? payload.items
-        : payload.items?.items ?? payload.notifications ?? payload.data ?? [];
+      const payload: any = notifications ?? {};
+      const items = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.items)
+            ? payload.items
+            : Array.isArray(payload.notifications)
+              ? payload.notifications
+              : [];
 
       const lossAlerts = (Array.isArray(items) ? items : []).filter((item) => {
         const title = String(item?.title || "").toLowerCase();
@@ -284,6 +350,41 @@ export default function GMPDashboard() {
       title: "Dashboard Refreshed",
       description: "All data has been updated",
     });
+  };
+
+  const asNumber = (value: unknown) => {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const handleExportReport = () => {
+    if (!dashboardData) return;
+
+    const lines: string[] = [];
+    lines.push("Section,Metric,Value");
+    lines.push(`Executive,Collected,${asNumber(dashboardData?.financials?.collectedAmount ?? 0)}`);
+    lines.push(`Executive,Projected,${asNumber(dashboardData?.financials?.projectedRevenue ?? 0)}`);
+    lines.push(`Executive,Profit,${asNumber(dashboardData?.financials?.totalProfit ?? 0)}`);
+    lines.push(`Executive,Collection Rate,${asNumber(dashboardData?.financials?.collectionRate ?? 0).toFixed(2)}%`);
+    lines.push(`Executive,At-Risk Jobs,${asNumber(dashboardData?.riskSummary?.atRiskJobs ?? 0)}`);
+    lines.push(`Executive,At-Risk Exposure,${asNumber(dashboardData?.riskSummary?.atRiskExposure ?? 0)}`);
+
+    (dashboardData.partnerRankings || []).forEach((partner) => {
+      lines.push(`Partner,${partner.name} Revenue,${asNumber(partner.portfolio_revenue)}`);
+      lines.push(`Partner,${partner.name} Profit,${asNumber(partner.portfolio_profit)}`);
+      lines.push(`Partner,${partner.name} Utilization,${asNumber(partner.utilization_rate).toFixed(2)}%`);
+    });
+
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `gmp-executive-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const formatCurrency = (amount: number) => {
@@ -325,15 +426,26 @@ export default function GMPDashboard() {
     (dashboardData?.financials?.totalCost !== undefined
       ? collected - Number(dashboardData?.financials?.totalCost || 0)
       : collected - projected);
-  const atRiskCount = alertsData?.jobsAtRisk?.length ?? 0;
-  const atRiskExposure = alertsData?.jobsAtRisk?.reduce((sum, job) => {
-    const fee = Number(job.feeAmount ?? job.fee ?? job.jobFee ?? 0);
-    return sum + (Number.isNaN(fee) ? 0 : fee);
-  }, 0) ?? 0;
+  const collectionRate = dashboardData?.financials?.collectionRate ?? 0;
+  const atRiskCount =
+    dashboardData?.riskSummary?.atRiskJobs ??
+    dashboardData?.alertsSummary?.atRiskJobs ??
+    alertsData?.jobsAtRisk?.length ??
+    0;
+  const atRiskExposure =
+    dashboardData?.riskSummary?.atRiskExposure ??
+    dashboardData?.alertsSummary?.atRiskExposure ??
+    alertsData?.jobsAtRisk?.reduce((sum, job) => {
+      const outstanding = Number(job.outstandingAmount ?? 0);
+      const fee = Number(job.feeAmount ?? 0);
+      const contribution = Number.isFinite(outstanding) && outstanding > 0 ? outstanding : fee;
+      return sum + (Number.isFinite(contribution) ? contribution : 0);
+    }, 0) ??
+    0;
 
   const pipelineValue = pipelineMetrics?.pipelineValue ?? 0;
 
-  const revenueTrend =
+  const revenueTrend: Array<{ month: string; collected: number; projected: number }> =
     dashboardData?.projectionTrend && dashboardData.projectionTrend.length > 0
       ? dashboardData.projectionTrend.map((row) => ({
           month: new Date(row.month).toLocaleString("en-US", { month: "short" }),
@@ -346,35 +458,30 @@ export default function GMPDashboard() {
           collected: Number(row.collected || 0),
           projected: 0,
         }))
-      : (() => {
-          const now = new Date();
-          const base = collected ? Math.max(collected / 6, 0) : 0;
-          return Array.from({ length: 6 }).map((_, index) => {
-            const pointDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
-            return {
-              month: pointDate.toLocaleString("en-US", { month: "short" }),
-              collected: Math.round(base * (0.9 + index * 0.04)),
-              projected: Math.round(base * (0.95 + index * 0.03)),
-            };
-          });
-        })();
+      : [];
 
   const departmentSplit = dashboardData?.departmentBreakdown?.map((dept) => ({
     department: dept.department_code || dept.department_name,
     revenue: Number(dept.department_revenue ?? 0),
   })) ?? [];
 
-  const topClients = dashboardData?.partnerRankings?.slice(0, 5).map((partner) => ({
-    name: partner.name,
-    collected: partner.portfolio_revenue,
-  })) ?? [];
+  const topClients = (dashboardData?.topClients ?? []).slice(0, 5);
 
   const operationalAlerts = [
     {
       label: "Overdue jobs",
-      value: atRiskCount,
+      value: dashboardData?.riskSummary?.overdueJobs ?? atRiskCount,
       tone: atRiskCount > 0 ? "destructive" : "secondary",
       route: "/jobs?status=overdue",
+    },
+    {
+      label: "Evaluations pending over 30 days",
+      value: dashboardData?.alertsSummary?.pendingEvaluationsOver30Days ?? alertsData?.pendingEvaluations?.length ?? 0,
+      tone:
+        (dashboardData?.alertsSummary?.pendingEvaluationsOver30Days ?? alertsData?.pendingEvaluations?.length ?? 0) > 0
+          ? "destructive"
+          : "secondary",
+      route: "/evaluations",
     },
     {
       label: "Over-budget / extra time approvals",
@@ -399,12 +506,7 @@ export default function GMPDashboard() {
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-96">
-          <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
-            <p className="text-muted-foreground">Loading Executive Dashboard...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading Executive Dashboard..." minHeightClassName="min-h-[420px]" />
       </DashboardLayout>
     );
   }
@@ -431,21 +533,34 @@ export default function GMPDashboard() {
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
-            <Button>
+            <Button variant="outline" onClick={() => navigate("/role-management")}>
               <Settings className="h-4 w-4 mr-2" />
               Admin Panel
             </Button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Collected vs Projected</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(collected)}</div>
-              <p className="text-xs text-muted-foreground">Projected {formatCurrency(projected)}</p>
+              <div className="kpi-value text-primary" title={formatCurrency(collected)}>
+                {formatCurrency(collected)}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Projected {formatCurrency(projected)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Collection Rate</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="kpi-value text-primary">{formatPercentage(collectionRate)}</div>
+              <p className="text-xs text-muted-foreground">Collected against total fee baseline</p>
             </CardContent>
           </Card>
           <Card>
@@ -456,7 +571,9 @@ export default function GMPDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(profitability)}</div>
+              <div className="kpi-value text-primary" title={formatCurrency(profitability)}>
+                {formatCurrency(profitability)}
+              </div>
               <p className="text-xs text-muted-foreground">Collected minus delivery cost</p>
             </CardContent>
           </Card>
@@ -465,7 +582,7 @@ export default function GMPDashboard() {
               <CardTitle className="text-sm font-medium">Utilization (MTD)</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">
+              <div className="kpi-value text-primary">
                 {formatPercentage(firmMetrics?.utilization_rate ?? 0)}
               </div>
               <p className="text-xs text-muted-foreground">Billable vs total hours</p>
@@ -476,8 +593,10 @@ export default function GMPDashboard() {
               <CardTitle className="text-sm font-medium">At-Risk Jobs</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{atRiskCount}</div>
-              <p className="text-xs text-muted-foreground">Exposure {formatCurrency(atRiskExposure)}</p>
+              <div className="kpi-value text-primary">{atRiskCount}</div>
+              <p className="text-xs text-muted-foreground" title={formatCurrency(atRiskExposure)}>
+                Exposure {formatCurrency(atRiskExposure)}
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -485,7 +604,9 @@ export default function GMPDashboard() {
               <CardTitle className="text-sm font-medium">Pipeline Value</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-primary">{formatCurrency(pipelineValue)}</div>
+              <div className="kpi-value text-primary" title={formatCurrency(pipelineValue)}>
+                {formatCurrency(pipelineValue)}
+              </div>
               <p className="text-xs text-muted-foreground">Expected revenue</p>
             </CardContent>
           </Card>
@@ -503,16 +624,26 @@ export default function GMPDashboard() {
           <CardContent className="grid grid-cols-1 xl:grid-cols-3 gap-6">
             <div className="xl:col-span-2">
               <p className="text-sm font-medium text-muted-foreground mb-3">Revenue trend (last 6 months)</p>
-              <ResponsiveContainer width="100%" height={240}>
-                <LineChart data={revenueTrend}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                  <Line type="monotone" dataKey="collected" stroke="#2563eb" strokeWidth={3} />
-                  <Line type="monotone" dataKey="projected" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 4" />
-                </LineChart>
-              </ResponsiveContainer>
+              {revenueTrend.length > 0 ? (
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={revenueTrend}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                    <Line type="monotone" dataKey="collected" stroke="#2563eb" strokeWidth={3} />
+                    <Line
+                      type="monotone"
+                      dataKey="projected"
+                      stroke="#f59e0b"
+                      strokeWidth={2}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-muted-foreground">No trend data available yet.</p>
+              )}
             </div>
             <div className="space-y-4">
               <div>
@@ -564,9 +695,14 @@ export default function GMPDashboard() {
                 <div className="space-y-2">
                   {topClients.length > 0 ? (
                     topClients.map((client) => (
-                      <div key={client.name} className="flex items-center justify-between text-sm">
-                        <span>{client.name}</span>
-                        <span className="font-semibold">{formatCurrency(client.collected)}</span>
+                      <div key={client.client_id} className="flex items-center justify-between text-sm">
+                        <span className="truncate pr-3">{client.client_name}</span>
+                        <span
+                          className="font-semibold"
+                          title={formatCurrency(client.total_collected)}
+                        >
+                          {formatCompactCurrency(client.total_collected)}
+                        </span>
                       </div>
                     ))
                   ) : (
@@ -668,11 +804,56 @@ export default function GMPDashboard() {
 
         <Card>
           <CardHeader>
+            <CardTitle>Manager Performance Summary</CardTitle>
+            <CardDescription>Delivery leadership, team output, and utilization</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {dashboardData?.managerRankings && dashboardData.managerRankings.length > 0 ? (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Manager</TableHead>
+                      <TableHead className="text-right">Team Size</TableHead>
+                      <TableHead className="text-right">Jobs Managed</TableHead>
+                      <TableHead className="text-right">Revenue</TableHead>
+                      <TableHead className="text-right">Utilization</TableHead>
+                      <TableHead className="text-right">Avg Team Score</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dashboardData.managerRankings.map((manager) => (
+                      <TableRow key={manager.manager_id}>
+                        <TableCell className="font-medium">{manager.name}</TableCell>
+                        <TableCell className="text-right">{manager.team_size}</TableCell>
+                        <TableCell className="text-right">{manager.jobs_managed}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCompactCurrency(Number(manager.portfolio_revenue || 0))}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="outline">
+                            {formatPercentage(Number(manager.utilization_rate || 0))}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">{Number(manager.avg_performance || 0).toFixed(1)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Manager performance data is not yet available.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription>Jump to high-impact reviews</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => navigate("/finance-dashboard")}>
+            <Button variant="outline" onClick={() => navigate("/finance-projections")}>
               <Target className="h-4 w-4 mr-2" />
               View projections
             </Button>
@@ -684,7 +865,15 @@ export default function GMPDashboard() {
               <Briefcase className="h-4 w-4 mr-2" />
               View partner portfolio
             </Button>
-            <Button variant="outline">
+            <Button variant="outline" onClick={() => navigate("/financial-summary")}>
+              <BarChart3 className="h-4 w-4 mr-2" />
+              Open financial summary
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/finance-balances")}>
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              Review receivables
+            </Button>
+            <Button variant="outline" onClick={handleExportReport}>
               <Download className="h-4 w-4 mr-2" />
               Export report
             </Button>
@@ -694,3 +883,5 @@ export default function GMPDashboard() {
     </DashboardLayout>
   );
 }
+
+

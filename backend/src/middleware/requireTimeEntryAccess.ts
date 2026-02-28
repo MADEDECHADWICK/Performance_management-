@@ -2,11 +2,32 @@ import { Response, NextFunction } from "express";
 import { AuthRequest } from "./auth";
 import { prisma } from "../prisma";
 
+const normalizeRole = (value?: string) => String(value || "").toLowerCase().trim();
+
+const getRoleSet = (req: AuthRequest): Set<string> => {
+  const roles = new Set<string>();
+  const profileRole = normalizeRole(req.profile?.role?.name);
+  if (profileRole) {
+    roles.add(profileRole);
+  }
+  (req.user?.authRoles || []).forEach((role) => {
+    const normalized = normalizeRole(role);
+    if (normalized) {
+      roles.add(normalized);
+    }
+  });
+  return roles;
+};
+
+const hasAnyRole = (roles: Set<string>, candidates: string[]) =>
+  candidates.some((candidate) => roles.has(candidate));
+
 /**
- * Verify user has access to time entry
- * Employees can only access their own
- * Managers/Partners can access team/partner time entries
- * Admins can access all
+ * Verify user has access to a time entry.
+ * Employees can only access their own.
+ * Managers only access entries they directly supervise.
+ * Partners only access entries on their portfolio jobs.
+ * Admins can access all.
  */
 export const requireTimeEntryAccess = async (
   req: AuthRequest,
@@ -16,10 +37,15 @@ export const requireTimeEntryAccess = async (
   try {
     const timeEntryId = Number(req.params.timeEntryId);
     const requesterProfileId = req.profile?.id;
-    const requesterRole = req.profile?.role?.name;
+    const requesterRoles = getRoleSet(req);
 
     if (!requesterProfileId) {
       res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    if (!Number.isFinite(timeEntryId) || timeEntryId <= 0) {
+      res.status(400).json({ error: "Invalid time entry id" });
       return;
     }
 
@@ -27,6 +53,12 @@ export const requireTimeEntryAccess = async (
       where: { id: timeEntryId },
       include: {
         job: true,
+        employee: {
+          select: {
+            id: true,
+            managerId: true,
+          },
+        },
       },
     });
 
@@ -35,19 +67,19 @@ export const requireTimeEntryAccess = async (
       return;
     }
 
-    // ✅ ACCESS CONTROL LOGIC
-    const isAdmin = requesterRole === "admin";
+    const isAdmin = hasAnyRole(requesterRoles, ["admin", "super_admin"]);
     const isOwner = timeEntry.employeeProfileId === requesterProfileId;
 
-    // Check if user is manager of the employee
-    const isManager = requesterRole === "manager";
+    const isManagerRole = hasAnyRole(requesterRoles, ["manager"]);
+    const managesJob = timeEntry.job.managerProfileId === requesterProfileId;
+    const managesEmployee = timeEntry.employee?.managerId === requesterProfileId;
+    const isScopedManager = isManagerRole && (managesJob || managesEmployee);
 
-    // Check if user is partner of the job
     const isPartner =
-      requesterRole === "partner" &&
+      hasAnyRole(requesterRoles, ["partner"]) &&
       timeEntry.job.partnerProfileId === requesterProfileId;
 
-    const hasAccess = isAdmin || isOwner || isManager || isPartner;
+    const hasAccess = isAdmin || isOwner || isScopedManager || isPartner;
 
     if (!hasAccess) {
       res.status(403).json({
@@ -56,9 +88,7 @@ export const requireTimeEntryAccess = async (
       return;
     }
 
-    // ✅ ATTACH TIME ENTRY TO REQUEST FOR DOWNSTREAM USE
     req.timeEntry = timeEntry;
-
     next();
   } catch (error) {
     console.error("requireTimeEntryAccess error:", error);
@@ -66,7 +96,6 @@ export const requireTimeEntryAccess = async (
   }
 };
 
-// Extend AuthRequest to include timeEntry
 declare global {
   namespace Express {
     interface Request {

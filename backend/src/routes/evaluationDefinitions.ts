@@ -2,7 +2,7 @@ import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
-import { requireRole } from "../middleware/reqiureRole";
+import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { mergeWithDefaultScoringConfig } from "../services/performanceFramework.service";
 import { errorResponse, successResponse } from "../utils/response";
 
@@ -73,7 +73,7 @@ router.get("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {
 router.post(
   "/",
   authMiddleware,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("evaluations", "admin"),
   async (req: AuthRequest, res) => {
     try {
       const payload = req.body ?? {};
@@ -117,7 +117,7 @@ router.post(
 router.patch(
   "/:id",
   authMiddleware,
-  requireRole("admin", "hr", "hr_manager", "super_admin"),
+  requireModuleAccess("evaluations", "admin"),
   async (req: AuthRequest, res) => {
     try {
       const id = Number(req.params.id);

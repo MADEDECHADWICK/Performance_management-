@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { NotificationController } from '../controllers/notifications.controller';
 import { authMiddleware } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { handleValidationErrors } from '../middleware/validate';
 import { body, param, query } from 'express-validator';
 
@@ -15,9 +15,7 @@ const router = Router();
 // ✅ VALIDATORS
 const createNotificationValidators = [
   body().custom((_, { req }) => {
-    const hasRecipient =
-      Number.isFinite(Number(req.body?.recipientProfileId)) ||
-      Number.isFinite(Number(req.body?.recipient_profile_id));
+    const hasRecipient = Number.isFinite(Number(req.body?.recipientProfileId));
     if (!hasRecipient) {
       throw new Error('recipientProfileId is required');
     }
@@ -27,10 +25,6 @@ const createNotificationValidators = [
     .optional()
     .isInt()
     .withMessage('recipientProfileId must be an integer'),
-  body('recipient_profile_id')
-    .optional()
-    .isInt()
-    .withMessage('recipient_profile_id must be an integer'),
   body('type')
     .isString()
     .trim()
@@ -56,7 +50,7 @@ const createNotificationValidators = [
 
 const batchNotificationValidators = [
   body().custom((_, { req }) => {
-    const ids = req.body?.recipientProfileIds ?? req.body?.recipient_profile_ids;
+    const ids = req.body?.recipientProfileIds;
     if (!Array.isArray(ids) || ids.length === 0) {
       throw new Error('recipientProfileIds must be a non-empty array');
     }
@@ -66,10 +60,6 @@ const batchNotificationValidators = [
     .optional()
     .isArray({ min: 1 })
     .withMessage('recipientProfileIds must be a non-empty array'),
-  body('recipient_profile_ids')
-    .optional()
-    .isArray({ min: 1 })
-    .withMessage('recipient_profile_ids must be a non-empty array'),
   body('type')
     .isString()
     .trim()
@@ -126,7 +116,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'manager', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('notifications', 'approve'),
   ...createNotificationValidators,
   handleValidationErrors,
   NotificationController.createNotification
@@ -163,6 +153,7 @@ router.delete(
   '/:notificationId',
   authMiddleware,
   loadProfile,
+  requireModuleAccess('notifications', 'write'),
   param('notificationId').isInt().toInt(),
   handleValidationErrors,
   NotificationController.deleteNotification
@@ -173,6 +164,7 @@ router.delete(
   '/all',
   authMiddleware,
   loadProfile,
+  requireModuleAccess('notifications', 'write'),
   NotificationController.deleteAllNotifications
 );
 
@@ -181,7 +173,7 @@ router.post(
   '/batch',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'manager', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('notifications', 'approve'),
   ...batchNotificationValidators,
   handleValidationErrors,
   NotificationController.sendBatchNotifications

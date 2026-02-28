@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import {
   Activity
 } from "lucide-react";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { apiFetch } from "@/lib/api";
 
 interface WorkloadData {
@@ -116,7 +117,7 @@ const WorkloadManagement = () => {
 
   useEffect(() => {
     fetchWorkloadData();
-  }, [selectedPeriod, filterStatus]);
+  }, [selectedPeriod, filterStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchWorkloadData = async () => {
     try {
@@ -391,12 +392,7 @@ const WorkloadManagement = () => {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading workload data...</p>
-          </div>
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -886,7 +882,7 @@ const WorkloadManagement = () => {
                       <div>
                         <p className="font-medium">{assignment.project_name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {assignment.client_name} · {assignment.employee_name}
+                          {assignment.client_name} Â· {assignment.employee_name}
                         </p>
                       </div>
                       <div className="text-right text-sm text-muted-foreground">

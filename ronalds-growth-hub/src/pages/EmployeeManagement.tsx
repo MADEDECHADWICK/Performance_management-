@@ -13,13 +13,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck } from "lucide-react";
+import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck, FileText, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { rolesAPI } from "@/lib/api";
 import documentsAPI from "@/lib/api/documents";
+import UserRoleManagement from "@/components/UserRoleManagement";
 
 interface Employee {
   id: string;
+  user_id?: string | null;
   first_name: string;
   last_name: string;
   email: string;
@@ -415,16 +417,17 @@ const EmployeeManagement = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // Intentional one-time bootstrap load for this admin screen.
   useEffect(() => {
     loadData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = async () => {
     try {
       setLoading(true);
 
       // Load employees with department info
-      const employeesResponse = await apiFetch('GET', "/profiles?include_department=true&page=1&pageSize=100&status=active");
+      const employeesResponse = await apiFetch('GET', "/profiles?page=1&pageSize=100&status=active");
       const employeesData = extractItems(employeesResponse);
 
       // Load departments
@@ -1025,15 +1028,15 @@ const EmployeeManagement = () => {
 
         const managerUpdates = selectedManagers.map((managerId) =>
           apiFetch("PATCH", `/profiles/${managerId}`, {
-            department_id: normalizedDepartmentId,
+            departmentId: normalizedDepartmentId,
           })
         );
 
         const employeeUpdates = managerAssignmentEntries.flatMap(({ managerId, employeeIds }) =>
           employeeIds.map((employeeId) =>
             apiFetch("PATCH", `/profiles/${employeeId}`, {
-              department_id: normalizedDepartmentId,
-              manager_id: Number(managerId),
+              departmentId: normalizedDepartmentId,
+              managerId: Number(managerId),
             })
           )
         );
@@ -1057,10 +1060,15 @@ const EmployeeManagement = () => {
   const handleDeleteDepartment = async (departmentId: string) => {
     try {
       // Check if department has employees
-      const response = await apiFetch("GET", `/profiles?department_id=${departmentId}`);
-      const payload = (response as any)?.data ?? response ?? [];
-      const safeEmployees = Array.isArray(payload) ? payload : [];
-      const count = safeEmployees.length || 0;
+      const response = await apiFetch(
+        "GET",
+        `/departments/${departmentId}/employees?page=1&pageSize=1`
+      );
+      const payload = (response as any)?.data ?? response ?? {};
+      const count = Number(
+        payload?.total ??
+          (Array.isArray(payload?.employees) ? payload.employees.length : 0)
+      );
 
       if (count && count > 0) {
         toast({
@@ -1512,7 +1520,7 @@ const EmployeeManagement = () => {
             </TabsTrigger>
             <TabsTrigger value="roles" className="flex items-center gap-2">
               <Shield className="h-4 w-4" />
-              Roles
+              Access Control
             </TabsTrigger>
             <TabsTrigger value="lifecycle" className="flex items-center gap-2">
               <ClipboardCheck className="h-4 w-4" />
@@ -1590,7 +1598,7 @@ const EmployeeManagement = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => navigate(`/profile?id=${employee.user_id}`)}
+                                  onClick={() => navigate(`/profile?id=${employee.user_id ?? employee.id}`)}
                                   className="text-primary hover:text-primary"
                                 >
                                   <Eye className="h-4 w-4 mr-1" />
@@ -1726,100 +1734,9 @@ const EmployeeManagement = () => {
             </Card>
           </TabsContent>
 
-          {/* Roles Tab */}
+          {/* Access Control Tab */}
           <TabsContent value="roles" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>System Access Roles</CardTitle>
-                    <CardDescription>
-                      Manage access roles only. Billing rates are maintained under Positions &amp; Rates.
-                    </CardDescription>
-                  </div>
-                  <Button onClick={handleCreateRole}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Create Role
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Role Name</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Permissions</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {roles.map((role) => (
-                      <TableRow key={role.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium">{role.name}</p>
-                            {role.description && (
-                              <p className="text-sm text-muted-foreground">{role.description}</p>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {role.isActive ? (
-                            <Badge variant="default" className="bg-green-600">Active</Badge>
-                          ) : (
-                            <Badge variant="secondary">Inactive</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {role.permissions && role.permissions.length > 0 ? (
-                              role.permissions.slice(0, 2).map((perm, idx) => (
-                                <Badge key={idx} variant="outline" className="text-xs">
-                                  {perm}
-                                </Badge>
-                              ))
-                            ) : (
-                              <span className="text-sm text-muted-foreground">No permissions</span>
-                            )}
-                            {role.permissions && role.permissions.length > 2 && (
-                              <Badge variant="outline" className="text-xs">
-                                +{role.permissions.length - 2}
-                              </Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditRole(role)}
-                          >
-                            <Pencil className="h-4 w-4 mr-2" />
-                            Edit
-                          </Button>
-                          {!['super_admin', 'hr_manager', 'Partner', 'Manager', 'Associate', 'Intern', 'Employee'].includes(role.name) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteRole(role.id)}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {roles.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No roles found. Create one to get started.
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <UserRoleManagement />
           </TabsContent>
 
           <TabsContent value="lifecycle" className="space-y-4">

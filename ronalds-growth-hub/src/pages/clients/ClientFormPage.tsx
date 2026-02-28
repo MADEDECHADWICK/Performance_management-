@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clientsAPI, employeesAPI, documentsAPI } from '@/lib/api';
+import type { CreateClientPayload, UpdateClientPayload } from '@/lib/api/clients';
 import type { Client } from '@/lib/api/types';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -133,7 +134,7 @@ export function ClientFormPage() {
     queryFn: () => employeesAPI.list({ pageSize: 100 }),
   });
 
-  const partners = Array.isArray(partnersData) ? partnersData : partnersData?.data || [];
+  const partners = partnersData || [];
   const managers = managersData?.data || [];
 
   useEffect(() => {
@@ -228,10 +229,10 @@ const hasEngagementLetter =
   };
 
   const saveMutation = useMutation({
-    mutationFn: async (data: Partial<Client>) => {
+    mutationFn: async (data: CreateClientPayload | UpdateClientPayload) => {
       const savedClient = isEditing
-        ? await clientsAPI.update(Number(id), data)
-        : await clientsAPI.create(data);
+        ? await clientsAPI.update(Number(id), data as UpdateClientPayload)
+        : await clientsAPI.create(data as CreateClientPayload);
 
       if (hasEngagementLetter) {
         await uploadEngagementLetter(savedClient.id);
@@ -295,7 +296,7 @@ const hasEngagementLetter =
 
     if (!validate()) return;
 
-    const clientData: Partial<Client> = {
+    const clientData: CreateClientPayload = {
       clientName: formData.clientName.trim(),
       clientCode: formData.clientCode || undefined,
       industry: formData.industry || undefined,

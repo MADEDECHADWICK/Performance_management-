@@ -16,7 +16,7 @@ const notificationTemplatesAPI = {
   list: async (params?: { isActive?: boolean }) => {
     const query = new URLSearchParams();
     if (typeof params?.isActive === "boolean") {
-      query.set("is_active", String(params.isActive));
+      query.set("isActive", String(params.isActive));
     }
     const response = await apiFetch(
       "GET",

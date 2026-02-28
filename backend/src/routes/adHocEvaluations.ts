@@ -2,7 +2,7 @@ import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
-import { requireRole } from '../middleware/reqiureRole';
+import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
@@ -21,10 +21,10 @@ const isPrivileged = (roles: string[]) =>
   roles.includes('hr') ||
   roles.includes('hr_manager');
 
-// GET /ad_hoc_evaluations?is_active=true
+// GET /ad_hoc_evaluations?isActive=true
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const active = req.query.is_active === 'true';
+    const active = req.query.isActive === 'true';
     const roles = resolveRoles(req);
     const privileged = isPrivileged(roles);
 
@@ -44,7 +44,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireRole('admin', 'hr', 'hr_manager', 'super_admin'),
+  requireModuleAccess('evaluations', 'admin'),
   async (req: AuthRequest, res) => {
   try {
     const payload = req.body;
@@ -55,7 +55,7 @@ router.post(
       id: 0,
       name: payload.name,
       status: payload.status || 'draft',
-      publishedAt: payload.published_at ? new Date(payload.published_at) : null,
+      publishedAt: payload.publishedAt ? new Date(payload.publishedAt) : null,
     };
     
     const performedBy = req.user?.userId;

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,9 @@ interface PartnerRanking {
   position: string;
   portfolio_revenue: number;
   portfolio_fees: number;
+  portfolio_profit?: number;
+  utilization_rate?: number;
+  collection_rate?: number;
   active_jobs: number;
   direct_reports: number;
   client_count: number;
@@ -42,7 +46,7 @@ export default function PartnerPortfolioSummary() {
       return;
     }
     loadData();
-  }, [authLoading, user, navigate]);
+  }, [authLoading, user, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = async () => {
     try {
@@ -121,9 +125,7 @@ export default function PartnerPortfolioSummary() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
+        <PageLoader message="Loading..." />
       </DashboardLayout>
     );
   }
@@ -237,7 +239,7 @@ export default function PartnerPortfolioSummary() {
                     {filteredPartners.map((partner) => {
                       const revenue = Number(partner.portfolio_revenue || 0);
                       const fees = Number(partner.portfolio_fees || 0);
-                      const profit = Number.isFinite(revenue - fees) ? revenue - fees : 0;
+                      const profit = Number(partner.portfolio_profit ?? revenue - fees);
                       return (
                         <TableRow key={partner.partner_id}>
                           <TableCell className="font-medium">
@@ -255,7 +257,11 @@ export default function PartnerPortfolioSummary() {
                             {formatCompactCurrency(profit)}
                           </TableCell>
                           <TableCell className="text-right">
-                            <Badge variant="outline">--</Badge>
+                            <Badge variant="outline">
+                              {Number.isFinite(Number(partner.utilization_rate))
+                                ? `${Number(partner.utilization_rate).toFixed(1)}%`
+                                : "--"}
+                            </Badge>
                           </TableCell>
                         </TableRow>
                       );

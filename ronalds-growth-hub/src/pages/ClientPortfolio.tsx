@@ -79,7 +79,7 @@ export default function ClientPortfolio() {
     queryFn: () => clientOnboardingsAPI.list({ page: 1, pageSize: 200, status: "pending_hr_review" }),
   });
 
-  const clients = clientsData?.data || [];
+  const clients = useMemo(() => clientsData?.data ?? [], [clientsData]);
 
   useEffect(() => {
     if (!selectedClientId && clients.length > 0) {
@@ -160,7 +160,10 @@ export default function ClientPortfolio() {
   const activeClients = clients.filter((client) => client.status === "active").length;
   const industriesServed = new Set(clients.map((client) => client.industry).filter(Boolean)).size;
   const pendingEngagements = pendingOnboardings?.data?.length || 0;
-  const surveysByClient = surveyByClientData || [];
+  const surveysByClient = useMemo(
+    () => (Array.isArray(surveyByClientData) ? surveyByClientData : []),
+    [surveyByClientData]
+  );
   const isLetterReady =
     Boolean(letterForm.documentFile) &&
     letterForm.documentName.trim().length > 0 &&

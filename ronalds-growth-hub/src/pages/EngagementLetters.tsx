@@ -42,7 +42,7 @@ export default function EngagementLetters() {
       }),
   });
 
-  const letters = lettersData?.data || [];
+  const letters = useMemo(() => lettersData?.data ?? [], [lettersData]);
 
   const summary = useMemo(() => {
     return letters.reduce(

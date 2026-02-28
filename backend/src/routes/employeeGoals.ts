@@ -156,17 +156,17 @@ const toLegacyGoal = (objective: any) => {
   const progress = summarizeProgress(objective?.keyResults || []);
   return {
     id: objective.id,
-    employee_id: objective.ownerProfileId,
-    owner_profile_id: objective.ownerProfileId,
-    cycle_id: objective.cycleId ?? null,
-    kpi_id: objective.kpiId ?? null,
-    goal_title: objective.title,
-    goal_description: objective.description ?? null,
+    employeeId: objective.ownerProfileId,
+    ownerProfileId: objective.ownerProfileId,
+    cycleId: objective.cycleId ?? null,
+    kpiId: objective.kpiId ?? null,
+    goalTitle: objective.title,
+    goalDescription: objective.description ?? null,
     status: mapObjectiveStatusToLegacy(objective),
-    approval_status: objective.approvalStatus,
-    progress_percentage: progress.progressPercent,
-    target_value: progress.targetValue,
-    achieved_value: progress.achievedValue,
+    approvalStatus: objective.approvalStatus,
+    progressPercentage: progress.progressPercent,
+    targetValue: progress.targetValue,
+    achievedValue: progress.achievedValue,
     cycle: objective.cycle
       ? {
           id: objective.cycle.id,
@@ -180,9 +180,9 @@ const toLegacyGoal = (objective: any) => {
           category: objective.kpi.category,
         }
       : null,
-    key_results_count: Array.isArray(objective.keyResults) ? objective.keyResults.length : 0,
-    created_at: objective.createdAt,
-    updated_at: objective.updatedAt,
+    keyResultsCount: Array.isArray(objective.keyResults) ? objective.keyResults.length : 0,
+    createdAt: objective.createdAt,
+    updatedAt: objective.updatedAt,
     source: "okr_objective",
   };
 };
@@ -204,12 +204,12 @@ const objectiveInclude = {
   },
 };
 
-// GET /employee-goals?employee_id=...
+// GET /employee-goals?employeeId=...
 router.get("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const employeeId = req.query.employee_id as string | undefined;
+    const employeeId = req.query.employeeId as string | undefined;
     if (!employeeId) {
-      return res.status(400).json({ error: "employee_id query parameter required" });
+      return res.status(400).json({ error: "employeeId query parameter required" });
     }
 
     const employeeProfileId = await resolveProfileIdFromEmployeeId(employeeId);
@@ -260,13 +260,13 @@ router.get("/:id", authMiddleware, loadProfile, async (req: AuthRequest, res) =>
 // POST /employee-goals
 router.post("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
-    const { employee_id, cycle_id, kpi_id, goal_title, goal_description, target_value } = req.body;
+    const { employeeId, cycleId, kpiId, goalTitle, goalDescription, targetValue } = req.body;
 
-    if (!employee_id || !goal_title) {
-      return res.status(400).json({ error: "employee_id and goal_title required" });
+    if (!employeeId || !goalTitle) {
+      return res.status(400).json({ error: "employeeId and goalTitle required" });
     }
 
-    const ownerProfileId = await resolveProfileIdFromEmployeeId(employee_id);
+    const ownerProfileId = await resolveProfileIdFromEmployeeId(employeeId);
     if (!ownerProfileId) {
       return res.status(404).json({ error: "Employee profile not found" });
     }
@@ -274,24 +274,24 @@ router.post("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: "Access denied" });
     }
 
-    const targetValue = parseOptionalNumber(target_value);
+    const resolvedTargetValue = parseOptionalNumber(targetValue);
     const created = await prisma.okrObjective.create({
       data: {
         ownerProfileId,
-        cycleId: parseOptionalInt(cycle_id),
-        kpiId: parseOptionalInt(kpi_id),
-        title: String(goal_title).trim(),
-        description: goal_description ? String(goal_description) : undefined,
+        cycleId: parseOptionalInt(cycleId),
+        kpiId: parseOptionalInt(kpiId),
+        title: String(goalTitle).trim(),
+        description: goalDescription ? String(goalDescription) : undefined,
         status: OkrStatus.active,
         approvalStatus: OkrApprovalStatus.pending,
         submittedAt: new Date(),
-        ...(targetValue !== undefined
+        ...(resolvedTargetValue !== undefined
           ? {
               keyResults: {
                 create: [
                   {
                     title: "Goal progress",
-                    targetValue,
+                    targetValue: resolvedTargetValue,
                     currentValue: 0,
                     status: OkrStatus.active,
                   },
@@ -326,7 +326,7 @@ router.patch("/:id", authMiddleware, loadProfile, async (req: AuthRequest, res) 
       return res.status(400).json({ error: "Invalid goal id" });
     }
 
-    const { status, progress_percentage, description } = req.body || {};
+    const { status, progressPercentage, description } = req.body || {};
     const existing = await prisma.okrObjective.findUnique({
       where: { id: goalId },
       include: { keyResults: true },
@@ -340,9 +340,11 @@ router.patch("/:id", authMiddleware, loadProfile, async (req: AuthRequest, res) 
 
     const objectiveStatus = normalizeStatusForObjective(status);
     const approvalStatus = normalizeStatusForApproval(status);
-    const progressPercentage = parseOptionalNumber(progress_percentage);
+    const parsedProgressPercentage = parseOptionalNumber(progressPercentage);
     const clampedProgress =
-      progressPercentage === undefined ? undefined : Math.max(0, Math.min(100, progressPercentage));
+      parsedProgressPercentage === undefined
+        ? undefined
+        : Math.max(0, Math.min(100, parsedProgressPercentage));
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.okrObjective.update({

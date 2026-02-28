@@ -83,13 +83,13 @@ const resolvePeriodRange = (period?: string) => {
   const now = new Date();
   const end = new Date(now);
   let start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
-  if (period === 'current_week') {
+  if (period === 'currentWeek') {
     const day = now.getDay();
     const diff = (day + 6) % 7;
     start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-  } else if (period === 'current_month') {
+  } else if (period === 'currentMonth') {
     start = new Date(now.getFullYear(), now.getMonth(), 1);
-  } else if (period === 'current_quarter') {
+  } else if (period === 'currentQuarter') {
     const quarter = Math.floor(now.getMonth() / 3);
     start = new Date(now.getFullYear(), quarter * 3, 1);
   }
@@ -140,7 +140,7 @@ router.get('/workload-analysis', authMiddleware, async (req: AuthRequest, res) =
   const profileId = req.user?.profileId;
   if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
 
-  const period = (req.query.period as string | undefined) || 'current_month';
+  const period = (req.query.period as string | undefined) || 'currentMonth';
   const { start, end } = resolvePeriodRange(period);
 
   const { jobs, jobIds, teamMemberIds } = await getManagerJobData(profileId);
@@ -242,7 +242,7 @@ router.get('/workload-metrics', authMiddleware, async (req: AuthRequest, res) =>
     });
   }
 
-  const { start, end } = resolvePeriodRange('current_month');
+  const { start, end } = resolvePeriodRange('currentMonth');
   const allocations = jobIds.length > 0
     ? await prisma.jobTimeAllocation.findMany({
         where: { jobCosting: { jobId: { in: jobIds } } },

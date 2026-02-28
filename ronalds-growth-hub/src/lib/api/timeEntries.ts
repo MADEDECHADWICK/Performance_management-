@@ -15,7 +15,9 @@ interface CreateTimeEntryPayload {
   taskId?: number;
   date?: string;
   dateWorked?: string;
-  hours: number;
+  hours?: number;
+  startedAt?: string;
+  endedAt?: string;
   description?: string;
   billable?: boolean;
 }
@@ -114,6 +116,8 @@ export const timeEntriesAPI = {
       taskId: data.taskId,
       dateWorked: data.dateWorked ?? data.date,
       hours: data.hours,
+      startedAt: data.startedAt,
+      endedAt: data.endedAt,
       description: data.description,
       billable: data.billable,
     };

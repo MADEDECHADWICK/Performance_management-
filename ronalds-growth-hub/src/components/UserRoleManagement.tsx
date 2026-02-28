@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { Loader2, Search } from "lucide-react";
 
@@ -97,19 +98,59 @@ const MODULE_ACTION_GUIDE: Array<{
   },
 ];
 
-const VALID_ROLES = [
-  "hr",
-  "hr_manager",
-  "admin",
-  "super_admin",
-  "gmp",
-  "group_managing_partner",
-  "partner",
-  "manager",
-  "marketing",
-  "finance",
-  "employee",
-];
+const PRIMARY_ACCESS_ROLE_OPTIONS = [
+  { value: "gmp", label: "GMP" },
+  { value: "admin", label: "HR/Admin" },
+  { value: "partner", label: "Partner" },
+  { value: "manager", label: "Manager" },
+  { value: "marketing", label: "Marketing" },
+  { value: "finance", label: "Finance" },
+  { value: "employee", label: "Employee" },
+] as const;
+
+const PRIMARY_ACCESS_ROLE_SET = new Set<string>(
+  PRIMARY_ACCESS_ROLE_OPTIONS.map((option) => option.value)
+);
+
+const PRIMARY_ACCESS_ROLE_LABELS = PRIMARY_ACCESS_ROLE_OPTIONS.reduce<Record<string, string>>(
+  (acc, option) => {
+    acc[option.value] = option.label;
+    return acc;
+  },
+  {}
+);
+
+const PRIMARY_ROLE_ALIASES: Record<string, string> = {
+  gmp: "gmp",
+  group_managing_partner: "gmp",
+  admin: "admin",
+  super_admin: "admin",
+  hr: "admin",
+  hr_manager: "admin",
+  partner: "partner",
+  manager: "manager",
+  marketing: "marketing",
+  finance: "finance",
+  employee: "employee",
+};
+
+const normalizeRoleValue = (value: unknown) => String(value || "").toLowerCase().trim();
+const toPrimaryAccessRole = (roleName: unknown) =>
+  PRIMARY_ROLE_ALIASES[normalizeRoleValue(roleName)] || normalizeRoleValue(roleName);
+const USER_OVERRIDE_ROLE_PREFIX = "user_override_";
+const toCamelModuleKey = (value: string) =>
+  String(value || "").replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
+
+const getModuleMatrixActions = (
+  matrix: Record<string, string[]> | undefined,
+  moduleKey: string
+) => {
+  if (!matrix) return [];
+  const direct = matrix[moduleKey];
+  if (Array.isArray(direct)) return direct;
+  const camel = matrix[toCamelModuleKey(moduleKey)];
+  return Array.isArray(camel) ? camel : [];
+};
 
 // Role hierarchy for escalation warnings
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -119,11 +160,7 @@ const ROLE_HIERARCHY: Record<string, number> = {
   manager: 3,
   partner: 4,
   gmp: 5,
-  group_managing_partner: 5,
-  hr: 6,
-  hr_manager: 6,
   admin: 7,
-  super_admin: 8,
 };
 
 // Role color mapping
@@ -156,28 +193,94 @@ const UserRoleManagement = () => {
   const [selectedPolicyRole, setSelectedPolicyRole] = useState<string>("");
   const [moduleDraft, setModuleDraft] = useState<Record<string, string[]>>({});
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
+  const [showPolicyEditor, setShowPolicyEditor] = useState(false);
+  const [showRoleMatrix, setShowRoleMatrix] = useState(false);
   const [roleEditorOpen, setRoleEditorOpen] = useState(false);
   const [roleEditorUser, setRoleEditorUser] = useState<User | null>(null);
   const [roleEditorDraft, setRoleEditorDraft] = useState<string[]>([]);
   const [isSavingRoles, setIsSavingRoles] = useState(false);
 
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
+  const currentUserId = Number(currentUser?.id || 0);
 
-  const assignableRoles = useMemo(() => {
-    const roleSet = new Set<string>(VALID_ROLES);
-    moduleRolePolicies.forEach((policy) => roleSet.add(String(policy.name || "").toLowerCase()));
-    users.forEach((user) =>
-      (user.roles || []).forEach((role) => roleSet.add(String(role || "").toLowerCase()))
+  const roleSortWeight = useCallback((role: string) => {
+    const normalizedPrimaryRole = toPrimaryAccessRole(role);
+    const primaryRoleIndex = PRIMARY_ACCESS_ROLE_OPTIONS.findIndex(
+      (option) => option.value === normalizedPrimaryRole
     );
+    if (primaryRoleIndex >= 0) return primaryRoleIndex;
+    return PRIMARY_ACCESS_ROLE_OPTIONS.length + 100 + (ROLE_HIERARCHY[normalizedPrimaryRole] || 0);
+  }, []);
 
-    return Array.from(roleSet)
-      .filter(Boolean)
-      .sort((a, b) => {
-        const byPriority = (ROLE_HIERARCHY[b] || 0) - (ROLE_HIERARCHY[a] || 0);
-        if (byPriority !== 0) return byPriority;
-        return a.localeCompare(b);
+  const isUserOverrideRole = useCallback(
+    (roleName: string) =>
+      String(roleName || "").toLowerCase().startsWith(USER_OVERRIDE_ROLE_PREFIX),
+    []
+  );
+
+  const formatRoleLabel = useCallback(
+    (roleName: string) => {
+      const normalized = toPrimaryAccessRole(roleName);
+      const predefinedLabel = PRIMARY_ACCESS_ROLE_LABELS[normalized];
+      if (predefinedLabel) return predefinedLabel;
+      return String(normalized || "")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+        .trim();
+    },
+    []
+  );
+
+  const isSelfRoleEdit = useCallback(
+    (targetUser: User | null | undefined) =>
+      !!targetUser && currentUserId > 0 && Number(targetUser.id) === currentUserId,
+    [currentUserId]
+  );
+
+  const assignableRoles = useMemo<string[]>(() => {
+    return PRIMARY_ACCESS_ROLE_OPTIONS.map((option) => option.value);
+  }, []);
+
+  const sortedRolePolicies = useMemo(
+    () =>
+      [...moduleRolePolicies].sort((a, b) => {
+        const byCoreOrder = roleSortWeight(a.name) - roleSortWeight(b.name);
+        if (byCoreOrder !== 0) return byCoreOrder;
+        return String(a.name || "").localeCompare(String(b.name || ""));
+      }),
+    [moduleRolePolicies, roleSortWeight]
+  );
+
+  const coreRolePolicies = useMemo(
+    () => {
+      const matchedPolicies: ModuleRolePolicy[] = [];
+      const seenPolicyIds = new Set<number>();
+
+      PRIMARY_ACCESS_ROLE_OPTIONS.forEach((roleOption) => {
+        const policy = sortedRolePolicies.find(
+          (item) => toPrimaryAccessRole(item.name) === roleOption.value
+        );
+        if (!policy || seenPolicyIds.has(policy.id)) return;
+        seenPolicyIds.add(policy.id);
+        matchedPolicies.push(policy);
       });
-  }, [moduleRolePolicies, users]);
+
+      return matchedPolicies;
+    },
+    [sortedRolePolicies]
+  );
+
+  const formatActionSummary = useCallback((actions: string[]) => {
+    if (!actions || actions.length === 0) return "none";
+    const normalized = actions.map((action) => String(action).toLowerCase());
+    if (normalized.includes("admin")) return "ADMIN";
+    const order = ["read", "write", "approve"];
+    return order
+      .filter((action) => normalized.includes(action))
+      .map((action) => action.charAt(0).toUpperCase())
+      .join("/");
+  }, []);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -188,14 +291,22 @@ const UserRoleManagement = () => {
         apiFetch("GET", "/module-access/roles"),
         apiFetch("GET", "/module-access/modules"),
       ]);
-      setUsers(data || []);
+      const normalizedUsers = (data || []).map((user: User) => ({
+        ...user,
+        roles: (user.roles || []).filter((role) => !isUserOverrideRole(role)),
+      }));
+      setUsers(normalizedUsers);
       setPositionRoles(roles || []);
-      setModuleRolePolicies(rolePoliciesResponse?.roles || []);
+      setModuleRolePolicies(
+        (rolePoliciesResponse?.roles || []).filter(
+          (policy: ModuleRolePolicy) => !isUserOverrideRole(policy.name)
+        )
+      );
       setModuleDefinitions(moduleCatalogResponse?.modules || []);
 
       // Extract unique departments
       const deptSet = new Set<string>();
-      data?.forEach((user: User) => {
+      normalizedUsers.forEach((user: User) => {
         if (user.department) deptSet.add(user.department);
       });
       setDepartments(deptSet);
@@ -210,7 +321,7 @@ const UserRoleManagement = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, isUserOverrideRole]);
 
   const applyFilters = useCallback(() => {
     let filtered = users;
@@ -227,9 +338,10 @@ const UserRoleManagement = () => {
 
     // Role filter
     if (roleFilter !== "all") {
-      filtered = filtered.filter((user) =>
-        user.roles.includes(roleFilter)
-      );
+      filtered = filtered.filter((user) => {
+        const mappedRoles = new Set((user.roles || []).map((role) => toPrimaryAccessRole(role)));
+        return mappedRoles.has(roleFilter);
+      });
     }
 
     // Department filter
@@ -258,81 +370,114 @@ const UserRoleManagement = () => {
   }, [applyFilters]);
 
   useEffect(() => {
-    if (!selectedPolicyRole && moduleRolePolicies.length > 0) {
-      setSelectedPolicyRole(moduleRolePolicies[0].name);
+    if (coreRolePolicies.length === 0) return;
+    const selectedIsAvailable = coreRolePolicies.some(
+      (policy) => policy.name === selectedPolicyRole
+    );
+    if (!selectedPolicyRole || !selectedIsAvailable) {
+      setSelectedPolicyRole(coreRolePolicies[0].name);
     }
-  }, [moduleRolePolicies, selectedPolicyRole]);
+  }, [coreRolePolicies, selectedPolicyRole]);
 
   useEffect(() => {
     if (!selectedPolicyRole) return;
     const policy = moduleRolePolicies.find((item) => item.name === selectedPolicyRole);
     const draft: Record<string, string[]> = {};
     moduleDefinitions.forEach((module) => {
-      const actions = policy?.explicitAccess?.[module.key] || [];
+      const actions = getModuleMatrixActions(policy?.explicitAccess, module.key);
       draft[module.key] = Array.from(new Set(actions));
     });
     setModuleDraft(draft);
   }, [moduleDefinitions, moduleRolePolicies, selectedPolicyRole]);
 
   const openRoleEditor = (user: User) => {
-    setRoleEditorUser(user);
-    setRoleEditorDraft(Array.from(new Set((user.roles || []).map((role) => role.toLowerCase()))));
-    setRoleEditorOpen(true);
-  };
+    if (isSelfRoleEdit(user)) {
+      toast({
+        title: "Action blocked",
+        description: "You cannot change your own access roles. Use another HR/Admin account.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const normalizedRoles = Array.from(
+      new Set((user.roles || []).map((role) => String(role || "").toLowerCase().trim()))
+    ).sort((a, b) => roleSortWeight(a) - roleSortWeight(b));
 
-  const toggleRoleInDraft = (role: string, checked: boolean) => {
-    const normalizedRole = role.toLowerCase();
-    setRoleEditorDraft((prev) => {
-      const current = new Set(prev.map((item) => item.toLowerCase()));
-      if (checked) current.add(normalizedRole);
-      else current.delete(normalizedRole);
-      return Array.from(current);
-    });
+    const selectableCurrentRole = normalizedRoles
+      .map((role) => toPrimaryAccessRole(role))
+      .find((role) => assignableRoles.includes(role));
+    setRoleEditorUser(user);
+    setRoleEditorDraft(selectableCurrentRole ? [selectableCurrentRole] : []);
+    setRoleEditorOpen(true);
   };
 
   const saveRoleEditor = async () => {
     if (!roleEditorUser) return;
-
-    const nextRoles = Array.from(new Set(roleEditorDraft.map((role) => role.toLowerCase())));
-    if (nextRoles.length === 0) {
+    if (isSelfRoleEdit(roleEditorUser)) {
       toast({
-        title: "At least one role required",
-        description: "Select at least one access role for this user.",
+        title: "Action blocked",
+        description: "You cannot change your own access roles. Use another HR/Admin account.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const nextRole = String(roleEditorDraft[0] || "").toLowerCase();
+    if (!nextRole) {
+      toast({
+        title: "Select role",
+        description: "Choose one access role for this user.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!PRIMARY_ACCESS_ROLE_SET.has(nextRole)) {
+      toast({
+        title: "Unsupported role",
+        description: "Choose one of the primary access roles.",
         variant: "destructive",
       });
       return;
     }
 
     const currentRoles = Array.from(
-      new Set((roleEditorUser.roles || []).map((role) => role.toLowerCase()))
-    );
-    const currentSet = new Set(currentRoles);
-    const nextSet = new Set(nextRoles);
-    const rolesToAdd = nextRoles.filter((role) => !currentSet.has(role));
-    const rolesToRemove = currentRoles.filter((role) => !nextSet.has(role));
+      new Set((roleEditorUser.roles || []).map((role) => String(role || "").toLowerCase().trim()))
+    ).sort((a, b) => roleSortWeight(a) - roleSortWeight(b));
+    const currentPrimaryRole = currentRoles[0];
+    const currentPrimaryAccessRole = toPrimaryAccessRole(currentPrimaryRole);
+
+    if (currentPrimaryAccessRole === nextRole) {
+      toast({
+        title: "No changes",
+        description: `${roleEditorUser.email} is already assigned to ${formatRoleLabel(nextRole)}.`,
+      });
+      setRoleEditorOpen(false);
+      setRoleEditorUser(null);
+      setRoleEditorDraft([]);
+      return;
+    }
 
     try {
       setIsSavingRoles(true);
 
-      for (const role of rolesToAdd) {
+      if (currentPrimaryRole) {
+        await apiFetch("PUT", "/user-roles/change", {
+          userId: roleEditorUser.id,
+          oldRole: currentPrimaryRole,
+          newRole: nextRole,
+        });
+      } else {
         await apiFetch("POST", "/user-roles", {
           userId: roleEditorUser.id,
-          role,
-        });
-      }
-
-      for (const role of rolesToRemove) {
-        await apiFetch("DELETE", "/user-roles", {
-          userId: roleEditorUser.id,
-          role,
+          role: nextRole,
         });
       }
 
       const currentMax = currentRoles.reduce(
-        (max, role) => Math.max(max, ROLE_HIERARCHY[role] || 0),
+        (max, role) => Math.max(max, ROLE_HIERARCHY[toPrimaryAccessRole(role)] || 0),
         0
       );
-      const nextMax = nextRoles.reduce((max, role) => Math.max(max, ROLE_HIERARCHY[role] || 0), 0);
+      const nextMax = ROLE_HIERARCHY[toPrimaryAccessRole(nextRole)] || 0;
       const escalated = nextMax > currentMax;
 
       toast({
@@ -391,7 +536,8 @@ const UserRoleManagement = () => {
   };
 
   const getRoleColor = (role: string): string => {
-    return ROLE_COLORS[role] || "bg-gray-100 text-gray-800";
+    const normalized = toPrimaryAccessRole(role);
+    return ROLE_COLORS[normalized] || "bg-gray-100 text-gray-800";
   };
   const selectedPolicy = moduleRolePolicies.find(
     (item) => item.name === selectedPolicyRole
@@ -421,8 +567,14 @@ const UserRoleManagement = () => {
 
     try {
       setIsSavingPolicy(true);
+      const accessPayload = Object.fromEntries(
+        Object.entries(moduleDraft).map(([moduleKey, actions]) => [
+          toCamelModuleKey(moduleKey),
+          actions,
+        ])
+      );
       await apiFetch("PUT", `/module-access/roles/${selectedPolicyRole}`, {
-        access: moduleDraft,
+        access: accessPayload,
       });
       toast({
         title: "Module policy updated",
@@ -456,6 +608,9 @@ const UserRoleManagement = () => {
         <p className="text-muted-foreground">
           Manage organizational roles and permissions for all users
         </p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Access roles control authorization. Billing position controls job costing/rates.
+        </p>
       </div>
 
       {/* Filters */}
@@ -488,7 +643,7 @@ const UserRoleManagement = () => {
                   <SelectItem value="all">All roles</SelectItem>
                   {assignableRoles.map((role) => (
                     <SelectItem key={role} value={role}>
-                      {role.charAt(0).toUpperCase() + role.slice(1)}
+                      {formatRoleLabel(role)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -549,16 +704,27 @@ const UserRoleManagement = () => {
                   <TableRow>
                     <TableHead className="w-[20%]">Email</TableHead>
                     <TableHead className="w-[13%]">Name</TableHead>
-                    <TableHead className="w-[12%]">Current Role</TableHead>
+                    <TableHead className="w-[12%]">Access Role</TableHead>
                     <TableHead className="w-[17%]">Billing Position</TableHead>
                     <TableHead className="w-[10%]">Department</TableHead>
                     <TableHead className="w-[8%]">Rate</TableHead>
                     <TableHead className="w-[8%]">Status</TableHead>
-                    <TableHead className="w-[12%]">Action</TableHead>
+                    <TableHead className="w-[13%]">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredUsers.map((user) => (
+                  {filteredUsers.map((user) => {
+                    const editingSelf = isSelfRoleEdit(user);
+                    const normalizedRoles = Array.from(
+                      new Set((user.roles || []).map((role) => String(role || "").toLowerCase().trim()))
+                    );
+                    const summarizedRoles = Array.from(
+                      new Set(normalizedRoles.map((role) => toPrimaryAccessRole(role)))
+                    ).sort((a, b) => roleSortWeight(a) - roleSortWeight(b));
+                    const primaryRole = summarizedRoles[0];
+                    const additionalRoles = Math.max(0, summarizedRoles.length - 1);
+
+                    return (
                     <TableRow key={user.id}>
                       <TableCell className="font-medium truncate" title={user.email}>
                         {user.email}
@@ -567,17 +733,26 @@ const UserRoleManagement = () => {
                         {user.name || "-"}
                       </TableCell>
                       <TableCell className="min-w-0">
-                        <div className="space-y-1">
-                          {user.roles.length > 0 ? (
-                            user.roles.map((role) => (
-                              <Badge key={role} className={getRoleColor(role)}>
-                                {role}
+                        {primaryRole ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Badge className={getRoleColor(primaryRole)}>
+                                {formatRoleLabel(primaryRole)}
                               </Badge>
-                            ))
-                          ) : (
-                            <Badge variant="outline">No role</Badge>
-                          )}
-                        </div>
+                              {additionalRoles > 0 && (
+                                <Badge variant="outline">+{additionalRoles}</Badge>
+                              )}
+                            </div>
+                            <div
+                              className="text-xs text-muted-foreground truncate"
+                              title={summarizedRoles.map((role) => formatRoleLabel(role)).join(", ")}
+                            >
+                              {summarizedRoles.map((role) => formatRoleLabel(role)).join(", ")}
+                            </div>
+                          </div>
+                        ) : (
+                          <Badge variant="outline">No role</Badge>
+                        )}
                       </TableCell>
                       <TableCell className="min-w-0">
                         <Select
@@ -617,18 +792,25 @@ const UserRoleManagement = () => {
                           {user.status}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="min-w-0">
                         <Button
                           variant="outline"
                           size="sm"
-                          className="w-full"
+                          className="w-full px-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis"
+                          disabled={editingSelf}
+                          title={
+                            editingSelf
+                              ? "Use another HR/Admin account to edit your own roles."
+                              : undefined
+                          }
                           onClick={() => openRoleEditor(user)}
                         >
-                          Manage roles...
+                          {editingSelf ? "Current user" : "Manage access"}
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -640,10 +822,28 @@ const UserRoleManagement = () => {
         <CardHeader>
           <CardTitle>Module Access Policies</CardTitle>
           <CardDescription>
-            Configure role-level module access. HR can then assign these roles to users.
+            Configure role-level module access (advanced). Day-to-day assignment should use
+            a primary access role per user.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowPolicyEditor((prev) => !prev)}
+            >
+              {showPolicyEditor ? "Hide policy editor" : "Open policy editor (advanced)"}
+            </Button>
+          </div>
+          {!showPolicyEditor ? (
+            <p className="text-sm text-muted-foreground">
+              Policy editor is hidden to keep role assignment simple. Open it only when you need
+              to customize module rights beyond standard role behavior.
+            </p>
+          ) : (
+            <>
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="w-full md:w-72">
               <label className="text-sm font-medium">Role policy</label>
@@ -652,9 +852,9 @@ const UserRoleManagement = () => {
                   <SelectValue placeholder="Select role policy..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {moduleRolePolicies.map((rolePolicy) => (
+                  {coreRolePolicies.map((rolePolicy) => (
                     <SelectItem key={rolePolicy.id} value={rolePolicy.name}>
-                      {rolePolicy.name}
+                      {formatRoleLabel(rolePolicy.name)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -671,6 +871,96 @@ const UserRoleManagement = () => {
               )}
             </Button>
           </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Primary role quick switch</label>
+            <div className="flex flex-wrap gap-2">
+              {coreRolePolicies.map((rolePolicy) => {
+                const active = selectedPolicyRole === rolePolicy.name;
+                return (
+                  <Button
+                    key={`quick-role-${rolePolicy.id}`}
+                    type="button"
+                    size="sm"
+                    variant={active ? "default" : "outline"}
+              onClick={() => setSelectedPolicyRole(rolePolicy.name)}
+            >
+              {formatRoleLabel(rolePolicy.name)}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          {coreRolePolicies.length > 0 && moduleDefinitions.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Primary role access matrix</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowRoleMatrix((prev) => !prev)}
+                >
+                  {showRoleMatrix ? "Hide matrix" : "Show matrix (advanced)"}
+                </Button>
+              </div>
+              {showRoleMatrix && (
+                <>
+                  <div className="rounded-md border overflow-x-auto">
+                    <Table className="min-w-[980px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[260px]">Module</TableHead>
+                          {coreRolePolicies.map((rolePolicy) => (
+                            <TableHead
+                              key={`matrix-head-${rolePolicy.id}`}
+                              className="text-center whitespace-nowrap"
+                            >
+                              {formatRoleLabel(rolePolicy.name)}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {moduleDefinitions.map((module) => (
+                          <TableRow key={`matrix-row-${module.key}`}>
+                            <TableCell>
+                              <div className="font-medium">{module.label}</div>
+                              <div className="text-xs text-muted-foreground">{module.key}</div>
+                            </TableCell>
+                            {coreRolePolicies.map((rolePolicy) => {
+                              const actions = getModuleMatrixActions(
+                                rolePolicy.effectiveAccess,
+                                module.key
+                              );
+                              const summary = formatActionSummary(actions);
+                              return (
+                                <TableCell
+                                  key={`matrix-cell-${module.key}-${rolePolicy.id}`}
+                                  className="text-center"
+                                >
+                                  <Badge
+                                    variant={summary === "none" ? "secondary" : "outline"}
+                                    className="font-mono"
+                                  >
+                                    {summary}
+                                  </Badge>
+                                </TableCell>
+                              );
+                            })}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Legend: R = read, W = write, A = approve, ADMIN = full module control.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="rounded-md border bg-muted/30 p-3">
             <p className="text-sm font-medium">Action levels</p>
@@ -697,7 +987,10 @@ const UserRoleManagement = () => {
             <div className="space-y-3">
               {moduleDefinitions.map((module) => {
                 const currentActions = new Set(moduleDraft[module.key] || []);
-                const effectiveActions = selectedPolicy?.effectiveAccess?.[module.key] || [];
+                const effectiveActions = getModuleMatrixActions(
+                  selectedPolicy?.effectiveAccess,
+                  module.key
+                );
 
                 return (
                   <div key={module.key} className="rounded border p-3">
@@ -726,6 +1019,8 @@ const UserRoleManagement = () => {
               })}
             </div>
           )}
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -741,24 +1036,34 @@ const UserRoleManagement = () => {
       >
         <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Manage User Roles</DialogTitle>
+            <DialogTitle>Manage Access Roles</DialogTitle>
             <DialogDescription>
               {roleEditorUser
-                ? `Select access roles for ${roleEditorUser.email}.`
-                : "Select access roles for this user."}
+                ? `Select a primary access role for ${roleEditorUser.email}.`
+                : "Select a primary access role for this user."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {assignableRoles.map((role) => (
-              <label key={role} className="flex items-center gap-2 rounded border p-2 text-sm">
-                <Checkbox
-                  checked={roleEditorDraft.includes(role)}
-                  onCheckedChange={(checked) => toggleRoleInDraft(role, checked === true)}
-                />
-                <span>{role}</span>
-              </label>
-            ))}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Primary access role</label>
+            <Select
+              value={roleEditorDraft[0] || ""}
+              onValueChange={(value) => setRoleEditorDraft(value ? [value.toLowerCase()] : [])}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select access role..." />
+              </SelectTrigger>
+              <SelectContent>
+                {assignableRoles.map((role) => (
+                  <SelectItem key={role} value={role}>
+                    {formatRoleLabel(role)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              This sets one primary access role for predictable module authorization.
+            </p>
           </div>
 
           <DialogFooter className="gap-2">
@@ -772,14 +1077,17 @@ const UserRoleManagement = () => {
             >
               Cancel
             </Button>
-            <Button onClick={saveRoleEditor} disabled={isSavingRoles || !roleEditorUser}>
+            <Button
+              onClick={saveRoleEditor}
+              disabled={isSavingRoles || !roleEditorUser || !roleEditorDraft[0]}
+            >
               {isSavingRoles ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Saving...
                 </>
               ) : (
-                "Save Roles"
+                "Save Access Role"
               )}
             </Button>
           </DialogFooter>

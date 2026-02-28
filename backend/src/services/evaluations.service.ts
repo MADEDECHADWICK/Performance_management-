@@ -131,12 +131,12 @@ export class EvaluationService {
 
   static async createEvaluation(input: any, auth: AuthContext) {
     const evaluationDefinitionId =
-      input.evaluationDefinitionId ?? input.evaluation_definition_id ?? input.definitionId;
+      input.evaluationDefinitionId ?? input.definitionId;
     const evaluatorProfileId =
-      input.evaluatorProfileId ?? input.evaluator_profile_id ?? auth.profileId;
+      input.evaluatorProfileId ?? auth.profileId;
     const evaluateeProfileId =
-      input.evaluateeProfileId ?? input.evaluatee_profile_id;
-    const evaluatorType = input.evaluatorType ?? input.evaluation_type ?? 'manager';
+      input.evaluateeProfileId;
+    const evaluatorType = input.evaluatorType ?? 'manager';
 
     if (!evaluationDefinitionId || !evaluateeProfileId) {
       throw { statusCode: 400, message: 'evaluationDefinitionId and evaluateeProfileId are required' };

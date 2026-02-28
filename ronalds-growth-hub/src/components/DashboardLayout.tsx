@@ -1,9 +1,10 @@
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Building2, LogOut } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiFetch, getToken } from "@/lib/api";
+import { io, Socket } from "socket.io-client";
 import {
   Sidebar,
   SidebarContent,
@@ -12,6 +13,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -32,7 +34,6 @@ import {
   ArrowUpCircle,
   Settings,
   Shield,
-  Upload,
   ChartCandlestick,
   FileSpreadsheet,
   User as UserIcon,
@@ -43,6 +44,7 @@ import {
   Briefcase,
   Crown,
   Bell,
+  BookOpen,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -54,10 +56,8 @@ type ModuleAction = "read" | "write" | "approve" | "admin";
 type HasModuleAccessFn = (moduleKey: string, action?: ModuleAction) => boolean;
 
 const DashboardLayout = ({ children }: DashboardLayoutProps) => {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { toast } = useToast();
   const {
     user,
     profile: userProfile,
@@ -117,6 +117,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       }
     }
   }, [
+    authLoading,
     user,
     userProfile,
     isGMP,
@@ -168,7 +169,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-gradient-to-br from-primary/5 via-background to-secondary/5">
+      <div className="min-h-screen flex w-full bg-transparent">
         <AppSidebar 
           isHROrAdmin={isHROrAdmin} 
           isManager={isManager} 
@@ -180,27 +181,31 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           isMarketing={isMarketing}
           isFinance={isFinance}
           hasModuleAccess={hasModuleAccess}
+          userId={user?.id ?? null}
+          profileId={userProfile?.id ?? null}
+          roleName={userProfile?.role?.name || normalizedRoles[0] || ""}
           isActive={isActive} 
         />
 
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Header */}
-          <header className="bg-card border-b border-border shadow-sm sticky top-0 z-50">
-            <div className="px-4 sm:px-6 lg:px-8 py-4">
+          <header className="sticky top-0 z-40 border-b border-border/70 bg-background/75 backdrop-blur-xl">
+            <div className="px-4 sm:px-6 lg:px-8 py-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <SidebarTrigger />
-                  <div className="flex items-center gap-2">
-                    {/* <Building2 className="h-6 w-6 text-primary" /> */}
-                    <img
-                      src="/images/logo.png"
-                      alt="Ronalds LLP Logo"
-                      width={40}
-                      height={10}
-                    />
-                    <div>
-                      <h1 className="text-xl font-bold text-foreground">Ronalds LLP</h1>
-                      <p className="text-xs text-muted-foreground hidden sm:block">Performance Management</p>
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-xl border border-border/70 bg-background/70 p-1.5 shadow-sm">
+                      <img
+                        src="/images/logo.png"
+                        alt="Ronalds LLP Logo"
+                        width={28}
+                        height={28}
+                      />
+                    </div>
+                    <div className="space-y-0.5">
+                      <h1 className="text-base sm:text-lg font-bold text-foreground">Ronalds LLP</h1>
+                      <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground hidden sm:block">Performance Management</p>
                     </div>
                   </div>
                 </div>
@@ -209,9 +214,13 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                     <p className="text-sm font-medium text-foreground">{user?.email}</p>
                     <p className="text-xs text-muted-foreground">{getRoleDisplay()}</p>
                   </div>
-                  <Button variant="outline" size="sm" onClick={handleSignOut}>
+                  <Button variant="outline" size="sm" onClick={handleSignOut} className="hidden sm:inline-flex">
                     <LogOut className="h-4 w-4 mr-2" />
                     Sign Out
+                  </Button>
+                  <Button variant="outline" size="icon" onClick={handleSignOut} className="sm:hidden">
+                    <LogOut className="h-4 w-4" />
+                    <span className="sr-only">Sign Out</span>
                   </Button>
                 </div>
               </div>
@@ -219,7 +228,9 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </header>
 
           {/* Main Content */}
-          <main className="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-8">{children}</main>
+          <main className="page-enter flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-6 sm:py-7">
+            {children}
+          </main>
         </div>
       </div>
     </SidebarProvider>
@@ -237,6 +248,9 @@ interface AppSidebarProps {
   isMarketing: boolean;
   isFinance: boolean;
   hasModuleAccess: HasModuleAccessFn;
+  userId: number | null;
+  profileId: number | null;
+  roleName: string;
   isActive: (path: string) => boolean;
 }
 
@@ -251,10 +265,145 @@ function AppSidebar({
   isMarketing,
   isFinance,
   hasModuleAccess,
+  userId,
+  profileId,
+  roleName,
   isActive,
 }: AppSidebarProps) {
   const location = useLocation();
   const { state } = useSidebar();
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const socketRef = useRef<Socket | null>(null);
+  const canReadNotifications = hasModuleAccess("notifications", "read");
+
+  const loadUnreadNotificationCount = useCallback(async () => {
+    if (!canReadNotifications) {
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    try {
+      const response: any = await apiFetch("GET", "/notifications/unread-count");
+      const nextCount =
+        typeof response?.unreadCount === "number"
+          ? response.unreadCount
+          : typeof response?.count === "number"
+            ? response.count
+            : 0;
+      setUnreadNotificationCount(Math.max(0, nextCount));
+    } catch {
+      // Keep current badge value if refresh fails.
+    }
+  }, [canReadNotifications]);
+
+  useEffect(() => {
+    void loadUnreadNotificationCount();
+  }, [loadUnreadNotificationCount, location.pathname]);
+
+  useEffect(() => {
+    if (!canReadNotifications) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      void loadUnreadNotificationCount();
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [canReadNotifications, loadUnreadNotificationCount]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      void loadUnreadNotificationCount();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [loadUnreadNotificationCount]);
+
+  useEffect(() => {
+    if (!canReadNotifications) return undefined;
+    if (!profileId) return undefined;
+
+    const token = getToken();
+    if (!token) return undefined;
+
+    const socketBaseUrl = (import.meta.env.VITE_API_URL || "http://localhost:4000")
+      .replace(/\/api\/?$/, "");
+
+    const socket = io(socketBaseUrl, {
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionDelay: 3000,
+      reconnectionDelayMax: 10000,
+      auth: {
+        token,
+        profileId: String(profileId),
+        userId: String(userId ?? ""),
+        roleName: roleName || "",
+      },
+    });
+
+    socketRef.current = socket;
+
+    const refreshBadge = () => {
+      void loadUnreadNotificationCount();
+    };
+
+    socket.on("connect", refreshBadge);
+    socket.on("notification", refreshBadge);
+
+    return () => {
+      socket.off("connect", refreshBadge);
+      socket.off("notification", refreshBadge);
+      socket.disconnect();
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
+    };
+  }, [canReadNotifications, loadUnreadNotificationCount, profileId, roleName, userId]);
+
+  const analyticsNav = useMemo<{
+    path: string;
+    module?: string;
+    action?: ModuleAction;
+    label: string;
+  }>(() => {
+    if (isGMP) {
+      return { path: "/analytics/gmp", label: "Analytics" };
+    }
+
+    if (isHROrAdmin) {
+      return { path: "/analytics/hr", label: "Analytics" };
+    }
+
+    if (isPartner) {
+      return { path: "/analytics/partner", label: "Analytics" };
+    }
+
+    if (isManager) {
+      return { path: "/analytics/manager", label: "Analytics" };
+    }
+
+    if (isMarketing) {
+      return { path: "/analytics/marketing", label: "Analytics" };
+    }
+
+    if (isFinance) {
+      return { path: "/analytics/finance", label: "Analytics" };
+    }
+
+    if (isEmployee) {
+      return { path: "/analytics/employee", label: "Analytics" };
+    }
+
+    return { path: "/analytics/employee", label: "Analytics" };
+  }, [
+    isEmployee,
+    isFinance,
+    isGMP,
+    isHROrAdmin,
+    isManager,
+    isMarketing,
+    isPartner,
+  ]);
 
   const NavItem = ({
     path,
@@ -262,41 +411,52 @@ function AppSidebar({
     label,
     module,
     action = "read",
+    badgeCount,
   }: {
     path: string;
     icon: any;
     label: string;
     module?: string;
     action?: ModuleAction;
+    badgeCount?: number;
   }) => {
     if (module && !hasModuleAccess(module, action)) return null;
     return (
       <SidebarMenuItem>
-        <SidebarMenuButton asChild isActive={isActive(path)}>
-          <a href={path} className="flex items-center gap-2">
+        <SidebarMenuButton
+          asChild
+          isActive={isActive(path)}
+          className={badgeCount && badgeCount > 0 ? "pr-8" : undefined}
+        >
+          <a href={path} className="flex w-full items-center gap-2 rounded-xl">
             <Icon className="h-4 w-4" />
             {state !== "collapsed" && <span>{label}</span>}
           </a>
         </SidebarMenuButton>
+        {badgeCount && badgeCount > 0 && (
+          <SidebarMenuBadge className="bg-destructive text-destructive-foreground">
+            {badgeCount > 99 ? "99+" : badgeCount}
+          </SidebarMenuBadge>
+        )}
       </SidebarMenuItem>
     );
   };
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b border-border p-4">
-        <div className="flex items-center gap-1">
+      <SidebarHeader className="border-b border-sidebar-border/80 p-4">
+        <div className="flex items-center gap-2">
           <img
             src="/images/logo.png"
             alt="Ronalds LLP Logo"
-            width={40}
-            height={10}
+            width={36}
+            height={36}
           />
-          {state !== "collapsed" && <span className="font-semibold">Ronalds LLP</span>}
+          {state !== "collapsed" && <span className="text-sm font-semibold tracking-wide">Ronalds LLP</span>}
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="stagger-in pb-4">
         {/* Dashboard */}
         <SidebarGroup>
           <SidebarGroupLabel>Overview</SidebarGroupLabel>
@@ -317,19 +477,32 @@ function AppSidebar({
               ) : (
                 <NavItem path="/dashboard" icon={BarChart3} label="Dashboard" module="dashboard" />
               )}
-              <NavItem path="/non-financial-analytics" icon={TrendingUp} label="Analytics" module="reports" />
+              <NavItem
+                path={analyticsNav.path}
+                icon={TrendingUp}
+                label={analyticsNav.label}
+                module={analyticsNav.module}
+                action={analyticsNav.action}
+              />
               <NavItem path="/reports" icon={FileText} label="Reports" module="reports" />
-              <NavItem path="/notifications" icon={Bell} label="Notifications" module="notifications" />
+              <NavItem path="/knowledge-hub" icon={BookOpen} label="Knowledge Hub" module="knowledge_hub" />
+              <NavItem
+                path="/notifications"
+                icon={Bell}
+                label="Notifications"
+                module="notifications"
+                badgeCount={unreadNotificationCount}
+              />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* My Performance */}
+        {/* My Portforlio */}
         <Collapsible className="group/collapsible">
           <SidebarGroup>
             <SidebarGroupLabel asChild>
               <CollapsibleTrigger className="flex w-full items-center justify-between">
-                My Performance
+                My Portfolio
                 <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
               </CollapsibleTrigger>
             </SidebarGroupLabel>
@@ -375,7 +548,7 @@ function AppSidebar({
         </Collapsible>
 
         {/* Financials */}
-        {(isEmployee || isManager || isPartner || isHROrAdmin || isGMP) && (
+        {hasModuleAccess("finance", "read") && (
           <SidebarGroup>
             <SidebarGroupLabel>Financials</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -523,3 +696,4 @@ function AppSidebar({
 }
 
 export default DashboardLayout;
+

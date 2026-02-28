@@ -3,10 +3,10 @@ import prisma from '../prisma';
 
 const router = Router();
 
-// GET /continuous_feedback?user_id=
+// GET /continuous_feedback?userId=
 router.get('/', async (req, res) => {
   try {
-    const userId = req.query.user_id as string | undefined;
+    const userId = req.query.userId as string | undefined;
     
     if (!userId) {
       return res.json([]);
@@ -22,9 +22,9 @@ router.get('/', async (req, res) => {
 // POST /continuous_feedback
 router.post('/', async (req, res) => {
   try {
-    const { recipient_id, giver_id, feedback_type, category, message, is_anonymous, is_public } = req.body;
+    const { recipientId, giverId, feedbackType, category, message, isAnonymous, isPublic } = req.body;
     
-    if (!recipient_id || !feedback_type || !message) {
+    if (!recipientId || !feedbackType || !message) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 

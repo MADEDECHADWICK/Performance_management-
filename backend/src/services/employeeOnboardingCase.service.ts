@@ -1,6 +1,7 @@
 import prisma from "../prisma";
 import { createAudit } from "../utils/audit";
 import { OnboardingStatus } from "@prisma/client";
+import { NotificationService } from "./notifications.service";
 
 export interface AuthContext {
   userId: number;
@@ -420,6 +421,379 @@ class EmployeeOnboardingCaseServiceImpl {
     });
 
     return { created: this.defaultStages.length };
+  }
+
+  private extractPolicyDocumentId(metadata: unknown): number | null {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+    const candidate = Number((metadata as Record<string, unknown>).documentId);
+    return Number.isFinite(candidate) && candidate > 0 ? candidate : null;
+  }
+
+  private async refreshOnboardingCompletion(caseId: number) {
+    const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      select: {
+        id: true,
+        profileId: true,
+        status: true,
+        inductionChecklist: {
+          select: { status: true },
+        },
+      },
+    });
+
+    if (!onboardingCase) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const policyAssignments = await prisma.statusTransition.findMany({
+      where: {
+        entityType: "OnboardingPolicyAssignment",
+        entityId: caseId,
+      },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        metadata: true,
+      },
+    });
+    const assignedDocumentIds = Array.from(
+      new Set(
+        policyAssignments
+          .map((row) => this.extractPolicyDocumentId(row.metadata))
+          .filter((value): value is number => Boolean(value))
+      )
+    );
+
+    const policyAcknowledgements = await prisma.statusTransition.findMany({
+      where: {
+        entityType: "OnboardingPolicyAcknowledgement",
+        entityId: caseId,
+      },
+      orderBy: { createdAt: "asc" },
+      select: {
+        metadata: true,
+      },
+    });
+    const acknowledgedDocumentIds = new Set<number>(
+      policyAcknowledgements
+        .map((row) => this.extractPolicyDocumentId(row.metadata))
+        .filter((value): value is number => Boolean(value))
+    );
+
+    const allPoliciesAcknowledged = assignedDocumentIds.every((id) =>
+      acknowledgedDocumentIds.has(id)
+    );
+    const checklistCompleted = onboardingCase.inductionChecklist?.status === "completed";
+
+    let nextStatus: OnboardingStatus = OnboardingStatus.pending;
+    if (checklistCompleted && allPoliciesAcknowledged) {
+      nextStatus = OnboardingStatus.completed;
+    } else if (
+      checklistCompleted ||
+      assignedDocumentIds.length > 0 ||
+      acknowledgedDocumentIds.size > 0
+    ) {
+      nextStatus = OnboardingStatus.in_progress;
+    }
+
+    if (nextStatus !== onboardingCase.status) {
+      await prisma.employeeOnboardingCase.update({
+        where: { id: caseId },
+        data: { status: nextStatus },
+      });
+    }
+
+    if (onboardingCase.profileId && nextStatus === OnboardingStatus.completed) {
+      await prisma.profile.update({
+        where: { id: onboardingCase.profileId },
+        data: { onboardingStatus: OnboardingStatus.completed },
+      });
+    }
+
+    return {
+      checklistCompleted,
+      allPoliciesAcknowledged,
+      assignedPolicyCount: assignedDocumentIds.length,
+      acknowledgedPolicyCount: assignedDocumentIds.filter((id) =>
+        acknowledgedDocumentIds.has(id)
+      ).length,
+      status: nextStatus,
+    };
+  }
+
+  async assignPolicies(caseId: number, documentIds: number[], auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      select: { id: true, profileId: true, hrOwnerProfileId: true },
+    });
+    if (!onboardingCase) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (!Array.isArray(documentIds) || documentIds.length === 0) {
+      const err = new Error("documentIds is required");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const uniqueDocumentIds = Array.from(
+      new Set(documentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+    );
+    const docs = await prisma.document.findMany({
+      where: { id: { in: uniqueDocumentIds } },
+      select: { id: true, fileName: true, filePath: true },
+    });
+    if (docs.length !== uniqueDocumentIds.length) {
+      const err = new Error("One or more policy documents were not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const existingAssignments = await prisma.statusTransition.findMany({
+      where: {
+        entityType: "OnboardingPolicyAssignment",
+        entityId: caseId,
+      },
+      select: { metadata: true },
+    });
+    const assignedSet = new Set<number>(
+      existingAssignments
+        .map((row) => this.extractPolicyDocumentId(row.metadata))
+        .filter((value): value is number => Boolean(value))
+    );
+    const toAssign = uniqueDocumentIds.filter((id) => !assignedSet.has(id));
+
+    await prisma.$transaction(async (tx) => {
+      for (const documentId of toAssign) {
+        await tx.statusTransition.create({
+          data: {
+            entityType: "OnboardingPolicyAssignment",
+            entityId: caseId,
+            fromStatus: "unassigned",
+            toStatus: "assigned",
+            changedByProfileId: auth.profileId,
+            metadata: {
+              onboardingCaseId: caseId,
+              documentId,
+            },
+          },
+        });
+      }
+    });
+
+    if (onboardingCase.profileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: onboardingCase.profileId,
+          type: "action",
+          title: "Policy acknowledgement required",
+          message:
+            "HR assigned policy documents for onboarding. Please read and acknowledge each document.",
+          actionRequired: true,
+          link: `/onboarding`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roles?.[0] }
+      );
+    }
+
+    // IMPLEMENTED: Onboarding policy acknowledgement flow - HR can assign policy documents per onboarding case.
+    const summary = await this.refreshOnboardingCompletion(caseId);
+    await createAudit({
+      action: "onboarding_policies_assigned",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { documentIds: toAssign },
+    }).catch(() => null);
+
+    return { assignedDocumentIds: toAssign, summary };
+  }
+
+  async listPolicies(caseId: number, auth: AuthContext) {
+    await this.assertCanView(caseId, auth);
+
+    const [assignmentRows, acknowledgementRows] = await Promise.all([
+      prisma.statusTransition.findMany({
+        where: {
+          entityType: "OnboardingPolicyAssignment",
+          entityId: caseId,
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          createdAt: true,
+          changedByProfileId: true,
+          metadata: true,
+        },
+      }),
+      prisma.statusTransition.findMany({
+        where: {
+          entityType: "OnboardingPolicyAcknowledgement",
+          entityId: caseId,
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          createdAt: true,
+          changedByProfileId: true,
+          metadata: true,
+        },
+      }),
+    ]);
+
+    const assignmentByDoc = new Map<
+      number,
+      { assignedAt: Date; assignedByProfileId: number | null }
+    >();
+    assignmentRows.forEach((row) => {
+      const documentId = this.extractPolicyDocumentId(row.metadata);
+      if (!documentId || assignmentByDoc.has(documentId)) return;
+      assignmentByDoc.set(documentId, {
+        assignedAt: row.createdAt,
+        assignedByProfileId: row.changedByProfileId ?? null,
+      });
+    });
+
+    const acknowledgementByDoc = new Map<
+      number,
+      { acknowledgedAt: Date; acknowledgedByProfileId: number | null }
+    >();
+    acknowledgementRows.forEach((row) => {
+      const documentId = this.extractPolicyDocumentId(row.metadata);
+      if (!documentId || acknowledgementByDoc.has(documentId)) return;
+      acknowledgementByDoc.set(documentId, {
+        acknowledgedAt: row.createdAt,
+        acknowledgedByProfileId: row.changedByProfileId ?? null,
+      });
+    });
+
+    const documentIds = Array.from(assignmentByDoc.keys());
+    const documents = documentIds.length
+      ? await prisma.document.findMany({
+          where: { id: { in: documentIds } },
+          select: { id: true, fileName: true, filePath: true, documentType: true },
+        })
+      : [];
+    const docsById = new Map(documents.map((doc) => [doc.id, doc]));
+
+    const policies = documentIds.map((documentId) => {
+      const assignment = assignmentByDoc.get(documentId)!;
+      const acknowledgement = acknowledgementByDoc.get(documentId) || null;
+      return {
+        documentId,
+        document: docsById.get(documentId) || null,
+        assignedAt: assignment.assignedAt,
+        assignedByProfileId: assignment.assignedByProfileId,
+        acknowledged: Boolean(acknowledgement),
+        acknowledgedAt: acknowledgement?.acknowledgedAt ?? null,
+        acknowledgedByProfileId: acknowledgement?.acknowledgedByProfileId ?? null,
+      };
+    });
+
+    const summary = await this.refreshOnboardingCompletion(caseId);
+    return { policies, summary };
+  }
+
+  async acknowledgePolicy(caseId: number, documentId: number, auth: AuthContext) {
+    const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      select: { id: true, profileId: true, hrOwnerProfileId: true },
+    });
+    if (!onboardingCase) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const isEmployee = onboardingCase.profileId === auth.profileId;
+    if (!this.isPrivileged(auth) && !isEmployee) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const assignments = await prisma.statusTransition.findMany({
+      where: {
+        entityType: "OnboardingPolicyAssignment",
+        entityId: caseId,
+      },
+      select: { metadata: true },
+    });
+    const assignedDocumentIds = new Set<number>(
+      assignments
+        .map((row) => this.extractPolicyDocumentId(row.metadata))
+        .filter((value): value is number => Boolean(value))
+    );
+    if (!assignedDocumentIds.has(documentId)) {
+      const err = new Error("Policy is not assigned to this onboarding case");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const existingAck = await prisma.statusTransition.findFirst({
+      where: {
+        entityType: "OnboardingPolicyAcknowledgement",
+        entityId: caseId,
+        metadata: {
+          path: ["documentId"],
+          equals: documentId,
+        },
+      },
+      select: { id: true },
+    });
+
+    if (!existingAck) {
+      await prisma.statusTransition.create({
+        data: {
+          entityType: "OnboardingPolicyAcknowledgement",
+          entityId: caseId,
+          fromStatus: "assigned",
+          toStatus: "acknowledged",
+          changedByProfileId: auth.profileId,
+          reason: "I have fully read and understood this document",
+          metadata: {
+            onboardingCaseId: caseId,
+            documentId,
+            statement: "I have fully read and understood this document",
+          },
+        },
+      });
+    }
+
+    if (onboardingCase.hrOwnerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: onboardingCase.hrOwnerProfileId,
+          type: "info",
+          title: "Policy acknowledged",
+          message: "An employee acknowledged an onboarding policy document.",
+          actionRequired: false,
+          link: `/onboarding`,
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roles?.[0] }
+      );
+    }
+
+    // IMPLEMENTED: Onboarding completion gate - onboarding now only auto-completes when checklist is done and all assigned policies are acknowledged.
+    const summary = await this.refreshOnboardingCompletion(caseId);
+    await createAudit({
+      action: "onboarding_policy_acknowledged",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { documentId },
+    }).catch(() => null);
+
+    return { acknowledged: true, summary };
   }
 }
 
