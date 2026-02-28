@@ -34,10 +34,9 @@ export const uploadDocumentValidators = [
 
   body("entityType")
     .isString()
-    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate", "Proposal"])
-    .withMessage(
-      "EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate, Proposal"
-    ),
+    .trim()
+    .matches(/^[A-Za-z][A-Za-z0-9_-]{1,80}$/)
+    .withMessage("EntityType must be an identifier (letters, numbers, _ or -)"),
 
   body("entityId")
     .isInt({ min: 1 })
@@ -71,10 +70,9 @@ export const uploadDocumentFileValidators = [
 
   body("entityType")
     .isString()
-    .isIn(["Profile", "Job", "Client", "Onboarding", "InductionChecklist", "RecruitmentCandidate", "Proposal"])
-    .withMessage(
-      "EntityType must be one of: Profile, Job, Client, Onboarding, InductionChecklist, RecruitmentCandidate, Proposal"
-    ),
+    .trim()
+    .matches(/^[A-Za-z][A-Za-z0-9_-]{1,80}$/)
+    .withMessage("EntityType must be an identifier (letters, numbers, _ or -)"),
 
   body("entityId")
     .isInt({ min: 1 })
@@ -156,12 +154,12 @@ export const verifyDocumentValidators = [
     .isInt({ min: 1 })
     .withMessage("Valid documentId (integer) required"),
 
-  body("verified")
-    .isBoolean()
-    .withMessage("Verified must be a boolean"),
+  body("verificationStatus")
+    .isIn(["pending", "verified", "rejected"])
+    .withMessage("verificationStatus must be one of: pending, verified, rejected"),
 
   body("rejectionReason")
-    .if(body("verified").equals("false"))
+    .if(body("verificationStatus").equals("rejected"))
     .isString()
     .trim()
     .isLength({ min: 5 })

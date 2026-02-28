@@ -34,6 +34,31 @@ interface UpdateTemplateInput {
 }
 
 export class NotificationTemplateService {
+  private static async assertLabelAvailable(label: string, excludeId?: number) {
+    const normalizedLabel = String(label || "").trim();
+    if (!normalizedLabel) {
+      throw { statusCode: 400, message: "label is required" };
+    }
+
+    const existing = await prisma.notificationTemplate.findFirst({
+      where: {
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        label: {
+          equals: normalizedLabel,
+          mode: "insensitive",
+        },
+      },
+      select: { id: true, label: true },
+    });
+
+    if (existing) {
+      throw {
+        statusCode: 409,
+        message: `Notification template label '${normalizedLabel}' already exists`,
+      };
+    }
+  }
+
   static async listTemplates(options: ListOptions) {
     const where: any = {};
     if (typeof options.isActive === "boolean") {
@@ -47,9 +72,11 @@ export class NotificationTemplateService {
   }
 
   static async createTemplate(input: CreateTemplateInput, auth: AuthContext) {
+    await this.assertLabelAvailable(input.label);
+
     const template = await prisma.notificationTemplate.create({
       data: {
-        label: input.label,
+        label: String(input.label || "").trim(),
         title: input.title,
         message: input.message,
         type: input.type,
@@ -62,10 +89,14 @@ export class NotificationTemplateService {
   }
 
   static async updateTemplate(id: number, input: UpdateTemplateInput) {
+    if (input.label !== undefined) {
+      await this.assertLabelAvailable(input.label, id);
+    }
+
     const template = await prisma.notificationTemplate.update({
       where: { id },
       data: {
-        ...(input.label !== undefined && { label: input.label }),
+        ...(input.label !== undefined && { label: String(input.label || "").trim() }),
         ...(input.title !== undefined && { title: input.title }),
         ...(input.message !== undefined && { message: input.message }),
         ...(input.type !== undefined && { type: input.type }),

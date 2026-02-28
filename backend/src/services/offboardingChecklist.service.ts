@@ -75,13 +75,17 @@ class OffboardingChecklistServiceClass {
     });
 
     if (offboardingCase.profileId) {
+      const requiredDocumentCount = input.items.filter((item) => item.requiresDocument).length;
       await NotificationService.createNotification(
         {
           recipientProfileId: offboardingCase.profileId,
-          type: "info",
+          type: requiredDocumentCount > 0 ? "action" : "info",
           title: "Offboarding tasks assigned",
-          message: "HR assigned offboarding tasks for your profile.",
-          actionRequired: false,
+          message:
+            requiredDocumentCount > 0
+              ? `HR assigned offboarding tasks. ${requiredDocumentCount} item(s) require document submission.`
+              : "HR assigned offboarding tasks for your profile.",
+          actionRequired: requiredDocumentCount > 0,
           link: "/profile",
         },
         { userId: auth.userId, profileId: auth.profileId, roleName: auth.roles?.[0] }

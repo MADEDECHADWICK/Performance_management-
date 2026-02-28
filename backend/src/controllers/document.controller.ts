@@ -20,7 +20,8 @@ export class DocumentController {
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
 
-      const verificationStatus = req.query.status as DocumentVerificationStatus | undefined;
+      const verificationStatus = (req.query.verificationStatus ??
+        req.query.status) as DocumentVerificationStatus | undefined;
       const accessLevel = req.query.accessLevel as DocumentAccessLevel | undefined;
 
       const documentType = req.query.documentType as string | undefined;

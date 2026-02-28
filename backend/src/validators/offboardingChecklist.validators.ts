@@ -22,8 +22,23 @@ export const completeOffboardingItemValidators = [
 export const attachOffboardingItemDocumentValidators = [
   param("caseId").isInt().withMessage("caseId must be an integer"),
   param("itemId").isInt().withMessage("itemId must be an integer"),
-  body("fileName").isString().withMessage("fileName is required"),
-  body("filePath").isString().withMessage("filePath is required"),
+  body("documentId").optional().isInt({ min: 1 }).withMessage("documentId must be a positive integer"),
+  body("fileName").optional().isString().trim().isLength({ min: 1 }).withMessage("fileName cannot be empty"),
+  body("filePath").optional().isString().trim().isLength({ min: 1 }).withMessage("filePath cannot be empty"),
   body("mimeType").optional().isString(),
   body("fileSize").optional().isInt(),
+  body().custom((value, { req }) => {
+    const rawDocumentId = req.body?.documentId;
+    const hasDocumentId =
+      rawDocumentId !== undefined &&
+      rawDocumentId !== null &&
+      String(rawDocumentId).trim() !== "";
+    const hasInlineFile = Boolean(req.body?.fileName) && Boolean(req.body?.filePath);
+
+    if (!hasDocumentId && !hasInlineFile) {
+      throw new Error("Provide either documentId or fileName + filePath");
+    }
+
+    return true;
+  }),
 ];

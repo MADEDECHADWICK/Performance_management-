@@ -1,6 +1,7 @@
 import http from 'http';
 import app from './app';
 import websocketService from './services/websocket.service';
+import { NotificationOutboxService } from './services/notificationOutbox.service';
 import dotenv from 'dotenv';
 import { assertJwtSecretConfigured } from './config/jwt';
 
@@ -14,6 +15,7 @@ const server = http.createServer(app);
 
 // Initialize WebSocket
 websocketService.initialize(server);
+NotificationOutboxService.startWorker();
 
 server.listen(PORT, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
@@ -37,3 +39,10 @@ process.on('uncaughtException', (error: any) => {
   console.error('Uncaught Exception:', error);
   process.exit(1);
 });
+
+const shutdown = () => {
+  NotificationOutboxService.stopWorker();
+};
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

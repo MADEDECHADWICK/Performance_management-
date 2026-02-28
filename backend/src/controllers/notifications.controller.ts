@@ -70,6 +70,17 @@ export class NotificationController {
         timeEntryId,
         workflowAssignmentId,
         link,
+        eventType,
+        priority,
+        targetEntityType,
+        targetEntityId,
+        canonicalRoute,
+        actions,
+        requiredPermission,
+        eventId,
+        templateLabel,
+        correlationId,
+        deduplicationKey,
         relatedEntityType,
         relatedEntityId,
       } = req.body;
@@ -91,7 +102,18 @@ export class NotificationController {
           evaluationDefinitionId,
           timeEntryId,
           workflowAssignmentId,
-          link,
+          link: canonicalRoute ?? link,
+          eventType,
+          priority,
+          targetEntityType: targetEntityType ?? entityType,
+          targetEntityId: targetEntityId ?? entityId,
+          canonicalRoute: canonicalRoute ?? link,
+          actions,
+          requiredPermission,
+          eventId,
+          templateLabel,
+          correlationId,
+          deduplicationKey,
         },
         auth
       );
@@ -202,6 +224,132 @@ export class NotificationController {
   }
 
   /**
+   * POST /notifications/:notificationId/action
+   * Execute notification action and auto-mark as read on success
+   */
+  static async executeAction(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const notificationId = Number(req.params.notificationId);
+      const actionId = String(req.body?.actionId || "").trim();
+      const payload =
+        req.body && typeof req.body.payload === "object" && req.body.payload !== null
+          ? req.body.payload
+          : undefined;
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const result = await NotificationService.executeAction(
+        notificationId,
+        actionId,
+        auth,
+        payload
+      );
+
+      res.json(successResponse(result, "Notification action executed"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * GET /notifications/ops-metrics
+   * Operational delivery metrics (admin/HR)
+   */
+  static async getOperationalMetrics(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const days = req.query.days ? Number(req.query.days) : 7;
+      const metrics = await NotificationService.getOperationalMetrics(days);
+      res.json(successResponse(metrics, "Notification metrics retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * GET /notifications/preferences
+   * Get caller notification preferences
+   */
+  static async getPreferences(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+      const result = await NotificationService.getPreferences(auth);
+      res.json(successResponse(result, "Notification preferences retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * PUT /notifications/preferences
+   * Update caller notification preferences
+   */
+  static async updatePreferences(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+      const result = await NotificationService.updatePreferences(req.body || {}, auth);
+      res.json(successResponse(result, "Notification preferences updated"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
+   * GET /notifications/outbox/summary
+   * Outbox processing summary
+   */
+  static async getOutboxSummary(_req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const result = await NotificationService.getOutboxSummary();
+      res.json(successResponse(result, "Notification outbox summary retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500)
+      );
+    }
+  }
+
+  /**
+   * POST /notifications/outbox/dead-letter/:notificationId/replay
+   * Replay dead-letter notification delivery
+   */
+  static async replayDeadLetter(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const notificationId = Number(req.params.notificationId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+      const result = await NotificationService.replayDeadLetter(notificationId, auth);
+      res.json(successResponse(result, "Dead-letter notification replay queued"));
+    } catch (error: any) {
+      res.status(error.statusCode || 400).json(
+        errorResponse(error.message, error.statusCode || 400)
+      );
+    }
+  }
+
+  /**
    * DELETE /notifications/all
    * Delete all notifications
    */
@@ -245,6 +393,17 @@ export class NotificationController {
         timeEntryId,
         workflowAssignmentId,
         link,
+        eventType,
+        priority,
+        targetEntityType,
+        targetEntityId,
+        canonicalRoute,
+        actions,
+        requiredPermission,
+        eventId,
+        templateLabel,
+        correlationId,
+        deduplicationKey,
       } = req.body;
 
       const auth = {
@@ -275,7 +434,18 @@ export class NotificationController {
           evaluationDefinitionId,
           timeEntryId,
           workflowAssignmentId,
-          link,
+          link: canonicalRoute ?? link,
+          eventType,
+          priority,
+          targetEntityType: targetEntityType ?? entityType,
+          targetEntityId: targetEntityId ?? entityId,
+          canonicalRoute: canonicalRoute ?? link,
+          actions,
+          requiredPermission,
+          eventId,
+          templateLabel,
+          correlationId,
+          deduplicationKey,
         },
         auth
       );

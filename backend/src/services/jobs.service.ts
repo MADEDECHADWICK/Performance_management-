@@ -605,6 +605,122 @@ class JobService {
     }
   }
 
+  private buildNotificationAuth(authContext?: AuthContext) {
+    return {
+      userId: authContext?.userId ?? 0,
+      profileId: authContext?.profileId ?? 0,
+      roleName: authContext?.roles?.[0] ?? "system",
+    };
+  }
+
+  private async notifyJobCreatedEvent(
+    job: {
+      id: number;
+      jobName: string;
+      clientId?: number | null;
+      departmentId?: number | null;
+      managerProfileId?: number | null;
+      partnerProfileId?: number | null;
+      client?: { clientName?: string | null } | null;
+    },
+    authContext: AuthContext
+  ) {
+    await NotificationService.dispatchEvent(
+      {
+        eventType: "job.created",
+        type: "action",
+        priority: "high",
+        title: `Job created: ${job.jobName}`,
+        message: `A new job has been created for ${job.client?.clientName || "a client"}.`,
+        actionRequired: true,
+        canonicalRoute: `/jobs/${job.id}`,
+        actions: [
+          {
+            id: "view_job",
+            label: "View job",
+            endpoint: `/jobs/${job.id}`,
+            method: "GET",
+          },
+        ],
+        requiredPermission: "module.jobs.read",
+        targetEntityType: "Job",
+        targetEntityId: job.id,
+        jobId: job.id,
+        clientId: job.clientId ?? undefined,
+        ownerProfileIds: [job.managerProfileId, job.partnerProfileId],
+        rolePolicies: [
+          {
+            roles: ["finance", "finance_manager"],
+            departmentId: job.departmentId ?? undefined,
+            fallbackRoles: ["finance", "finance_manager"],
+          },
+          { roles: ["gmp", "group_managing_partner"] },
+          { roles: ["marketing"] },
+        ],
+        eventId: `job.created:${job.id}`,
+        deduplicationKey: `job.created:${job.id}`,
+      },
+      this.buildNotificationAuth(authContext)
+    );
+  }
+
+  private async notifyJobCompletedEvent(
+    job: {
+      id: number;
+      jobName: string;
+      clientId?: number | null;
+      departmentId?: number | null;
+      managerProfileId?: number | null;
+      partnerProfileId?: number | null;
+      client?: { clientName?: string | null } | null;
+    },
+    authContext?: AuthContext
+  ) {
+    const staffAssignments = await prisma.jobStaffAssignment.findMany({
+      where: { jobId: job.id },
+      select: { employeeProfileId: true },
+    });
+
+    await NotificationService.dispatchEvent(
+      {
+        eventType: "job.completed",
+        type: "info",
+        priority: "medium",
+        title: `Job completed: ${job.jobName}`,
+        message: `Job "${job.jobName}" has been marked complete.`,
+        actionRequired: false,
+        canonicalRoute: `/jobs/${job.id}`,
+        actions: [
+          {
+            id: "view_job_summary",
+            label: "View summary",
+            endpoint: `/jobs/${job.id}`,
+            method: "GET",
+          },
+        ],
+        requiredPermission: "module.jobs.read",
+        targetEntityType: "Job",
+        targetEntityId: job.id,
+        jobId: job.id,
+        clientId: job.clientId ?? undefined,
+        ownerProfileIds: [job.managerProfileId, job.partnerProfileId],
+        recipientProfileIds: staffAssignments.map((item) => item.employeeProfileId),
+        rolePolicies: [
+          {
+            roles: ["finance", "finance_manager"],
+            departmentId: job.departmentId ?? undefined,
+            fallbackRoles: ["finance", "finance_manager"],
+          },
+          { roles: ["gmp", "group_managing_partner"] },
+          { roles: ["marketing"] },
+        ],
+        eventId: `job.completed:${job.id}`,
+        deduplicationKey: `job.completed:${job.id}`,
+      },
+      this.buildNotificationAuth(authContext)
+    );
+  }
+
   /**
    * Create a new job
    * 
@@ -724,64 +840,7 @@ class JobService {
       job.managerProfileId ?? null
     );
 
-    const notificationPayload = {
-      title: `Job created: ${job.jobName}`,
-      message: `A new job has been created for ${job.client?.clientName || 'a client'}.`,
-      actionRequired: true,
-      jobId: job.id,
-      link: `/jobs/${job.id}`,
-    };
-
-    const recipients: number[] = [];
-
-    if (job.managerProfileId) recipients.push(job.managerProfileId);
-    if (job.partnerProfileId) recipients.push(job.partnerProfileId);
-
-    const financeProfiles = await prisma.profile.findMany({
-      where: {
-        user: {
-          roles: {
-            some: {
-              role: { name: { in: ['finance', 'finance_manager'] } },
-            },
-          },
-        },
-      },
-      select: { id: true },
-    });
-
-    const gmpProfiles = await prisma.profile.findMany({
-      where: {
-        user: {
-          roles: {
-            some: {
-              role: { name: { in: ['gmp', 'group_managing_partner'] } },
-            },
-          },
-        },
-      },
-      select: { id: true },
-    });
-
-    financeProfiles.forEach((profile) => recipients.push(profile.id));
-    gmpProfiles.forEach((profile) => recipients.push(profile.id));
-
-    await Promise.all(
-      Array.from(new Set(recipients)).map((recipientProfileId) =>
-        NotificationService.createNotification(
-          {
-            recipientProfileId,
-            type: 'info',
-            ...notificationPayload,
-          },
-          {
-            userId: authContext.userId,
-            profileId: authContext.profileId,
-            roleName: authContext.roles?.[0],
-          }
-        )
-      )
-    );
+    await this.notifyJobCreatedEvent(job, authContext);
 
     return job;
   }
@@ -905,64 +964,7 @@ class JobService {
       return created;
     });
 
-    const notificationPayload = {
-      title: `Job created: ${job.jobName}`,
-      message: `A new job has been created for ${job.client?.clientName || 'a client'}.`,
-      actionRequired: true,
-      jobId: job.id,
-      link: `/jobs/${job.id}`,
-    };
-
-    const recipients: number[] = [];
-
-    if (job.managerProfileId) recipients.push(job.managerProfileId);
-    if (job.partnerProfileId) recipients.push(job.partnerProfileId);
-
-    const financeProfiles = await prisma.profile.findMany({
-      where: {
-        user: {
-          roles: {
-            some: {
-              role: { name: { in: ['finance', 'finance_manager'] } },
-            },
-          },
-        },
-      },
-      select: { id: true },
-    });
-
-    const gmpProfiles = await prisma.profile.findMany({
-      where: {
-        user: {
-          roles: {
-            some: {
-              role: { name: { in: ['gmp', 'group_managing_partner'] } },
-            },
-          },
-        },
-      },
-      select: { id: true },
-    });
-
-    financeProfiles.forEach((profile) => recipients.push(profile.id));
-    gmpProfiles.forEach((profile) => recipients.push(profile.id));
-
-    await Promise.all(
-      Array.from(new Set(recipients)).map((recipientProfileId) =>
-        NotificationService.createNotification(
-          {
-            recipientProfileId,
-            type: 'info',
-            ...notificationPayload,
-          },
-          {
-            userId: authContext.userId,
-            profileId: authContext.profileId,
-            roleName: authContext.roles?.[0],
-          }
-        )
-      )
-    );
+    await this.notifyJobCreatedEvent(job, authContext);
 
     return job;
   }
@@ -1562,6 +1564,19 @@ class JobService {
       } catch (surveyError) {
         console.error(`Failed to auto-create client survey for completed job ${jobId}:`, surveyError);
       }
+
+      await this.notifyJobCompletedEvent(
+        {
+          id: job.id,
+          jobName: job.jobName,
+          clientId: job.clientId ?? undefined,
+          departmentId: job.departmentId ?? undefined,
+          managerProfileId: job.managerProfileId ?? undefined,
+          partnerProfileId: job.partnerProfileId ?? undefined,
+          client: job.client,
+        },
+        authContext
+      );
     }
 
     return updated;
