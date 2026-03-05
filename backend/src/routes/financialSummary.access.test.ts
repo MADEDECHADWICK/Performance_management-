@@ -6,6 +6,9 @@ import financialSummaryRoutes from "./financialSummary";
 
 jest.mock("../prisma", () => {
   const prismaMock = {
+    session: {
+      findFirst: jest.fn(),
+    },
     user: {
       findUnique: jest.fn(),
     },
@@ -26,6 +29,7 @@ jest.mock("../prisma", () => {
 });
 
 type PrismaMock = {
+  session: { findFirst: jest.Mock };
   user: { findUnique: jest.Mock };
   userAuthRole: { findMany: jest.Mock };
   profile: { findUnique: jest.Mock };
@@ -41,6 +45,7 @@ const createToken = (userId = 1, email = "finance@ronalds.local") =>
       sub: userId,
       email,
       authRoles: ["finance"],
+      sessionToken: `financial-summary-test-session-${userId}`,
     },
     process.env.JWT_SECRET || "secret",
     { expiresIn: "1h" }
@@ -57,6 +62,7 @@ const roleRow = (permissionKeys: string[]) => ({
 });
 
 const mockAuthenticatedUser = (profileId = 11) => {
+  mockedPrisma.session.findFirst.mockResolvedValue({ id: 1 });
   mockedPrisma.user.findUnique.mockResolvedValue({
     id: 1,
     email: "finance@ronalds.local",
@@ -64,6 +70,9 @@ const mockAuthenticatedUser = (profileId = 11) => {
     profile: {
       id: profileId,
       status: "active",
+      onboardingStatus: "completed",
+      onboardingChecklistCompleted: true,
+      inductionCompleted: true,
     },
   });
 };

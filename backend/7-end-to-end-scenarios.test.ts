@@ -227,8 +227,22 @@ describe('End-to-end workflow smoke test', () => {
       throw new Error('Missing seed users for onboarding checklist');
     }
 
+    const onboardingCase =
+      (await prisma.employeeOnboardingCase.findUnique({
+        where: { profileId: employeeProfile.id },
+      })) ??
+      (await prisma.employeeOnboardingCase.create({
+        data: {
+          profileId: employeeProfile.id,
+          hrOwnerProfileId: hrProfile.id,
+          status: 'pending',
+          startDate: new Date(),
+        },
+      }));
+
     const checklist = await InductionChecklistService.createChecklist(
       {
+        onboardingCaseId: onboardingCase.id,
         employeeProfileId: employeeProfile.id,
         checklistName: 'Seeded induction checklist',
         items: [
@@ -325,19 +339,30 @@ describe('End-to-end workflow smoke test', () => {
       throw new Error('Missing seed users for recompute test');
     }
 
-    const token = jwt.sign(
-      { userId: hrUser.id, email: hrUser.email, authRoles: ['hr'] },
+    const sessionToken = `e2e-recompute-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await prisma.session.create({
+      data: {
+        userId: hrUser.id,
+        token: sessionToken,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    const tokenWithSession = jwt.sign(
+      { userId: hrUser.id, email: hrUser.email, authRoles: ['hr'], sessionToken },
       process.env.JWT_SECRET || 'secret',
       { expiresIn: '1h' }
     );
 
     const response = await request(app)
       .post('/api/performance-scores/recalculate')
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${tokenWithSession}`)
       .send({ profileIds: [employeeProfile.id] });
 
     expect(response.status).toBe(200);
     expect(response.body?.success).toBe(true);
     expect(response.body?.data?.results?.length).toBeGreaterThan(0);
+
+    await prisma.session.deleteMany({ where: { token: sessionToken } });
   });
 });

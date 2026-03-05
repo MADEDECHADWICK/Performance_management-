@@ -69,7 +69,14 @@ class NotificationOutboxServiceClass {
   private pollIntervalMs = 5000;
   private batchSize = 50;
 
+  private shouldRunBackgroundProcessing() {
+    if (process.env.DISABLE_NOTIFICATION_OUTBOX_WORKER === "true") return false;
+    if (process.env.NODE_ENV === "test") return false;
+    return true;
+  }
+
   startWorker(options?: { pollIntervalMs?: number; batchSize?: number }) {
+    if (!this.shouldRunBackgroundProcessing()) return;
     if (this.workerTimer) return;
     this.pollIntervalMs = options?.pollIntervalMs ?? this.pollIntervalMs;
     this.batchSize = options?.batchSize ?? this.batchSize;
@@ -87,6 +94,7 @@ class NotificationOutboxServiceClass {
   }
 
   requestImmediateProcessing() {
+    if (!this.shouldRunBackgroundProcessing()) return;
     setTimeout(() => {
       void this.processDueJobs(this.batchSize);
     }, 0).unref();
