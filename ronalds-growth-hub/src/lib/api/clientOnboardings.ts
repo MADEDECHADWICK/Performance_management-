@@ -26,6 +26,48 @@ interface CreateClientOnboardingPayload {
   clientId?: number;
 }
 
+export interface ClientOnboardingChecklistItem {
+  id: number;
+  checklistId: number;
+  itemName: string;
+  description?: string;
+  orderIndex: number;
+  isCompleted: boolean;
+  requiresDocument: boolean;
+  documentId?: number | null;
+  completedAt?: string | null;
+  document?: {
+    id: number;
+    fileName?: string | null;
+    filePath?: string | null;
+  } | null;
+}
+
+export interface ClientOnboardingChecklist {
+  id: number;
+  clientOnboardingId: number;
+  checklistName: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  totalItems: number;
+  completedItems: number;
+  completionPercent: number;
+  dueDate?: string | null;
+  completedAt?: string | null;
+  assignedByProfileId?: number | null;
+  items?: ClientOnboardingChecklistItem[];
+}
+
+interface UpsertClientOnboardingChecklistPayload {
+  checklistName?: string;
+  dueDate?: string;
+  items: Array<{
+    itemName: string;
+    description?: string;
+    orderIndex?: number;
+    requiresDocument?: boolean;
+  }>;
+}
+
 export const clientOnboardingsAPI = {
   /**
    * List onboarding submissions
@@ -80,6 +122,46 @@ export const clientOnboardingsAPI = {
    */
   reject: async (id: number, reason?: string): Promise<ClientOnboarding> => {
     return api.post(`/client-onboardings/${id}/reject`, { reason });
+  },
+
+  /**
+   * Get checklist assigned to a client onboarding record
+   */
+  getChecklist: async (id: number): Promise<ClientOnboardingChecklist | null> => {
+    return api.get(`/client-onboardings/${id}/checklist`);
+  },
+
+  /**
+   * Create or replace checklist for a client onboarding record (HR/Admin)
+   */
+  upsertChecklist: async (
+    id: number,
+    data: UpsertClientOnboardingChecklistPayload
+  ): Promise<ClientOnboardingChecklist> => {
+    return api.post(`/client-onboardings/${id}/checklist`, data);
+  },
+
+  /**
+   * Mark a checklist item complete
+   */
+  completeChecklistItem: async (
+    id: number,
+    itemId: number
+  ): Promise<ClientOnboardingChecklist> => {
+    return api.patch(`/client-onboardings/${id}/checklist/items/${itemId}/complete`);
+  },
+
+  /**
+   * Attach uploaded document to checklist item
+   */
+  attachChecklistItemDocument: async (
+    id: number,
+    itemId: number,
+    documentId: number
+  ): Promise<ClientOnboardingChecklist> => {
+    return api.patch(`/client-onboardings/${id}/checklist/items/${itemId}/document`, {
+      documentId,
+    });
   },
 };
 

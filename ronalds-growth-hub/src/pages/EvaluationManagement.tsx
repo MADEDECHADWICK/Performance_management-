@@ -40,6 +40,29 @@ const extractItems = (payload: any) => {
   return [];
 };
 
+const toInputDate = (value: unknown) => {
+  if (!value) return "";
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 10);
+};
+
+const normalizeCycle = (cycle: any) => ({
+  ...cycle,
+  cycle_name: cycle?.cycleName ?? cycle?.cycle_name ?? cycle?.name ?? "",
+  cycle_type: cycle?.cycleType ?? cycle?.cycle_type ?? "quarterly",
+  start_date: toInputDate(cycle?.startDate ?? cycle?.start_date),
+  end_date: toInputDate(cycle?.endDate ?? cycle?.end_date),
+  review_period_start: toInputDate(cycle?.reviewPeriodStart ?? cycle?.review_period_start),
+  review_period_end: toInputDate(cycle?.reviewPeriodEnd ?? cycle?.review_period_end),
+  financial_weight: Number(cycle?.financialWeight ?? cycle?.financial_weight ?? 70),
+  non_financial_weight: Number(cycle?.nonFinancialWeight ?? cycle?.non_financial_weight ?? 30),
+  auto_create_evaluations: Boolean(
+    cycle?.autoCreateEvaluations ?? cycle?.auto_create_evaluations ?? false
+  ),
+  status: String(cycle?.status || "draft").toLowerCase(),
+});
+
 const EvaluationManagement = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -120,7 +143,7 @@ const EvaluationManagement = () => {
   const loadCycles = async () => {
     try {
       const data = await apiFetch('GET', "/evaluation-cycles");
-      setCycles(extractItems(data));
+      setCycles(extractItems(data).map((cycle) => normalizeCycle(cycle)));
     } catch (error: any) {
       console.error("Error loading cycles:", error);
       toast({
@@ -152,8 +175,19 @@ const EvaluationManagement = () => {
 
   const loadKPIs = async () => {
     try {
-      const data = await apiFetch('GET', "/kpis?isActive=true");
-      setKpis(extractItems(data));
+      const data = await apiFetch('GET', "/kpi/archive/kpis");
+      const archiveRows = extractItems(data);
+      setKpis(
+        archiveRows
+          .filter((row: any) => row?.is_active !== false)
+          .map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            description: row.description || null,
+            category: row.category || null,
+            kpiType: row.kpi_type || null,
+          }))
+      );
     } catch (error: any) {
       if (error?.status === 401) {
         navigate("/auth");
@@ -188,7 +222,7 @@ const EvaluationManagement = () => {
     try {
       const response = await apiFetch(
         'GET',
-        `/profiles?department_id=${deptId}&status=active&page=1&pageSize=200`
+        `/profiles?departmentId=${deptId}&status=active&page=1&pageSize=200`
       );
       const safeEmployees = extractItems(response);
       setDepartmentEmployees(safeEmployees);
@@ -210,12 +244,39 @@ const EvaluationManagement = () => {
   // Cycle management functions
   const handleCycleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
+    if (
+      cycleFormData.review_period_start &&
+      cycleFormData.review_period_end &&
+      cycleFormData.review_period_end < cycleFormData.review_period_start
+    ) {
+      toast({
+        title: "Invalid review period",
+        description: "Review Period End must be on or after Review Period Start.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const cyclePayload = {
+      cycleName: cycleFormData.cycle_name,
+      description: cycleFormData.description,
+      cycleType: cycleFormData.cycle_type,
+      startDate: cycleFormData.start_date,
+      endDate: cycleFormData.end_date,
+      reviewPeriodStart: cycleFormData.review_period_start || null,
+      reviewPeriodEnd: cycleFormData.review_period_end || null,
+      financialWeight: cycleFormData.financial_weight,
+      nonFinancialWeight: cycleFormData.non_financial_weight,
+      autoCreateEvaluations: cycleFormData.auto_create_evaluations,
+      status: cycleFormData.status,
+    };
+
     try {
-      let cycleId: string;
+      let cycleId: number;
 
       if (editingCycle) {
-        await apiFetch('PATCH', `/evaluation-cycles/${editingCycle.id}`, cycleFormData);
+        await apiFetch('PATCH', `/evaluation-cycles/${editingCycle.id}`, cyclePayload);
         cycleId = editingCycle.id;
         
         toast({
@@ -223,7 +284,7 @@ const EvaluationManagement = () => {
           description: "Evaluation cycle has been updated successfully.",
         });
       } else {
-        const data = await apiFetch('POST', "/evaluation-cycles", cycleFormData);
+        const data = await apiFetch('POST', "/evaluation-cycles", cyclePayload);
         cycleId = data.id;
         
         toast({
@@ -275,7 +336,7 @@ const EvaluationManagement = () => {
       console.error("Error saving cycle:", error);
       toast({
         title: "Error",
-        description: "Failed to save evaluation cycle.",
+        description: error?.message || "Failed to save evaluation cycle.",
         variant: "destructive",
       });
     }
@@ -301,7 +362,7 @@ const EvaluationManagement = () => {
 
   const handleStatusChange = async (cycleId: string, newStatus: string) => {
     try {
-      const cycle = await apiFetch('GET', `/evaluation-cycles/${cycleId}`);
+      const cycle = normalizeCycle(await apiFetch('GET', `/evaluation-cycles/${cycleId}`));
 
       await apiFetch('PATCH', `/evaluation-cycles/${cycleId}`, { status: newStatus });
 
@@ -338,7 +399,7 @@ const EvaluationManagement = () => {
       console.error("Error updating status:", error);
       toast({
         title: "Error",
-        description: "Failed to update cycle status.",
+        description: error?.message || "Failed to update cycle status.",
         variant: "destructive",
       });
     }
@@ -742,12 +803,12 @@ const EvaluationManagement = () => {
                         <div>
                           <CardTitle className="flex items-center gap-2">
                             <Calendar className="h-5 w-5 text-primary" />
-                            {cycle.name}
+                            {cycle.cycle_name}
                           </CardTitle>
                           <CardDescription>
-                            {getCycleTypeLabel(cycle.cycle_type)} â€¢ {" "}
-                            {format(new Date(cycle.start_date), "MMM d, yyyy")} - {" "}
-                            {format(new Date(cycle.end_date), "MMM d, yyyy")}
+                            {getCycleTypeLabel(cycle.cycle_type)} -{" "}
+                            {cycle.start_date ? format(new Date(cycle.start_date), "MMM d, yyyy") : "N/A"} -{" "}
+                            {cycle.end_date ? format(new Date(cycle.end_date), "MMM d, yyyy") : "N/A"}
                           </CardDescription>
                         </div>
                         <div className="flex items-center gap-2">

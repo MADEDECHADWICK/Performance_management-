@@ -7,11 +7,8 @@ const router = Router();
 
 const hrRoles = new Set([
   'hr',
-  'hr_manager',
-  'admin',
   'super_admin',
   'gmp',
-  'group_managing_partner',
 ]);
 
 const getHrContext = async (req: AuthRequest) => {

@@ -7,6 +7,7 @@ import {
   EXPLICIT_NONE_PERMISSION_KEY,
   ModuleAction,
   ModuleKey,
+  ROLE_MODULE_PERMISSION_MATRIX,
   RoleModulePolicyInput,
   buildModuleAccessMatrix,
   isModuleAction,
@@ -14,6 +15,10 @@ import {
   matrixToPermissionKeys,
   moduleCatalog,
 } from "../services/moduleAccess.service";
+import {
+  CANONICAL_ROLES,
+  canonicalizeRoleName,
+} from "../auth/canonicalRoles";
 import {
   MODULE_REQUIREMENTS_BY_MODULE,
   ROUTE_MODULE_REQUIREMENTS,
@@ -131,6 +136,13 @@ router.get("/modules", async (_req, res) => {
       create: ["write"],
       delete: ["write"],
     },
+  });
+});
+
+router.get("/matrix", canManageModulePolicies, async (_req, res) => {
+  res.json({
+    canonicalRoles: CANONICAL_ROLES,
+    roleModulePermissionMatrix: ROLE_MODULE_PERMISSION_MATRIX,
   });
 });
 
@@ -319,11 +331,15 @@ router.get("/users/:userId", canManageModulePolicies, async (req, res) => {
     );
     const effectiveRoleEntries = overrideRoleEntry ? [overrideRoleEntry] : activeRoleEntries;
 
-    const roleNames = activeRoleEntries
+    const roleNames = Array.from(
+      new Set(
+        activeRoleEntries
       .filter((entry) => entry.role.name.toLowerCase() !== overrideRoleName)
-      .map((entry) => entry.role.name);
+      .map((entry) => canonicalizeRoleName(entry.role.name))
+      )
+    );
     const rolePolicies: RoleModulePolicyInput[] = effectiveRoleEntries.map((entry) => ({
-      roleName: entry.role.name,
+      roleName: canonicalizeRoleName(entry.role.name),
       permissionKeys: entry.role.permissions.map((permissionEntry) => permissionEntry.permission.key),
     }));
     const permissionKeys = Array.from(
@@ -553,11 +569,15 @@ router.get("/me", async (req: AuthRequest, res) => {
     );
     const effectiveRoleEntries = overrideRoleEntry ? [overrideRoleEntry] : activeRoleEntries;
 
-    const roleNames = activeRoleEntries
+    const roleNames = Array.from(
+      new Set(
+        activeRoleEntries
       .filter((entry) => entry.role.name.toLowerCase() !== overrideRoleName)
-      .map((entry) => entry.role.name);
+      .map((entry) => canonicalizeRoleName(entry.role.name))
+      )
+    );
     const rolePolicies: RoleModulePolicyInput[] = effectiveRoleEntries.map((entry) => ({
-      roleName: entry.role.name,
+      roleName: canonicalizeRoleName(entry.role.name),
       permissionKeys: entry.role.permissions.map((permissionEntry) => permissionEntry.permission.key),
     }));
     const permissionKeys = Array.from(

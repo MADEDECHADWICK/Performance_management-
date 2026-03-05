@@ -24,7 +24,7 @@ const buildAnalyticsContext = async (userId: number): Promise<AnalyticsContext> 
   const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
   const positionTitle = user?.profile?.positionTitle?.toLowerCase() || "";
 
-  const isAdmin = roleNames.includes("admin") || roleNames.includes("super_admin");
+  const isAdmin = roleNames.includes("super_admin");
   const isPartner = roleNames.includes("partner") || Boolean(user?.profile?.isPartner);
   const isManager =
     roleNames.includes("manager") ||
@@ -32,14 +32,12 @@ const buildAnalyticsContext = async (userId: number): Promise<AnalyticsContext> 
     positionTitle.includes("team lead");
   const isHr =
     roleNames.includes("hr") ||
-    roleNames.includes("hr_manager") ||
     positionTitle.includes("hr") ||
     positionTitle.includes("human resource");
   const isFinance = roleNames.includes("finance") || positionTitle.includes("finance");
   const isMarketing = roleNames.includes("marketing") || positionTitle.includes("marketing");
   const isGmp =
     roleNames.includes("gmp") ||
-    roleNames.includes("group_managing_partner") ||
     positionTitle.includes("group managing partner");
 
   const isEmployee =
@@ -239,7 +237,7 @@ router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
-    const isAdmin = roleNames.includes("admin") || roleNames.includes("super_admin");
+    const isAdmin = roleNames.includes("super_admin");
     if (!isAdmin) {
       return res.status(403).json({
         error: 'Only admins can access company-wide analytics',

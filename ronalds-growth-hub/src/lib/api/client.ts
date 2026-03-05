@@ -47,7 +47,28 @@ export class ApiError extends Error {
 }
 
 const toCamelCase = (value: string) =>
-  value.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+  value.replace(/_([a-zA-Z0-9])/g, (_, letter: string) => letter.toUpperCase());
+
+const normalizePathQueryKeys = (path: string) => {
+  const queryIndex = path.indexOf("?");
+  if (queryIndex < 0) return path;
+
+  const basePath = path.slice(0, queryIndex);
+  const queryAndHash = path.slice(queryIndex + 1);
+  const hashIndex = queryAndHash.indexOf("#");
+  const query = hashIndex >= 0 ? queryAndHash.slice(0, hashIndex) : queryAndHash;
+  const hash = hashIndex >= 0 ? queryAndHash.slice(hashIndex) : "";
+  if (!query) return `${basePath}${hash}`;
+
+  const normalized = new URLSearchParams();
+  const params = new URLSearchParams(query);
+  params.forEach((value, key) => {
+    normalized.append(toCamelCase(key), value);
+  });
+
+  const normalizedQuery = normalized.toString();
+  return normalizedQuery ? `${basePath}?${normalizedQuery}${hash}` : `${basePath}${hash}`;
+};
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && value.constructor === Object;
@@ -88,8 +109,9 @@ export async function apiFetch<T = any>(
   method: string,
   path: string,
   body?: any,
-  options?: { skipAuth?: boolean }
+  options?: { skipAuth?: boolean; headers?: Record<string, string> }
 ): Promise<T> {
+  const normalizedPath = normalizePathQueryKeys(path);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -98,12 +120,17 @@ export async function apiFetch<T = any>(
   if (token && !options?.skipAuth) {
     headers['Authorization'] = `Bearer ${token}`;
   }
+  if (options?.headers) {
+    Object.assign(headers, options.headers);
+  }
   
   const fetchOptions: RequestInit = { method, headers };
-  if (body) fetchOptions.body = JSON.stringify(body);
+  if (body !== undefined && body !== null) {
+    fetchOptions.body = JSON.stringify(camelizeKeys(body));
+  }
   
   try {
-    const res = await fetch(`${API_URL}${path}`, fetchOptions);
+    const res = await fetch(`${API_URL}${normalizedPath}`, fetchOptions);
     const text = await res.text();
     const data = text ? JSON.parse(text) : {};
     

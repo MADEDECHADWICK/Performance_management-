@@ -7,6 +7,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import PageLoader from '@/components/ui/page-loader';
 
+const PROTECTED_ROLE_NAMES = new Set([
+  'super_admin',
+  'hr',
+  'gmp',
+  'partner',
+  'manager',
+  'finance',
+  'marketing',
+  'employee',
+]);
+
 export default function RoleManagement() {
   const { toast } = useToast();
   const [roles, setRoles] = useState<Role[]>([]);
@@ -195,7 +206,7 @@ export default function RoleManagement() {
                   >
                     Edit
                   </button>
-                  {!['super_admin', 'hr_manager', 'Partner', 'Manager', 'Associate', 'Intern', 'Employee'].includes(role.name) && (
+                  {!PROTECTED_ROLE_NAMES.has(String(role.name || '').toLowerCase().trim()) && (
                     <button
                       onClick={() => handleDelete(role.id)}
                       className="text-red-600 hover:text-red-800 font-medium"

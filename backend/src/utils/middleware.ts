@@ -86,7 +86,7 @@ export const withDocumentAccess = (): RequestHandler[] => [
  *
  * NOTE:
  * requirePartnerAccess already enforces partner/admin access.
- * If you want strict role-gating before DB checks, wrap it with withRoles("partner","admin","super_admin").
+ * If you want strict role-gating before DB checks, wrap it with withRoles("partner","super_admin").
  */
 export const withPartnerAccess = (): RequestHandler[] => [
   ...authenticated(),
@@ -118,19 +118,19 @@ export const withTimeEntryBudgetValidation = (): RequestHandler[] => [
  * Convenience bundles
  */
 export const managerOrAdmin = (): RequestHandler[] => [
-  ...withRoles("manager", "admin", "super_admin"),
+  ...withRoles("manager", "super_admin"),
 ];
 
 export const partnerManagerOrAdmin = (): RequestHandler[] => [
-  ...withRoles("partner", "manager", "admin", "super_admin"),
+  ...withRoles("partner", "manager", "super_admin"),
 ];
 
 export const adminOnly = (): RequestHandler[] => [
-  ...withRoles("admin", "super_admin"),
+  ...withRoles("super_admin"),
 ];
 
 export const hrOrAdmin = (): RequestHandler[] => [
-  ...withRoles("hr", "hr_manager", "admin", "super_admin"),
+  ...withRoles("hr", "super_admin"),
 ];
 
 export const employeeOnly = (): RequestHandler[] => [

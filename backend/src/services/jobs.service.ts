@@ -224,8 +224,10 @@ export interface ListJobsOptions {
   filters?: {
     status?: string | string[];
     clientId?: number;
+    departmentId?: number;
     partnerProfileId?: number;
     managerProfileId?: number;
+    priority?: string;
     dateFrom?: Date;
     dateTo?: Date;
   };
@@ -654,7 +656,7 @@ class JobService {
             departmentId: job.departmentId ?? undefined,
             fallbackRoles: ["finance", "finance_manager"],
           },
-          { roles: ["gmp", "group_managing_partner"] },
+          { roles: ["gmp"] },
           { roles: ["marketing"] },
         ],
         eventId: `job.created:${job.id}`,
@@ -711,7 +713,7 @@ class JobService {
             departmentId: job.departmentId ?? undefined,
             fallbackRoles: ["finance", "finance_manager"],
           },
-          { roles: ["gmp", "group_managing_partner"] },
+          { roles: ["gmp"] },
           { roles: ["marketing"] },
         ],
         eventId: `job.completed:${job.id}`,
@@ -728,8 +730,8 @@ class JobService {
    */
   async createJob(input: JobCreateInput, authContext: AuthContext) {
     // Authorization: manager creating their own job, or admin
-    const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
-    const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
+    const isAdmin = authContext.roles?.includes('super_admin');
+    const isHr = authContext.roles?.includes('hr');
     const normalizedMilestones = this.normalizeMilestonesInput(input.milestones);
 
     if (!isAdmin && !isHr) {
@@ -854,8 +856,8 @@ class JobService {
     authContext: AuthContext
   ) {
     const normalizedMilestones = this.normalizeMilestonesInput(input.milestones);
-    const isAdmin = authContext.roles?.includes('admin') || authContext.roles?.includes('super_admin');
-    const isHr = authContext.roles?.includes('hr') || authContext.roles?.includes('hr_manager');
+    const isAdmin = authContext.roles?.includes('super_admin');
+    const isHr = authContext.roles?.includes('hr');
 
     if (!isAdmin && !isHr) {
       throw new Error('Not authorized to create jobs from onboarding');
@@ -981,20 +983,19 @@ class JobService {
   async listJobs(options: ListJobsOptions, authContext: AuthContext) {
     const { page, pageSize, filters = {}, sort = {} } = options;
     const skip = (page - 1) * pageSize;
+    if (!Number.isFinite(authContext.profileId) || Number(authContext.profileId) <= 0) {
+      throw { statusCode: 401, message: 'Profile is required for job access' };
+    }
     const normalizeRole = (role?: string) =>
       String(role || '')
         .trim()
         .toLowerCase()
-        .replace(/\s+/g, '_');
+        .replace(/[\s-]+/g, '_');
     const roleSet = new Set((authContext.roles || []).map((role) => normalizeRole(role)));
     const isAdmin =
-      roleSet.has('admin') ||
       roleSet.has('super_admin') ||
       roleSet.has('hr') ||
-      roleSet.has('hr_manager') ||
-      roleSet.has('human_resources') ||
-      roleSet.has('gmp') ||
-      roleSet.has('group_managing_partner');
+      roleSet.has('gmp');
 
     // Build where clause based on access control
     let whereClause: any = {};
@@ -1065,8 +1066,10 @@ class JobService {
       }
     }
     if (filters.clientId) whereClause.clientId = filters.clientId;
+    if (filters.departmentId) whereClause.departmentId = filters.departmentId;
     if (filters.partnerProfileId) whereClause.partnerProfileId = filters.partnerProfileId;
     if (filters.managerProfileId) whereClause.managerProfileId = filters.managerProfileId;
+    if (filters.priority) whereClause.priority = String(filters.priority).toLowerCase();
 
     if (filters.dateFrom || filters.dateTo) {
       whereClause.startDate = {};
@@ -1303,12 +1306,9 @@ class JobService {
 
     const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
     const isAdmin =
-      roleSet.has('admin') ||
       roleSet.has('super_admin') ||
       roleSet.has('hr') ||
-      roleSet.has('hr_manager') ||
-      roleSet.has('gmp') ||
-      roleSet.has('group_managing_partner');
+      roleSet.has('gmp');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
 
@@ -1389,7 +1389,7 @@ class JobService {
     const job = await this.getJobById(jobId);
 
     // Authorization: own job or admin
-    const isAdmin = authContext.roles?.includes('admin');
+    const isAdmin = authContext.roles?.includes('super_admin');
     if (!isAdmin && job.managerProfileId !== authContext.profileId) {
       throw new Error('Not authorized to update this job');
     }
@@ -1442,7 +1442,7 @@ class JobService {
     }
 
     // Authorization
-    const isAdmin = authContext?.roles?.includes('admin');
+    const isAdmin = authContext?.roles?.includes('super_admin');
     const isJobManager = job.managerProfileId === authContext?.profileId;
     const isPartner = job.partnerProfileId === authContext?.profileId;
 
@@ -1589,7 +1589,7 @@ class JobService {
     const job = await this.getJobById(jobId);
 
     // Authorization
-    const isAdmin = authContext.roles?.includes('admin');
+    const isAdmin = authContext.roles?.includes('super_admin');
     if (!isAdmin && job.managerProfileId !== authContext.profileId) {
       throw new Error('Not authorized to delete this job');
     }
@@ -1619,7 +1619,7 @@ class JobService {
     const job = await this.getJobById(jobId);
 
     // Authorization: job manager, partner, or admin
-    const isAdmin = authContext.roles?.includes('admin');
+    const isAdmin = authContext.roles?.includes('super_admin');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
 
@@ -1746,12 +1746,9 @@ class JobService {
 
     const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
     const isAdmin =
-      roleSet.has('admin') ||
       roleSet.has('super_admin') ||
       roleSet.has('hr') ||
-      roleSet.has('hr_manager') ||
-      roleSet.has('gmp') ||
-      roleSet.has('group_managing_partner');
+      roleSet.has('gmp');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
 
@@ -2093,7 +2090,7 @@ class JobService {
     }
 
     const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
-    const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
+    const isAdmin = roleSet.has('super_admin');
     const isJobManager = assignment.job.managerProfileId === authContext.profileId;
     const isPartner = assignment.job.partnerProfileId === authContext.profileId;
 
@@ -2210,7 +2207,7 @@ class JobService {
     }
 
     const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
-    const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
+    const isAdmin = roleSet.has('super_admin');
     const isJobManager = assignment.job.managerProfileId === authContext.profileId;
     const isPartner = assignment.job.partnerProfileId === authContext.profileId;
 

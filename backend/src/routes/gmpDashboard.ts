@@ -30,13 +30,13 @@ const resolveGmpContext = async (
     return null;
   }
 
-  const roles = (req.user?.authRoles || []).map((role) => role.toLowerCase());
+  const roles = (req.userRoles || []).map((role) => role.toLowerCase());
   const positionTitle = user.profile.positionTitle?.toLowerCase() || '';
   const hasGmpAccess =
     roles.includes('super_admin') ||
     roles.includes('gmp') ||
     positionTitle.includes('group managing partner') ||
-    positionTitle.includes('group_managing_partner');
+    positionTitle.includes('gmp');
 
   if (!hasGmpAccess) {
     res.status(403).json({ error: 'Access denied. Group Managing Partner privileges required.' });

@@ -7,18 +7,15 @@ import { hrOrAdmin } from "../utils/middleware";
 
 const router = Router();
 const privilegedRoles = new Set([
-  "admin",
   "super_admin",
   "hr",
-  "hr_manager",
   "gmp",
-  "group_managing_partner",
 ]);
 
 const getRoleNames = (req: any) => {
   const roles = [
     ...(req.userRoles || []),
-    ...(req.user?.authRoles || []),
+    ...(req.userRoles || []),
     req.profile?.role?.name,
   ]
     .filter(Boolean)

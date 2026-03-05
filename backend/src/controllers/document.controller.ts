@@ -11,12 +11,24 @@ import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client"
 const buildAuth = (req: AuthRequest) => ({
   userId: req.user!.userId,
   profileId: req.user!.profileId!,
-  roles: req.userRoles ?? [],
+  roles: Array.from(new Set([...(req.userRoles || [])])),
 });
+
+const normalizeOptionalBoolean = (value: unknown): boolean | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase().trim();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+  }
+  return undefined;
+};
 
 export class DocumentController {
   static async listDocuments(req: AuthRequest, res: Response): Promise<void> {
     try {
+      const auth = buildAuth(req);
       const page = Number(req.query.page) || 1;
       const pageSize = Number(req.query.pageSize) || 10;
 
@@ -28,17 +40,20 @@ export class DocumentController {
       const entityType = req.query.entityType as string | undefined;
       const entityId = req.query.entityId ? Number(req.query.entityId) : undefined;
 
-      const result = await DocumentService.listDocuments({
-        page,
-        pageSize,
-        filters: {
-          verificationStatus,
-          accessLevel,
-          documentType,
-          entityType,
-          entityId: Number.isFinite(entityId as number) ? (entityId as number) : undefined,
+      const result = await DocumentService.listDocuments(
+        {
+          page,
+          pageSize,
+          filters: {
+            verificationStatus,
+            accessLevel,
+            documentType,
+            entityType,
+            entityId: Number.isFinite(entityId as number) ? (entityId as number) : undefined,
+          },
         },
-      });
+        auth
+      );
 
       res.json(paginatedResponse(result.documents, result.total, page, pageSize, "Documents retrieved"));
     } catch (error: any) {
@@ -65,6 +80,7 @@ export class DocumentController {
         description,
         isRequired,
       } = req.body;
+      const normalizedIsRequired = normalizeOptionalBoolean(isRequired);
 
       const fileName = bodyFileName || uploadedFile?.originalname;
       const filePath = uploadedFile
@@ -91,7 +107,7 @@ export class DocumentController {
           entityId: entityId ? Number(entityId) : undefined,
           accessLevel,
           description,
-          isRequired,
+          isRequired: normalizedIsRequired,
         },
         auth
       );
@@ -101,6 +117,45 @@ export class DocumentController {
       console.error("DocumentController.uploadDocument error:", error);
       const status = error.statusCode ?? 400;
       res.status(status).json(errorResponse(error.message || "Failed to upload document", status));
+    }
+  }
+
+  static async requestDocument(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const auth = buildAuth(req);
+      const {
+        requestedProfileId,
+        documentType,
+        entityType,
+        entityId,
+        dueDate,
+        message,
+        priority,
+      } = req.body;
+
+      const result = await DocumentService.requestDocument(
+        {
+          requestedProfileId: Number(requestedProfileId),
+          documentType: String(documentType || ""),
+          entityType: String(entityType || ""),
+          entityId:
+            entityId === undefined || entityId === null || entityId === ""
+              ? undefined
+              : Number(entityId),
+          dueDate: dueDate ? new Date(dueDate) : undefined,
+          message,
+          priority,
+        },
+        auth
+      );
+
+      res.status(201).json(successResponse(result, "Document request sent", 201));
+    } catch (error: any) {
+      console.error("DocumentController.requestDocument error:", error);
+      const status = error.statusCode ?? 400;
+      res
+        .status(status)
+        .json(errorResponse(error.message || "Failed to request document", status));
     }
   }
 

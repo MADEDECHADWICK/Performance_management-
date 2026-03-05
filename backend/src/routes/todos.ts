@@ -6,14 +6,14 @@ import { createAudit } from '../utils/audit';
 
 const router = Router();
 const ALLOWED_STATUSES = new Set<TaskStatus>(Object.values(TaskStatus));
-const PRIVILEGED_ROLES = new Set(['admin', 'super_admin', 'hr', 'hr_manager']);
+const PRIVILEGED_ROLES = new Set(['super_admin', 'hr']);
 const MANAGEMENT_ROLES = new Set(['manager', 'partner']);
 
 const normalizeRole = (value: string) => value.toLowerCase().trim();
 
 const getRoleSet = (req: AuthRequest) => {
   const roleSet = new Set<string>();
-  (req.user?.authRoles || []).forEach((role) => roleSet.add(normalizeRole(role)));
+  (req.userRoles || []).forEach((role) => roleSet.add(normalizeRole(role)));
   if (req.profile?.role?.name) {
     roleSet.add(normalizeRole(req.profile.role.name));
   }

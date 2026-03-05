@@ -40,7 +40,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Revenue growth rate",
     level: "level_1_corporate_vision",
     perspective: "financial",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "%",
     frequency: "monthly",
     direction: "higher_better",
@@ -51,7 +51,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Operating profit margin",
     level: "level_1_corporate_vision",
     perspective: "financial",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "%",
     frequency: "monthly",
     direction: "higher_better",
@@ -62,7 +62,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Revenue per partner",
     level: "level_1_corporate_vision",
     perspective: "financial",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "currency",
     frequency: "monthly",
     direction: "higher_better",
@@ -84,7 +84,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Client retention rate",
     level: "level_1_corporate_vision",
     perspective: "customer",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "%",
     frequency: "quarterly",
     direction: "higher_better",
@@ -106,7 +106,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Regulatory sanctions",
     level: "level_1_corporate_vision",
     perspective: "internal_process",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "count",
     frequency: "quarterly",
     direction: "lower_better",
@@ -442,7 +442,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Strategic market share",
     level: "level_1_corporate_vision",
     perspective: "customer",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "%",
     frequency: "quarterly",
     direction: "higher_better",
@@ -453,7 +453,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     name: "Audits passing external or peer review",
     level: "level_1_corporate_vision",
     perspective: "internal_process",
-    owner: "group_managing_partner",
+    owner: "gmp",
     unit: "%",
     frequency: "quarterly",
     direction: "higher_better",
@@ -657,7 +657,7 @@ export const PERFORMANCE_FRAMEWORK_BLUEPRINT = {
     {
       id: "level_1_corporate_vision",
       name: "Corporate Vision & Strategic Outcomes",
-      owner: "group_managing_partner",
+      owner: "gmp",
       intent:
         "Translate strategy into enterprise outcomes across financial sustainability, market position, and governance quality.",
     },
@@ -843,7 +843,7 @@ const DASHBOARD_MODULE_COVERAGE: Record<
     label: "Group Managing Partner Dashboard",
     strategicIntent:
       "Steer enterprise profitability, market reputation, and quality governance across all functions.",
-    primaryRoleOwner: "group_managing_partner",
+    primaryRoleOwner: "gmp",
     enablerFunctions: ["finance", "marketing", "hr", "partners", "managers"],
     cadence: "monthly",
     pyramidFocus: [
@@ -1175,14 +1175,14 @@ export const resolveDashboardModuleForContext = (input: {
     );
 
   if (
-    hasRole("gmp", "group_managing_partner") ||
+    hasRole("gmp") ||
     positionTitle.includes("group managing partner") ||
-    positionTitle.includes("group_managing_partner")
+    positionTitle.includes("gmp")
   ) {
     return "gmp";
   }
 
-  if (hasRole("hr_manager", "hr")) return "hr";
+  if (hasRole("hr")) return "hr";
   if (hasRole("partner")) return "partner";
   if (hasRole("manager")) return "manager";
   if (hasRole("finance") || positionTitle.includes("finance")) return "finance";
@@ -1194,7 +1194,7 @@ export const resolveDashboardModuleForContext = (input: {
     return "marketing";
   }
 
-  if (hasRole("admin", "super_admin")) return "hr";
+  if (hasRole("super_admin")) return "hr";
 
   return "employee";
 };

@@ -192,12 +192,24 @@ const documentsAPI = {
       body: formData,
     });
 
+    const payload = await res.json().catch(() => ({}));
+
     if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      throw new Error(error.message || 'Upload failed');
+      throw new Error(payload.message || payload.error || 'Upload failed');
     }
 
-    return res.json();
+    const normalized = payload && typeof payload === 'object' && 'data' in payload
+      ? payload.data
+      : payload;
+
+    const document =
+      normalized && typeof normalized === 'object' && 'id' in normalized
+        ? normalized
+        : normalized && typeof normalized === 'object' && 'data' in normalized
+          ? normalized.data
+          : normalized;
+
+    return document as Document;
   },
 
   /**

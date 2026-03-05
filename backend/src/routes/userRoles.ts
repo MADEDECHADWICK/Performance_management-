@@ -3,8 +3,44 @@ import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
+import { canonicalizeRoleName } from '../auth/canonicalRoles';
 
 const router = Router();
+
+const normalizeLegacyRoleName = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+const normalizeRoleName = (value: unknown) => canonicalizeRoleName(value);
+
+const getRoleLookupCandidates = (value: unknown) => {
+  const canonical = normalizeRoleName(value);
+  const legacy = normalizeLegacyRoleName(value);
+  return Array.from(new Set([canonical, legacy].filter(Boolean)));
+};
+
+const findAuthRoleByInput = async (value: unknown) => {
+  const candidates = getRoleLookupCandidates(value);
+  for (const name of candidates) {
+    const role = await prisma.authRole.findUnique({ where: { name } });
+    if (role) return role;
+  }
+  return null;
+};
+
+const revokeUserSessions = async (userId: number) => {
+  await prisma.session.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+    },
+    data: {
+      revokedAt: new Date(),
+    },
+  });
+};
 
 // Role hierarchy for escalation warnings (access roles only)
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -14,10 +50,7 @@ const ROLE_HIERARCHY: Record<string, number> = {
   manager: 3,
   partner: 4,
   gmp: 5,
-  group_managing_partner: 5,
   hr: 5,
-  hr_manager: 5,
-  admin: 6,
   super_admin: 7,
 };
 
@@ -30,20 +63,18 @@ const CORE_ACCESS_ROLES = [
   'manager',
   'partner',
   'gmp',
-  'group_managing_partner',
   'hr',
-  'hr_manager',
-  'admin',
   'super_admin',
 ] as const;
 
 const CORE_ACCESS_ROLE_SET = new Set<string>(CORE_ACCESS_ROLES);
+const ALL_CORE_ACCESS_ROLE_NAMES = CORE_ACCESS_ROLES;
 
-const normalizeRoleName = (value: unknown) => String(value || '').trim().toLowerCase();
 const isCoreAccessRole = (roleName: unknown) => CORE_ACCESS_ROLE_SET.has(normalizeRoleName(roleName));
 const PRIMARY_ASSIGNABLE_ACCESS_ROLES = [
+  'super_admin',
+  'hr',
   'gmp',
-  'admin',
   'partner',
   'manager',
   'marketing',
@@ -67,7 +98,7 @@ router.get('/', authMiddleware, async (req, res) => {
       include: { role: true },
     });
     // return shape compatible with previous frontend usage: [{ role: '...' }, ...]
-    return res.json(roles.map(r => ({ role: r.role.name })));
+    return res.json(roles.map(r => ({ role: normalizeRoleName(r.role.name) })));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -99,6 +130,7 @@ router.get('/list/all', authMiddleware, requireModuleAccess('users', 'admin'), a
       const sortedRoles = user.roles
         .map((item) => normalizeRoleName(item.role.name))
         .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index)
         .sort((a, b) => rolePriority(b) - rolePriority(a));
       const primaryRole = sortedRoles[0] || null;
 
@@ -145,9 +177,7 @@ router.post('/', authMiddleware, requireModuleAccess('users', 'admin'), async (r
 
     // Check if user already has this role
     const normalizedRoleName = normalizeRoleName(role);
-    const roleRecord = await prisma.authRole.findUnique({
-      where: { name: normalizedRoleName },
-    });
+    const roleRecord = await findAuthRoleByInput(role);
 
     if (!roleRecord) {
       return res.status(400).json({ error: `Invalid role: ${role}` });
@@ -182,7 +212,7 @@ router.post('/', authMiddleware, requireModuleAccess('users', 'admin'), async (r
 
       if (isCoreAccessRole(roleRecord.name)) {
         const coreRoleRecords = await tx.authRole.findMany({
-          where: { name: { in: [...CORE_ACCESS_ROLE_SET] } },
+          where: { name: { in: [...ALL_CORE_ACCESS_ROLE_NAMES] } },
           select: { id: true },
         });
         const coreRoleIds = coreRoleRecords.map((item) => item.id);
@@ -208,10 +238,13 @@ router.post('/', authMiddleware, requireModuleAccess('users', 'admin'), async (r
       ip_address: req.ip,
     });
 
+    await revokeUserSessions(userIdNum);
+
     return res.status(201).json({
       userId: userIdNum,
       roleId: roleRecord.id,
-      message: `Role '${role}' assigned to user ${targetUser?.email || userId}`,
+      role: normalizedRoleName,
+      message: `Role '${normalizedRoleName}' assigned to user ${targetUser?.email || userId}`,
     });
   } catch (err: any) {
     console.error('Error assigning role:', err);
@@ -247,12 +280,8 @@ router.put('/change', authMiddleware, requireModuleAccess('users', 'admin'), asy
     }
 
     // Check if user has the old role
-    const oldRoleRecord = await prisma.authRole.findUnique({
-      where: { name: normalizedOldRole },
-    });
-    const newRoleRecord = await prisma.authRole.findUnique({
-      where: { name: normalizedNewRole },
-    });
+    const oldRoleRecord = await findAuthRoleByInput(oldRole);
+    const newRoleRecord = await findAuthRoleByInput(newRole);
 
     if (!oldRoleRecord || !newRoleRecord) {
       return res.status(400).json({ error: 'Invalid role provided' });
@@ -302,7 +331,7 @@ router.put('/change', authMiddleware, requireModuleAccess('users', 'admin'), asy
 
       if (isCoreAccessRole(newRoleRecord.name)) {
         const coreRoleRecords = await tx.authRole.findMany({
-          where: { name: { in: [...CORE_ACCESS_ROLE_SET] } },
+          where: { name: { in: [...ALL_CORE_ACCESS_ROLE_NAMES] } },
           select: { id: true },
         });
         const coreRoleIds = coreRoleRecords.map((item) => item.id);
@@ -334,13 +363,15 @@ router.put('/change', authMiddleware, requireModuleAccess('users', 'admin'), asy
       ip_address: req.ip,
     });
 
+    await revokeUserSessions(userIdNum);
+
     return res.json({
       userId: userIdNum,
       roleId: newRoleRecord.id,
-      message: `Role changed from '${oldRoleRecord.name}' to '${newRoleRecord.name}' for user ${targetUser?.email || userId}`,
+      message: `Role changed from '${normalizeRoleName(oldRoleRecord.name)}' to '${normalizeRoleName(newRoleRecord.name)}' for user ${targetUser?.email || userId}`,
       escalation: isEscalation,
-      oldRole: oldRoleRecord.name,
-      newRole: newRoleRecord.name,
+      oldRole: normalizeRoleName(oldRoleRecord.name),
+      newRole: normalizeRoleName(newRoleRecord.name),
       changedBy: currentUserId,
       changedAt: new Date(),
     });
@@ -365,9 +396,7 @@ router.delete('/', authMiddleware, requireModuleAccess('users', 'admin'), async 
       return res.status(403).json({ error: 'You cannot remove your own roles' });
     }
 
-    const roleRecord = await prisma.authRole.findUnique({
-      where: { name: role },
-    });
+    const roleRecord = await findAuthRoleByInput(role);
 
     if (!roleRecord) {
       return res.status(400).json({ error: `Invalid role: ${role}` });
@@ -402,9 +431,11 @@ router.delete('/', authMiddleware, requireModuleAccess('users', 'admin'), async 
       ip_address: req.ip,
     });
 
+    await revokeUserSessions(Number(userId));
+
     return res.json({
       deleted: deleted.count,
-      message: `Role '${role}' removed from user ${targetUser?.email || userId}`,
+      message: `Role '${normalizeRoleName(role)}' removed from user ${targetUser?.email || userId}`,
     });
   } catch (err: any) {
     console.error('Error removing role:', err);

@@ -12,8 +12,8 @@ import {
   methodToModuleAction,
 } from "../services/moduleAccess.service";
 
-const ADMIN_ROLES = new Set(["admin", "super_admin", "hr", "hr_manager"]);
-const SUPERVISORY_ROLES = new Set(["manager", "partner", "gmp", "group_managing_partner"]);
+const ADMIN_ROLES = new Set(["super_admin", "hr"]);
+const SUPERVISORY_ROLES = new Set(["manager", "partner", "gmp"]);
 const OPERATIONAL_ROLES = new Set(["employee", "associate", "intern", "marketing", "finance"]);
 
 const inferModuleAction = (

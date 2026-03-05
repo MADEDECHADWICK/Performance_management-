@@ -9,6 +9,7 @@ import { validateRequest, handleValidationErrors } from "../middleware/validate"
 import {
   uploadDocumentValidators,
   uploadDocumentFileValidators,
+  requestDocumentValidators,
   verifyDocumentValidators,
   listDocumentsValidators,
 } from "../validators/document.validators";
@@ -72,6 +73,18 @@ router.post(
 );
 
 /**
+ * POST /documents/request
+ * Request a targeted user to submit a required document.
+ */
+router.post(
+  "/request",
+  authenticated(),
+  validateRequest(requestDocumentValidators),
+  handleValidationErrors,
+  DocumentController.requestDocument
+);
+
+/**
  * GET /documents/:documentId
  */
 router.get(
@@ -95,7 +108,7 @@ router.delete(
  */
 router.patch(
   "/:documentId/verify",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(verifyDocumentValidators),
   handleValidationErrors,
   DocumentController.verifyDocument

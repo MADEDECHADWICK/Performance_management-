@@ -18,6 +18,9 @@ interface ReplayAuthContext {
 
 const OUTBOX_ENTITY = "NotificationOutbox";
 const DISPATCH_ENTITY = "NotificationDispatch";
+const OUTBOX_LEADER_LOCK_CLASS_ID = 48193;
+const OUTBOX_LEADER_LOCK_OBJECT_ID = 1;
+const OUTBOX_LEADER_LOCK_TIMEOUT_MS = 2 * 60 * 1000;
 
 const toPositiveInt = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -124,19 +127,46 @@ class NotificationOutboxServiceClass {
     this.processing = true;
 
     try {
-      const now = new Date();
-      const eligibleStatuses = new Set(["queued", "retry_scheduled", "replayed"]);
-      const latestStates = await this.latestOutboxStates();
-      const due = latestStates
-        .filter((state) => eligibleStatuses.has(state.status))
-        .filter((state) => state.nextAttemptAt.getTime() <= now.getTime())
-        .slice(0, limit);
-
-      for (const state of due) {
-        await this.processOne(state);
-      }
+      await this.processDueJobsWithDistributedLock(limit);
     } finally {
       this.processing = false;
+    }
+  }
+
+  private async processDueJobsWithDistributedLock(limit: number) {
+    await prisma.$transaction(
+      async (tx) => {
+        const lockRows = await tx.$queryRaw<Array<{ locked: boolean }>>`
+          SELECT pg_try_advisory_xact_lock(
+            CAST(${OUTBOX_LEADER_LOCK_CLASS_ID} AS integer),
+            CAST(${OUTBOX_LEADER_LOCK_OBJECT_ID} AS integer)
+          ) AS locked
+        `;
+        const isLeader = Boolean(lockRows?.[0]?.locked);
+        if (!isLeader) return;
+
+        // Keep this transaction open while processing, so only one app instance
+        // owns the outbox worker lease during this polling cycle.
+        await this.processDueJobsUnlocked(limit);
+      },
+      {
+        maxWait: 2_000,
+        timeout: OUTBOX_LEADER_LOCK_TIMEOUT_MS,
+      }
+    );
+  }
+
+  private async processDueJobsUnlocked(limit = 50) {
+    const now = new Date();
+    const eligibleStatuses = new Set(["queued", "retry_scheduled", "replayed"]);
+    const latestStates = await this.latestOutboxStates();
+    const due = latestStates
+      .filter((state) => eligibleStatuses.has(state.status))
+      .filter((state) => state.nextAttemptAt.getTime() <= now.getTime())
+      .slice(0, limit);
+
+    for (const state of due) {
+      await this.processOne(state);
     }
   }
 

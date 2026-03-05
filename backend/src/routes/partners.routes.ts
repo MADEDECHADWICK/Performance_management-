@@ -30,7 +30,7 @@ const withStrictRoles = (...roles: string[]) => [
  * GET /partners
  * List all partners
  */
-router.get("/", withRoles("admin", "super_admin"), PartnerController.listPartners);
+router.get("/", withRoles("super_admin"), PartnerController.listPartners);
 
 /**
  * GET /partners/dashboard-summary
@@ -38,7 +38,7 @@ router.get("/", withRoles("admin", "super_admin"), PartnerController.listPartner
  */
 router.get(
   "/dashboard-summary",
-  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "super_admin", "hr"),
   PartnerController.getPartnerDashboardSummary
 );
 
@@ -48,7 +48,7 @@ router.get(
  */
 router.get(
   "/approval-chain",
-  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "super_admin", "hr"),
   PartnerController.getPartnerApprovalChain
 );
 
@@ -58,7 +58,7 @@ router.get(
  */
 router.get(
   "/allocations",
-  withStrictRoles("partner", "manager", "admin", "super_admin", "hr", "hr_manager"),
+  withStrictRoles("partner", "manager", "super_admin", "hr"),
   validateRequest(getPartnerAllocationsValidators),
   handleValidationErrors,
   PartnerController.getPartnerAllocations
@@ -70,7 +70,7 @@ router.get(
  */
 router.post(
   "/",
-  withRoles("admin", "super_admin"),
+  withRoles("super_admin"),
   validateRequest(createPartnerValidators),
   handleValidationErrors,
   PartnerController.createPartner

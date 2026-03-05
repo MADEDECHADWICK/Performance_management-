@@ -354,7 +354,7 @@ router.post("/", async (req: AuthRequest, res) => {
     });
 
     await notifyProfilesByRoles(
-      ["hr", "hr_manager"],
+      ["hr"],
       {
         title: "New client onboarding submitted",
         message: `Client "${created.client.clientName}" and engagement letter are awaiting HR review for job setup.`,

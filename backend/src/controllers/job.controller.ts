@@ -19,25 +19,45 @@ export class JobController {
       const pageSize = Number(req.query.pageSize) || 10;
       const statusParam = (req.query.status as string) || undefined;
       const clientId = req.query.clientId ? Number(req.query.clientId) : undefined;
+      const departmentId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
+      const partnerProfileId = req.query.partnerProfileId
+        ? Number(req.query.partnerProfileId)
+        : undefined;
+      const managerProfileId = req.query.managerProfileId
+        ? Number(req.query.managerProfileId)
+        : undefined;
+      const priority = req.query.priority ? String(req.query.priority).trim().toLowerCase() : undefined;
       const status = statusParam
         ? statusParam.split(",").map((value) => value.trim()).filter(Boolean)
         : undefined;
 
-      const roleHints = [req.profile?.role?.name].filter(Boolean) as string[];
+      const profileId = Number(req.profile?.id || req.user?.profileId || 0);
+      if (!Number.isFinite(profileId) || profileId <= 0) {
+        res.status(401).json(errorResponse("Profile is required for job access", 401));
+        return;
+      }
+
+      const effectiveRoles = Array.from(
+        new Set([...(req.userRoles || [])])
+      );
       const auth = {
         userId: req.user!.userId,
-        profileId: req.user!.profileId!,
-        roles: [
-          ...((req as any).userRoles || req.user?.authRoles || []),
-          ...roleHints,
-        ],
+        profileId,
+        roles: effectiveRoles,
       };
 
       const result = await jobService.listJobs(
         { 
           page, 
           pageSize, 
-          filters: { status, clientId } 
+          filters: {
+            status,
+            clientId,
+            departmentId,
+            partnerProfileId,
+            managerProfileId,
+            priority,
+          },
         },
         auth
       );
@@ -128,7 +148,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const result = await jobService.updateInvoiceMilestoneStatus(
@@ -154,7 +174,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
       const managerProfileId = req.body.managerProfileId;
 
@@ -193,7 +213,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const managerProfileId = req.body.managerProfileId;
@@ -227,7 +247,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const updatedJob = await jobService.updateJob(jobId, req.body, auth);
@@ -251,7 +271,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const updatedJob = await jobService.updateJobStatus(jobId, status, reason, auth, {
@@ -298,7 +318,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const costing = await jobService.upsertJobCosting(jobId, req.body, auth);
@@ -321,7 +341,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const assignment = await jobService.assignJobTeam(jobId, req.body, auth);
@@ -371,7 +391,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const updated = await jobService.updateJobStaffAssignment(jobId, assignmentId, req.body || {}, auth);
@@ -403,7 +423,7 @@ export class JobController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.user!.profileId!,
-        roles: (req as any).userRoles || req.user?.authRoles || [],
+        roles: req.userRoles || [],
       };
 
       const result = await jobService.removeJobStaffAssignment(jobId, assignmentId, auth);

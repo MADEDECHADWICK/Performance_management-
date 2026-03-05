@@ -4,7 +4,7 @@ import { AuthRequest } from "../middleware/auth";
 
 const ROLE_GROUPS: Record<string, string[]> = {
   finance: ["finance"],
-  gmp: ["gmp", "group_managing_partner"],
+  gmp: ["gmp"],
   marketing: ["marketing"],
 };
 

@@ -40,7 +40,7 @@ router.get(
  */
 router.post(
   "/",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(createJobValidators),
   handleValidationErrors,
   JobController.createJob
@@ -52,7 +52,7 @@ router.post(
  */
 router.post(
   "/from-onboarding/:clientOnboardingId",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(createJobFromOnboardingValidators),
   handleValidationErrors,
   JobController.createJobFromOnboarding
@@ -134,7 +134,7 @@ router.get(
  */
 router.post(
   "/:jobId/costing",
-  withRoles("manager", "partner", "admin", "super_admin"),
+  withRoles("manager", "partner", "super_admin"),
   requireJobAccess("manage"),
   validateRequest(upsertJobCostingValidators),
   handleValidationErrors,

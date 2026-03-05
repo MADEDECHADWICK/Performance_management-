@@ -9,7 +9,7 @@ import { successResponse, errorResponse, paginatedResponse } from '../utils/resp
 
 const resolveRoles = (req: AuthRequest) => {
   const roles = [
-    ...(req.user?.authRoles || []),
+    ...(req.userRoles || []),
     ...(req.userRoles || []),
     req.profile?.role?.name,
   ]

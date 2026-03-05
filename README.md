@@ -75,5 +75,14 @@ Frontend (in `ronalds-growth-hub/`)
 ## Status
 This project is under active development. Core backend modules and the dashboard are operational; some advanced workflows and reports are still evolving.
 
+## Auth/RBAC
+- Canonical roles and centralized RBAC are documented in `AUTH_RBAC_REFACTOR.md`.
+- Backend sources:
+  - `backend/src/auth/canonicalRoles.ts`
+  - `backend/src/services/moduleAccess.service.ts`
+- Frontend sources:
+  - `ronalds-growth-hub/src/auth/canonicalRoles.ts`
+  - `ronalds-growth-hub/src/auth/routeAccess.ts`
+
 ## License
 Proprietary. All rights reserved.

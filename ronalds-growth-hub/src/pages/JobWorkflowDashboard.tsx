@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,8 +15,9 @@ import type {
   JobInvoiceMilestoneTracking,
   JobInvoiceMilestoneTrackingItem,
 } from '@/lib/api/types';
-import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText } from 'lucide-react';
+import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText, Upload } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 
 const statusColors: Record<string, string> = {
   planned: 'bg-gray-100 text-gray-800',
@@ -51,6 +52,9 @@ interface AllocationSummary {
   remainingJobHours: number;
   allowedJobHours: number;
   loggedJobHours: number;
+  employeeAllocatedHours: number;
+  allowedEmployeeHours: number;
+  loggedEmployeeHours: number;
   remainingEmployeeHours: number;
 }
 
@@ -63,8 +67,74 @@ interface JobDocument {
   createdAt?: string;
 }
 
+type RequiredDocumentType = 'work_plan' | 'budget' | 'draft_report' | 'final_report';
+
+interface RequiredDocumentDefinition {
+  type: RequiredDocumentType;
+  label: string;
+  matchingTokens: string[];
+}
+
+interface RequiredActionItem {
+  key: string;
+  title: string;
+  description: string;
+  path?: string;
+  ctaLabel?: string;
+}
+
+const REQUIRED_DOCUMENTS_BY_TYPE: Record<RequiredDocumentType, RequiredDocumentDefinition> = {
+  work_plan: {
+    type: 'work_plan',
+    label: 'Work Plan',
+    matchingTokens: ['workplan', 'workpaper'],
+  },
+  budget: {
+    type: 'budget',
+    label: 'Budget',
+    matchingTokens: ['budget'],
+  },
+  draft_report: {
+    type: 'draft_report',
+    label: 'Draft Report',
+    matchingTokens: ['draftreport'],
+  },
+  final_report: {
+    type: 'final_report',
+    label: 'Final Report',
+    matchingTokens: ['finalreport', 'auditreport', 'managementletter', 'deliverable'],
+  },
+};
+
+const REQUIRED_DOCUMENT_TYPES_BY_JOB_STATUS: Partial<Record<Job['status'], RequiredDocumentType[]>> = {
+  in_progress: ['work_plan', 'budget'],
+  on_hold: ['work_plan', 'budget'],
+  completed: ['work_plan', 'budget', 'draft_report', 'final_report'],
+};
+
+const normalizeDocumentType = (value?: string | null) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+
+const documentMatchesRequirement = (documentType: string, requirement: RequiredDocumentDefinition) => {
+  const normalized = normalizeDocumentType(documentType);
+  return requirement.matchingTokens.some((token) => normalized.includes(token));
+};
+
+const millisecondsInDay = 24 * 60 * 60 * 1000;
+
+const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const differenceInDays = (startDate: Date, endDate: Date) => {
+  const start = toStartOfDay(startDate).getTime();
+  const end = toStartOfDay(endDate).getTime();
+  return Math.floor((end - start) / millisecondsInDay);
+};
+
 export default function JobWorkflowDashboard() {
   const { toast } = useToast();
+  const { profile, isEmployee, isAdmin, isHR, isGMP, isPartner, isManager } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -78,7 +148,11 @@ export default function JobWorkflowDashboard() {
   const [invoiceTracking, setInvoiceTracking] = useState<JobInvoiceMilestoneTracking | null>(null);
   const [jobDocuments, setJobDocuments] = useState<JobDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState<Record<string, File | null>>({});
+  const [uploadingDocumentType, setUploadingDocumentType] = useState<RequiredDocumentType | null>(null);
   const [milestoneUpdatingId, setMilestoneUpdatingId] = useState<number | null>(null);
+  const isEmployeeExperience =
+    isEmployee && !isAdmin && !isHR && !isGMP && !isPartner && !isManager;
   const isFixedFeeJob = selectedJob?.billingType === 'fixed_fee';
   const selectedJobIdParam = Number(searchParams.get('jobId'));
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -124,7 +198,14 @@ export default function JobWorkflowDashboard() {
     try {
       setIsLoading(true);
       const response = await jobsAPI.list({ pageSize: 100 });
-      setJobs(response.data || []);
+      const allJobs = response.data || [];
+      const scopedJobs =
+        isEmployeeExperience && profile?.id
+          ? allJobs.filter((job) =>
+              (job.staffing || []).some((assignment) => assignment.employeeProfileId === profile.id)
+            )
+          : allJobs;
+      setJobs(scopedJobs);
     } catch (error) {
       console.error('Failed to load jobs:', error);
       toast({
@@ -139,21 +220,28 @@ export default function JobWorkflowDashboard() {
 
   const loadJobDetails = async (jobId: number) => {
     try {
-      const [job, staffAssignments, invoiceMilestones] = await Promise.all([
+      const [job, staffAssignments] = await Promise.all([
         jobsAPI.getById(jobId),
         jobsAPI.getStaff(jobId),
-        jobsAPI.getInvoiceMilestones(jobId),
       ]);
       setSelectedJob(job);
       setStaff(staffAssignments);
-      setInvoiceTracking(invoiceMilestones);
-      await initializeCosting(job, staffAssignments);
-      await loadAllocationSummary(jobId);
-      await loadJobDocuments(jobId);
+      await Promise.all([loadAllocationSummary(jobId), loadJobDocuments(jobId)]);
+
+      if (isEmployeeExperience) {
+        setInvoiceTracking(null);
+        setCostingForm(null);
+      } else {
+        const invoiceMilestones = await jobsAPI.getInvoiceMilestones(jobId);
+        setInvoiceTracking(invoiceMilestones);
+        await initializeCosting(job, staffAssignments);
+      }
     } catch (error) {
       console.error('Failed to load job details:', error);
       setInvoiceTracking(null);
+      setCostingForm(null);
       setJobDocuments([]);
+      setAllocationSummary(null);
       toast({
         title: 'Error',
         description: 'Failed to load job details',
@@ -221,11 +309,194 @@ export default function JobWorkflowDashboard() {
         remainingJobHours: summary.remainingJobHours,
         allowedJobHours: summary.allowedJobHours,
         loggedJobHours: summary.loggedJobHours,
+        employeeAllocatedHours: summary.employeeAllocatedHours,
+        allowedEmployeeHours: summary.allowedEmployeeHours,
+        loggedEmployeeHours: summary.loggedEmployeeHours,
         remainingEmployeeHours: summary.remainingEmployeeHours,
       });
     } catch (error) {
       console.error('Failed to load allocation summary:', error);
       setAllocationSummary(null);
+    }
+  };
+
+  const employeeAssignment = useMemo(() => {
+    if (!profile?.id) return null;
+    return staff.find((assignment) => assignment.employeeProfileId === profile.id) || null;
+  }, [profile?.id, staff]);
+
+  const requiredDocumentDefinitions = useMemo(() => {
+    if (!selectedJob?.status) return [];
+    const requiredTypes = REQUIRED_DOCUMENT_TYPES_BY_JOB_STATUS[selectedJob.status] || [];
+    return requiredTypes.map((type) => REQUIRED_DOCUMENTS_BY_TYPE[type]);
+  }, [selectedJob?.status]);
+
+  const requiredDocumentChecklist = useMemo(
+    () =>
+      requiredDocumentDefinitions.map((requirement) => {
+        const matchingDocuments = jobDocuments.filter((doc) =>
+          documentMatchesRequirement(doc.documentType, requirement)
+        );
+        return {
+          ...requirement,
+          uploaded: matchingDocuments.length > 0,
+          matchingDocuments,
+        };
+      }),
+    [jobDocuments, requiredDocumentDefinitions]
+  );
+
+  const missingRequiredDocuments = useMemo(
+    () => requiredDocumentChecklist.filter((item) => !item.uploaded),
+    [requiredDocumentChecklist]
+  );
+
+  const jobTimeline = useMemo(() => {
+    if (!selectedJob) return null;
+
+    const now = new Date();
+    const startDate = selectedJob.startDate ? new Date(selectedJob.startDate) : null;
+    const dueDate = selectedJob.dueDate ? new Date(selectedJob.dueDate) : null;
+
+    const isCompleted = selectedJob.status === 'completed';
+    const isOverdue = !!dueDate && !isCompleted && toStartOfDay(now) > toStartOfDay(dueDate);
+    const overdueDays = isOverdue && dueDate ? Math.max(0, differenceInDays(dueDate, now)) : 0;
+    const remainingDays =
+      dueDate && !isCompleted ? differenceInDays(now, dueDate) : null;
+
+    let totalDays: number | null = null;
+    let elapsedDays: number | null = null;
+    let progressPercent: number | null = null;
+
+    if (startDate && dueDate) {
+      totalDays = Math.max(1, differenceInDays(startDate, dueDate) + 1);
+      const elapsed = Math.max(0, differenceInDays(startDate, now) + 1);
+      elapsedDays = Math.min(totalDays, elapsed);
+      progressPercent = Math.max(0, Math.min(100, Math.round((elapsedDays / totalDays) * 100)));
+    }
+
+    return {
+      isOverdue,
+      overdueDays,
+      startDate,
+      dueDate,
+      totalDays,
+      elapsedDays,
+      remainingDays,
+      progressPercent,
+    };
+  }, [selectedJob]);
+
+  const employeeUtilizationPercent = useMemo(() => {
+    if (!allocationSummary || allocationSummary.allowedEmployeeHours <= 0) return 0;
+    return Math.min(
+      100,
+      Math.round((allocationSummary.loggedEmployeeHours / allocationSummary.allowedEmployeeHours) * 100)
+    );
+  }, [allocationSummary]);
+
+  const requiredActions = useMemo<RequiredActionItem[]>(() => {
+    if (!selectedJob) return [];
+
+    const actions: RequiredActionItem[] = [];
+
+    if (
+      allocationSummary &&
+      selectedJob.status !== 'completed' &&
+      allocationSummary.loggedEmployeeHours <= 0
+    ) {
+      actions.push({
+        key: 'timesheet-start',
+        title: 'Log your first timesheet entry',
+        description: 'Start tracking hours on this job to keep delivery and utilization current.',
+        path: `/timesheets?jobId=${selectedJob.id}`,
+        ctaLabel: 'Open Timesheets',
+      });
+    }
+
+    if (
+      allocationSummary &&
+      selectedJob.status !== 'completed' &&
+      allocationSummary.remainingEmployeeHours <= 2
+    ) {
+      actions.push({
+        key: 'hours-low',
+        title: 'Review remaining hours',
+        description: `You have ${allocationSummary.remainingEmployeeHours.toFixed(1)}h remaining on this job allocation.`,
+        path: `/timesheets?jobId=${selectedJob.id}`,
+        ctaLabel: 'Review Hours',
+      });
+    }
+
+    if (missingRequiredDocuments.length > 0) {
+      const missingLabels = missingRequiredDocuments.map((item) => item.label).join(', ');
+      actions.push({
+        key: 'documents-required',
+        title: 'Upload required job documents',
+        description: `${missingLabels} still need to be uploaded for this workflow stage.`,
+      });
+    }
+
+    if (jobTimeline?.isOverdue) {
+      actions.push({
+        key: 'timeline-overdue',
+        title: 'Job timeline is overdue',
+        description: `This job is overdue by ${jobTimeline.overdueDays} day(s). Update progress and flag blockers.`,
+      });
+    } else if (jobTimeline?.remainingDays !== null && jobTimeline?.remainingDays !== undefined) {
+      if (jobTimeline.remainingDays <= 3 && selectedJob.status !== 'completed') {
+        actions.push({
+          key: 'timeline-due-soon',
+          title: 'Due date approaching',
+          description: `Only ${Math.max(0, jobTimeline.remainingDays)} day(s) left before the due date.`,
+        });
+      }
+    }
+
+    return actions;
+  }, [allocationSummary, jobTimeline, missingRequiredDocuments, selectedJob]);
+
+  const handleRequiredDocumentFileChange = (documentType: RequiredDocumentType, file: File | null) => {
+    setPendingUploads((prev) => ({ ...prev, [documentType]: file }));
+  };
+
+  const handleUploadRequiredDocument = async (documentType: RequiredDocumentType) => {
+    if (!selectedJob) return;
+    const file = pendingUploads[documentType];
+    if (!file) {
+      toast({
+        title: 'File required',
+        description: `Choose a ${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} file before uploading.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      setUploadingDocumentType(documentType);
+      await documentsAPI.uploadFile(file, {
+        documentType,
+        entityType: 'Job',
+        entityId: selectedJob.id,
+        accessLevel: 'manager',
+        isRequired: true,
+        description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded via employee workflow.`,
+      });
+      await loadJobDocuments(selectedJob.id);
+      setPendingUploads((prev) => ({ ...prev, [documentType]: null }));
+      toast({
+        title: 'Document uploaded',
+        description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded successfully.`,
+      });
+    } catch (error) {
+      console.error('Required document upload failed:', error);
+      toast({
+        title: 'Upload failed',
+        description: 'Unable to upload the selected document.',
+        variant: 'destructive',
+      });
+    } finally {
+      setUploadingDocumentType(null);
     }
   };
 
@@ -394,7 +665,12 @@ export default function JobWorkflowDashboard() {
 
   useEffect(() => {
     loadJobs();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEmployeeExperience, profile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setPendingUploads({});
+    setUploadingDocumentType(null);
+  }, [selectedJob?.id]);
 
   useEffect(() => {
     if (!Number.isFinite(selectedJobIdParam) || selectedJobIdParam <= 0) return;
@@ -403,6 +679,18 @@ export default function JobWorkflowDashboard() {
 
     loadJobDetails(selectedJobIdParam);
   }, [jobs, selectedJob?.id, selectedJobIdParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!selectedJob) return;
+    if (jobs.some((job) => job.id === selectedJob.id)) return;
+
+    setSelectedJob(null);
+    setStaff([]);
+    setInvoiceTracking(null);
+    setCostingForm(null);
+    setAllocationSummary(null);
+    setJobDocuments([]);
+  }, [jobs, selectedJob]);
 
   const totalAllocatedHours = costingForm
     ? costingForm.allocations.reduce((sum, allocation) => sum + Number(allocation.allocatedHours || 0), 0)
@@ -421,7 +709,11 @@ export default function JobWorkflowDashboard() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Jobs</h1>
-            <p className="text-muted-foreground">Monitor job progress and assignments</p>
+            <p className="text-muted-foreground">
+              {isEmployeeExperience
+                ? 'Track your assigned jobs, required actions, and delivery progress.'
+                : 'Monitor job progress and assignments'}
+            </p>
           </div>
           <Button onClick={loadJobs} disabled={isLoading} variant="outline">
             <RefreshCw className="h-4 w-4 mr-2" />
@@ -476,7 +768,11 @@ export default function JobWorkflowDashboard() {
             <CardHeader>
               <CardTitle>Job Details</CardTitle>
               <CardDescription>
-                {selectedJob ? 'Review job summary and staff assignments.' : 'Select a job to view details.'}
+                {selectedJob
+                  ? isEmployeeExperience
+                    ? 'Review your assigned work, due dates, and required documents.'
+                    : 'Review job summary and staff assignments.'
+                  : 'Select a job to view details.'}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -516,7 +812,132 @@ export default function JobWorkflowDashboard() {
                     </div>
                   </div>
 
-                  <Card>
+                  {isEmployeeExperience && (
+                    <>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Your Job Performance</CardTitle>
+                          <CardDescription>
+                            Track your utilization, assigned role, and remaining time budget.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Assigned Role</p>
+                            <p className="font-medium">{employeeAssignment?.role?.name || 'Not set'}</p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Allocated (You)</p>
+                            <p className="font-semibold">
+                              {allocationSummary ? `${allocationSummary.allowedEmployeeHours.toFixed(1)}h` : '-'}
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Logged (You)</p>
+                            <p className="font-semibold">
+                              {allocationSummary ? `${allocationSummary.loggedEmployeeHours.toFixed(1)}h` : '-'}
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Utilization</p>
+                            <p className="font-semibold">{employeeUtilizationPercent}%</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {allocationSummary
+                                ? `${allocationSummary.remainingEmployeeHours.toFixed(1)}h remaining`
+                                : 'No allocation summary'}
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Timeline Tracking</CardTitle>
+                          <CardDescription>
+                            Follow job timeline progress and stay ahead of delivery deadlines.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Start Date</p>
+                              <p className="font-medium">
+                                {jobTimeline?.startDate
+                                  ? jobTimeline.startDate.toLocaleDateString()
+                                  : 'Not set'}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Due Date</p>
+                              <p className="font-medium">
+                                {jobTimeline?.dueDate ? jobTimeline.dueDate.toLocaleDateString() : 'Not set'}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Timeline Progress</p>
+                              <p className="font-semibold">
+                                {jobTimeline?.progressPercent !== null && jobTimeline?.progressPercent !== undefined
+                                  ? `${jobTimeline.progressPercent}%`
+                                  : 'N/A'}
+                              </p>
+                            </div>
+                            <div className="border rounded-lg p-3">
+                              <p className="text-xs text-muted-foreground">Status</p>
+                              <p
+                                className={`font-semibold ${
+                                  jobTimeline?.isOverdue ? 'text-red-600' : 'text-green-700'
+                                }`}
+                              >
+                                {jobTimeline?.isOverdue
+                                  ? `Overdue by ${jobTimeline.overdueDays} day(s)`
+                                  : jobTimeline?.remainingDays !== null &&
+                                      jobTimeline?.remainingDays !== undefined
+                                    ? `${Math.max(0, jobTimeline.remainingDays)} day(s) remaining`
+                                    : 'On track'}
+                              </p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Required Actions</CardTitle>
+                          <CardDescription>
+                            Complete these actions to keep your assigned job moving.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {requiredActions.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No urgent actions right now. Keep logging progress and documents.
+                            </p>
+                          ) : (
+                            requiredActions.map((action) => (
+                              <div key={action.key} className="border rounded-lg p-3 flex items-start justify-between gap-4">
+                                <div>
+                                  <p className="font-medium">{action.title}</p>
+                                  <p className="text-sm text-muted-foreground">{action.description}</p>
+                                </div>
+                                {action.path && action.ctaLabel ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => navigate(action.path || '/job-workflow-dashboard')}
+                                  >
+                                    {action.ctaLabel}
+                                  </Button>
+                                ) : null}
+                              </div>
+                            ))
+                          )}
+                        </CardContent>
+                      </Card>
+                    </>
+                  )}
+
+                  {!isEmployeeExperience && (
+                    <Card>
                     <CardHeader>
                       <CardTitle>Invoice Milestone Tracker</CardTitle>
                       <CardDescription>
@@ -641,7 +1062,8 @@ export default function JobWorkflowDashboard() {
                         </>
                       )}
                     </CardContent>
-                  </Card>
+                    </Card>
+                  )}
 
                   <Card>
                     <CardHeader>
@@ -650,10 +1072,71 @@ export default function JobWorkflowDashboard() {
                         Job Documents
                       </CardTitle>
                       <CardDescription>
-                        Work plan, budget, draft report, final report, and all job-linked uploads.
+                        {isEmployeeExperience
+                          ? 'Upload required workflow documents and review your job files.'
+                          : 'Work plan, budget, draft report, final report, and all job-linked uploads.'}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-2">
+                      {isEmployeeExperience && requiredDocumentChecklist.length > 0 && (
+                        <div className="space-y-3 border rounded-lg p-3 mb-4">
+                          <p className="text-sm font-medium">Required Documents</p>
+                          {requiredDocumentChecklist.map((requirement) => {
+                            const uploadKey = requirement.type;
+                            const selectedFile = pendingUploads[uploadKey];
+                            return (
+                              <div
+                                key={requirement.type}
+                                className="border rounded-md p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between"
+                              >
+                                <div>
+                                  <p className="font-medium">{requirement.label}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {requirement.uploaded
+                                      ? `Uploaded (${requirement.matchingDocuments.length} file${
+                                          requirement.matchingDocuments.length === 1 ? '' : 's'
+                                        })`
+                                      : 'Missing'}
+                                  </p>
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                                  <Input
+                                    type="file"
+                                    onChange={(event) =>
+                                      handleRequiredDocumentFileChange(
+                                        requirement.type,
+                                        event.target.files?.[0] || null
+                                      )
+                                    }
+                                    className="sm:w-64"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant={requirement.uploaded ? 'outline' : 'default'}
+                                    onClick={() => handleUploadRequiredDocument(requirement.type)}
+                                    disabled={
+                                      !selectedFile || uploadingDocumentType === requirement.type
+                                    }
+                                  >
+                                    {uploadingDocumentType === requirement.type ? (
+                                      <>
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                        Uploading...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Upload className="h-4 w-4 mr-2" />
+                                        {requirement.uploaded ? 'Replace' : 'Upload'}
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       {documentsLoading ? (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -674,7 +1157,7 @@ export default function JobWorkflowDashboard() {
                               <p className="text-xs text-muted-foreground">
                                 {formatDocumentType(doc.documentType)}
                                 {doc.createdAt
-                                  ? ` â€¢ ${new Date(doc.createdAt).toLocaleDateString()}`
+                                  ? ` | ${new Date(doc.createdAt).toLocaleDateString()}`
                                   : ''}
                               </p>
                             </div>
@@ -698,7 +1181,8 @@ export default function JobWorkflowDashboard() {
                     </CardContent>
                   </Card>
 
-                  <Card>
+                  {!isEmployeeExperience && (
+                    <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Users className="h-5 w-5" />
@@ -731,9 +1215,11 @@ export default function JobWorkflowDashboard() {
                         ))
                       )}
                     </CardContent>
-                  </Card>
+                    </Card>
+                  )}
 
-                  <Card>
+                  {!isEmployeeExperience && (
+                    <Card>
                     <CardHeader>
                       <CardTitle>Project Evaluations</CardTitle>
                       <CardDescription>Submit job-based reviews for assigned staff.</CardDescription>
@@ -749,9 +1235,11 @@ export default function JobWorkflowDashboard() {
                         Evaluate Job
                       </Button>
                     </CardContent>
-                  </Card>
+                    </Card>
+                  )}
 
-                  <Card>
+                  {!isEmployeeExperience && (
+                    <Card>
                     <CardHeader>
                       <CardTitle>Job Costing & Allocations</CardTitle>
                       <CardDescription>
@@ -801,7 +1289,7 @@ export default function JobWorkflowDashboard() {
                                   <span className="font-medium">
                                     {allocationSummary
                                       ? `${allocationSummary.allowedJobHours.toFixed(1)}h`
-                                      : 'â€”'}
+                                      : '-'}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">
@@ -809,7 +1297,7 @@ export default function JobWorkflowDashboard() {
                                   <span className="font-medium">
                                     {allocationSummary
                                       ? `${allocationSummary.loggedJobHours.toFixed(1)}h`
-                                      : 'â€”'}
+                                      : '-'}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">
@@ -823,7 +1311,7 @@ export default function JobWorkflowDashboard() {
                                   >
                                     {allocationSummary
                                       ? `${allocationSummary.remainingJobHours.toFixed(1)}h`
-                                      : 'â€”'}
+                                      : '-'}
                                   </span>
                                 </div>
                               </div>
@@ -995,7 +1483,8 @@ export default function JobWorkflowDashboard() {
                         </div>
                       )}
                     </CardContent>
-                  </Card>
+                    </Card>
+                  )}
                 </div>
               ) : (
                 <div className="text-center text-muted-foreground py-10">

@@ -29,6 +29,8 @@ interface UpdateProfileInput {
   profilePicture?: string;
   departmentId?: number;
   managerId?: number | null;
+  status?: 'active' | 'inactive' | 'separated';
+  separationDate?: Date | string | null;
 }
 
 export class ProfileService {
@@ -46,12 +48,9 @@ export class ProfileService {
   private static isPrivileged(auth: AuthContext) {
     const roles = this.resolveRoleSet(auth);
     return (
-      roles.has("admin") ||
       roles.has("super_admin") ||
       roles.has("hr") ||
-      roles.has("hr_manager") ||
-      roles.has("gmp") ||
-      roles.has("group_managing_partner")
+      roles.has("gmp")
     );
   }
 
@@ -90,7 +89,7 @@ export class ProfileService {
     }
 
     // ✅ ACCESS CONTROL
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    if (!['super_admin', 'manager'].includes(auth.roleName || '')) {
       // Non-admins see only active profiles (not themselves)
       where.status = 'active';
     }
@@ -169,7 +168,7 @@ export class ProfileService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       profileId === auth.profileId;
 
     if (!canView && profile.status !== 'active') {
@@ -229,6 +228,18 @@ export class ProfileService {
     }
 
     // ✅ WHITELIST FIELDS
+    const normalizedStatus =
+      typeof input.status === 'string'
+        ? String(input.status).toLowerCase().trim()
+        : undefined;
+    const validStatuses = new Set(['active', 'inactive', 'separated']);
+    if (normalizedStatus && !validStatuses.has(normalizedStatus)) {
+      throw {
+        statusCode: 400,
+        message: 'Invalid status. Allowed values: active, inactive, separated',
+      };
+    }
+
     const allowedFields = [
       'firstName',
       'lastName',
@@ -237,8 +248,14 @@ export class ProfileService {
     ];
 
     // Privileged roles can update organization fields.
-    if (canManageOrg && ('departmentId' in input || 'managerId' in input)) {
-      allowedFields.push('departmentId', 'managerId');
+    if (
+      canManageOrg &&
+      ('departmentId' in input ||
+        'managerId' in input ||
+        'status' in input ||
+        'separationDate' in input)
+    ) {
+      allowedFields.push('departmentId', 'managerId', 'status', 'separationDate');
     }
 
     const updateData: Record<string, any> = {};
@@ -246,7 +263,11 @@ export class ProfileService {
     for (const field of allowedFields) {
       const value = input[field as keyof UpdateProfileInput];
       if (value !== undefined) {
-        updateData[field] = value;
+        if (field === 'status') {
+          updateData.status = normalizedStatus;
+        } else {
+          updateData[field] = value;
+        }
       }
     }
 
@@ -257,17 +278,62 @@ export class ProfileService {
       };
     }
 
-    const updated = await prisma.profile.update({
-      where: { id: profileId },
-      data: {
-        ...updateData,
-        updatedAt: new Date(),
-      },
-      include: {
-        role: { select: { id: true, name: true } },
-        department: { select: { id: true, name: true } },
-        user: { select: { email: true } },
-      },
+    const nextStatus = String(updateData.status || profile.status).toLowerCase();
+    const statusChanged =
+      Boolean(updateData.status) &&
+      nextStatus !== String(profile.status).toLowerCase();
+
+    if (statusChanged && isSelf) {
+      throw {
+        statusCode: 400,
+        message: 'You cannot change your own account status',
+      };
+    }
+
+    if (statusChanged) {
+      if (nextStatus === 'active') {
+        updateData.separationDate = null;
+      } else if (nextStatus === 'separated' && !updateData.separationDate) {
+        updateData.separationDate = new Date();
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedProfile = await tx.profile.update({
+        where: { id: profileId },
+        data: {
+          ...updateData,
+          updatedAt: new Date(),
+        },
+        include: {
+          role: { select: { id: true, name: true } },
+          department: { select: { id: true, name: true } },
+          user: { select: { id: true, email: true } },
+        },
+      });
+
+      if (statusChanged && profile.userId) {
+        await tx.user.update({
+          where: { id: profile.userId },
+          data: {
+            isActive: nextStatus === 'active',
+          },
+        });
+
+        if (nextStatus !== 'active') {
+          await tx.session.updateMany({
+            where: {
+              userId: profile.userId,
+              revokedAt: null,
+            },
+            data: {
+              revokedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      return updatedProfile;
     });
 
     return {
@@ -431,7 +497,7 @@ export class ProfileService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       profileId === auth.profileId;
 
     if (!canView) {
@@ -477,7 +543,7 @@ export class ProfileService {
    */
   static async getTeamMembers(profileId: number, auth: AuthContext) {
     // ✅ VERIFY ACCESS
-    if (profileId !== auth.profileId && auth.roleName !== 'admin') {
+    if (profileId !== auth.profileId && auth.roleName !== 'super_admin') {
       throw {
         statusCode: 403,
         message: 'You can only view your own team',

@@ -10,7 +10,7 @@ const getRoleSet = (req: AuthRequest): Set<string> => {
   if (profileRole) {
     roles.add(profileRole);
   }
-  (req.user?.authRoles || []).forEach((role) => {
+  (req.userRoles || []).forEach((role) => {
     const normalized = normalizeRole(role);
     if (normalized) {
       roles.add(normalized);
@@ -67,7 +67,7 @@ export const requireTimeEntryAccess = async (
       return;
     }
 
-    const isAdmin = hasAnyRole(requesterRoles, ["admin", "super_admin"]);
+    const isAdmin = hasAnyRole(requesterRoles, ["super_admin", "hr"]);
     const isOwner = timeEntry.employeeProfileId === requesterProfileId;
 
     const isManagerRole = hasAnyRole(requesterRoles, ["manager"]);

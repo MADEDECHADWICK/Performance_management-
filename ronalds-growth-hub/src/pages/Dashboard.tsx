@@ -57,7 +57,8 @@ const Dashboard = () => {
     isGMP,
     isPartner,
     isManager,
-    hasRole,
+    isMarketing,
+    isFinance,
   } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
@@ -102,19 +103,11 @@ const Dashboard = () => {
           return;
         }
 
-        const normalizedPosition = profile?.positionTitle?.toLowerCase() || "";
-        const isMarketing =
-          hasRole('marketing') ||
-          hasRole('business_development') ||
-          normalizedPosition.includes('marketing') ||
-          normalizedPosition.includes('business development');
-
         if (isMarketing) {
           navigate("/marketing-dashboard", { replace: true });
           return;
         }
 
-        const isFinance = hasRole('finance') || normalizedPosition.includes('finance');
         if (isFinance) {
           navigate("/finance-dashboard", { replace: true });
           return;
@@ -148,7 +141,8 @@ const Dashboard = () => {
     isAdmin,
     isPartner,
     isManager,
-    hasRole,
+    isMarketing,
+    isFinance,
     navigate,
     toast,
   ]);
@@ -282,24 +276,18 @@ const Dashboard = () => {
         ? clientEvals.reduce((sum: number, e: any) => sum + Number(e?.overallRating || e?.overall_rating || 0), 0) / clientEvals.length
         : 0;
 
-      // Get KPI scores by BSC category
-      const kpiAssignments = await apiFetch("GET", `/employee-kpi-assignments`);
-      const scopedAssignments = (Array.isArray(kpiAssignments) ? kpiAssignments : []).filter(
-        (assignment: any) => Number(assignment?.employeeProfileId ?? assignment?.employee_id) === userProfileId
-      );
+      // Get KPI scores by BSC category (Cascade V2)
+      const kpiCards = await apiFetch("GET", `/kpi/employees/${userProfileId}/kpis`);
+      const scopedAssignments = Array.isArray(kpiCards) ? kpiCards : [];
 
-      const financialKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "financial" || k?.kpi?.bsc_category === "financial");
-      const customerKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "customer" || k?.kpi?.bsc_category === "customer");
-      const internalKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "internal_processes" || k?.kpi?.bsc_category === "internal_processes");
-      const learningKPIs = scopedAssignments.filter((k: any) => k?.kpi?.bscCategory === "learning_growth" || k?.kpi?.bsc_category === "learning_growth");
+      const financialKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "financial");
+      const customerKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "customer");
+      const internalKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "internal_process");
+      const learningKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "learning_growth");
 
       const calculateScore = (kpis: any[]) => {
         if (kpis.length === 0) return 0;
-        const total = kpis.reduce((sum, k) => {
-          const achieved = Number(k?.achievedValue ?? k?.achieved_value ?? 0);
-          const target = Number(k?.targetValue ?? k?.target_value ?? 1);
-          return sum + (achieved / target) * 100;
-        }, 0);
+        const total = kpis.reduce((sum, k) => sum + Number(k?.percent_complete ?? 0), 0);
         return Math.min(100, total / kpis.length);
       };
 
@@ -392,18 +380,16 @@ const Dashboard = () => {
         });
       }
 
-      // Check KPI assignments
-      const kpiUpdates = await apiFetch("GET", `/employee-kpi-assignments`);
-      const scopedUpdates = (Array.isArray(kpiUpdates) ? kpiUpdates : []).filter(
-        (assignment: any) => Number(assignment?.employeeProfileId ?? assignment?.employee_id) === userProfileId
-      );
+      // Check KPI card updates (Cascade V2)
+      const kpiUpdates = await apiFetch("GET", `/kpi/employees/${userProfileId}/kpis`);
+      const scopedUpdates = Array.isArray(kpiUpdates) ? kpiUpdates : [];
 
       if (scopedUpdates.length > 0) {
         activities.push({
           type: "info",
           title: "KPI updated",
           description: "Performance metrics were recently updated",
-          date: scopedUpdates[0]?.updatedAt || scopedUpdates[0]?.updated_at
+          date: scopedUpdates[0]?.last_updated_at || scopedUpdates[0]?.updated_at
         });
       }
 

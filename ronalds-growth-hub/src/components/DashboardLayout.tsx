@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { getPreferredHomeRoute } from "@/auth/routeAccess";
 import { apiFetch, getToken } from "@/lib/api";
 import { io, Socket } from "socket.io-client";
 import {
@@ -54,6 +55,7 @@ interface DashboardLayoutProps {
 type ModuleAction = "read" | "write" | "approve" | "admin";
 
 type HasModuleAccessFn = (moduleKey: string, action?: ModuleAction) => boolean;
+type HasViewAccessFn = (viewKey: string) => boolean;
 
 const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const navigate = useNavigate();
@@ -61,40 +63,12 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const {
     user,
     profile: userProfile,
+    roles,
     isLoading: authLoading,
-    isAdmin,
-    isHR,
-    isGMP,
-    isPartner,
-    isManager,
-    isMarketing,
-    isFinance,
-    isEmployee,
-    hasRole,
     hasModuleAccess,
+    hasViewAccess,
     logout,
   } = useAuth();
-
-  const normalizedRoles = useMemo(() => {
-    const roleCandidates = Array.isArray(user?.roles)
-      ? user.roles
-      : Array.isArray((user as any)?.authRoles)
-        ? (user as any).authRoles
-        : [];
-    return roleCandidates
-      .map((role: any) => (typeof role === "string" ? role : role?.role?.name))
-      .filter(Boolean)
-      .map((role: string) => role.toLowerCase());
-  }, [user]);
-  const normalizedPosition = userProfile?.positionTitle?.toLowerCase() || '';
-  const isHROrAdmin =
-    isAdmin ||
-    isHR ||
-    normalizedPosition.includes('administrator') ||
-    normalizedPosition.includes('hr') ||
-    false;
-  const isSeniorAssociate = hasRole('senior associate');
-  const isAssociate = hasRole('associate');
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -102,30 +76,16 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   useEffect(() => {
     if (authLoading) return;
     if (user && location.pathname === '/dashboard') {
-      if (isGMP) {
-        navigate('/gmp-dashboard', { replace: true });
-      } else if (isHROrAdmin) {
-        navigate('/hr-dashboard', { replace: true });
-      } else if (isPartner) {
-        navigate('/partner-dashboard', { replace: true });
-      } else if (isManager) {
-        navigate('/manager-dashboard', { replace: true });
-      } else if (isMarketing) {
-        navigate('/marketing-dashboard', { replace: true });
-      } else if (isFinance) {
-        navigate('/finance-dashboard', { replace: true });
+      const preferredRoute = getPreferredHomeRoute(roles, hasViewAccess);
+      if (preferredRoute !== "/dashboard") {
+        navigate(preferredRoute, { replace: true });
       }
     }
   }, [
     authLoading,
+    hasViewAccess,
     user,
-    userProfile,
-    isGMP,
-    isHROrAdmin,
-    isPartner,
-    isManager,
-    isMarketing,
-    isFinance,
+    roles,
     location.pathname,
     navigate,
   ]);
@@ -136,54 +96,26 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   };
 
   const getRoleDisplay = () => {
-    // Check if user is GMP first (highest level)
-    if (normalizedRoles.includes('group managing partner') || normalizedRoles.includes('group_managing_partner') || normalizedRoles.includes('gmp') ||
-        userProfile?.positionTitle?.toLowerCase().includes('group managing partner')) {
-      return "Group Managing Partner";
-    }
-    
-    // Check if user is partner based on is_partner flag
-    if (userProfile?.isPartner) return "Partner";
-    
-    // Check position for admin
-    if (userProfile?.positionTitle?.toLowerCase().includes('administrator')) return "System Administrator";
-    
-    // Check role from database
-    if (normalizedRoles.length > 0) {
-      const role = normalizedRoles[0];
-      if (role === 'partner') return "Partner";
-      if (role === 'manager') return "Manager";
-      if (role === 'marketing') return "Marketing";
-      if (role === 'finance') return "Finance";
-      if (role === 'senior associate') return "Senior Associate";
-      if (role === 'associate') return "Associate";
-      if (role === 'super_admin' || role === 'admin') return "Super Administrator";
-      if (role === 'hr_manager' || role === 'hr') return "HR Manager";
-    }
-    
-    // Check position for manager roles
-    if (userProfile?.positionTitle?.toLowerCase().includes('manager')) return "Manager";
-    
-  return "Employee";
+    if (roles.includes("gmp")) return "Group Managing Partner";
+    if (roles.includes("super_admin")) return "Super Administrator";
+    if (roles.includes("hr")) return "HR";
+    if (roles.includes("partner")) return "Partner";
+    if (roles.includes("manager")) return "Manager";
+    if (roles.includes("finance")) return "Finance";
+    if (roles.includes("marketing")) return "Marketing";
+    if (roles.includes("employee")) return "Employee";
+    return "User";
   };
 
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-transparent">
         <AppSidebar 
-          isHROrAdmin={isHROrAdmin} 
-          isManager={isManager} 
-          isPartner={isPartner} 
-          isGMP={isGMP} 
-          isEmployee={isEmployee}
-          isSeniorAssociate={isSeniorAssociate}
-          isAssociate={isAssociate}
-          isMarketing={isMarketing}
-          isFinance={isFinance}
           hasModuleAccess={hasModuleAccess}
+          hasViewAccess={hasViewAccess}
           userId={user?.id ?? null}
           profileId={userProfile?.id ?? null}
-          roleName={userProfile?.role?.name || normalizedRoles[0] || ""}
+          roleName={roles[0] || ""}
           isActive={isActive} 
         />
 
@@ -238,16 +170,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 };
 
 interface AppSidebarProps {
-  isHROrAdmin: boolean;
-  isManager: boolean;
-  isPartner: boolean;
-  isGMP: boolean;
-  isEmployee: boolean;
-  isSeniorAssociate: boolean;
-  isAssociate: boolean;
-  isMarketing: boolean;
-  isFinance: boolean;
   hasModuleAccess: HasModuleAccessFn;
+  hasViewAccess: HasViewAccessFn;
   userId: number | null;
   profileId: number | null;
   roleName: string;
@@ -255,16 +179,8 @@ interface AppSidebarProps {
 }
 
 function AppSidebar({
-  isHROrAdmin,
-  isManager,
-  isPartner,
-  isGMP,
-  isEmployee,
-  isSeniorAssociate,
-  isAssociate,
-  isMarketing,
-  isFinance,
   hasModuleAccess,
+  hasViewAccess,
   userId,
   profileId,
   roleName,
@@ -360,55 +276,95 @@ function AppSidebar({
     };
   }, [canReadNotifications, loadUnreadNotificationCount, profileId, roleName, userId]);
 
+  const dashboardNav = useMemo<{
+    path: string;
+    viewKey: string;
+    icon: any;
+    label: string;
+  }>(() => {
+    const candidates = [
+      {
+        path: "/gmp-dashboard",
+        viewKey: "dashboard.gmp",
+        icon: Crown,
+        label: "Executive Dashboard",
+      },
+      {
+        path: "/hr-dashboard",
+        viewKey: "dashboard.hr",
+        icon: BarChart3,
+        label: "Dashboard",
+      },
+      {
+        path: "/partner-dashboard",
+        viewKey: "dashboard.partner",
+        icon: BarChart3,
+        label: "Partner Dashboard",
+      },
+      {
+        path: "/manager-dashboard",
+        viewKey: "dashboard.manager",
+        icon: BarChart3,
+        label: "Manager Dashboard",
+      },
+      {
+        path: "/marketing-dashboard",
+        viewKey: "dashboard.marketing",
+        icon: BarChart3,
+        label: "Marketing Overview",
+      },
+      {
+        path: "/finance-dashboard",
+        viewKey: "dashboard.finance",
+        icon: BarChart3,
+        label: "Finance Overview",
+      },
+      {
+        path: "/dashboard",
+        viewKey: "dashboard.employee",
+        icon: BarChart3,
+        label: "Dashboard",
+      },
+    ];
+
+    return (
+      candidates.find((candidate) => hasViewAccess(candidate.viewKey)) || candidates[candidates.length - 1]
+    );
+  }, [hasViewAccess]);
+
   const analyticsNav = useMemo<{
+    viewKey: string;
+    icon: any;
+    label: string;
     path: string;
     module?: string;
     action?: ModuleAction;
-    label: string;
   }>(() => {
-    if (isGMP) {
-      return { path: "/analytics/gmp", label: "Analytics" };
-    }
+    const candidates = [
+      { viewKey: "analytics.gmp", path: "/analytics/gmp", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.hr", path: "/analytics/hr", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.partner", path: "/analytics/partner", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.manager", path: "/analytics/manager", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.marketing", path: "/analytics/marketing", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.finance", path: "/analytics/finance", icon: TrendingUp, label: "Analytics" },
+      { viewKey: "analytics.employee", path: "/analytics/employee", icon: TrendingUp, label: "Analytics" },
+    ];
 
-    if (isHROrAdmin) {
-      return { path: "/analytics/hr", label: "Analytics" };
-    }
+    return (
+      candidates.find((candidate) => hasViewAccess(candidate.viewKey)) || candidates[candidates.length - 1]
+    );
+  }, [hasViewAccess]);
 
-    if (isPartner) {
-      return { path: "/analytics/partner", label: "Analytics" };
-    }
-
-    if (isManager) {
-      return { path: "/analytics/manager", label: "Analytics" };
-    }
-
-    if (isMarketing) {
-      return { path: "/analytics/marketing", label: "Analytics" };
-    }
-
-    if (isFinance) {
-      return { path: "/analytics/finance", label: "Analytics" };
-    }
-
-    if (isEmployee) {
-      return { path: "/analytics/employee", label: "Analytics" };
-    }
-
-    return { path: "/analytics/employee", label: "Analytics" };
-  }, [
-    isEmployee,
-    isFinance,
-    isGMP,
-    isHROrAdmin,
-    isManager,
-    isMarketing,
-    isPartner,
-  ]);
+  const canShowAnyView = useCallback(
+    (viewKeys: string[]) => viewKeys.some((viewKey) => hasViewAccess(viewKey)),
+    [hasViewAccess]
+  );
 
   const NavItem = ({
     path,
     icon: Icon,
     label,
+    viewKey,
     module,
     action = "read",
     badgeCount,
@@ -416,10 +372,12 @@ function AppSidebar({
     path: string;
     icon: any;
     label: string;
+    viewKey?: string;
     module?: string;
     action?: ModuleAction;
     badgeCount?: number;
   }) => {
+    if (viewKey && !hasViewAccess(viewKey)) return null;
     if (module && !hasModuleAccess(module, action)) return null;
     return (
       <SidebarMenuItem>
@@ -442,6 +400,51 @@ function AppSidebar({
     );
   };
 
+  const hasMarketingSectionAccess = canShowAnyView([
+    "clients.list",
+    "clients.create_edit",
+    "clients.engagement_letters",
+    "clients.onboarding_queue",
+    "clients.business_development",
+    "clients.surveys",
+    "clients.portfolio",
+  ]);
+
+  const hasFinanceSectionAccess = canShowAnyView([
+    "finance.collections",
+    "finance.projections",
+    "finance.balances",
+    "finance.profitability",
+    "finance.allocations",
+  ]);
+
+  const hasManagementSectionAccess = canShowAnyView([
+    "people.employee_management",
+    "people.recruitment_candidates",
+    "clients.onboarding_queue",
+    "jobs.admin_create",
+    "jobs.workflow",
+    "evaluations.management",
+    "kpi.management",
+    "evaluations.calibration",
+    "people.positions_rates",
+    "reports.audit_logs",
+  ]);
+
+  const hasPartnerToolsSectionAccess = canShowAnyView([
+    "clients.portfolio",
+    "clients.business_development",
+    "partner.metrics",
+    "jobs.team_overview",
+  ]);
+
+  const hasTeamManagementSectionAccess = canShowAnyView([
+    "team.performance",
+    "dashboard.department",
+    "team.staff_development",
+    "jobs.workload_management",
+  ]);
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border/80 p-4">
@@ -462,34 +465,39 @@ function AppSidebar({
           <SidebarGroupLabel>Overview</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {isGMP ? (
-                <NavItem path="/gmp-dashboard" icon={Crown} label="Executive Dashboard" module="dashboard" />
-              ) : isHROrAdmin ? (
-                <NavItem path="/hr-dashboard" icon={BarChart3} label="Dashboard" module="dashboard" />
-              ) : isPartner ? (
-                <NavItem path="/partner-dashboard" icon={BarChart3} label="Partner Dashboard" module="dashboard" />
-              ) : isManager ? (
-                <NavItem path="/manager-dashboard" icon={BarChart3} label="Manager Dashboard" module="dashboard" />
-              ) : isMarketing ? (
-                <NavItem path="/marketing-dashboard" icon={BarChart3} label="Marketing Overview" module="dashboard" />
-              ) : isFinance ? (
-                <NavItem path="/finance-dashboard" icon={BarChart3} label="Finance Overview" module="dashboard" />
-              ) : (
-                <NavItem path="/dashboard" icon={BarChart3} label="Dashboard" module="dashboard" />
-              )}
+              <NavItem
+                path={dashboardNav.path}
+                icon={dashboardNav.icon}
+                label={dashboardNav.label}
+                viewKey={dashboardNav.viewKey}
+              />
               <NavItem
                 path={analyticsNav.path}
-                icon={TrendingUp}
+                icon={analyticsNav.icon}
                 label={analyticsNav.label}
+                viewKey={analyticsNav.viewKey}
                 module={analyticsNav.module}
                 action={analyticsNav.action}
               />
-              <NavItem path="/reports" icon={FileText} label="Reports" module="reports" />
-              <NavItem path="/knowledge-hub" icon={BookOpen} label="Knowledge Hub" module="knowledge_hub" />
+              <NavItem
+                path="/reports"
+                icon={FileText}
+                label="Reports"
+                viewKey="reports.core"
+                module="reports"
+              />
+              <NavItem
+                path="/knowledge-hub"
+                icon={BookOpen}
+                label="Knowledge Hub"
+                viewKey="knowledge.hub"
+                module="knowledge_hub"
+              />
               <NavItem
                 path="/notifications"
                 icon={Bell}
                 label="Notifications"
+                viewKey="notifications.center"
                 module="notifications"
                 badgeCount={unreadNotificationCount}
               />
@@ -507,15 +515,15 @@ function AppSidebar({
               </CollapsibleTrigger>
             </SidebarGroupLabel>
             <CollapsibleContent>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <NavItem path="/profile" icon={UserIcon} label="Profile" module="users" />
-                  <NavItem path="/scorecard" icon={Target} label="Scorecard" module="kpis" />
-                  <NavItem path="/goals" icon={Target} label="Goals" module="kpis" />
-                  <NavItem path="/todos" icon={CheckSquare} label="My To-Dos" />
-                  <NavItem path="/timesheets" icon={Clock} label="Timesheets" module="time_entries" />
-                  <NavItem path="/development-plan" icon={FileText} label="Development Plan" module="evaluations" />
-                </SidebarMenu>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <NavItem path="/profile" icon={UserIcon} label="Profile" viewKey="profile.my" module="users" />
+                    <NavItem path="/scorecard" icon={Target} label="Scorecard" viewKey="scorecard.my" module="kpis" />
+                    <NavItem path="/goals" icon={Target} label="Goals" viewKey="goals.my" module="kpis" />
+                    <NavItem path="/todos" icon={CheckSquare} label="My To-Dos" viewKey="todos.my" />
+                    <NavItem path="/timesheets" icon={Clock} label="Timesheets" viewKey="timesheets.my" module="time_entries" />
+                    <NavItem path="/development-plan" icon={FileText} label="Development Plan" viewKey="development.plan" module="evaluations" />
+                  </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
           </SidebarGroup>
@@ -533,14 +541,34 @@ function AppSidebar({
             <CollapsibleContent>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <NavItem path="/evaluations" icon={ClipboardCheck} label="Evaluations" module="evaluations" />
-                  <NavItem path="/continuous-feedback" icon={Users} label="Feedback" module="evaluations" />
-                  {(isManager || isHROrAdmin) && (
-                    <NavItem path="/manager-evaluation" icon={UserCheck} label="Team Evaluations" module="evaluations" />
-                  )}
-                  {(isManager || isPartner || isHROrAdmin) && (
-                    <NavItem path="/project-evaluations" icon={ClipboardCheck} label="Project Evaluations" module="evaluations" />
-                  )}
+                  <NavItem
+                    path="/evaluations"
+                    icon={ClipboardCheck}
+                    label="Evaluations"
+                    viewKey="evaluations.my"
+                    module="evaluations"
+                  />
+                  <NavItem
+                    path="/continuous-feedback"
+                    icon={Users}
+                    label="Feedback"
+                    viewKey="feedback.continuous"
+                    module="evaluations"
+                  />
+                  <NavItem
+                    path="/manager-evaluation"
+                    icon={UserCheck}
+                    label="Team Evaluations"
+                    viewKey="evaluations.manager_view"
+                    module="evaluations"
+                  />
+                  <NavItem
+                    path="/project-evaluations"
+                    icon={ClipboardCheck}
+                    label="Project Evaluations"
+                    viewKey="evaluations.project_view"
+                    module="evaluations"
+                  />
                 </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
@@ -548,19 +576,25 @@ function AppSidebar({
         </Collapsible>
 
         {/* Financials */}
-        {hasModuleAccess("finance", "read") && (
+        {hasViewAccess("finance.summary") && (
           <SidebarGroup>
             <SidebarGroupLabel>Financials</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <NavItem path="/financial-summary" icon={DollarSign} label="Financial Summary" module="finance" />
+                <NavItem
+                  path="/financial-summary"
+                  icon={DollarSign}
+                  label="Financial Summary"
+                  viewKey="finance.summary"
+                  module="finance"
+                />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         )}
 
         {/* Marketing */}
-        {isMarketing && (
+        {hasMarketingSectionAccess && (
           <Collapsible className="group/collapsible">
             <SidebarGroup>
               <SidebarGroupLabel asChild>
@@ -572,13 +606,13 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/clients" icon={Users} label="Client Intake" module="clients" />
-                    <NavItem path="/clients/new" icon={Plus} label="New Client" module="clients" action="write" />
-                    <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" module="clients" />
-                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" module="clients" />
-                    <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" module="proposals" />
-                    <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" module="surveys" />
-                    <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" module="clients" />
+                    <NavItem path="/clients" icon={Users} label="Client Intake" viewKey="clients.list" module="clients" />
+                    <NavItem path="/clients/new" icon={Plus} label="New Client" viewKey="clients.create_edit" module="clients" action="write" />
+                    <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" viewKey="clients.engagement_letters" module="clients" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" viewKey="clients.onboarding_queue" module="clients" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" viewKey="clients.business_development" module="proposals" />
+                    <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" viewKey="clients.surveys" module="surveys" />
+                    <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" viewKey="clients.portfolio" module="clients" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -587,7 +621,7 @@ function AppSidebar({
         )}
 
         {/* Finance */}
-        {isFinance && (
+        {hasFinanceSectionAccess && (
           <Collapsible className="group/collapsible">
             <SidebarGroup>
               <SidebarGroupLabel asChild>
@@ -599,12 +633,12 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/finance-collections" icon={DollarSign} label="Collections" module="finance" />
-                    <NavItem path="/finance-projections" icon={TrendingUp} label="Projections" module="finance" />
-                    <NavItem path="/finance-balances" icon={BarChart3} label="Balances" module="finance" />
-                    <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" module="finance" />
-                    <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" module="finance" />
-                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" module="reports" />
+                    <NavItem path="/finance-collections" icon={DollarSign} label="Collections" viewKey="finance.collections" />
+                    <NavItem path="/finance-projections" icon={TrendingUp} label="Projections" viewKey="finance.projections" />
+                    <NavItem path="/finance-balances" icon={BarChart3} label="Balances" viewKey="finance.balances" module="finance" />
+                    <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" viewKey="finance.profitability" module="finance" />
+                    <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" viewKey="finance.allocations" module="finance" />
+                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" viewKey="reports.core" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -613,7 +647,7 @@ function AppSidebar({
         )}
 
         {/* HR/Admin: Management */}
-        {isHROrAdmin && (
+        {hasManagementSectionAccess && (
           <Collapsible className="group/collapsible">
             <SidebarGroup>
               <SidebarGroupLabel asChild>
@@ -625,17 +659,17 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/employee-management" icon={Users} label="Employee Management" module="users" />
+                    <NavItem path="/employee-management" icon={Users} label="Employee Management" viewKey="people.employee_management" module="users" />
 
-                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" module="users" />
-                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" module="clients" />
-                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" module="jobs" action="write" />
-                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" module="jobs" />
-                    <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" module="evaluations" />
-                    <NavItem path="/kpi-management" icon={Settings} label="KPIs" module="kpis" />
-                    <NavItem path="/calibration" icon={Settings} label="Calibration" module="evaluations" />
-                    <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" module="users" />
-                    <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" module="reports" />
+                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" viewKey="clients.onboarding_queue" module="clients" />
+                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
+                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" viewKey="jobs.workflow" module="jobs" />
+                    <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" viewKey="evaluations.management" module="evaluations" />
+                    <NavItem path="/kpi-management" icon={Settings} label="KPIs" viewKey="kpi.management" module="kpis" />
+                    <NavItem path="/calibration" icon={Settings} label="Calibration" viewKey="evaluations.calibration" module="evaluations" />
+                    <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" viewKey="people.positions_rates" module="users" />
+                    <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" viewKey="reports.audit_logs" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -644,7 +678,7 @@ function AppSidebar({
         )}
 
         {/* Partner-specific features */}
-        {isPartner && (
+        {hasPartnerToolsSectionAccess && (
           <Collapsible className="group/collapsible">
             <SidebarGroup>
               <SidebarGroupLabel asChild>
@@ -656,10 +690,10 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" module="clients" />
-                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" module="proposals" />
-                    <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" module="reports" />
-                    <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" module="jobs" />
+                    <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" viewKey="clients.portfolio" module="clients" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" viewKey="clients.business_development" module="proposals" />
+                    <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" viewKey="partner.metrics" module="reports" />
+                    <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" viewKey="jobs.team_overview" module="jobs" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -668,7 +702,7 @@ function AppSidebar({
         )}
 
         {/* Manager-specific features */}
-        {isManager && !isPartner && (
+        {hasTeamManagementSectionAccess && (
           <Collapsible className="group/collapsible">
             <SidebarGroup>
               <SidebarGroupLabel asChild>
@@ -680,10 +714,10 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/team-performance" icon={Users} label="Team Performance" module="reports" />
-                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" module="dashboard" />
-                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" module="evaluations" />
-                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" module="jobs" />
+                    <NavItem path="/team-performance" icon={Users} label="Team Performance" viewKey="team.performance" module="reports" />
+                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" viewKey="dashboard.department" module="dashboard" />
+                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" viewKey="team.staff_development" module="evaluations" />
+                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" viewKey="jobs.workload_management" module="jobs" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -696,4 +730,3 @@ function AppSidebar({
 }
 
 export default DashboardLayout;
-

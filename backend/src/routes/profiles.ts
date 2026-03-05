@@ -40,6 +40,14 @@ const updateProfileValidators = [
     .optional()
     .isURL()
     .withMessage('profilePicture must be valid URL'),
+  body('status')
+    .optional()
+    .isIn(['active', 'inactive', 'separated'])
+    .withMessage('status must be one of: active, inactive, separated'),
+  body('separationDate')
+    .optional({ nullable: true })
+    .isISO8601()
+    .withMessage('separationDate must be a valid ISO date'),
 ];
 
 const listProfileValidators = [
@@ -57,7 +65,7 @@ const listProfileValidators = [
     .toInt(),
   query('status')
     .optional()
-    .isIn(['active', 'inactive', 'suspended'])
+    .isIn(['active', 'inactive', 'separated'])
     .withMessage('Invalid status'),
   query('search')
     .optional()

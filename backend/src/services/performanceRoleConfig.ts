@@ -1,5 +1,5 @@
 export type PerformanceRoleKey =
-  | "group_managing_partner"
+  | "gmp"
   | "partner"
   | "manager"
   | "marketing"
@@ -27,8 +27,8 @@ export interface RolePerformanceConfig {
 }
 
 const roleConfigs: Record<PerformanceRoleKey, RolePerformanceConfig> = {
-  group_managing_partner: {
-    role: "group_managing_partner",
+  gmp: {
+    role: "gmp",
     jobScope: "partnered",
     financial: { revenue: 0.4, profit: 0.3, bd: 0.3 },
     efficiency: { utilization: 0, jobCompletion: 0.5, timeToDelivery: 0.5 },
@@ -89,8 +89,7 @@ const normalizeRoleKey = (value: string | null | undefined): PerformanceRoleKey 
   if (!value) return null;
   const normalized = value.trim().toLowerCase().replace(/\s+/g, "_");
   const aliases: Record<string, PerformanceRoleKey> = {
-    gmp: "group_managing_partner",
-    group_managing_partner: "group_managing_partner",
+    gmp: "gmp",
     marketing_manager: "marketing",
     business_development_manager: "business_development",
     business_development: "business_development",

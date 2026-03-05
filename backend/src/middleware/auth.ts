@@ -13,6 +13,8 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../prisma";
 import { getJwtSecret } from "../config/jwt";
 import type { AuthorizationContext } from "../services/authorizationContext.service";
+import { canonicalizeRoles } from "../auth/canonicalRoles";
+import { shouldEnforceOnboardingGate } from "./onboardingGate";
 
 /**
  * Minimal profile shape injected later by loadProfile
@@ -46,7 +48,7 @@ export interface AuthRequest extends Request {
   
   // Typed properties for downstream middleware/controllers
   // Use these directly instead of casting to 'any'
-  userRoles?: string[]; // Set by requireRole - array of role names
+  userRoles?: string[]; // Canonical role names (initialized by authMiddleware, enriched by authz middleware)
   userPermissions?: string[]; // Set by requirePermission - array of permission strings
   userRolePolicies?: Array<{ roleName: string; permissionKeys?: string[] | null }>; // Set by module access middleware
   authorizationContext?: AuthorizationContext; // Shared authz context cache for middleware chain
@@ -75,7 +77,7 @@ export interface AuthRequest extends Request {
 export const authFromReq = (req: AuthRequest) => ({
   userId: req.user?.userId ?? 0,
   profileId: req.profile?.id ?? req.user?.profileId ?? 0,
-  roles: req.userRoles ?? req.user?.authRoles ?? [],
+  roles: req.userRoles ?? [],
 });
 
 /**
@@ -117,23 +119,29 @@ export async function authMiddleware(
       });
     }
 
-    if (decoded.sessionToken) {
-      const activeSession = await prisma.session.findFirst({
-        where: {
-          token: decoded.sessionToken,
-          userId: resolvedUserId,
-          revokedAt: null,
-          expiresAt: { gt: new Date() },
-        },
-        select: { id: true },
+    const sessionToken = String(decoded.sessionToken || "").trim();
+    if (!sessionToken) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Invalid token payload",
       });
+    }
 
-      if (!activeSession) {
-        return res.status(401).json({
-          success: false,
-          message: "Session expired. Please sign in again.",
-        });
-      }
+    const activeSession = await prisma.session.findFirst({
+      where: {
+        token: sessionToken,
+        userId: resolvedUserId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    if (!activeSession) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please sign in again.",
+      });
     }
 
     // Verify user still exists
@@ -159,13 +167,41 @@ export async function authMiddleware(
       });
     }
 
+    const authRoles = canonicalizeRoles(decoded.authRoles || []);
+    const requestPath = req.originalUrl || req.url || "";
+
+    if (
+      shouldEnforceOnboardingGate({
+        requestPath,
+        roles: authRoles,
+        profile: {
+          onboardingStatus: user.profile?.onboardingStatus,
+          onboardingChecklistCompleted: user.profile?.onboardingChecklistCompleted,
+          inductionCompleted: user.profile?.inductionCompleted,
+        },
+      })
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "ONBOARDING_INCOMPLETE",
+        message:
+          "Onboarding checklist incomplete. Complete onboarding before accessing this module.",
+        onboarding: {
+          status: user.profile?.onboardingStatus || "pending",
+          onboardingChecklistCompleted: !!user.profile?.onboardingChecklistCompleted,
+          inductionCompleted: !!user.profile?.inductionCompleted,
+        },
+      });
+    }
+
     req.user = {
       userId: resolvedUserId,
       email: decoded.email,
       profileId: user.profile?.id,
-      authRoles: decoded.authRoles || [],
-      sessionToken: decoded.sessionToken,
+      authRoles,
+      sessionToken,
     };
+    req.userRoles = authRoles;
 
     next();
   } catch (error: any) {

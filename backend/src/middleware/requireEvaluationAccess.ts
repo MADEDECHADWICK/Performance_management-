@@ -16,12 +16,12 @@ const normalize = (s: string) => s.toLowerCase().trim();
 
 const isPrivileged = (roles: string[]) => {
   const r = roles.map(normalize);
-  return r.includes("admin") || r.includes("super_admin");
+  return r.includes("super_admin");
 };
 
 const isHR = (roles: string[]) => {
   const r = roles.map(normalize);
-  return r.includes("hr") || r.includes("hr_manager");
+  return r.includes("hr");
 };
 
 const isManager = (roles: string[]) => {

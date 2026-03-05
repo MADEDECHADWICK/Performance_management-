@@ -301,6 +301,27 @@ enum DashboardStatus {
   off_track
 }
 
+enum TrainingRecordType {
+  internal
+  external
+  certification
+  workshop
+}
+
+enum TrainingRecordStatus {
+  planned
+  in_progress
+  completed
+  cancelled
+}
+
+enum DevelopmentGoalStatus {
+  active
+  completed
+  paused
+  cancelled
+}
+
 // =============================
 // AUTH + RBAC
 // =============================
@@ -437,6 +458,9 @@ model Department {
   evaluationDefinitions EvaluationDefinition[]
   dashboardMetrics      DashboardMetric[]
   okrObjectives         OkrObjective[]
+  trainingRecords       TrainingRecord[]
+  skillAssessments      SkillAssessment[]
+  developmentGoals      DevelopmentGoal[]
 
   @@index([departmentHeadId])
   @@index([partnerProfileId])
@@ -585,6 +609,15 @@ model Profile {
 
   inductionChecklistsAsEmployee InductionChecklist[] @relation("InductionChecklistEmployee")
   inductionChecklistsAsAssigner InductionChecklist[] @relation("InductionChecklistAssigner")
+  clientOnboardingChecklistsAssigned ClientOnboardingChecklist[] @relation("ClientOnboardingChecklistAssigner")
+  clientOnboardingChecklistItemsCompleted ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemCompletedBy")
+  trainingRecordsAsEmployee      TrainingRecord[]    @relation("TrainingRecordEmployee")
+  trainingRecordsCreated         TrainingRecord[]    @relation("TrainingRecordCreator")
+  skillAssessmentsAsEmployee     SkillAssessment[]   @relation("SkillAssessmentEmployee")
+  skillAssessmentsAsAssessor     SkillAssessment[]   @relation("SkillAssessmentAssessor")
+  developmentGoalsAsEmployee     DevelopmentGoal[]   @relation("DevelopmentGoalEmployee")
+  developmentGoalsCreated        DevelopmentGoal[]   @relation("DevelopmentGoalCreator")
+  developmentGoalsAsMentor       DevelopmentGoal[]   @relation("DevelopmentGoalMentor")
 
   dashboardMetrics DashboardMetric[] @relation("DashboardMetricPartner")
 
@@ -636,6 +669,87 @@ model Feedback {
   @@index([giverProfileId])
   @@index([recipientProfileId])
   @@map("feedback")
+}
+
+model TrainingRecord {
+  id                   Int                  @id @default(autoincrement())
+  employeeProfileId    Int?                 @map("employee_profile_id")
+  createdByProfileId   Int                  @map("created_by_profile_id")
+  departmentId         Int?                 @map("department_id")
+  courseName           String               @map("course_name")
+  trainingType         TrainingRecordType   @default(internal) @map("training_type")
+  status               TrainingRecordStatus @default(planned)
+  deliveryMode         String?              @map("delivery_mode")
+  startDate            DateTime             @map("start_date")
+  endDate              DateTime?            @map("end_date")
+  provider             String?
+  cost                 Decimal              @default(0) @db.Decimal(14, 2)
+  completionPercentage Decimal              @default(0) @map("completion_percentage") @db.Decimal(5, 2)
+  certificateUrl       String?              @map("certificate_url")
+  notes                String?
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  employee   Profile?    @relation("TrainingRecordEmployee", fields: [employeeProfileId], references: [id], onDelete: SetNull)
+  creator    Profile     @relation("TrainingRecordCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([employeeProfileId])
+  @@index([createdByProfileId])
+  @@index([departmentId])
+  @@index([status, startDate])
+  @@map("training_records")
+}
+
+model SkillAssessment {
+  id                Int      @id @default(autoincrement())
+  employeeProfileId Int      @map("employee_profile_id")
+  assessorProfileId Int      @map("assessor_profile_id")
+  departmentId      Int?     @map("department_id")
+  skillCategory     String   @map("skill_category")
+  skillName         String   @map("skill_name")
+  currentLevel      Int      @default(1) @map("current_level")
+  targetLevel       Int      @default(1) @map("target_level")
+  assessmentDate    DateTime @default(now()) @map("assessment_date")
+  notes             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  employee   Profile    @relation("SkillAssessmentEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  assessor   Profile    @relation("SkillAssessmentAssessor", fields: [assessorProfileId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([employeeProfileId, assessmentDate])
+  @@index([assessorProfileId])
+  @@index([departmentId])
+  @@map("skill_assessments")
+}
+
+model DevelopmentGoal {
+  id                     Int                   @id @default(autoincrement())
+  employeeProfileId      Int                   @map("employee_profile_id")
+  createdByProfileId     Int                   @map("created_by_profile_id")
+  assignedMentorProfileId Int?                 @map("assigned_mentor_profile_id")
+  departmentId           Int?                  @map("department_id")
+  goalTitle              String                @map("goal_title")
+  goalDescription        String                @map("goal_description")
+  targetCompletion       DateTime              @map("target_completion")
+  currentProgress        Decimal               @default(0) @map("current_progress") @db.Decimal(5, 2)
+  status                 DevelopmentGoalStatus @default(active)
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
+
+  employee       Profile    @relation("DevelopmentGoalEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  creator        Profile    @relation("DevelopmentGoalCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
+  assignedMentor Profile?   @relation("DevelopmentGoalMentor", fields: [assignedMentorProfileId], references: [id], onDelete: SetNull)
+  department     Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  @@index([employeeProfileId, status])
+  @@index([createdByProfileId])
+  @@index([assignedMentorProfileId])
+  @@index([departmentId])
+  @@index([targetCompletion])
+  @@map("development_goals")
 }
 
 // =============================
@@ -792,6 +906,8 @@ model InductionChecklistItem {
   itemName    String  @map("item_name")
   description String?
   orderIndex  Int     @default(0) @map("order_index")
+  itemType    String  @default("task") @map("item_type")
+  resourceUrl String? @map("resource_url")
 
   isCompleted          Boolean   @default(false) @map("is_completed")
   completedByProfileId Int?      @map("completed_by_profile_id")
@@ -886,6 +1002,7 @@ model Document {
 
   candidateOfferLetters RecruitmentCandidate[]     @relation("CandidateOfferLetter")
   checklistItemDocs     InductionChecklistItem[]   @relation("ChecklistItemDocument")
+  clientOnboardingChecklistItemDocs ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemDocument")
   offboardingItemDocs   OffboardingChecklistItem[] @relation("OffboardingItemDocument")
 
   @@index([entityType, entityId])
@@ -954,11 +1071,64 @@ model ClientOnboarding {
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   client     Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
   job        Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  checklist  ClientOnboardingChecklist?
 
   @@index([status])
   @@index([uploadedByProfileId])
   @@index([hrReviewerProfileId]) // v2.1 (optional helpful index)
   @@map("client_onboardings")
+}
+
+model ClientOnboardingChecklist {
+  id                 Int  @id @default(autoincrement())
+  clientOnboardingId Int  @unique @map("client_onboarding_id")
+
+  checklistName     String          @default("Standard Client Onboarding") @map("checklist_name")
+  status            ChecklistStatus @default(pending)
+  totalItems        Int             @default(0) @map("total_items")
+  completedItems    Int             @default(0) @map("completed_items")
+  completionPercent Decimal         @default(0) @map("completion_percent") @db.Decimal(5, 2)
+
+  assignedByProfileId Int?      @map("assigned_by_profile_id")
+  dueDate             DateTime? @map("due_date")
+  completedAt         DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  clientOnboarding ClientOnboarding @relation(fields: [clientOnboardingId], references: [id], onDelete: Cascade)
+  assignedBy       Profile?         @relation("ClientOnboardingChecklistAssigner", fields: [assignedByProfileId], references: [id], onDelete: SetNull)
+
+  items ClientOnboardingChecklistItem[]
+
+  @@index([assignedByProfileId])
+  @@map("client_onboarding_checklists")
+}
+
+model ClientOnboardingChecklistItem {
+  id          Int @id @default(autoincrement())
+  checklistId Int @map("checklist_id")
+
+  itemName    String  @map("item_name")
+  description String?
+  orderIndex  Int     @default(0) @map("order_index")
+
+  isCompleted          Boolean   @default(false) @map("is_completed")
+  completedByProfileId Int?      @map("completed_by_profile_id")
+  completedAt          DateTime? @map("completed_at")
+
+  requiresDocument Boolean @default(false) @map("requires_document")
+  documentId       Int?    @map("document_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  checklist   ClientOnboardingChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  completedBy Profile?                  @relation("ClientOnboardingChecklistItemCompletedBy", fields: [completedByProfileId], references: [id], onDelete: SetNull)
+  document    Document?                 @relation("ClientOnboardingChecklistItemDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([checklistId])
+  @@map("client_onboarding_checklist_items")
 }
 
 model Client {
@@ -2213,4 +2383,331 @@ model WorkflowStepEvent {
   @@index([workflowAssignmentId, actedAt])
   @@index([actedByProfileId])
   @@map("workflow_step_events")
+}
+
+// =============================
+// KPI CASCADE V2
+// =============================
+
+enum KpiCadence {
+  quarterly
+  annual
+}
+
+enum KpiCycleState {
+  draft
+  active
+  completed
+  archived
+}
+
+enum KpiCycleVersionStatus {
+  draft
+  published
+  locked
+}
+
+enum KpiEntityState {
+  draft
+  submitted
+  in_review
+  approved
+  rejected
+  active
+  completed
+  escalated
+  archived
+}
+
+enum KpiBscPerspective {
+  financial
+  customer
+  internal_process
+  learning_growth
+}
+
+enum KpiDirection {
+  higher_better
+  lower_better
+  milestone
+}
+
+enum KpiRag {
+  red
+  amber
+  green
+}
+
+enum KpiInitiativeLevel {
+  firm
+  team
+  department
+  employee
+}
+
+enum KpiUpdateFrequency {
+  weekly
+  biweekly
+  monthly
+  quarterly
+}
+
+enum KpiProgressSource {
+  web
+  mobile
+  api
+  system
+  migration
+}
+
+enum KpiSnapshotType {
+  baseline
+  periodic
+  closeout
+}
+
+model KpiCycle {
+  id                 Int           @id @default(autoincrement())
+  name               String
+  cadence            KpiCadence
+  startAt            DateTime      @map("start_at")
+  endAt              DateTime      @map("end_at")
+  state              KpiCycleState @default(draft)
+  createdByProfileId Int?          @map("created_by_profile_id")
+  rowVersion         Int           @default(1) @map("row_version")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  @@index([cadence])
+  @@index([state])
+  @@map("kpi_cycles")
+}
+
+model KpiCycleVersion {
+  id                 Int                   @id @default(autoincrement())
+  cycleId            Int                   @map("cycle_id")
+  versionNo          Int                   @map("version_no")
+  status             KpiCycleVersionStatus @default(draft)
+  publishedAt        DateTime?             @map("published_at")
+  createdByProfileId Int?                  @map("created_by_profile_id")
+  rowVersion         Int                   @default(1) @map("row_version")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  @@unique([cycleId, versionNo])
+  @@index([cycleId])
+  @@map("kpi_cycle_versions")
+}
+
+model KpiGoal {
+  id              Int            @id @default(autoincrement())
+  cycleVersionId  Int            @map("cycle_version_id")
+  title           String
+  description     String?
+  bscTag          KpiBscPerspective? @map("bsc_tag")
+  ownerProfileId  Int            @map("owner_profile_id")
+  state           KpiEntityState @default(draft)
+  baseline        Decimal        @db.Decimal(14, 2)
+  target          Decimal        @db.Decimal(14, 2)
+  actual          Decimal        @default(0) @db.Decimal(14, 2)
+  dueDate         DateTime?      @map("due_date")
+  weight          Decimal        @db.Decimal(5, 2)
+  percentComplete Decimal        @default(0) @map("percent_complete") @db.Decimal(7, 2)
+  rag             KpiRag         @default(red)
+  lastUpdatedAt   DateTime?      @map("last_updated_at")
+  rowVersion      Int            @default(1) @map("row_version")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  @@unique([cycleVersionId, title])
+  @@index([cycleVersionId])
+  @@index([bscTag])
+  @@index([dueDate])
+  @@index([state])
+  @@map("kpi_goals")
+}
+
+model KpiMetric {
+  id                Int                @id @default(autoincrement())
+  goalId            Int                @map("goal_id")
+  name              String
+  description       String?
+  bscTag            KpiBscPerspective? @map("bsc_tag")
+  unit              String?
+  direction         KpiDirection
+  aggregationMethod String             @map("aggregation_method")
+  redThreshold      Decimal?           @map("red_threshold") @db.Decimal(14, 2)
+  amberThreshold    Decimal?           @map("amber_threshold") @db.Decimal(14, 2)
+  greenThreshold    Decimal?           @map("green_threshold") @db.Decimal(14, 2)
+  state             KpiEntityState     @default(draft)
+  baseline          Decimal            @db.Decimal(14, 2)
+  target            Decimal            @db.Decimal(14, 2)
+  actual            Decimal            @default(0) @db.Decimal(14, 2)
+  dueDate           DateTime?          @map("due_date")
+  weight            Decimal            @db.Decimal(5, 2)
+  percentComplete   Decimal            @default(0) @map("percent_complete") @db.Decimal(7, 2)
+  rag               KpiRag             @default(red)
+  lastUpdatedAt     DateTime?          @map("last_updated_at")
+  updateFrequency   KpiUpdateFrequency @map("update_frequency")
+  rowVersion        Int                @default(1) @map("row_version")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  @@index([goalId])
+  @@index([bscTag])
+  @@index([dueDate])
+  @@index([state])
+  @@map("kpi_metrics")
+}
+
+model KpiInitiative {
+  id                 Int                @id @default(autoincrement())
+  metricId           Int                @map("metric_id")
+  level              KpiInitiativeLevel
+  parentInitiativeId Int?               @map("parent_initiative_id")
+  title              String
+  description        String?
+  bscTag             KpiBscPerspective? @map("bsc_tag")
+  ownerProfileId     Int?               @map("owner_profile_id")
+  partnerProfileId   Int?               @map("partner_profile_id")
+  managerProfileId   Int?               @map("manager_profile_id")
+  departmentId       Int?               @map("department_id")
+  employeeProfileId  Int?               @map("employee_profile_id")
+  state              KpiEntityState     @default(draft)
+  baseline           Decimal            @db.Decimal(14, 2)
+  target             Decimal            @db.Decimal(14, 2)
+  actual             Decimal            @default(0) @db.Decimal(14, 2)
+  dueDate            DateTime?          @map("due_date")
+  weight             Decimal            @db.Decimal(5, 2)
+  percentComplete    Decimal            @default(0) @map("percent_complete") @db.Decimal(7, 2)
+  rag                KpiRag             @default(red)
+  lastUpdatedAt      DateTime?          @map("last_updated_at")
+  updateFrequency    KpiUpdateFrequency @map("update_frequency")
+  ackRequired        Boolean            @default(true) @map("ack_required")
+  acknowledgedAt     DateTime?          @map("acknowledged_at")
+  effectiveFrom      DateTime?          @map("effective_from")
+  effectiveTo        DateTime?          @map("effective_to")
+  rowVersion         Int                @default(1) @map("row_version")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  @@index([metricId])
+  @@index([parentInitiativeId])
+  @@index([bscTag])
+  @@index([dueDate])
+  @@index([level, state])
+  @@index([departmentId])
+  @@index([employeeProfileId])
+  @@map("kpi_initiatives")
+}
+
+model KpiProgressUpdate {
+  id                 Int               @id @default(autoincrement())
+  initiativeId       Int               @map("initiative_id")
+  periodStart        DateTime          @map("period_start")
+  periodEnd          DateTime          @map("period_end")
+  actual             Decimal           @db.Decimal(14, 2)
+  note               String?
+  evidenceUrls       String[]          @default([]) @map("evidence_urls")
+  updatedByProfileId Int?              @map("updated_by_profile_id")
+  source             KpiProgressSource @default(api)
+  idempotencyKey     String            @unique @map("idempotency_key")
+  createdAt          DateTime          @default(now()) @map("created_at")
+
+  @@unique([initiativeId, periodStart, periodEnd])
+  @@index([initiativeId])
+  @@map("kpi_progress_updates")
+}
+
+model KpiApprovalHistory {
+  id               Int            @id @default(autoincrement())
+  entityType       String         @map("entity_type")
+  entityId         Int            @map("entity_id")
+  fromState        KpiEntityState @map("from_state")
+  toState          KpiEntityState @map("to_state")
+  actedByProfileId Int?           @map("acted_by_profile_id")
+  actedRole        String         @map("acted_role")
+  comments         String?
+  actedAt          DateTime       @default(now()) @map("acted_at")
+  sequenceNo       Int            @map("sequence_no")
+  slaBreached      Boolean        @default(false) @map("sla_breached")
+  metadata         Json?
+
+  @@unique([entityType, entityId, sequenceNo])
+  @@index([entityType, entityId, actedAt])
+  @@map("kpi_approval_history")
+}
+
+model KpiReassignment {
+  id                  Int      @id @default(autoincrement())
+  initiativeId        Int      @map("initiative_id")
+  fromProfileId       Int?     @map("from_profile_id")
+  toProfileId         Int      @map("to_profile_id")
+  reason              String
+  effectiveAt         DateTime @map("effective_at")
+  approvedByProfileId Int?     @map("approved_by_profile_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@index([initiativeId, effectiveAt])
+  @@map("kpi_reassignments")
+}
+
+model KpiSnapshot {
+  id                 Int             @id @default(autoincrement())
+  cycleId            Int             @map("cycle_id")
+  cycleVersionId     Int             @map("cycle_version_id")
+  snapshotType       KpiSnapshotType @map("snapshot_type")
+  createdByProfileId Int?            @map("created_by_profile_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+
+  @@index([cycleId, snapshotType])
+  @@map("kpi_snapshots")
+}
+
+model KpiSnapshotItem {
+  id              Int            @id @default(autoincrement())
+  snapshotId      Int            @map("snapshot_id")
+  entityType      String         @map("entity_type")
+  entityId        Int            @map("entity_id")
+  parentId        Int?           @map("parent_id")
+  state           KpiEntityState
+  target          Decimal        @db.Decimal(14, 2)
+  actual          Decimal        @db.Decimal(14, 2)
+  baseline        Decimal        @db.Decimal(14, 2)
+  weight          Decimal        @db.Decimal(5, 2)
+  percentComplete Decimal        @map("percent_complete") @db.Decimal(7, 2)
+  rag             KpiRag
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  @@unique([snapshotId, entityType, entityId])
+  @@index([snapshotId, parentId])
+  @@map("kpi_snapshot_items")
+}
+
+model KpiLegacyMap {
+  id            Int      @id @default(autoincrement())
+  legacyTable   String   @map("legacy_table")
+  legacyId      Int      @map("legacy_id")
+  newEntityType String   @map("new_entity_type")
+  newEntityId   Int      @map("new_entity_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([legacyTable, legacyId])
+  @@index([newEntityType, newEntityId])
+  @@map("kpi_legacy_map")
+}
+
+model NotificationDeviceToken {
+  id         Int      @id @default(autoincrement())
+  profileId  Int      @map("profile_id")
+  platform   String
+  token      String
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([profileId, platform, token])
+  @@index([profileId, active])
+  @@map("notification_device_tokens")
 }

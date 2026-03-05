@@ -24,13 +24,11 @@ export function requireJobAccess(action: string = 'view') {
         String(role || '')
           .trim()
           .toLowerCase()
-          .replace(/\s+/g, '_');
+          .replace(/[\s-]+/g, '_');
 
-      const roleCandidates = [
-        req.profile?.role?.name,
-        ...(req.userRoles || []),
-        ...(req.user?.authRoles || []),
-      ].filter(Boolean) as string[];
+      // Only auth roles are allowed to drive authorization decisions.
+      // Profile.positionRole is a billing/position concept, not an auth role.
+      const roleCandidates = (req.userRoles || []).filter(Boolean) as string[];
       const roleSet = new Set(roleCandidates.map((role) => normalizeRole(role)));
 
       if (!requesterProfileId) {
@@ -58,10 +56,9 @@ export function requireJobAccess(action: string = 'view') {
 
       const resolvedAction = String(action || 'view').toLowerCase();
 
-      const isAdmin = roleSet.has('admin') || roleSet.has('super_admin');
-      const isHr =
-        roleSet.has('hr') || roleSet.has('hr_manager') || roleSet.has('human_resources');
-      const isGmp = roleSet.has('gmp') || roleSet.has('group_managing_partner');
+      const isAdmin = roleSet.has('super_admin');
+      const isHr = roleSet.has('hr');
+      const isGmp = roleSet.has('gmp');
       const isManager = roleSet.has('manager') && job.managerProfileId === requesterProfileId;
       const isPartner = roleSet.has('partner') && job.partnerProfileId === requesterProfileId;
       const isStaffAssigned = job.staffing.length > 0;

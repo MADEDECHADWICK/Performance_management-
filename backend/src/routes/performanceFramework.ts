@@ -244,7 +244,7 @@ router.get("/resolve-module", async (req: AuthRequest, res) => {
     const positionTitleQuery =
       typeof req.query.positionTitle === "string" ? req.query.positionTitle : undefined;
 
-    let roles = (req.user?.authRoles || []).map((role) => role.toLowerCase());
+    let roles = (req.userRoles || []).map((role) => role.toLowerCase());
     let positionTitle = positionTitleQuery ?? null;
 
     if (roleQuery) {

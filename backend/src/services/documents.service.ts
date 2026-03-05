@@ -12,7 +12,8 @@
 
 import prisma from "../prisma";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
-import { NotificationService } from "./notifications.service";
+import { NotificationPriority, NotificationService } from "./notifications.service";
+const db = prisma as any;
 
 export interface ListDocumentsOptions {
   page: number;
@@ -47,6 +48,16 @@ export interface DocumentVerifyInput {
   rejectionReason?: string;
 }
 
+export interface DocumentRequestInput {
+  requestedProfileId: number;
+  documentType: string;
+  entityType: string;
+  entityId?: number;
+  dueDate?: Date;
+  message?: string;
+  priority?: NotificationPriority;
+}
+
 export interface AuthContext {
   userId: number;
   profileId: number;
@@ -67,13 +78,36 @@ type DocumentNotificationInput = {
 class DocumentServiceClass {
   private requireHrOrAdmin(auth: AuthContext) {
     const roles = auth.roles ?? [];
-    const isAdmin = roles.includes("admin") || roles.includes("super_admin");
-    const isHr = roles.includes("hr") || roles.includes("hr_manager");
+    const isAdmin = roles.includes("super_admin");
+    const isHr = roles.includes("hr");
     if (!isAdmin && !isHr) {
       const err = new Error("Forbidden");
       (err as any).statusCode = 403;
       throw err;
     }
+  }
+
+  private normalizeRoleName(value: string | null | undefined) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_")
+      .replace(/_+/g, "_");
+  }
+
+  private isPrivilegedJobDocumentLister(roles?: string[]) {
+    const roleSet = new Set((roles || []).map((role) => this.normalizeRoleName(role)));
+    return (
+      roleSet.has("super_admin") ||
+      roleSet.has("hr") ||
+      roleSet.has("human_resources") ||
+      roleSet.has("gmp") ||
+      roleSet.has("partner") ||
+      roleSet.has("manager") ||
+      roleSet.has("finance") ||
+      roleSet.has("finance_manager") ||
+      roleSet.has("marketing")
+    );
   }
 
   private normalizeEntityType(value: string | null | undefined) {
@@ -122,6 +156,10 @@ class DocumentServiceClass {
       normalizedEntityType === "employeeonboardingcase"
     ) {
       return "/profile?tab=onboarding";
+    }
+
+    if (normalizedEntityType === "clientonboardingchecklist") {
+      return "/client-onboarding-queue";
     }
 
     if (
@@ -292,6 +330,42 @@ class DocumentServiceClass {
       return notifications;
     }
 
+    if (normalizedEntityType === "clientonboardingchecklist") {
+      const checklist = await db.clientOnboardingChecklist.findUnique({
+        where: { id: document.entityId },
+        select: {
+          id: true,
+          checklistName: true,
+          assignedByProfileId: true,
+          clientOnboarding: {
+            select: {
+              clientName: true,
+              uploadedByProfileId: true,
+              hrReviewerProfileId: true,
+            },
+          },
+        },
+      });
+
+      if (checklist) {
+        const payload = {
+          type: "action" as const,
+          title: "Client onboarding checklist document submitted",
+          message: `A checklist document for "${checklist.clientOnboarding.clientName}" is ready for review.`,
+          actionRequired: true,
+          link: "/client-onboarding-queue",
+        };
+
+        if (checklist.clientOnboarding.hrReviewerProfileId) {
+          queue(checklist.clientOnboarding.hrReviewerProfileId, payload);
+        }
+        queue(checklist.assignedByProfileId, payload);
+        queue(checklist.clientOnboarding.uploadedByProfileId, payload);
+      }
+
+      return notifications;
+    }
+
     if (normalizedEntityType === "employeeonboardingcase") {
       const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
         where: { id: document.entityId },
@@ -358,7 +432,7 @@ class DocumentServiceClass {
         if (onboarding.hrReviewerProfileId) {
           queue(onboarding.hrReviewerProfileId, payload);
         } else {
-          await queueRoleRecipients(["hr", "hr_manager", "admin", "super_admin"], payload);
+          await queueRoleRecipients(["hr", "super_admin"], payload);
         }
       }
       if (!onboarding && normalizedEntityType === "onboarding") {
@@ -392,7 +466,7 @@ class DocumentServiceClass {
       if (profile) {
         if (auth.profileId === profile.id) {
           await queueRoleRecipients(
-            ["hr", "hr_manager", "admin", "super_admin"],
+            ["hr", "super_admin"],
             {
               type: "action",
               title: "Employee document submitted",
@@ -552,7 +626,7 @@ class DocumentServiceClass {
         queue(letter.approvedByProfileId, payload);
         queue(letter.client.managerProfileId, payload);
         queue(letter.client.partnerProfileId, payload);
-        await queueRoleRecipients(["hr", "hr_manager", "admin", "super_admin"], payload);
+        await queueRoleRecipients(["hr", "super_admin"], payload);
       }
       return notifications;
     }
@@ -699,6 +773,8 @@ class DocumentServiceClass {
         ];
       case "inductionchecklist":
         return ["InductionChecklist", "induction_checklist"];
+      case "clientonboardingchecklist":
+        return ["ClientOnboardingChecklist", "client_onboarding_checklist"];
       case "offboardingchecklistitem":
         return ["OffboardingChecklistItem", "offboarding_checklist_item"];
       case "employeeonboardingcase":
@@ -755,6 +831,109 @@ class DocumentServiceClass {
   }
 
   /**
+   * Request a targeted user to upload a required document.
+   */
+  async requestDocument(input: DocumentRequestInput, auth: AuthContext) {
+    const requestedProfileId = Number(input.requestedProfileId);
+    if (!Number.isFinite(requestedProfileId) || requestedProfileId <= 0) {
+      const err = new Error("Valid requestedProfileId is required");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (requestedProfileId === auth.profileId) {
+      const err = new Error("You cannot request a document from yourself");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const targetProfile = await prisma.profile.findUnique({
+      where: { id: requestedProfileId },
+      select: { id: true, status: true, firstName: true, lastName: true },
+    });
+    if (!targetProfile || targetProfile.status !== "active") {
+      const err = new Error("Requested profile not found or inactive");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const requesterProfile = await prisma.profile.findUnique({
+      where: { id: auth.profileId },
+      select: { firstName: true, lastName: true },
+    });
+
+    const normalizedEntityType = this.normalizeEntityType(input.entityType);
+    const normalizedDocumentType = this.normalizeDocumentType(input.documentType);
+    const route = this.buildDocumentLink(
+      input.entityType,
+      input.entityId ?? null,
+      input.documentType
+    );
+    const dueDate = input.dueDate ? new Date(input.dueDate) : undefined;
+    if (dueDate && Number.isNaN(dueDate.getTime())) {
+      const err = new Error("Invalid dueDate");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const requesterName = requesterProfile
+      ? `${requesterProfile.firstName} ${requesterProfile.lastName}`.trim()
+      : "A reviewer";
+    const extraMessage = String(input.message || "").trim();
+    const contextLabel =
+      input.entityId && Number(input.entityId) > 0
+        ? `${input.entityType} #${Number(input.entityId)}`
+        : input.entityType;
+    const dayBucket = new Date().toISOString().slice(0, 10);
+
+    const eventKey = `document.requested:${normalizedEntityType}:${Number(input.entityId || 0)}:${normalizedDocumentType}:${dayBucket}`;
+    const notification = await NotificationService.createNotification(
+      {
+        recipientProfileId: requestedProfileId,
+        type: "action",
+        title: `Document requested: ${input.documentType}`,
+        message: `${requesterName} requested "${input.documentType}" for ${contextLabel}.${extraMessage ? ` ${extraMessage}` : ""}`.trim(),
+        actionRequired: true,
+        dueDate,
+        link: route,
+        eventType: "document.requested",
+        priority: input.priority ?? "high",
+        targetEntityType: input.entityType || "Document",
+        targetEntityId:
+          input.entityId && Number(input.entityId) > 0
+            ? Number(input.entityId)
+            : requestedProfileId,
+        canonicalRoute: route,
+        actions: [
+          {
+            id: "upload_document",
+            label: "Upload document",
+            endpoint: route,
+            method: "GET",
+          },
+        ],
+        requiredPermission: "module.documents.read",
+        eventId: eventKey,
+        templateLabel: "document.requested",
+        deduplicationKey: `${eventKey}:${requestedProfileId}`,
+      },
+      this.buildNotificationAuth(auth)
+    );
+
+    return {
+      requestedProfileId,
+      requestedProfileName: `${targetProfile.firstName} ${targetProfile.lastName}`.trim(),
+      documentType: input.documentType,
+      entityType: input.entityType,
+      entityId: input.entityId ?? null,
+      dueDate: dueDate ?? null,
+      route,
+      notificationId: notification.id,
+      eventType: "document.requested",
+    };
+  }
+
+  /**
    * Get document by ID
    */
   async getDocumentById(documentId: number) {
@@ -777,14 +956,13 @@ class DocumentServiceClass {
 
   /**
    * List documents
-   * NOTE: Access enforcement should be handled by your withDocumentAccess middleware per-item.
-   * This list function is kept simple and filterable.
+   * NOTE: list-level scoping is enforced here to prevent direct-filter bypasses.
    */
-  async listDocuments(options: ListDocumentsOptions) {
+  async listDocuments(options: ListDocumentsOptions, auth: AuthContext) {
     const { page, pageSize, filters = {} } = options;
     const skip = (page - 1) * pageSize;
 
-    const where: any = {};
+    let where: any = {};
     if (filters.verificationStatus) where.verificationStatus = filters.verificationStatus;
     if (filters.accessLevel) where.accessLevel = filters.accessLevel;
     if (filters.documentType) where.documentType = filters.documentType;
@@ -794,6 +972,52 @@ class DocumentServiceClass {
         entityTypes.length === 1 ? entityTypes[0] : { in: entityTypes };
     }
     if (typeof filters.entityId === "number") where.entityId = filters.entityId;
+
+    const appendAndCondition = (current: any, condition: any) => {
+      if (!current || Object.keys(current).length === 0) return condition;
+      if (current.AND) {
+        return { ...current, AND: [...current.AND, condition] };
+      }
+      return { AND: [current, condition] };
+    };
+
+    // Employees and other non-privileged users can only see Job docs for jobs they are assigned to.
+    if (!this.isPrivilegedJobDocumentLister(auth.roles)) {
+      const assignedJobs = await prisma.job.findMany({
+        where: {
+          staffing: {
+            some: {
+              employeeProfileId: auth.profileId,
+            },
+          },
+        },
+        select: { id: true },
+      });
+      const assignedJobIds = assignedJobs.map((job) => job.id);
+      const jobEntityTypes = this.expandEntityTypeFilter("job");
+
+      const nonJobClause = { entityType: { notIn: jobEntityTypes } };
+      const assignedJobClause =
+        assignedJobIds.length > 0
+          ? {
+              AND: [
+                {
+                  entityType:
+                    jobEntityTypes.length === 1
+                      ? jobEntityTypes[0]
+                      : { in: jobEntityTypes },
+                },
+                {
+                  entityId: { in: assignedJobIds },
+                },
+              ],
+            }
+          : null;
+
+      where = appendAndCondition(where, {
+        OR: assignedJobClause ? [nonJobClause, assignedJobClause] : [nonJobClause],
+      });
+    }
 
     const [documents, total] = await Promise.all([
       prisma.document.findMany({
@@ -829,7 +1053,7 @@ class DocumentServiceClass {
     }
 
     const roles = auth.roles ?? [];
-    const isAdmin = roles.includes("admin") || roles.includes("super_admin");
+    const isAdmin = roles.includes("super_admin");
 
     if (!isAdmin && doc.uploadedBy !== auth.profileId) {
       const err = new Error("Forbidden");

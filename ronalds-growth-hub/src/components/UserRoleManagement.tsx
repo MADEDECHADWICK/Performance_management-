@@ -27,9 +27,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { resolveCanonicalRole, type CanonicalRole } from "@/auth/canonicalRoles";
+import { getRoleViewEntitlements, getViewPermissionDefinition } from "@/auth/viewAccess";
 import { Loader2, Search } from "lucide-react";
 
 interface User {
@@ -100,7 +109,8 @@ const MODULE_ACTION_GUIDE: Array<{
 
 const PRIMARY_ACCESS_ROLE_OPTIONS = [
   { value: "gmp", label: "GMP" },
-  { value: "admin", label: "HR/Admin" },
+  { value: "super_admin", label: "Super Admin" },
+  { value: "hr", label: "HR" },
   { value: "partner", label: "Partner" },
   { value: "manager", label: "Manager" },
   { value: "marketing", label: "Marketing" },
@@ -120,23 +130,12 @@ const PRIMARY_ACCESS_ROLE_LABELS = PRIMARY_ACCESS_ROLE_OPTIONS.reduce<Record<str
   {}
 );
 
-const PRIMARY_ROLE_ALIASES: Record<string, string> = {
-  gmp: "gmp",
-  group_managing_partner: "gmp",
-  admin: "admin",
-  super_admin: "admin",
-  hr: "admin",
-  hr_manager: "admin",
-  partner: "partner",
-  manager: "manager",
-  marketing: "marketing",
-  finance: "finance",
-  employee: "employee",
-};
-
 const normalizeRoleValue = (value: unknown) => String(value || "").toLowerCase().trim();
-const toPrimaryAccessRole = (roleName: unknown) =>
-  PRIMARY_ROLE_ALIASES[normalizeRoleValue(roleName)] || normalizeRoleValue(roleName);
+const toPrimaryAccessRole = (roleName: unknown) => {
+  const normalized = normalizeRoleValue(roleName);
+  const canonical = resolveCanonicalRole(normalized);
+  return canonical || normalized;
+};
 const USER_OVERRIDE_ROLE_PREFIX = "user_override_";
 const toCamelModuleKey = (value: string) =>
   String(value || "").replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
@@ -160,17 +159,15 @@ const ROLE_HIERARCHY: Record<string, number> = {
   manager: 3,
   partner: 4,
   gmp: 5,
-  admin: 7,
+  hr: 6,
+  super_admin: 7,
 };
 
 // Role color mapping
 const ROLE_COLORS: Record<string, string> = {
-  admin: "bg-red-100 text-red-800",
   super_admin: "bg-rose-100 text-rose-800",
   hr: "bg-amber-100 text-amber-800",
-  hr_manager: "bg-amber-100 text-amber-800",
   gmp: "bg-violet-100 text-violet-800",
-  group_managing_partner: "bg-violet-100 text-violet-800",
   partner: "bg-purple-100 text-purple-800",
   manager: "bg-blue-100 text-blue-800",
   marketing: "bg-emerald-100 text-emerald-800",
@@ -195,6 +192,7 @@ const UserRoleManagement = () => {
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [showPolicyEditor, setShowPolicyEditor] = useState(false);
   const [showRoleMatrix, setShowRoleMatrix] = useState(false);
+  const [showTechnicalPolicyEditor, setShowTechnicalPolicyEditor] = useState(false);
   const [roleEditorOpen, setRoleEditorOpen] = useState(false);
   const [roleEditorUser, setRoleEditorUser] = useState<User | null>(null);
   const [roleEditorDraft, setRoleEditorDraft] = useState<string[]>([]);
@@ -281,6 +279,37 @@ const UserRoleManagement = () => {
       .map((action) => action.charAt(0).toUpperCase())
       .join("/");
   }, []);
+
+  const selectedRoleViewEntitlements = useMemo(() => {
+    const normalizedRole = toPrimaryAccessRole(selectedPolicyRole);
+    if (!PRIMARY_ACCESS_ROLE_SET.has(normalizedRole)) return [];
+
+    return getRoleViewEntitlements(normalizedRole as CanonicalRole).map((viewKey) => {
+      const definition = getViewPermissionDefinition(viewKey);
+      return {
+        key: viewKey,
+        label: definition?.label || viewKey,
+        category: definition?.category || "Other",
+      };
+    });
+  }, [selectedPolicyRole]);
+
+  const selectedRoleViewEntitlementsByCategory = useMemo(() => {
+    const grouped = new Map<string, Array<{ key: string; label: string }>>();
+
+    selectedRoleViewEntitlements.forEach((item) => {
+      const existing = grouped.get(item.category) || [];
+      existing.push({ key: item.key, label: item.label });
+      grouped.set(item.category, existing);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([category, views]) => ({
+        category,
+        views: views.sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }, [selectedRoleViewEntitlements]);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -535,6 +564,93 @@ const UserRoleManagement = () => {
     }
   };
 
+  const handleToggleUserStatus = async (user: User) => {
+    if (isSelfRoleEdit(user)) {
+      toast({
+        title: "Action blocked",
+        description: "Use another HR/Admin account to change your own status.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user.profileId) {
+      toast({
+        title: "Error",
+        description: "Missing profile for this user",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const isActive = String(user.status || "").toLowerCase() === "active";
+    const nextStatus = isActive ? "inactive" : "active";
+    const actionLabel = isActive ? "deactivate" : "reactivate";
+    const confirmed = window.confirm(
+      `Are you sure you want to ${actionLabel} ${user.email}?`
+    );
+    if (!confirmed) return;
+
+    try {
+      await apiFetch("PATCH", `/profiles/${user.profileId}`, { status: nextStatus });
+      toast({
+        title: isActive ? "User deactivated" : "User reactivated",
+        description: isActive
+          ? `${user.email} can no longer sign in until reactivated.`
+          : `${user.email} can now sign in again.`,
+      });
+      await loadUsers();
+    } catch (error: unknown) {
+      const err = error as Record<string, string>;
+      toast({
+        title: "Status update failed",
+        description: err.error || "Unable to update user status.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteUser = async (user: User) => {
+    if (isSelfRoleEdit(user)) {
+      toast({
+        title: "Action blocked",
+        description: "Use another HR/Admin account to delete your own account.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user.profileId) {
+      toast({
+        title: "Error",
+        description: "Missing profile for this user",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${user.email}? This is permanent unless archived by system safety checks.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await apiFetch("DELETE", `/profiles/${user.profileId}`);
+      toast({
+        title: "User removed",
+        description: `${user.email} has been removed from the system.`,
+      });
+      await loadUsers();
+    } catch (error: unknown) {
+      const err = error as Record<string, string>;
+      toast({
+        title: "Delete failed",
+        description: err.error || "Unable to delete user.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const getRoleColor = (role: string): string => {
     const normalized = toPrimaryAccessRole(role);
     return ROLE_COLORS[normalized] || "bg-gray-100 text-gray-800";
@@ -677,6 +793,7 @@ const UserRoleManagement = () => {
                   <SelectItem value="all">All status</SelectItem>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="separated">Separated</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -702,14 +819,14 @@ const UserRoleManagement = () => {
               <Table className="w-full table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[20%]">Email</TableHead>
+                    <TableHead className="w-[19%]">Email</TableHead>
                     <TableHead className="w-[13%]">Name</TableHead>
                     <TableHead className="w-[12%]">Access Role</TableHead>
                     <TableHead className="w-[17%]">Billing Position</TableHead>
                     <TableHead className="w-[10%]">Department</TableHead>
                     <TableHead className="w-[8%]">Rate</TableHead>
                     <TableHead className="w-[8%]">Status</TableHead>
-                    <TableHead className="w-[13%]">Action</TableHead>
+                    <TableHead className="w-[14%]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -723,6 +840,9 @@ const UserRoleManagement = () => {
                     ).sort((a, b) => roleSortWeight(a) - roleSortWeight(b));
                     const primaryRole = summarizedRoles[0];
                     const additionalRoles = Math.max(0, summarizedRoles.length - 1);
+                    const normalizedStatus = String(user.status || "").toLowerCase();
+                    const isActiveStatus = normalizedStatus === "active";
+                    const canManageAccount = !editingSelf && Boolean(user.profileId);
 
                     return (
                     <TableRow key={user.id}>
@@ -793,20 +913,39 @@ const UserRoleManagement = () => {
                         </Badge>
                       </TableCell>
                       <TableCell className="min-w-0">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full px-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis"
-                          disabled={editingSelf}
-                          title={
-                            editingSelf
-                              ? "Use another HR/Admin account to edit your own roles."
-                              : undefined
-                          }
-                          onClick={() => openRoleEditor(user)}
-                        >
-                          {editingSelf ? "Current user" : "Manage access"}
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 w-full px-2 text-xs whitespace-nowrap"
+                            >
+                              {editingSelf ? "Current user" : "Actions"}
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuItem
+                              disabled={editingSelf}
+                              onClick={() => openRoleEditor(user)}
+                            >
+                              Manage access
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!canManageAccount}
+                              onClick={() => handleToggleUserStatus(user)}
+                            >
+                              {isActiveStatus ? "Deactivate temporarily" : "Reactivate user"}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              disabled={!canManageAccount}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => handleDeleteUser(user)}
+                            >
+                              Delete employee
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                     );
@@ -820,10 +959,10 @@ const UserRoleManagement = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Module Access Policies</CardTitle>
+          <CardTitle>Role Access Policies</CardTitle>
           <CardDescription>
-            Configure role-level module access (advanced). Day-to-day assignment should use
-            a primary access role per user.
+            Role visibility is driven by screen entitlements. Module action controls are optional
+            technical overrides for edge cases.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -860,14 +999,19 @@ const UserRoleManagement = () => {
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={saveModulePolicy} disabled={!selectedPolicyRole || isSavingPolicy}>
+            <Button
+              onClick={saveModulePolicy}
+              disabled={!selectedPolicyRole || isSavingPolicy || !showTechnicalPolicyEditor}
+            >
               {isSavingPolicy ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Saving policy...
                 </>
               ) : (
-                "Save Module Policy"
+                showTechnicalPolicyEditor
+                  ? "Save Technical Module Policy"
+                  : "Open Technical Editor to Save"
               )}
             </Button>
           </div>
@@ -892,132 +1036,186 @@ const UserRoleManagement = () => {
             </div>
           </div>
 
-          {coreRolePolicies.length > 0 && moduleDefinitions.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium">Primary role access matrix</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowRoleMatrix((prev) => !prev)}
-                >
-                  {showRoleMatrix ? "Hide matrix" : "Show matrix (advanced)"}
-                </Button>
-              </div>
-              {showRoleMatrix && (
-                <>
-                  <div className="rounded-md border overflow-x-auto">
-                    <Table className="min-w-[980px]">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-[260px]">Module</TableHead>
-                          {coreRolePolicies.map((rolePolicy) => (
-                            <TableHead
-                              key={`matrix-head-${rolePolicy.id}`}
-                              className="text-center whitespace-nowrap"
-                            >
-                              {formatRoleLabel(rolePolicy.name)}
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {moduleDefinitions.map((module) => (
-                          <TableRow key={`matrix-row-${module.key}`}>
-                            <TableCell>
-                              <div className="font-medium">{module.label}</div>
-                              <div className="text-xs text-muted-foreground">{module.key}</div>
-                            </TableCell>
-                            {coreRolePolicies.map((rolePolicy) => {
-                              const actions = getModuleMatrixActions(
-                                rolePolicy.effectiveAccess,
-                                module.key
-                              );
-                              const summary = formatActionSummary(actions);
-                              return (
-                                <TableCell
-                                  key={`matrix-cell-${module.key}-${rolePolicy.id}`}
-                                  className="text-center"
-                                >
-                                  <Badge
-                                    variant={summary === "none" ? "secondary" : "outline"}
-                                    className="font-mono"
-                                  >
-                                    {summary}
-                                  </Badge>
-                                </TableCell>
-                              );
-                            })}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Legend: R = read, W = write, A = approve, ADMIN = full module control.
-                  </p>
-                </>
-              )}
-            </div>
-          )}
-
           <div className="rounded-md border bg-muted/30 p-3">
-            <p className="text-sm font-medium">Action levels</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              {MODULE_ACTION_GUIDE.map((item) => (
-                <div key={item.action} className="rounded border bg-background p-2">
-                  <p className="text-sm font-medium">
-                    <span className="mr-2 inline-block rounded bg-muted px-2 py-0.5 font-mono text-xs">
-                      {item.action}
-                    </span>
-                    {item.label}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {!selectedPolicyRole ? (
-            <p className="text-sm text-muted-foreground">
-              Select a role to edit module-level permissions.
+            <p className="text-sm font-medium">Role Experience Entitlements</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This is the primary RBAC model for which screens each role can open.
             </p>
-          ) : (
-            <div className="space-y-3">
-              {moduleDefinitions.map((module) => {
-                const currentActions = new Set(moduleDraft[module.key] || []);
-                const effectiveActions = getModuleMatrixActions(
-                  selectedPolicy?.effectiveAccess,
-                  module.key
-                );
-
-                return (
-                  <div key={module.key} className="rounded border p-3">
-                    <div className="mb-2">
-                      <p className="font-medium">{module.label}</p>
-                      <p className="text-xs text-muted-foreground">{module.description}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-4">
-                      {module.actions.map((action) => (
-                        <label key={`${module.key}:${action}`} className="flex items-center gap-2 text-sm">
-                          <Checkbox
-                            checked={currentActions.has(action)}
-                            onCheckedChange={(checked) =>
-                              toggleModuleAction(module.key, action, checked === true)
-                            }
-                          />
-                          {action}
-                        </label>
+            {!selectedPolicyRole ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Select a role to review its default screen entitlements.
+              </p>
+            ) : selectedRoleViewEntitlementsByCategory.length === 0 ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                No screen entitlements configured for this role.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {selectedRoleViewEntitlementsByCategory.map((group) => (
+                  <div key={group.category} className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {group.category}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {group.views.map((view) => (
+                        <Badge key={view.key} variant="outline">
+                          {view.label}
+                        </Badge>
                       ))}
                     </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Effective access: {effectiveActions.length > 0 ? effectiveActions.join(", ") : "none"}
-                    </p>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-md border border-dashed p-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-medium">Technical Module Policy Editor</p>
+              <p className="text-xs text-muted-foreground">
+                Use only for module-action overrides. Day-to-day access should stay role-entitlement driven.
+              </p>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowTechnicalPolicyEditor((prev) => !prev)}
+            >
+              {showTechnicalPolicyEditor ? "Hide technical editor" : "Open technical editor"}
+            </Button>
+          </div>
+
+          {showTechnicalPolicyEditor && (
+            <>
+              {coreRolePolicies.length > 0 && moduleDefinitions.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">Primary role access matrix (module/action)</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowRoleMatrix((prev) => !prev)}
+                    >
+                      {showRoleMatrix ? "Hide matrix" : "Show matrix (advanced)"}
+                    </Button>
+                  </div>
+                  {showRoleMatrix && (
+                    <>
+                      <div className="rounded-md border overflow-x-auto">
+                        <Table className="min-w-[980px]">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[260px]">Module</TableHead>
+                              {coreRolePolicies.map((rolePolicy) => (
+                                <TableHead
+                                  key={`matrix-head-${rolePolicy.id}`}
+                                  className="text-center whitespace-nowrap"
+                                >
+                                  {formatRoleLabel(rolePolicy.name)}
+                                </TableHead>
+                              ))}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {moduleDefinitions.map((module) => (
+                              <TableRow key={`matrix-row-${module.key}`}>
+                                <TableCell>
+                                  <div className="font-medium">{module.label}</div>
+                                  <div className="text-xs text-muted-foreground">{module.key}</div>
+                                </TableCell>
+                                {coreRolePolicies.map((rolePolicy) => {
+                                  const actions = getModuleMatrixActions(
+                                    rolePolicy.effectiveAccess,
+                                    module.key
+                                  );
+                                  const summary = formatActionSummary(actions);
+                                  return (
+                                    <TableCell
+                                      key={`matrix-cell-${module.key}-${rolePolicy.id}`}
+                                      className="text-center"
+                                    >
+                                      <Badge
+                                        variant={summary === "none" ? "secondary" : "outline"}
+                                        className="font-mono"
+                                      >
+                                        {summary}
+                                      </Badge>
+                                    </TableCell>
+                                  );
+                                })}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Legend: R = read, W = write, A = approve, ADMIN = full module control.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="rounded-md border bg-muted/30 p-3">
+                <p className="text-sm font-medium">Action levels</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {MODULE_ACTION_GUIDE.map((item) => (
+                    <div key={item.action} className="rounded border bg-background p-2">
+                      <p className="text-sm font-medium">
+                        <span className="mr-2 inline-block rounded bg-muted px-2 py-0.5 font-mono text-xs">
+                          {item.action}
+                        </span>
+                        {item.label}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {!selectedPolicyRole ? (
+                <p className="text-sm text-muted-foreground">
+                  Select a role to edit module-level permissions.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {moduleDefinitions.map((module) => {
+                    const currentActions = new Set(moduleDraft[module.key] || []);
+                    const effectiveActions = getModuleMatrixActions(
+                      selectedPolicy?.effectiveAccess,
+                      module.key
+                    );
+
+                    return (
+                      <div key={module.key} className="rounded border p-3">
+                        <div className="mb-2">
+                          <p className="font-medium">{module.label}</p>
+                          <p className="text-xs text-muted-foreground">{module.description}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-4">
+                          {module.actions.map((action) => (
+                            <label key={`${module.key}:${action}`} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={currentActions.has(action)}
+                                onCheckedChange={(checked) =>
+                                  toggleModuleAction(module.key, action, checked === true)
+                                }
+                              />
+                              {action}
+                            </label>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Effective access: {effectiveActions.length > 0 ? effectiveActions.join(", ") : "none"}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
             </>
           )}

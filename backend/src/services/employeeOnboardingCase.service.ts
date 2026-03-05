@@ -2,6 +2,7 @@ import prisma from "../prisma";
 import { createAudit } from "../utils/audit";
 import { OnboardingStatus } from "@prisma/client";
 import { NotificationService } from "./notifications.service";
+import { ensureOnboardingProvisioning } from "./onboardingProvisioning.service";
 
 export interface AuthContext {
   userId: number;
@@ -86,10 +87,8 @@ class EmployeeOnboardingCaseServiceImpl {
   private isPrivileged(auth: AuthContext) {
     const roles = auth.roles ?? [];
     return (
-      roles.includes("admin") ||
       roles.includes("super_admin") ||
-      roles.includes("hr") ||
-      roles.includes("hr_manager")
+      roles.includes("hr")
     );
   }
 
@@ -201,6 +200,21 @@ class EmployeeOnboardingCaseServiceImpl {
           ownerProfileId: input.hrOwnerProfileId ?? undefined,
         })),
       });
+
+      if (input.profileId) {
+        await ensureOnboardingProvisioning(
+          {
+            profileId: input.profileId,
+            onboardingCaseId: onboardingCase.id,
+            hrOwnerProfileId: input.hrOwnerProfileId ?? null,
+            assignedByProfileId: input.hrOwnerProfileId ?? auth.profileId ?? null,
+            startDate: input.startDate ?? new Date(),
+            dueDate: input.dueDate ?? null,
+            notes: input.notes ?? null,
+          },
+          { tx }
+        );
+      }
 
       return tx.employeeOnboardingCase.findUnique({
         where: { id: onboardingCase.id },

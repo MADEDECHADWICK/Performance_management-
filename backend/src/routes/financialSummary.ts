@@ -229,7 +229,7 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const roleSet = new Set((req.userRoles || req.user?.authRoles || []).map((role) => role.toLowerCase()));
+    const roleSet = new Set((req.userRoles || []).map((role) => role.toLowerCase()));
 
     const profile = await prisma.profile.findUnique({
       where: { id: profileId },
@@ -243,7 +243,6 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
     const positionTitle = profile.positionTitle?.toLowerCase() || '';
     const isGmp =
       positionTitle.includes('group managing partner') ||
-      roleSet.has('group_managing_partner') ||
       roleSet.has('gmp');
     const isPartner = positionTitle.includes('partner') || roleSet.has('partner');
     const isManager = positionTitle.includes('manager') || roleSet.has('manager');

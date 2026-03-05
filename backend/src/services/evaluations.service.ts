@@ -28,10 +28,8 @@ const normalizeRole = (role?: string) => (role || "").toLowerCase().trim();
 const isPrivilegedRole = (role?: string) => {
   const normalized = normalizeRole(role);
   return (
-    normalized === "admin" ||
     normalized === "super_admin" ||
-    normalized === "hr" ||
-    normalized === "hr_manager"
+    normalized === "hr"
   );
 };
 
@@ -326,7 +324,7 @@ export class EvaluationService {
       );
 
       await notifyRoles(
-        ["hr", "hr_manager"],
+        ["hr"],
         "evaluation.submitted.hr",
         templateData,
         {
@@ -444,7 +442,7 @@ export class EvaluationService {
     );
 
     await notifyRoles(
-      ["hr", "hr_manager"],
+      ["hr"],
       "evaluation.submitted.hr",
       templateData,
       {
@@ -468,7 +466,7 @@ export class EvaluationService {
   }
 
   static async approveEvaluation(evaluationId: number, auth: AuthContext) {
-    if (!['admin', 'manager', 'hr', 'hr_manager', 'super_admin'].includes(auth.roleName || '')) {
+    if (!['super_admin', 'manager', 'hr'].includes(auth.roleName || '')) {
       throw { statusCode: 403, message: 'Only managers/admins can approve evaluations' };
     }
 
@@ -538,7 +536,7 @@ export class EvaluationService {
     );
 
     await notifyRoles(
-      ["hr", "hr_manager"],
+      ["hr"],
       "evaluation.signed.hr",
       templateData,
       {

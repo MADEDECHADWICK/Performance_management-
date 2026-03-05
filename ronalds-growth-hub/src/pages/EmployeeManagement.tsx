@@ -13,10 +13,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, Shield, ClipboardCheck, FileText, Upload } from "lucide-react";
+import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, ClipboardCheck, FileText, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { rolesAPI } from "@/lib/api";
 import documentsAPI from "@/lib/api/documents";
+import { CANONICAL_ROLES, resolveCanonicalRole } from "@/auth/canonicalRoles";
 import UserRoleManagement from "@/components/UserRoleManagement";
 
 interface Employee {
@@ -94,23 +95,6 @@ interface OnboardingCase {
     status: string;
     completionPercent: number;
   };
-  stages?: OnboardingStage[];
-}
-
-interface OnboardingStage {
-  id: number;
-  stageKey: string;
-  title: string;
-  description?: string | null;
-  orderIndex: number;
-  status: string;
-  dueDate?: string | null;
-  completedAt?: string | null;
-  owner?: {
-    id: number;
-    firstName: string;
-    lastName: string;
-  } | null;
 }
 
 interface ChecklistDocument {
@@ -124,6 +108,8 @@ interface InductionChecklistItem {
   itemName: string;
   description?: string | null;
   isCompleted: boolean;
+  itemType?: string | null;
+  resourceUrl?: string | null;
   requiresDocument: boolean;
   documentId?: number | null;
   document?: ChecklistDocument | null;
@@ -160,17 +146,86 @@ interface OffboardingCase {
   };
 }
 
-const DEFAULT_ACCESS_ROLES = [
-  "employee",
-  "manager",
-  "partner",
-  "finance",
-  "marketing",
-  "hr",
-  "hr_manager",
-  "admin",
-  "super_admin",
-  "gmp",
+type ChecklistItemType =
+  | "task"
+  | "document_upload"
+  | "video_watch"
+  | "policy_link"
+  | "external_link";
+
+interface ChecklistDraftItem {
+  id: string;
+  itemName: string;
+  description: string;
+  itemType: ChecklistItemType;
+  resourceUrl: string;
+  requiresDocument: boolean;
+}
+
+const DEFAULT_ACCESS_ROLES = [...CANONICAL_ROLES];
+
+const CHECKLIST_ITEM_TYPE_OPTIONS: Array<{
+  value: ChecklistItemType;
+  label: string;
+  resourceLabel?: string;
+  resourcePlaceholder?: string;
+}> = [
+  { value: "task", label: "Task" },
+  { value: "document_upload", label: "Document Upload" },
+  {
+    value: "video_watch",
+    label: "Video to Watch",
+    resourceLabel: "Video URL",
+    resourcePlaceholder: "https://...",
+  },
+  {
+    value: "policy_link",
+    label: "Policy Link",
+    resourceLabel: "Policy URL",
+    resourcePlaceholder: "https://... or /knowledge-hub/...",
+  },
+  {
+    value: "external_link",
+    label: "External Link",
+    resourceLabel: "Link URL",
+    resourcePlaceholder: "https://...",
+  },
+];
+
+const createChecklistDraftItem = (
+  overrides: Partial<ChecklistDraftItem> = {}
+): ChecklistDraftItem => {
+  const itemType = (overrides.itemType || "task") as ChecklistItemType;
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    itemName: overrides.itemName || "",
+    description: overrides.description || "",
+    itemType,
+    resourceUrl: overrides.resourceUrl || "",
+    requiresDocument:
+      typeof overrides.requiresDocument === "boolean"
+        ? overrides.requiresDocument
+        : itemType === "document_upload",
+  };
+};
+
+const defaultChecklistDraftItems = (): ChecklistDraftItem[] => [
+  createChecklistDraftItem({
+    itemName: "Upload ID documents",
+    description: "Upload national ID or passport copy.",
+    itemType: "document_upload",
+    requiresDocument: true,
+  }),
+  createChecklistDraftItem({
+    itemName: "Complete induction briefing",
+    description: "Attend or review the induction briefing.",
+    itemType: "task",
+  }),
+  createChecklistDraftItem({
+    itemName: "Accept company policies",
+    description: "Review and acknowledge onboarding policies.",
+    itemType: "task",
+  }),
 ];
 
 const formatShortDate = (value?: string) => {
@@ -381,8 +436,9 @@ const EmployeeManagement = () => {
   const [onboardingFilter, setOnboardingFilter] = useState<"all" | "pending" | "missing">("all");
   const [checklistDialogOpen, setChecklistDialogOpen] = useState(false);
   const [checklistEmployeeId, setChecklistEmployeeId] = useState<string>("");
-  const [checklistItemsText, setChecklistItemsText] = useState(
-    "Provide ID documents\nComplete induction briefing\nAccept company policies"
+  const [checklistOnboardingCaseId, setChecklistOnboardingCaseId] = useState<string>("");
+  const [checklistDraftItems, setChecklistDraftItems] = useState<ChecklistDraftItem[]>(
+    defaultChecklistDraftItems
   );
   const [checklistDueDate, setChecklistDueDate] = useState("");
   const [bulkChecklistDialogOpen, setBulkChecklistDialogOpen] = useState(false);
@@ -401,11 +457,6 @@ const EmployeeManagement = () => {
   const [newOffboardingTaskName, setNewOffboardingTaskName] = useState("");
   const [newOffboardingTaskDescription, setNewOffboardingTaskDescription] = useState("");
   const [newOffboardingTaskRequiresDoc, setNewOffboardingTaskRequiresDoc] = useState(false);
-  const [onboardingStagesDialogOpen, setOnboardingStagesDialogOpen] = useState(false);
-  const [activeOnboardingCase, setActiveOnboardingCase] = useState<OnboardingCase | null>(null);
-  const [stageEdits, setStageEdits] = useState<Record<number, { status?: string; dueDate?: string }>>({});
-  const [savingStageId, setSavingStageId] = useState<number | null>(null);
-  const [initializingStagesCaseId, setInitializingStagesCaseId] = useState<number | null>(null);
   const [attachDocDialogOpen, setAttachDocDialogOpen] = useState(false);
   const [attachTaskId, setAttachTaskId] = useState<number | null>(null);
   const [attachFileName, setAttachFileName] = useState("");
@@ -514,7 +565,8 @@ const EmployeeManagement = () => {
           : [];
         const names = accessRoleRows
           .map((row: any) => String(row?.name || "").toLowerCase().trim())
-          .filter(Boolean);
+          .map((roleName: string) => resolveCanonicalRole(roleName))
+          .filter((roleName): roleName is string => Boolean(roleName));
         if (names.length > 0) {
           setAccessRoles(Array.from(new Set(names)));
         } else {
@@ -571,6 +623,88 @@ const EmployeeManagement = () => {
   const safeOnboardingCases = Array.isArray(onboardingCases) ? onboardingCases : [];
   const safeEmployees = Array.isArray(employees) ? employees : [];
   const safeOffboardingCases = Array.isArray(offboardingCases) ? offboardingCases : [];
+  const getOnboardingCaseForProfile = (profileId: number) =>
+    safeOnboardingCases.find((caseItem) => Number(caseItem.profileId || 0) === profileId);
+  const employeesWithOnboardingCases = safeEmployees.filter((emp) =>
+    Boolean(getOnboardingCaseForProfile(Number(emp.id)))
+  );
+  const getChecklistItemTypeOption = (itemType?: string | null) =>
+    CHECKLIST_ITEM_TYPE_OPTIONS.find((option) => option.value === itemType) ||
+    CHECKLIST_ITEM_TYPE_OPTIONS[0];
+
+  const updateChecklistDraftItem = (
+    id: string,
+    updates: Partial<ChecklistDraftItem>
+  ) => {
+    setChecklistDraftItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const nextType = (updates.itemType || item.itemType) as ChecklistItemType;
+        const isDocumentUpload = nextType === "document_upload";
+        const keepResource =
+          nextType === "video_watch" || nextType === "policy_link" || nextType === "external_link";
+        return {
+          ...item,
+          ...updates,
+          itemType: nextType,
+          requiresDocument: isDocumentUpload,
+          resourceUrl: keepResource ? updates.resourceUrl ?? item.resourceUrl : "",
+        };
+      })
+    );
+  };
+
+  const addChecklistDraftItem = (itemType: ChecklistItemType = "task") => {
+    setChecklistDraftItems((prev) => [
+      ...prev,
+      createChecklistDraftItem({ itemType, requiresDocument: itemType === "document_upload" }),
+    ]);
+  };
+
+  const removeChecklistDraftItem = (id: string) => {
+    setChecklistDraftItems((prev) =>
+      prev.length <= 1 ? prev : prev.filter((item) => item.id !== id)
+    );
+  };
+
+  const buildChecklistPayloadItems = () => {
+    const items = checklistDraftItems
+      .map((draft, index) => {
+        const itemName = draft.itemName.trim();
+        const description = draft.description.trim();
+        const itemType = draft.itemType;
+        const resourceUrl = draft.resourceUrl.trim();
+        return {
+          itemName,
+          description: description || undefined,
+          orderIndex: index,
+          itemType,
+          resourceUrl: resourceUrl || undefined,
+          requiresDocument: itemType === "document_upload",
+        };
+      })
+      .filter((item) => item.itemName.length > 0);
+
+    if (items.length === 0) {
+      return { error: "Add at least one checklist item." as const };
+    }
+
+    const missingResource = items.find(
+      (item) =>
+        (item.itemType === "video_watch" ||
+          item.itemType === "policy_link" ||
+          item.itemType === "external_link") &&
+        !item.resourceUrl
+    );
+
+    if (missingResource) {
+      return {
+        error: `Add a URL for "${missingResource.itemName}" (${missingResource.itemType.replace("_", " ")}).` as const,
+      };
+    }
+
+    return { items };
+  };
 
   const filteredOnboardingCases = safeOnboardingCases.filter((caseItem) => {
     if (onboardingFilter === "pending") {
@@ -581,88 +715,6 @@ const EmployeeManagement = () => {
     }
     return true;
   });
-
-  const getOnboardingDisplayName = (caseItem: OnboardingCase) => {
-    if (caseItem.employee) {
-      return `${caseItem.employee.firstName} ${caseItem.employee.lastName}`.trim();
-    }
-    return caseItem.candidate?.fullName || "Unknown";
-  };
-
-  const getStageProgress = (caseItem: OnboardingCase) => {
-    const stages = caseItem.stages || [];
-    const completed = stages.filter((stage) => stage.status === "completed").length;
-    return { total: stages.length, completed };
-  };
-
-  const getNextStage = (caseItem: OnboardingCase) => {
-    const stages = caseItem.stages || [];
-    return stages.find((stage) => stage.status !== "completed");
-  };
-
-  const openOnboardingStagesDialog = (caseItem: OnboardingCase) => {
-    setActiveOnboardingCase(caseItem);
-    setStageEdits({});
-    setOnboardingStagesDialogOpen(true);
-  };
-
-  const updateStageEdit = (stageId: number, updates: { status?: string; dueDate?: string }) => {
-    setStageEdits((prev) => ({
-      ...prev,
-      [stageId]: { ...prev[stageId], ...updates },
-    }));
-  };
-
-  const saveOnboardingStage = async (stage: OnboardingStage) => {
-    try {
-      setSavingStageId(stage.id);
-      const edits = stageEdits[stage.id] || {};
-      const payload: any = {};
-      if (edits.status !== undefined && edits.status !== stage.status) payload.status = edits.status;
-      if (edits.dueDate !== undefined) payload.dueDate = edits.dueDate || null;
-
-      await apiFetch("PATCH", `/onboarding/stages/${stage.id}`, payload);
-      toast({ title: "Onboarding stage updated" });
-      const refreshed = await loadLifecycleData();
-      if (activeOnboardingCase) {
-        const updatedCase = refreshed.find((caseItem) => caseItem.id === activeOnboardingCase.id);
-        if (updatedCase) {
-          setActiveOnboardingCase(updatedCase);
-        }
-      }
-    } catch (error: any) {
-      toast({
-        title: "Failed to update stage",
-        description: error.message || "Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setSavingStageId(null);
-    }
-  };
-
-  const initializeOnboardingStages = async (caseId: number) => {
-    try {
-      setInitializingStagesCaseId(caseId);
-      await apiFetch("POST", `/onboarding/${caseId}/initialize-stages`);
-      toast({ title: "Onboarding stages initialized" });
-      const refreshed = await loadLifecycleData();
-      if (activeOnboardingCase?.id === caseId) {
-        const updatedCase = refreshed.find((caseItem) => caseItem.id === caseId);
-        if (updatedCase) {
-          setActiveOnboardingCase(updatedCase);
-        }
-      }
-    } catch (error: any) {
-      toast({
-        title: "Failed to initialize stages",
-        description: error.message || "Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setInitializingStagesCaseId(null);
-    }
-  };
 
   const handleUpdateDueDate = async (caseId: number) => {
     const dueDate = dueDateEdits[caseId];
@@ -765,25 +817,25 @@ const EmployeeManagement = () => {
   };
 
   const handleBulkAssignChecklist = async () => {
-    const items = checklistItemsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    if (items.length === 0) {
+    const payload = buildChecklistPayloadItems();
+    if ("error" in payload) {
       toast({
         title: "Checklist items required",
-        description: "Add at least one checklist item.",
+        description: payload.error,
         variant: "destructive",
       });
       return;
     }
+    const items = payload.items;
 
-    const targetProfiles = filteredOnboardingCases
+    const targetCases = filteredOnboardingCases
       .filter((caseItem) => !caseItem.inductionChecklist && caseItem.profileId)
-      .map((caseItem) => caseItem.profileId as number);
+      .map((caseItem) => ({
+        profileId: caseItem.profileId as number,
+        onboardingCaseId: caseItem.id,
+      }));
 
-    if (targetProfiles.length === 0) {
+    if (targetCases.length === 0) {
       toast({
         title: "No eligible employees",
         description: "There are no onboarding cases ready for checklist assignment.",
@@ -794,17 +846,18 @@ const EmployeeManagement = () => {
 
     try {
       await Promise.all(
-        targetProfiles.map((profileId) =>
+        targetCases.map(({ profileId, onboardingCaseId }) =>
           apiFetch("POST", "/induction-checklist", {
+            onboardingCaseId,
             employeeProfileId: profileId,
             dueDate: bulkChecklistDueDate || undefined,
-            items: items.map((itemName) => ({ itemName })),
+            items,
           })
         )
       );
       toast({
         title: "Checklist assigned",
-        description: `Assigned to ${targetProfiles.length} employees.`,
+        description: `Assigned to ${targetCases.length} employees.`,
       });
       setBulkChecklistDialogOpen(false);
       await loadLifecycleData();
@@ -1116,9 +1169,16 @@ const EmployeeManagement = () => {
     setEmployeeDialogOpen(true);
   };
 
-  const handleOpenChecklistDialog = (employeeId?: string) => {
+  const handleOpenChecklistDialog = (employeeId?: string, onboardingCaseId?: number) => {
     setChecklistEmployeeId(employeeId || "");
+    setChecklistOnboardingCaseId(onboardingCaseId ? String(onboardingCaseId) : "");
     setChecklistDialogOpen(true);
+  };
+
+  const handleChecklistEmployeeSelect = (employeeId: string) => {
+    setChecklistEmployeeId(employeeId);
+    const matchedCase = getOnboardingCaseForProfile(Number(employeeId));
+    setChecklistOnboardingCaseId(matchedCase ? String(matchedCase.id) : "");
   };
 
   const handleAssignChecklist = async () => {
@@ -1130,15 +1190,27 @@ const EmployeeManagement = () => {
       });
       return;
     }
-    const items = checklistItemsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((itemName) => ({ itemName }));
-    if (items.length === 0) {
+    const payload = buildChecklistPayloadItems();
+    if ("error" in payload) {
       toast({
         title: "Checklist items required",
-        description: "Add at least one checklist item.",
+        description: payload.error,
+        variant: "destructive",
+      });
+      return;
+    }
+    const items = payload.items;
+
+    const resolvedEmployeeProfileId = Number(checklistEmployeeId);
+    const resolvedCaseId =
+      Number(checklistOnboardingCaseId) ||
+      getOnboardingCaseForProfile(resolvedEmployeeProfileId)?.id ||
+      0;
+
+    if (!resolvedCaseId) {
+      toast({
+        title: "Onboarding case required",
+        description: "Initialize onboarding for this employee before assigning a checklist.",
         variant: "destructive",
       });
       return;
@@ -1146,7 +1218,8 @@ const EmployeeManagement = () => {
 
     try {
       await apiFetch("POST", "/induction-checklist", {
-        employeeProfileId: Number(checklistEmployeeId),
+        onboardingCaseId: resolvedCaseId,
+        employeeProfileId: resolvedEmployeeProfileId,
         dueDate: checklistDueDate || undefined,
         items,
       });
@@ -1189,7 +1262,7 @@ const EmployeeManagement = () => {
       });
       toast({
         title: "Offboarding initiated",
-        description: "Offboarding case created.",
+        description: "Offboarding case created with a default checklist template.",
       });
       setOffboardingDialogOpen(false);
       await loadLifecycleData();
@@ -1362,37 +1435,59 @@ const EmployeeManagement = () => {
       });
       return;
     }
+    const canonicalAccessRole = resolveCanonicalRole(employeeForm.access_role);
+    if (!canonicalAccessRole) {
+      toast({
+        title: "Invalid access role",
+        description: "Select a canonical access role.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       setLoading(true);
 
       const onboardingResponse = await apiFetch("POST", "/auth/onboard-user", {
         email: employeeForm.email.trim(),
-        first_name: employeeForm.first_name.trim(),
-        last_name: employeeForm.last_name.trim(),
+        firstName: employeeForm.first_name.trim(),
+        lastName: employeeForm.last_name.trim(),
         phone: employeeForm.phone.trim() || null,
         position: employeeForm.position.trim() || null,
-        authRole: employeeForm.access_role,
+        authRole: canonicalAccessRole,
         roleId: Number(employeeForm.role_id),
-        department_id: employeeForm.department_id || null,
-        manager_id: employeeForm.manager_id || null,
-        hire_date: employeeForm.hire_date || null,
+        departmentId: employeeForm.department_id || null,
+        managerId: employeeForm.manager_id || null,
+        hireDate: employeeForm.hire_date || null,
         status: employeeForm.status,
-        hourly_rate: employeeForm.hourly_rate ? parseFloat(employeeForm.hourly_rate) : null,
+        hourlyRate: employeeForm.hourly_rate ? parseFloat(employeeForm.hourly_rate) : null,
       });
 
       const emailDelivery = (onboardingResponse as any)?.emailDelivery;
       const emailDeliveryReason = (onboardingResponse as any)?.emailDeliveryReason;
       const fallbackPassword = (onboardingResponse as any)?.temporaryPasswordPreview;
+      const onboardingCaseId =
+        (onboardingResponse as any)?.onboarding?.onboardingCaseId ??
+        (onboardingResponse as any)?.user?.onboardingCaseId;
+      const checklistId =
+        (onboardingResponse as any)?.onboarding?.checklistId ??
+        (onboardingResponse as any)?.user?.checklistId;
+      const checklistProvisioned = Boolean(onboardingCaseId && checklistId);
 
       toast({
         title: "Success",
         description:
           emailDelivery === "sent"
-            ? "Employee onboarded and temporary password sent by email."
+            ? checklistProvisioned
+              ? "Employee onboarded, checklist assigned, and temporary password sent by email."
+              : "Employee onboarded and temporary password sent by email."
             : fallbackPassword
               ? emailDeliveryReason === "dummy_mode"
-                ? `Employee onboarded in dummy email mode; temporary password: ${fallbackPassword}`
-                : `Employee onboarded. SMTP is not configured; temporary password: ${fallbackPassword}`
+                ? checklistProvisioned
+                  ? `Employee onboarded with checklist assigned (dummy email mode); temporary password: ${fallbackPassword}`
+                  : `Employee onboarded in dummy email mode; temporary password: ${fallbackPassword}`
+                : checklistProvisioned
+                  ? `Employee onboarded with checklist assigned. SMTP is not configured; temporary password: ${fallbackPassword}`
+                  : `Employee onboarded. SMTP is not configured; temporary password: ${fallbackPassword}`
               : "Employee onboarded. Email delivery failed; configure SMTP and resend invite.",
       });
 
@@ -1518,10 +1613,6 @@ const EmployeeManagement = () => {
               <Building2 className="h-4 w-4" />
               Departments
             </TabsTrigger>
-            <TabsTrigger value="roles" className="flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              Access Control
-            </TabsTrigger>
             <TabsTrigger value="lifecycle" className="flex items-center gap-2">
               <ClipboardCheck className="h-4 w-4" />
               Lifecycle
@@ -1607,6 +1698,15 @@ const EmployeeManagement = () => {
                                 <Button
                                   variant="ghost"
                                   size="sm"
+                                  onClick={() => navigate(`/profile?id=${employee.user_id ?? employee.id}`)}
+                                  className="text-primary hover:text-primary"
+                                >
+                                  <Pencil className="h-4 w-4 mr-1" />
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
                                   onClick={() => handleDeleteEmployee(employee)}
                                   className="text-red-500 hover:text-red-700"
                                 >
@@ -1656,6 +1756,18 @@ const EmployeeManagement = () => {
                 </CardContent>
               </Card>
             </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Access Control</CardTitle>
+                <CardDescription>
+                  Manage access roles, billing positions, status, and account actions from this same employee screen.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UserRoleManagement />
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="departments" className="space-y-4">
@@ -1734,18 +1846,23 @@ const EmployeeManagement = () => {
             </Card>
           </TabsContent>
 
-          {/* Access Control Tab */}
-          <TabsContent value="roles" className="space-y-4">
-            <UserRoleManagement />
-          </TabsContent>
-
           <TabsContent value="lifecycle" className="space-y-4">
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <CardTitle>Onboarding Process</CardTitle>
-                    <CardDescription>Track onboarding stages from offer to probation.</CardDescription>
+                    <CardTitle>Onboarding Checklist Flow</CardTitle>
+                    <CardDescription>Use checklist assignment and completion as the onboarding flow.</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" onClick={() => setBulkChecklistDialogOpen(true)}>
+                      <ClipboardCheck className="h-4 w-4 mr-2" />
+                      Bulk Assign
+                    </Button>
+                    <Button onClick={() => handleOpenChecklistDialog()}>
+                      <ClipboardCheck className="h-4 w-4 mr-2" />
+                      Assign Checklist
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
@@ -1766,34 +1883,61 @@ const EmployeeManagement = () => {
                         Completed: {safeOnboardingCases.filter((c) => c.status === "completed").length}
                       </span>
                     </div>
-                    <div className="rounded-md border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Employee/Candidate</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Progress</TableHead>
-                            <TableHead>Next Stage</TableHead>
-                            <TableHead>Due</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {safeOnboardingCases.length === 0 ? (
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium">Checklist Execution</div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Button
+                          type="button"
+                          variant={onboardingFilter === "all" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setOnboardingFilter("all")}
+                        >
+                          All
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={onboardingFilter === "pending" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setOnboardingFilter("pending")}
+                        >
+                          Pending only
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={onboardingFilter === "missing" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setOnboardingFilter("missing")}
+                        >
+                          Missing checklist only
+                        </Button>
+                      </div>
+                      <div className="rounded-md border">
+                        <Table>
+                          <TableHeader>
                             <TableRow>
-                              <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
-                                No onboarding cases yet.
-                              </TableCell>
+                              <TableHead>Employee/Candidate</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Checklist</TableHead>
+                              <TableHead>Due</TableHead>
+                              <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
-                          ) : (
-                            safeOnboardingCases.map((oc) => {
-                              const progress = getStageProgress(oc);
-                              const nextStage = getNextStage(oc);
-                              const hasStages = Boolean(oc.stages && oc.stages.length > 0);
-                              return (
+                          </TableHeader>
+                          <TableBody>
+                            {filteredOnboardingCases.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
+                                  No onboarding cases yet.
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              filteredOnboardingCases.map((oc) => (
                                 <TableRow key={oc.id}>
                                   <TableCell>
-                                    {getOnboardingDisplayName(oc)}
+                                    {oc.employee
+                                      ? `${oc.employee.firstName} ${oc.employee.lastName}`
+                                      : oc.candidate
+                                        ? `${oc.candidate.fullName} (Candidate)`
+                                        : "Unassigned"}
                                     {oc.candidate?.stage && (
                                       <div className="text-xs text-muted-foreground">
                                         Stage: {oc.candidate.stage.replace("_", " ")}
@@ -1805,235 +1949,83 @@ const EmployeeManagement = () => {
                                       {oc.status.replace("_", " ")}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell className="text-sm text-muted-foreground">
-                                    {progress.total > 0
-                                      ? `${progress.completed}/${progress.total} completed`
-                                      : "Not initialized"}
-                                  </TableCell>
-                                  <TableCell className="text-sm text-muted-foreground">
-                                    {nextStage ? (
-                                      <div>
-                                        <div className="font-medium text-foreground">{nextStage.title}</div>
-                                        <div className="text-xs text-muted-foreground">
-                                          {nextStage.status.replace("_", " ")}
-                                        </div>
-                                      </div>
+                                  <TableCell>
+                                    {oc.inductionChecklist ? (
+                                      <span className="text-sm text-muted-foreground">
+                                        {oc.inductionChecklist.status} ({Math.round(oc.inductionChecklist.completionPercent || 0)}%)
+                                      </span>
                                     ) : (
-                                      <span>--</span>
+                                      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                                        <span>Not assigned</span>
+                                        {isChecklistOverdue(oc) && (
+                                          <Badge variant="destructive">Overdue</Badge>
+                                        )}
+                                      </div>
                                     )}
                                   </TableCell>
                                   <TableCell className="text-sm text-muted-foreground">
-                                    {nextStage?.dueDate
-                                      ? nextStage.dueDate.split("T")[0]
-                                      : oc.dueDate
-                                        ? oc.dueDate.split("T")[0]
-                                        : "--"}
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="date"
+                                        value={dueDateEdits[oc.id] ?? (oc.dueDate ? oc.dueDate.split("T")[0] : "")}
+                                        onChange={(e) =>
+                                          setDueDateEdits((prev) => ({ ...prev, [oc.id]: e.target.value }))
+                                        }
+                                        className="h-8 w-40"
+                                      />
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => handleUpdateDueDate(oc.id)}
+                                        disabled={savingDueDateId === oc.id}
+                                      >
+                                        {savingDueDateId === oc.id ? "Saving..." : "Save"}
+                                      </Button>
+                                    </div>
                                   </TableCell>
                                   <TableCell className="text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                      {hasStages ? (
+                                      {oc.inductionChecklist && oc.inductionChecklist.status !== "completed" && (
                                         <Button
                                           variant="outline"
                                           size="sm"
-                                          onClick={() => openOnboardingStagesDialog(oc)}
+                                          disabled={remindingChecklistId === oc.inductionChecklist.id}
+                                          onClick={() => handleSendChecklistReminder(oc.inductionChecklist.id)}
                                         >
-                                          View stages
+                                          {remindingChecklistId === oc.inductionChecklist.id ? "Sending..." : "Send reminder"}
                                         </Button>
-                                      ) : (
+                                      )}
+                                      {oc.inductionChecklist && (
                                         <Button
                                           variant="outline"
                                           size="sm"
-                                          disabled={initializingStagesCaseId === oc.id}
-                                          onClick={() => initializeOnboardingStages(oc.id)}
+                                          onClick={() => openChecklistDetails(oc.inductionChecklist!.id)}
                                         >
-                                          {initializingStagesCaseId === oc.id ? "Initializing..." : "Initialize stages"}
+                                          View checklist
+                                        </Button>
+                                      )}
+                                      {!oc.inductionChecklist && oc.profileId && (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => handleOpenChecklistDialog(String(oc.profileId), oc.id)}
+                                        >
+                                          Assign Checklist
+                                        </Button>
+                                      )}
+                                      {!oc.inductionChecklist && !oc.profileId && (
+                                        <Button variant="outline" size="sm" disabled>
+                                          Await profile
                                         </Button>
                                       )}
                                     </div>
                                   </TableCell>
                                 </TableRow>
-                              );
-                            })
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <CardTitle>Onboarding Checklists</CardTitle>
-                    <CardDescription>Assign induction checklists per employee</CardDescription>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" onClick={() => setBulkChecklistDialogOpen(true)}>
-                      <ClipboardCheck className="h-4 w-4 mr-2" />
-                      Bulk Assign
-                    </Button>
-                    <Button onClick={() => handleOpenChecklistDialog()}>
-                      <ClipboardCheck className="h-4 w-4 mr-2" />
-                      Assign Checklist
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {lifecycleLoading ? (
-                  <div className="text-center py-6 text-muted-foreground">Loading onboarding cases...</div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>
-                        Pending: {safeOnboardingCases.filter((c) => c.status === "pending").length}
-                      </span>
-                      <span>
-                        In Progress: {safeOnboardingCases.filter((c) => c.status === "in_progress").length}
-                      </span>
-                      <span>
-                        Completed: {safeOnboardingCases.filter((c) => c.status === "completed").length}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <Button
-                        type="button"
-                        variant={onboardingFilter === "all" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setOnboardingFilter("all")}
-                      >
-                        All
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={onboardingFilter === "pending" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setOnboardingFilter("pending")}
-                      >
-                        Pending only
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={onboardingFilter === "missing" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setOnboardingFilter("missing")}
-                      >
-                        Missing checklist only
-                      </Button>
-                    </div>
-                    <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Employee/Candidate</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Checklist</TableHead>
-                          <TableHead>Due</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredOnboardingCases.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
-                              No onboarding cases yet.
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          filteredOnboardingCases.map((oc) => (
-                            <TableRow key={oc.id}>
-                              <TableCell>
-                                {oc.employee
-                                  ? `${oc.employee.firstName} ${oc.employee.lastName}`
-                                  : oc.candidate
-                                    ? `${oc.candidate.fullName} (Candidate)`
-                                    : "Unassigned"}
-                                {oc.candidate?.stage && (
-                                  <div className="text-xs text-muted-foreground">
-                                    Stage: {oc.candidate.stage.replace("_", " ")}
-                                  </div>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant={statusBadgeVariant(oc.status)}>
-                                  {oc.status.replace("_", " ")}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                {oc.inductionChecklist ? (
-                                  <span className="text-sm text-muted-foreground">
-                                    {oc.inductionChecklist.status} ({Math.round(oc.inductionChecklist.completionPercent || 0)}%)
-                                  </span>
-                                ) : (
-                                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                    <span>Not assigned</span>
-                                    {isChecklistOverdue(oc) && (
-                                      <Badge variant="destructive">Overdue</Badge>
-                                    )}
-                                  </div>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    type="date"
-                                    value={dueDateEdits[oc.id] ?? (oc.dueDate ? oc.dueDate.split("T")[0] : "")}
-                                    onChange={(e) =>
-                                      setDueDateEdits((prev) => ({ ...prev, [oc.id]: e.target.value }))
-                                    }
-                                    className="h-8 w-40"
-                                  />
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleUpdateDueDate(oc.id)}
-                                    disabled={savingDueDateId === oc.id}
-                                  >
-                                    {savingDueDateId === oc.id ? "Saving..." : "Save"}
-                                  </Button>
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  {oc.inductionChecklist && oc.inductionChecklist.status !== "completed" && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      disabled={remindingChecklistId === oc.inductionChecklist.id}
-                                      onClick={() => handleSendChecklistReminder(oc.inductionChecklist.id)}
-                                    >
-                                      {remindingChecklistId === oc.inductionChecklist.id ? "Sending..." : "Send reminder"}
-                                    </Button>
-                                  )}
-                                  {oc.inductionChecklist && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => openChecklistDetails(oc.inductionChecklist!.id)}
-                                    >
-                                      View checklist
-                                    </Button>
-                                  )}
-                                  {!oc.inductionChecklist && oc.profileId && (
-                                    <Button variant="outline" size="sm" onClick={() => handleOpenChecklistDialog(String(oc.profileId))}>
-                                      Assign Checklist
-                                    </Button>
-                                  )}
-                                  {!oc.inductionChecklist && !oc.profileId && (
-                                    <Button variant="outline" size="sm" disabled>
-                                      Await profile
-                                    </Button>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2724,22 +2716,135 @@ const EmployeeManagement = () => {
 
         {/* Bulk Assign Checklist Dialog */}
         <Dialog open={bulkChecklistDialogOpen} onOpenChange={setBulkChecklistDialogOpen}>
-          <DialogContent className="sm:max-w-[600px]">
+          <DialogContent className="w-[95vw] sm:max-w-[600px] max-h-[90vh] overflow-hidden">
             <DialogHeader>
               <DialogTitle>Bulk Assign Onboarding Checklist</DialogTitle>
               <DialogDescription>
                 Applies to onboarding cases in the current filter that are missing a checklist.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-2">
+            <div className="grid max-h-[calc(90vh-10rem)] gap-4 overflow-y-auto py-2 pr-1">
               <div className="grid gap-2">
                 <Label>Checklist Items</Label>
-                <Textarea
-                  rows={6}
-                  value={checklistItemsText}
-                  onChange={(e) => setChecklistItemsText(e.target.value)}
-                  placeholder="Enter one checklist item per line"
-                />
+                <div className="space-y-3">
+                  {checklistDraftItems.map((item, index) => {
+                    const itemTypeOption = getChecklistItemTypeOption(item.itemType);
+                    const showResourceField =
+                      item.itemType === "video_watch" ||
+                      item.itemType === "policy_link" ||
+                      item.itemType === "external_link";
+                    return (
+                      <div key={item.id} className="rounded-md border p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-muted-foreground">Item {index + 1}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeChecklistDraftItem(item.id)}
+                            disabled={checklistDraftItems.length <= 1}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            Remove
+                          </Button>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Title</Label>
+                          <Input
+                            value={item.itemName}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, { itemName: event.target.value })
+                            }
+                            placeholder="e.g. Upload KRA PIN certificate"
+                          />
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="grid gap-2">
+                            <Label>Type</Label>
+                            <Select
+                              value={item.itemType}
+                              onValueChange={(value) =>
+                                updateChecklistDraftItem(item.id, {
+                                  itemType: value as ChecklistItemType,
+                                })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {CHECKLIST_ITEM_TYPE_OPTIONS.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {showResourceField && (
+                            <div className="grid gap-2">
+                              <Label>{itemTypeOption.resourceLabel || "Resource URL"}</Label>
+                              <Input
+                                value={item.resourceUrl}
+                                onChange={(event) =>
+                                  updateChecklistDraftItem(item.id, {
+                                    resourceUrl: event.target.value,
+                                  })
+                                }
+                                placeholder={itemTypeOption.resourcePlaceholder || "https://..."}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Description (optional)</Label>
+                          <Input
+                            value={item.description}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, {
+                                description: event.target.value,
+                              })
+                            }
+                            placeholder="Guidance shown to the employee"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => addChecklistDraftItem("task")}>
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Task
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("document_upload")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Document Upload
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("video_watch")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Video
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("policy_link")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Policy Link
+                    </Button>
+                  </div>
+                </div>
               </div>
               <div className="grid gap-2">
                 <Label>Due date (optional)</Label>
@@ -2761,22 +2866,22 @@ const EmployeeManagement = () => {
 
         {/* Assign Checklist Dialog */}
         <Dialog open={checklistDialogOpen} onOpenChange={setChecklistDialogOpen}>
-          <DialogContent className="sm:max-w-[600px]">
+          <DialogContent className="w-[95vw] sm:max-w-[600px] max-h-[90vh] overflow-hidden">
             <DialogHeader>
               <DialogTitle>Assign Onboarding Checklist</DialogTitle>
               <DialogDescription>
-                Choose an employee and define checklist items (one per line).
+                Choose an employee with an onboarding case and define structured checklist items.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-2">
+            <div className="grid max-h-[calc(90vh-10rem)] gap-4 overflow-y-auto py-2 pr-1">
               <div className="grid gap-2">
                 <Label>Employee</Label>
-                <Select value={checklistEmployeeId} onValueChange={setChecklistEmployeeId}>
+                <Select value={checklistEmployeeId} onValueChange={handleChecklistEmployeeSelect}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select employee" />
                   </SelectTrigger>
                   <SelectContent>
-                    {employees.map((emp) => (
+                    {employeesWithOnboardingCases.map((emp) => (
                       <SelectItem key={emp.id} value={String(emp.id)}>
                         {emp.first_name} {emp.last_name} ({emp.email})
                       </SelectItem>
@@ -2786,12 +2891,125 @@ const EmployeeManagement = () => {
               </div>
               <div className="grid gap-2">
                 <Label>Checklist Items</Label>
-                <Textarea
-                  rows={6}
-                  value={checklistItemsText}
-                  onChange={(e) => setChecklistItemsText(e.target.value)}
-                  placeholder="Enter one checklist item per line"
-                />
+                <div className="space-y-3">
+                  {checklistDraftItems.map((item, index) => {
+                    const itemTypeOption = getChecklistItemTypeOption(item.itemType);
+                    const showResourceField =
+                      item.itemType === "video_watch" ||
+                      item.itemType === "policy_link" ||
+                      item.itemType === "external_link";
+                    return (
+                      <div key={item.id} className="rounded-md border p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-muted-foreground">Item {index + 1}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeChecklistDraftItem(item.id)}
+                            disabled={checklistDraftItems.length <= 1}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            Remove
+                          </Button>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Title</Label>
+                          <Input
+                            value={item.itemName}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, { itemName: event.target.value })
+                            }
+                            placeholder="e.g. Upload ID card"
+                          />
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="grid gap-2">
+                            <Label>Type</Label>
+                            <Select
+                              value={item.itemType}
+                              onValueChange={(value) =>
+                                updateChecklistDraftItem(item.id, {
+                                  itemType: value as ChecklistItemType,
+                                })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {CHECKLIST_ITEM_TYPE_OPTIONS.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {showResourceField && (
+                            <div className="grid gap-2">
+                              <Label>{itemTypeOption.resourceLabel || "Resource URL"}</Label>
+                              <Input
+                                value={item.resourceUrl}
+                                onChange={(event) =>
+                                  updateChecklistDraftItem(item.id, {
+                                    resourceUrl: event.target.value,
+                                  })
+                                }
+                                placeholder={itemTypeOption.resourcePlaceholder || "https://..."}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Description (optional)</Label>
+                          <Input
+                            value={item.description}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, {
+                                description: event.target.value,
+                              })
+                            }
+                            placeholder="Guidance shown to the employee"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => addChecklistDraftItem("task")}>
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Task
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("document_upload")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Document Upload
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("video_watch")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Video
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addChecklistDraftItem("policy_link")}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" />
+                      Add Policy Link
+                    </Button>
+                  </div>
+                </div>
               </div>
               <div className="grid gap-2">
                 <Label>Due date (optional)</Label>
@@ -2813,7 +3031,7 @@ const EmployeeManagement = () => {
 
         {/* Checklist Details Dialog */}
         <Dialog open={checklistViewOpen} onOpenChange={setChecklistViewOpen}>
-          <DialogContent className="sm:max-w-[700px]">
+          <DialogContent className="w-[95vw] sm:max-w-[700px] max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Checklist Details</DialogTitle>
               <DialogDescription>
@@ -2844,12 +3062,22 @@ const EmployeeManagement = () => {
                   {(activeChecklist.items || []).map((item) => {
                     const filePath = item.document?.filePath;
                     const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+                    const itemTypeOption = getChecklistItemTypeOption(item.itemType);
+                    const rawResourceUrl = String(item.resourceUrl || "").trim();
+                    const resourceUrl = rawResourceUrl
+                      ? rawResourceUrl.startsWith("/uploads/")
+                        ? `${baseUrl}${rawResourceUrl}`
+                        : rawResourceUrl
+                      : "";
                     return (
                       <div key={item.id} className="rounded-lg border border-border p-3">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-medium">{item.itemName}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {itemTypeOption.label}
+                              </Badge>
                               {item.requiresDocument && (
                                 <Badge variant="outline" className="text-xs">
                                   Document required
@@ -2863,6 +3091,15 @@ const EmployeeManagement = () => {
                             </div>
                             {item.description && (
                               <p className="text-xs text-muted-foreground">{item.description}</p>
+                            )}
+                            {resourceUrl && (
+                              <div className="mt-2">
+                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                  <a href={resourceUrl} target="_blank" rel="noreferrer">
+                                    Open resource
+                                  </a>
+                                </Button>
+                              </div>
                             )}
                             {filePath && (
                               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -2911,108 +3148,6 @@ const EmployeeManagement = () => {
                 </div>
               </div>
             )}
-          </DialogContent>
-        </Dialog>
-
-        {/* Onboarding Stages Dialog */}
-        <Dialog open={onboardingStagesDialogOpen} onOpenChange={setOnboardingStagesDialogOpen}>
-          <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Onboarding Stages</DialogTitle>
-              <DialogDescription>Track stage status, due dates, and ownership.</DialogDescription>
-            </DialogHeader>
-            {activeOnboardingCase ? (
-              <div className="space-y-4">
-                <div className="text-sm text-muted-foreground">
-                  {getOnboardingDisplayName(activeOnboardingCase)} -{" "}
-                  <span className="capitalize">{activeOnboardingCase.status.replace("_", " ")}</span>
-                </div>
-                {activeOnboardingCase.stages && activeOnboardingCase.stages.length > 0 ? (
-                  <div className="space-y-3">
-                    {activeOnboardingCase.stages.map((stage) => {
-                      const edits = stageEdits[stage.id] || {};
-                      const statusValue = edits.status ?? stage.status;
-                      const dueValue =
-                        edits.dueDate ?? (stage.dueDate ? stage.dueDate.split("T")[0] : "");
-                      const ownerName = stage.owner
-                        ? `${stage.owner.firstName} ${stage.owner.lastName}`.trim()
-                        : "Unassigned";
-                      return (
-                        <div key={stage.id} className="rounded-md border p-3 space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <div className="font-medium">{stage.title}</div>
-                              {stage.description && (
-                                <div className="text-xs text-muted-foreground">{stage.description}</div>
-                              )}
-                              <div className="text-xs text-muted-foreground">Owner: {ownerName}</div>
-                            </div>
-                            <Badge variant={statusBadgeVariant(statusValue)}>
-                              {statusValue.replace("_", " ")}
-                            </Badge>
-                          </div>
-                          <div className="grid gap-3 md:grid-cols-3">
-                            <div className="space-y-1">
-                              <Label>Status</Label>
-                              <Select
-                                value={statusValue}
-                                onValueChange={(value) => updateStageEdit(stage.id, { status: value })}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="pending">Pending</SelectItem>
-                                  <SelectItem value="in_progress">In progress</SelectItem>
-                                  <SelectItem value="completed">Completed</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-1">
-                              <Label>Due date</Label>
-                              <Input
-                                type="date"
-                                value={dueValue}
-                                onChange={(e) => updateStageEdit(stage.id, { dueDate: e.target.value })}
-                              />
-                            </div>
-                            <div className="flex items-end justify-end">
-                              <Button
-                                variant="outline"
-                                onClick={() => saveOnboardingStage(stage)}
-                                disabled={savingStageId === stage.id}
-                              >
-                                {savingStageId === stage.id ? "Saving..." : "Save"}
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="text-sm text-muted-foreground">
-                      No stages have been initialized for this onboarding case yet.
-                    </div>
-                    <Button
-                      variant="outline"
-                      onClick={() => initializeOnboardingStages(activeOnboardingCase.id)}
-                      disabled={initializingStagesCaseId === activeOnboardingCase.id}
-                    >
-                      {initializingStagesCaseId === activeOnboardingCase.id ? "Initializing..." : "Initialize stages"}
-                    </Button>
-                  </div>
-                )}
-            </div>
-            ) : (
-              <div className="text-sm text-muted-foreground">Select an onboarding case to view stages.</div>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOnboardingStagesDialogOpen(false)}>
-                Close
-              </Button>
-            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -3148,7 +3283,12 @@ const EmployeeManagement = () => {
                           <Button size="sm" variant="outline" onClick={() => openAttachDocument(task.id)}>
                             Attach document
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => handleCompleteOffboardingTask(task.id)}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleCompleteOffboardingTask(task.id)}
+                            disabled={Boolean(task.requiresDocument && !task.documentId)}
+                          >
                             Mark complete
                           </Button>
                         </div>

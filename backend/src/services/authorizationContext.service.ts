@@ -1,6 +1,7 @@
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { RoleModulePolicyInput } from "./moduleAccess.service";
+import { canonicalizeRoleName } from "../auth/canonicalRoles";
 
 type AuthorizationContext = {
   activeRolePolicies: RoleModulePolicyInput[];
@@ -11,7 +12,7 @@ type AuthorizationContext = {
   overrideRoleName: string;
 };
 
-const normalize = (value: string) => value.toLowerCase().trim();
+const normalize = (value: string) => canonicalizeRoleName(value);
 
 const getOverrideRoleName = (userId: number) => `user_override_${userId}`.toLowerCase();
 

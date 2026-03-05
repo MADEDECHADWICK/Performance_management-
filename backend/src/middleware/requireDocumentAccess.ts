@@ -14,6 +14,7 @@
 import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
+const db = prisma as any;
 
 type AccessDoc = {
   id: number;
@@ -45,8 +46,6 @@ const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 const resolveRoles = (req: AuthRequest): string[] => {
   const roles = unique([
     ...(req.userRoles || []).map((role) => normalizeRole(role)),
-    ...(req.user?.authRoles || []).map((role) => normalizeRole(role)),
-    normalizeRole(req.profile?.role?.name),
   ]);
 
   if (roles.length > 0) {
@@ -60,14 +59,11 @@ const hasAnyRole = (roles: string[], expected: string[]) => {
   return expected.some((role) => roleSet.has(normalizeRole(role)));
 };
 
-const isAdmin = (roles: string[]) => hasAnyRole(roles, ["admin", "super_admin"]);
-const isHR = (roles: string[]) =>
-  hasAnyRole(roles, ["hr", "hr_manager", "human_resources"]);
+const isAdmin = (roles: string[]) => hasAnyRole(roles, ["super_admin"]);
+const isHR = (roles: string[]) => hasAnyRole(roles, ["hr"]);
 const isManager = (roles: string[]) => hasAnyRole(roles, ["manager"]);
-const isPartner = (roles: string[]) =>
-  hasAnyRole(roles, ["partner", "gmp", "group_managing_partner"]);
-const isGmp = (roles: string[]) =>
-  hasAnyRole(roles, ["gmp", "group_managing_partner"]);
+const isPartner = (roles: string[]) => hasAnyRole(roles, ["partner"]);
+const isGmp = (roles: string[]) => hasAnyRole(roles, ["gmp"]);
 const isFinance = (roles: string[]) => hasAnyRole(roles, ["finance"]);
 const isMarketing = (roles: string[]) => hasAnyRole(roles, ["marketing"]);
 
@@ -80,7 +76,7 @@ const allowedByAccessLevel = (accessLevel: string, roles: string[]) => {
     case "hr":
       return isHR(roles);
     case "manager":
-      return isHR(roles) || isManager(roles) || isPartner(roles);
+      return isHR(roles) || isManager(roles) || isPartner(roles) || isGmp(roles);
     case "employee":
       return true; // any authenticated profile
     default:
@@ -262,6 +258,54 @@ const hasClientOnboardingWorkflowAccess = async (
   );
 };
 
+const hasClientOnboardingChecklistWorkflowAccess = async (
+  checklistId: number,
+  profileId: number,
+  roles: string[]
+) => {
+  const checklist = await db.clientOnboardingChecklist.findUnique({
+    where: { id: checklistId },
+    select: {
+      assignedByProfileId: true,
+      clientOnboarding: {
+        select: {
+          id: true,
+          uploadedByProfileId: true,
+          hrReviewerProfileId: true,
+          engagementLetter: {
+            select: {
+              uploadedByProfileId: true,
+              approvedByProfileId: true,
+              client: {
+                select: {
+                  managerProfileId: true,
+                  partnerProfileId: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!checklist) return false;
+
+  return (
+    checklist.assignedByProfileId === profileId ||
+    checklist.clientOnboarding.uploadedByProfileId === profileId ||
+    checklist.clientOnboarding.hrReviewerProfileId === profileId ||
+    checklist.clientOnboarding.engagementLetter.uploadedByProfileId === profileId ||
+    checklist.clientOnboarding.engagementLetter.approvedByProfileId === profileId ||
+    checklist.clientOnboarding.engagementLetter.client.managerProfileId === profileId ||
+    checklist.clientOnboarding.engagementLetter.client.partnerProfileId === profileId ||
+    isHR(roles) ||
+    isFinance(roles) ||
+    isMarketing(roles) ||
+    isGmp(roles)
+  );
+};
+
 const hasWorkflowFallbackAccess = async (
   doc: AccessDoc,
   profileId: number,
@@ -298,6 +342,10 @@ const hasWorkflowFallbackAccess = async (
 
   if (entityType === "onboarding" || entityType === "clientonboarding") {
     return hasClientOnboardingWorkflowAccess(doc.entityId, profileId, roles);
+  }
+
+  if (entityType === "clientonboardingchecklist") {
+    return hasClientOnboardingChecklistWorkflowAccess(doc.entityId, profileId, roles);
   }
 
   return false;

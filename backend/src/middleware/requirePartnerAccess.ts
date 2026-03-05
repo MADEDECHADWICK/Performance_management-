@@ -17,7 +17,7 @@ import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
 
-const isAdmin = (roles: string[]) => roles.includes("admin") || roles.includes("super_admin");
+const isAdmin = (roles: string[]) => roles.includes("super_admin");
 
 export const requirePartnerAccess = async (
   req: AuthRequest,

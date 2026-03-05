@@ -98,13 +98,11 @@ const combineDateAndTime = (dateValue: unknown, timeValue: unknown): Date | null
 };
 
 const resolvePrimaryRole = (req: AuthRequest): string | undefined => {
-  const roles = [...(req.userRoles || []), ...(req.user?.authRoles || [])].map((role) =>
+  const roles = [...(req.userRoles || [])].map((role) =>
     String(role).toLowerCase().trim()
   );
 
   if (roles.includes("super_admin")) return "super_admin";
-  if (roles.includes("admin")) return "admin";
-  if (roles.includes("hr_manager")) return "hr_manager";
   if (roles.includes("hr")) return "hr";
   if (roles.includes("partner")) return "partner";
   if (roles.includes("manager")) return "manager";

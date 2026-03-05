@@ -23,7 +23,7 @@ router.get(
 
 router.post(
   "/",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(createRecruitmentCandidateValidators),
   handleValidationErrors,
   RecruitmentCandidateController.create
@@ -39,7 +39,7 @@ router.get(
 
 router.patch(
   "/:id",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(updateRecruitmentCandidateValidators),
   handleValidationErrors,
   RecruitmentCandidateController.update
@@ -47,7 +47,7 @@ router.patch(
 
 router.patch(
   "/:id/stage",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(updateRecruitmentStageValidators),
   handleValidationErrors,
   RecruitmentCandidateController.updateStage
@@ -55,7 +55,7 @@ router.patch(
 
 router.patch(
   "/:id/offer-letter",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(attachOfferLetterValidators),
   handleValidationErrors,
   RecruitmentCandidateController.attachOfferLetter
@@ -63,7 +63,7 @@ router.patch(
 
 router.delete(
   "/:id",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(getRecruitmentCandidateValidators),
   handleValidationErrors,
   RecruitmentCandidateController.remove

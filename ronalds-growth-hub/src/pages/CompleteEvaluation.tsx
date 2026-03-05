@@ -92,7 +92,7 @@ export default function CompleteEvaluation() {
       setResponses({ ...existingResponses, ...initialResponses });
     } catch (error: any) {
       toast({ title: "Error loading evaluation", description: error.message, variant: "destructive" });
-      navigate("/my-evaluations");
+      navigate("/evaluations");
     } finally {
       setLoading(false);
     }
@@ -211,7 +211,7 @@ export default function CompleteEvaluation() {
       });
 
       toast({ title: "Evaluation submitted successfully!" });
-      navigate("/my-evaluations");
+      navigate("/evaluations");
     } catch (error: any) {
       toast({ title: "Error submitting evaluation", description: error.message, variant: "destructive" });
     } finally {
@@ -411,7 +411,7 @@ export default function CompleteEvaluation() {
         )}
 
         {isCompleted && (
-          <Button onClick={() => navigate("/my-evaluations")} className="w-full">
+          <Button onClick={() => navigate("/evaluations")} className="w-full">
             Back to My Evaluations
           </Button>
         )}

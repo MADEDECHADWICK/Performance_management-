@@ -3,6 +3,7 @@
  */
 import { api, setToken, setUser, clearAuth } from './client';
 import type { User, Profile } from './types';
+import type { CanonicalRole } from '@/auth/canonicalRoles';
 
 export interface LoginSuccessResponse {
   token: string;
@@ -25,7 +26,7 @@ interface RegisterPayload {
   email: string;
   firstName: string;
   lastName: string;
-  authRole?: string;
+  authRole: CanonicalRole;
   roleId?: number;
   phone?: string;
   position?: string;
@@ -54,15 +55,15 @@ export const authAPI = {
   register: async (payload: RegisterPayload): Promise<any> => {
     const response = await api.post('/auth/onboard-user', {
       email: payload.email,
-      first_name: payload.firstName,
-      last_name: payload.lastName,
-      authRole: payload.authRole || 'employee',
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      authRole: payload.authRole,
       roleId: payload.roleId,
       phone: payload.phone,
       position: payload.position,
-      department_id: payload.departmentId,
-      manager_id: payload.managerId,
-      hire_date: payload.hireDate,
+      departmentId: payload.departmentId,
+      managerId: payload.managerId,
+      hireDate: payload.hireDate,
       status: payload.status,
     });
     return response;
@@ -122,26 +123,6 @@ export const authAPI = {
     return response;
   },
 
-  /**
-   * Request password reset
-   */
-  requestPasswordReset: async (email: string): Promise<void> => {
-    await api.post('/auth/forgot-password', { email });
-  },
-
-  /**
-   * Reset password with token
-   */
-  resetPassword: async (token: string, password: string): Promise<void> => {
-    await api.post('/auth/reset-password', { token, password });
-  },
-
-  /**
-   * Change password (authenticated)
-   */
-  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
-    await api.post('/auth/change-password', { currentPassword, newPassword });
-  },
 };
 
 export default authAPI;

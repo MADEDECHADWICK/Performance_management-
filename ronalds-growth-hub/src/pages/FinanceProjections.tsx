@@ -45,7 +45,8 @@ export default function FinanceProjections() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { hasModuleAccess } = useAuth();
-  const canWriteProjections = hasModuleAccess("finance", "write");
+  const canWriteProjections =
+    hasModuleAccess("finance", "write") || hasModuleAccess("finance_projections", "write");
   const [loading, setLoading] = useState(true);
   const [projections, setProjections] = useState<Projection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);

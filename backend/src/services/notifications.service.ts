@@ -900,7 +900,7 @@ export class NotificationService {
 
     if (
       notification.profileId !== auth.profileId &&
-      !["admin", "super_admin", "hr", "hr_manager"].includes(
+      !["super_admin", "hr"].includes(
         String(auth.roleName || "").toLowerCase()
       )
     ) {
@@ -951,7 +951,7 @@ export class NotificationService {
 
     if (
       notification.profileId !== auth.profileId &&
-      !["admin", "super_admin", "hr", "hr_manager"].includes(
+      !["super_admin", "hr"].includes(
         String(auth.roleName || "").toLowerCase()
       )
     ) {
@@ -1037,7 +1037,7 @@ export class NotificationService {
 
     if (
       notification.profileId !== auth.profileId &&
-      !["admin", "super_admin", "hr", "hr_manager"].includes(
+      !["super_admin", "hr"].includes(
         String(auth.roleName || "").toLowerCase()
       )
     ) {
@@ -1210,7 +1210,7 @@ export class NotificationService {
     auth: AuthContext
   ) {
     const roleName = String(auth.roleName || "").toLowerCase();
-    if (!["admin", "super_admin", "manager", "hr", "hr_manager"].includes(roleName)) {
+    if (!["super_admin", "manager", "hr"].includes(roleName)) {
       throw {
         statusCode: 403,
         message: "Only admins/managers can send batch notifications",

@@ -42,7 +42,7 @@ const toNumber = (value: unknown): number => {
 
 const isEditorRole = (role?: string) => {
   const normalized = String(role || "").toLowerCase().trim();
-  return ["admin", "super_admin", "manager", "hr", "hr_manager"].includes(normalized);
+  return ["super_admin", "manager", "hr"].includes(normalized);
 };
 
 export class KPIService {

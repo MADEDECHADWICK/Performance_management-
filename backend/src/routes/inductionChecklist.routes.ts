@@ -16,7 +16,7 @@ const router = Router();
  */
 router.post(
   "/",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(createInductionChecklistValidators),
   handleValidationErrors,
   InductionChecklistController.create
@@ -60,7 +60,7 @@ router.patch(
  */
 router.post(
   "/:checklistId/remind",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(getInductionChecklistValidators),
   handleValidationErrors,
   InductionChecklistController.remind

@@ -30,6 +30,12 @@ export const listTimeEntriesValidators = [
     .withMessage("Status must be one of: pending, submitted, approved, rejected, cancelled"),
 ];
 
+export const getWeeklySummaryValidators = [
+  query("weekStart")
+    .isISO8601()
+    .withMessage("weekStart must be a valid ISO8601 date"),
+];
+
 /**
  * POST /time-entries
  * Body:

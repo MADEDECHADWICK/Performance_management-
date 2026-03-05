@@ -10,6 +10,15 @@ import { buildModuleAccessMatrix } from "../services/moduleAccess.service";
 import { sendOnboardingEmail } from "../services/onboardingEmail.service";
 import { sendEmail } from "../services/emailService";
 import { getJwtSecret } from "../config/jwt";
+import { ensureOnboardingProvisioning } from "../services/onboardingProvisioning.service";
+import {
+  CANONICAL_ROLES,
+  type CanonicalRole,
+  canonicalizeRoleName,
+  canonicalizeRoles,
+  normalizeRoleName,
+  resolveCanonicalRole,
+} from "../auth/canonicalRoles";
 
 const router = Router();
 
@@ -35,7 +44,7 @@ type AccessTokenPayload = {
   userId?: number;
   sub?: number;
   email?: string;
-  authRoles?: string[];
+  authRoles?: CanonicalRole[];
   sessionToken?: string;
   profileId?: number;
   iat?: number;
@@ -155,9 +164,20 @@ const revokeSession = async (sessionToken?: string) => {
 
 const buildAuthSnapshot = (user: any) => {
   const activeRoleEntries = (user.roles || []).filter((entry: any) => entry.role?.isActive);
-  const authRoles = activeRoleEntries.map((entry: any) => entry.role.name);
-  const rolePolicies = activeRoleEntries.map((entry: any) => ({
-    roleName: entry.role.name,
+  const overrideRoleName = `user_override_${user.id}`.toLowerCase();
+  const overrideEntry = activeRoleEntries.find(
+    (entry: any) => normalizeRoleName(entry.role?.name) === overrideRoleName
+  );
+  const effectiveRoleEntries = overrideEntry ? [overrideEntry] : activeRoleEntries;
+
+  const authRoles = canonicalizeRoles(
+    activeRoleEntries
+      .map((entry: any) => entry.role.name)
+      .filter((roleName: string) => normalizeRoleName(roleName) !== overrideRoleName)
+  );
+
+  const rolePolicies = effectiveRoleEntries.map((entry: any) => ({
+    roleName: canonicalizeRoleName(entry.role.name),
     permissionKeys: entry.role.permissions.map(
       (permissionEntry: any) => permissionEntry.permission.key
     ),
@@ -227,7 +247,7 @@ const loadAuthUser = async (email: string) =>
 
 const buildAccessToken = (
   user: any,
-  authRoles: string[],
+  authRoles: CanonicalRole[],
   sessionToken?: string
 ) =>
   jwt.sign(
@@ -275,7 +295,6 @@ const onboardUser = async (req: AuthRequest, res: any) => {
     roleId,
     positionRoleId,
     authRole,
-    accessRole,
   } = req.body || {};
 
   if (!email) return res.status(400).json({ error: "Email is required" });
@@ -287,11 +306,17 @@ const onboardUser = async (req: AuthRequest, res: any) => {
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
-  const normalizedAccessRole = String(authRole || accessRole || "employee")
-    .trim()
-    .toLowerCase();
+  const normalizedAccessRole = normalizeRoleName(authRole);
   if (!normalizedAccessRole) {
     return res.status(400).json({ error: "authRole is required" });
+  }
+  const canonicalAccessRole = resolveCanonicalRole(normalizedAccessRole);
+  if (!canonicalAccessRole) {
+    return res.status(400).json({
+      error: `Invalid authRole '${normalizedAccessRole}'. Expected one of: ${CANONICAL_ROLES.join(
+        ", "
+      )}`,
+    });
   }
 
   try {
@@ -304,13 +329,13 @@ const onboardUser = async (req: AuthRequest, res: any) => {
 
     const accessRoleRecord = await prisma.authRole.findFirst({
       where: {
-        name: normalizedAccessRole,
+        name: canonicalAccessRole,
         isActive: true,
       },
       select: { id: true, name: true },
     });
     if (!accessRoleRecord) {
-      return res.status(400).json({ error: `Invalid authRole '${normalizedAccessRole}'` });
+      return res.status(400).json({ error: `Invalid authRole '${canonicalAccessRole}'` });
     }
 
     const resolvedRoleId = parsePositiveInt(positionRoleId ?? roleId ?? role_id);
@@ -372,17 +397,18 @@ const onboardUser = async (req: AuthRequest, res: any) => {
         },
       });
 
-      await tx.employeeOnboardingCase.create({
-        data: {
+      const provisioning = await ensureOnboardingProvisioning(
+        {
           profileId: profile.id,
-          status: "pending",
+          hrOwnerProfileId: req.user?.profileId ?? null,
+          assignedByProfileId: req.user?.profileId ?? null,
           startDate: new Date(),
-          hrOwnerProfileId: req.user?.profileId ?? undefined,
           notes: "Created during HR onboarding flow.",
         },
-      });
+        { tx }
+      );
 
-      return { user, profile };
+      return { user, profile, provisioning };
     });
 
     const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:8080";
@@ -403,6 +429,12 @@ const onboardUser = async (req: AuthRequest, res: any) => {
         email: created.user.email,
         profileId: created.profile.id,
         authRole: accessRoleRecord.name,
+        onboardingCaseId: created.provisioning.onboardingCaseId,
+        checklistId: created.provisioning.checklistId,
+      },
+      onboarding: {
+        onboardingCaseId: created.provisioning.onboardingCaseId,
+        checklistId: created.provisioning.checklistId,
       },
       emailDelivery: emailResult.delivered ? "sent" : "not_sent",
       temporaryPasswordExpiresAt: tempPasswordExpiry.toISOString(),
@@ -436,7 +468,7 @@ router.post("/login", async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ error: "Email and password required" });
   try {
-    const user = await loadAuthUser(String(email).trim().toLowerCase());
+    let user = await loadAuthUser(String(email).trim().toLowerCase());
     if (!user || !user.password)
       return res.status(401).json({ error: "Invalid credentials" });
     if (isUserBlockedFromLogin(user)) {
@@ -469,6 +501,20 @@ router.post("/login", async (req, res) => {
             : user.email,
         },
       });
+    }
+
+    const profileNeedsProvisioning =
+      !!user.profile &&
+      (String(user.profile.onboardingStatus || "").toLowerCase() !== "completed" ||
+        !user.profile.onboardingChecklistCompleted ||
+        !user.profile.inductionCompleted);
+
+    if (profileNeedsProvisioning && user.profile?.id) {
+      await ensureOnboardingProvisioning({
+        profileId: user.profile.id,
+      });
+      const refreshedUser = await loadAuthUser(user.email);
+      if (refreshedUser) user = refreshedUser;
     }
 
     const { authRoles } = buildAuthSnapshot(user);

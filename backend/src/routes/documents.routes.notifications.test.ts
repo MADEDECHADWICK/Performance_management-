@@ -13,6 +13,7 @@ jest.mock("../middleware/auth", () => ({
       profileId: 700,
       authRoles: ["hr"],
     };
+    req.userRoles = ["hr"];
     next();
   },
 }));
@@ -41,7 +42,7 @@ jest.mock("../middleware/reqiureRole", () => ({
     (...allowedRoles: string[]) =>
     (req: any, res: any, next: any) => {
       const required = allowedRoles.map((role) => role.toLowerCase());
-      const roles = (req.user?.authRoles ?? []).map((role: string) =>
+      const roles = (req.userRoles ?? []).map((role: string) =>
         role.toLowerCase()
       );
       req.userRoles = roles;
@@ -223,6 +224,30 @@ describe("documents routes notification integration", () => {
     );
   });
 
+  it("POST /documents normalizes string isRequired payloads for multipart/json parity", async () => {
+    const app = createApp();
+    mockedPrisma.document.create.mockResolvedValue(createBaseDocument({ id: 99, isRequired: true }));
+
+    const response = await request(app).post("/documents").send({
+      fileName: "id-proof.pdf",
+      filePath: "/uploads/id-proof.pdf",
+      documentType: "onboarding_checklist",
+      entityType: "InductionChecklist",
+      entityId: 173,
+      accessLevel: "employee",
+      isRequired: "true",
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockedPrisma.document.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isRequired: true,
+        }),
+      })
+    );
+  });
+
   it("PATCH /documents/:id/verify rejects document and notifies uploader", async () => {
     const app = createApp();
     mockedPrisma.document.findUnique.mockResolvedValue(
@@ -277,6 +302,51 @@ describe("documents routes notification integration", () => {
         actionRequired: true,
       }),
       expect.objectContaining({
+        profileId: 700,
+      })
+    );
+  });
+
+  it("POST /documents/request notifies the targeted profile with request contract fields", async () => {
+    const app = createApp();
+    mockedPrisma.profile.findUnique.mockImplementation(async ({ where }: any) => {
+      if (where?.id === 700) {
+        return { id: 700, firstName: "HR", lastName: "Owner", status: "active" };
+      }
+      if (where?.id === 501) {
+        return { id: 501, firstName: "John", lastName: "Doe", status: "active" };
+      }
+      return null;
+    });
+    mockedNotificationService.createNotification.mockResolvedValue({ id: 77 } as any);
+
+    const response = await request(app).post("/documents/request").send({
+      requestedProfileId: 501,
+      documentType: "offboarding_clearance",
+      entityType: "EmployeeOffboardingCase",
+      entityId: 40,
+      dueDate: "2026-03-15T00:00:00.000Z",
+      message: "Please upload the signed clearance form.",
+      priority: "high",
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        success: true,
+        message: "Document request sent",
+      })
+    );
+    expect(mockedNotificationService.createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientProfileId: 501,
+        eventType: "document.requested",
+        title: "Document requested: offboarding_clearance",
+        actionRequired: true,
+        priority: "high",
+      }),
+      expect.objectContaining({
+        userId: 1,
         profileId: 700,
       })
     );

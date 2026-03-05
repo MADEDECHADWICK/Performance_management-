@@ -16,6 +16,7 @@ import {
   timerStopValidators,
   batchSubmitValidators,
   listTimeEntriesValidators,
+  getWeeklySummaryValidators,
   getJobSummaryValidators,
   getJobAllocationSummaryValidators,
   createApprovalRequestValidators,
@@ -128,6 +129,32 @@ router.post(
   ...createTimeEntryValidators,
   handleValidationErrors,
   TimeEntryController.createTimeEntry
+);
+
+/**
+ * GET /time-entries/my
+ * List authenticated user's own time entries
+ */
+router.get(
+  "/my",
+  authMiddleware,
+  loadProfile,
+  ...listTimeEntriesValidators,
+  handleValidationErrors,
+  TimeEntryController.listMyTimeEntries
+);
+
+/**
+ * GET /time-entries/weekly-summary
+ * Get weekly summary for current user scope
+ */
+router.get(
+  "/weekly-summary",
+  authMiddleware,
+  loadProfile,
+  ...getWeeklySummaryValidators,
+  handleValidationErrors,
+  TimeEntryController.getWeeklySummary
 );
 
 /**

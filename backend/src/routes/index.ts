@@ -33,8 +33,6 @@ import continuousFeedbackRoutes from './continuousFeedback';
 import createCycleEvaluationsRoutes from './createCycleEvaluations';
 import developmentRecommendationsRoutes from './developmentRecommendations';
 import employeeEvaluationsRoutes from './employeeEvaluations';
-import employeeGoalsRoutes from './employeeGoals';
-import employeeKpiAssignmentsRoutes from './employeeKpiAssignments';
 import employeeProjectAllocationsRoutes from './employeeProjectAllocations';
 import employeeRolesRoutes from './employeeRoles';
 import employeesRoutes from './employees';
@@ -46,12 +44,10 @@ import evaluationDefinitionsRoutes from './evaluationDefinitions';
 import feedbackRoutes from './feedback';
 import financialSummaryRoutes from './financialSummary';
 import financeDashboardRoutes from './financeDashboard';
-import gmpAuthRoutes from './gmp-auth';
 import gmpDashboardRoutes from './gmpDashboard';
 import hrDashboardRoutes from './hrDashboard';
 import jobProfitabilityRoutes from './jobProfitability';
-import kpisRoutes from './kpis';
-import okrRoutes from './okrs';
+import kpiCascadeV2Routes from './kpiCascadeV2';
 import managerDashboardRoutes from './managerDashboard';
 import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
 import notificationsRoutes from './notifications';
@@ -106,10 +102,10 @@ router.use(
 );
 router.use('/documents', authMiddleware, requireModuleAccess('documents'), documentsRoutes);
 router.use('/knowledge-hub', authMiddleware, requireModuleAccess('knowledge_hub'), knowledgeHubRoutes);
-router.use('/onboarding', authMiddleware, requireModuleAccess('users'), employeeOnboardingRoutes);
+router.use('/onboarding', authMiddleware, requireModuleAccess('users', 'read'), employeeOnboardingRoutes);
 router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
 router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
-router.use('/induction-checklist', authMiddleware, requireModuleAccess('users'), inductionChecklistRoutes);
+router.use('/induction-checklist', authMiddleware, requireModuleAccess('users', 'read'), inductionChecklistRoutes);
 router.use(
   '/partners',
   authMiddleware,
@@ -154,12 +150,10 @@ router.use('/create-cycle-evaluations', authMiddleware, requireModuleAccess('eva
 router.use('/performance-reviews', authMiddleware, requireModuleAccess('evaluations'), performanceReviewsRoutes);
 router.use('/non-financial-performance', authMiddleware, requireModuleAccess('evaluations'), nonFinancialPerformanceRoutes);
 router.use('/development-recommendations', authMiddleware, requireModuleAccess('evaluations'), developmentRecommendationsRoutes);
-router.use('/kpis', authMiddleware, requireModuleAccess('kpis'), kpisRoutes);
-router.use('/okrs', authMiddleware, requireModuleAccess('kpis'), okrRoutes);
-router.use('/employee-goals', authMiddleware, requireModuleAccess('kpis'), employeeGoalsRoutes);
-router.use('/employee-kpi-assignments', authMiddleware, requireModuleAccess('kpis'), employeeKpiAssignmentsRoutes);
+router.use('/v2/kpi', authMiddleware, requireModuleAccess('kpis'), kpiCascadeV2Routes);
+router.use('/kpi', authMiddleware, requireModuleAccess('kpis'), kpiCascadeV2Routes);
 router.use('/employees', authMiddleware, requireModuleAccess('users'), employeesRoutes);
-router.use('/profiles', authMiddleware, requireModuleAccess('users'), profilesRoutes);
+router.use('/profiles', authMiddleware, requireModuleAccess('users', 'read'), profilesRoutes);
 router.use('/employee-roles', authMiddleware, requireModuleAccess('users'), employeeRolesRoutes);
 router.use('/employee-project-allocations', authMiddleware, requireModuleAccess('users'), employeeProjectAllocationsRoutes);
 router.use('/subordinates', authMiddleware, requireModuleAccess('users'), subordinatesRoutes);
@@ -181,7 +175,6 @@ router.use('/notification-templates', authMiddleware, requireModuleAccess('notif
 router.use('/manager-dashboard', authMiddleware, requireModuleAccess('dashboard'), managerDashboardRoutes);
 router.use('/gmp-dashboard', authMiddleware, requireModuleAccess('dashboard'), gmpDashboardRoutes);
 router.use('/hr-dashboard', authMiddleware, requireModuleAccess('dashboard'), hrDashboardRoutes);
-router.use('/gmp-auth', gmpAuthRoutes);
 router.use('/roles', authMiddleware, requireModuleAccess('users'), rolesRoutes);
 router.use('/user-roles', authMiddleware, requireModuleAccess('users'), userRolesRoutes);
 router.use('/position-rates', authMiddleware, requireModuleAccess('users'), positionRatesRoutes);

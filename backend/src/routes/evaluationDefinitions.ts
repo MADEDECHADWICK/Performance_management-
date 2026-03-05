@@ -17,10 +17,8 @@ const resolveRoles = (req: AuthRequest) => {
 };
 
 const isPrivileged = (roles: string[]) =>
-  roles.includes("admin") ||
   roles.includes("super_admin") ||
-  roles.includes("hr") ||
-  roles.includes("hr_manager");
+  roles.includes("hr");
 
 // GET /evaluation-definitions?status=published&cycleId=1&departmentId=2
 router.get("/", authMiddleware, loadProfile, async (req: AuthRequest, res) => {

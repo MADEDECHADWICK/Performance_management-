@@ -1,0 +1,640 @@
+openapi: 3.1.0
+info:
+  title: KPI Cascade V2 API
+  version: 0.1.0-draft
+  description: >
+    Contract-first API for KPI Cascade V2.
+    Replaces legacy `/kpis`, `/okrs`, `/employee-goals`, and `/employee-kpi-assignments` write flows.
+
+servers:
+  - url: /api/v2/kpi
+
+tags:
+  - name: Cycles
+  - name: Goals
+  - name: Metrics
+  - name: Initiatives
+  - name: Progress
+  - name: Reporting
+  - name: Archive
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+    InitiativeId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    CycleId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    EntityType:
+      name: entityType
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [goal, metric, initiative]
+    EntityId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    KpiEntityState:
+      type: string
+      enum: [draft, submitted, in_review, approved, rejected, active, completed, archived]
+
+    KpiCadence:
+      type: string
+      enum: [quarterly, annual]
+
+    KpiUpdateFrequency:
+      type: string
+      enum: [weekly, biweekly, monthly, quarterly]
+
+    KpiDirection:
+      type: string
+      enum: [higher_better, lower_better, milestone]
+
+    KpiRag:
+      type: string
+      enum: [red, amber, green]
+
+    Cycle:
+      type: object
+      required: [id, name, cadence, startAt, endAt, state]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        cadence:
+          $ref: "#/components/schemas/KpiCadence"
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [draft, active, completed, archived]
+
+    CycleVersion:
+      type: object
+      required: [id, cycleId, versionNo, status]
+      properties:
+        id:
+          type: integer
+        cycleId:
+          type: integer
+        versionNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft, published, locked]
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    GoalCreateRequest:
+      type: object
+      required: [cycleVersionId, title, ownerProfileId, baseline, target, weight]
+      properties:
+        cycleVersionId:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        ownerProfileId:
+          type: integer
+        baseline:
+          type: number
+        target:
+          type: number
+        weight:
+          type: number
+
+    MetricCreateRequest:
+      type: object
+      required: [goalId, name, direction, aggregationMethod, baseline, target, weight]
+      properties:
+        goalId:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        unit:
+          type: string
+        direction:
+          $ref: "#/components/schemas/KpiDirection"
+        aggregationMethod:
+          type: string
+          enum: [sum, average, weighted_average, min, max, latest]
+        thresholds:
+          type: object
+          properties:
+            red:
+              type: number
+            amber:
+              type: number
+            green:
+              type: number
+        baseline:
+          type: number
+        target:
+          type: number
+        weight:
+          type: number
+        updateFrequency:
+          $ref: "#/components/schemas/KpiUpdateFrequency"
+
+    InitiativeCreateRequest:
+      type: object
+      required: [metricId, title, baseline, target, weight, updateFrequency]
+      properties:
+        metricId:
+          type: integer
+        parentInitiativeId:
+          type: integer
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        ownerProfileId:
+          type: integer
+        partnerProfileId:
+          type: integer
+        managerProfileId:
+          type: integer
+        departmentId:
+          type: integer
+        employeeProfileId:
+          type: integer
+        baseline:
+          type: number
+        target:
+          type: number
+        weight:
+          type: number
+        updateFrequency:
+          $ref: "#/components/schemas/KpiUpdateFrequency"
+        ackRequired:
+          type: boolean
+
+    ActionResponse:
+      type: object
+      required: [id, state]
+      properties:
+        id:
+          type: integer
+        state:
+          $ref: "#/components/schemas/KpiEntityState"
+        approvalSequence:
+          type: integer
+        message:
+          type: string
+
+    ProgressUpdateRequest:
+      type: object
+      required: [periodStart, periodEnd, actual]
+      properties:
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        actual:
+          type: number
+        note:
+          type: string
+        evidenceUrls:
+          type: array
+          items:
+            type: string
+
+    ProgressUpdateResponse:
+      type: object
+      required: [initiativeId, actual, periodStart, periodEnd, rollup]
+      properties:
+        initiativeId:
+          type: integer
+        actual:
+          type: number
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        rollup:
+          type: object
+          required: [initiative, metric, goal]
+          properties:
+            initiative:
+              type: object
+              properties:
+                percentComplete:
+                  type: number
+                rag:
+                  $ref: "#/components/schemas/KpiRag"
+            metric:
+              type: object
+              properties:
+                percentComplete:
+                  type: number
+                rag:
+                  $ref: "#/components/schemas/KpiRag"
+            goal:
+              type: object
+              properties:
+                percentComplete:
+                  type: number
+                rag:
+                  $ref: "#/components/schemas/KpiRag"
+
+    ReassignRequest:
+      type: object
+      required: [toProfileId, reason, effectiveAt]
+      properties:
+        toProfileId:
+          type: integer
+        reason:
+          type: string
+        effectiveAt:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []
+
+paths:
+  /cycles:
+    post:
+      tags: [Cycles]
+      summary: Create KPI cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cadence, startAt, endAt]
+              properties:
+                name:
+                  type: string
+                cadence:
+                  $ref: "#/components/schemas/KpiCadence"
+                startAt:
+                  type: string
+                  format: date-time
+                endAt:
+                  type: string
+                  format: date-time
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cycle"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /cycles/{id}/versions:
+    post:
+      tags: [Cycles]
+      summary: Create or publish cycle version
+      parameters:
+        - $ref: "#/components/parameters/CycleId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                versionNo:
+                  type: integer
+                publish:
+                  type: boolean
+      responses:
+        "201":
+          description: Version created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CycleVersion"
+        "409":
+          description: Published version already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /goals:
+    post:
+      tags: [Goals]
+      summary: Create goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoalCreateRequest"
+      responses:
+        "201":
+          description: Goal created
+
+  /metrics:
+    post:
+      tags: [Metrics]
+      summary: Create metric under goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MetricCreateRequest"
+      responses:
+        "201":
+          description: Metric created
+
+  /initiatives/firm:
+    post:
+      tags: [Initiatives]
+      summary: HR creates firm initiative
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiativeCreateRequest"
+      responses:
+        "201":
+          description: Firm initiative created
+
+  /initiatives/team:
+    post:
+      tags: [Initiatives]
+      summary: Partner creates team initiative
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiativeCreateRequest"
+      responses:
+        "201":
+          description: Team initiative created
+
+  /initiatives/department:
+    post:
+      tags: [Initiatives]
+      summary: Manager creates department initiative
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiativeCreateRequest"
+      responses:
+        "201":
+          description: Department initiative created
+
+  /initiatives/{id}/submit:
+    post:
+      tags: [Initiatives]
+      summary: Submit initiative to next review stage
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Transition complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /initiatives/{id}/approve:
+    post:
+      tags: [Initiatives]
+      summary: Approve initiative
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /initiatives/{id}/reject:
+    post:
+      tags: [Initiatives]
+      summary: Reject initiative with mandatory reason
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /initiatives/{id}/cascade:
+    post:
+      tags: [Initiatives]
+      summary: Cascade children to next level
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Cascade generated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [createdCount]
+                properties:
+                  createdCount:
+                    type: integer
+
+  /employee-initiatives/{id}/acknowledge:
+    post:
+      tags: [Progress]
+      summary: Employee acknowledges assigned initiative
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /employee-initiatives/{id}/progress:
+    post:
+      tags: [Progress]
+      summary: Submit periodic progress update
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProgressUpdateRequest"
+      responses:
+        "200":
+          description: Progress accepted and roll-up updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgressUpdateResponse"
+
+  /initiatives/{id}/reassign:
+    post:
+      tags: [Initiatives]
+      summary: Reassign initiative owner
+      parameters:
+        - $ref: "#/components/parameters/InitiativeId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReassignRequest"
+      responses:
+        "200":
+          description: Reassignment applied
+
+  /hierarchy/{entityType}/{id}:
+    get:
+      tags: [Reporting]
+      summary: Get full hierarchy (drill-up + drill-down)
+      parameters:
+        - $ref: "#/components/parameters/EntityType"
+        - $ref: "#/components/parameters/EntityId"
+      responses:
+        "200":
+          description: Hierarchy payload
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /reporting/firm:
+    get:
+      tags: [Reporting]
+      summary: Firm dashboard feed
+      responses:
+        "200":
+          description: Firm report
+
+  /reporting/partners/{profileId}:
+    get:
+      tags: [Reporting]
+      summary: Partner dashboard feed
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Partner report
+
+  /reporting/departments/{departmentId}:
+    get:
+      tags: [Reporting]
+      summary: Department dashboard feed
+      parameters:
+        - name: departmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Department report
+
+  /reporting/employees/{profileId}:
+    get:
+      tags: [Reporting]
+      summary: Employee dashboard feed
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Employee report
+
+  /archive/kpis:
+    get:
+      tags: [Archive]
+      summary: Read-only legacy KPI archive endpoint
+      responses:
+        "200":
+          description: Legacy records
+

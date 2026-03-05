@@ -7,6 +7,17 @@ import prisma from '../prisma';
 
 const router = Router();
 
+const parseCycleStatus = (value: unknown): EvaluationCycleStatus | null => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "draft") return EvaluationCycleStatus.draft;
+  if (normalized === "active") return EvaluationCycleStatus.active;
+  if (normalized === "closed") return EvaluationCycleStatus.closed;
+  return null;
+};
+
 const resolveRoles = (req: AuthRequest) => {
   const roles = new Set<string>();
   (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
@@ -16,10 +27,8 @@ const resolveRoles = (req: AuthRequest) => {
 };
 
 const isPrivileged = (roles: string[]) =>
-  roles.includes('admin') ||
   roles.includes('super_admin') ||
-  roles.includes('hr') ||
-  roles.includes('hr_manager');
+  roles.includes('hr');
 
 // GET /evaluation_cycles?status=active
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
@@ -89,7 +98,7 @@ router.post(
   '/',
   authMiddleware,
   loadProfile,
-  requireModuleAccess('evaluations', 'admin'),
+  requireModuleAccess('evaluations', 'write'),
   async (req: AuthRequest, res) => {
   try {
     const {
@@ -102,8 +111,7 @@ router.post(
       endDate,
       status
     } = req.body;
-    const userId = req.user?.userId ? Number(req.user.userId) : undefined;
-    const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+    const profileId = req.profile?.id ?? (req.user?.profileId ? Number(req.user.profileId) : undefined);
 
     const resolvedName = cycleName || cycle_name;
     const resolvedStart = startDate || start_date;
@@ -113,20 +121,34 @@ router.post(
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    const startDateObj = new Date(resolvedStart);
+    const endDateObj = new Date(resolvedEnd);
+    if (Number.isNaN(startDateObj.getTime()) || Number.isNaN(endDateObj.getTime())) {
+      return res.status(400).json({ error: 'Invalid start or end date' });
+    }
+    if (endDateObj <= startDateObj) {
+      return res.status(400).json({ error: 'End date must be after start date' });
+    }
+
+    const parsedStatus = parseCycleStatus(status);
+    if (status !== undefined && status !== null && !parsedStatus) {
+      return res.status(400).json({ error: 'Invalid status value' });
+    }
+
     const cycle = await prisma.evaluationCycle.create({
       data: {
         cycleName: resolvedName,
         description,
-        startDate: new Date(resolvedStart),
-        endDate: new Date(resolvedEnd),
-        status: (status as EvaluationCycleStatus) || EvaluationCycleStatus.draft,
+        startDate: startDateObj,
+        endDate: endDateObj,
+        status: parsedStatus || EvaluationCycleStatus.draft,
         createdByProfileId: profileId || undefined,
       },
     });
     return res.status(201).json(cycle);
   } catch (err: any) {
     console.error('Error creating evaluation cycle:', err);
-    return res.status(500).json({ error: 'Failed to create evaluation cycle' });
+    return res.status(500).json({ error: err?.message || 'Failed to create evaluation cycle' });
   }
 });
 
@@ -135,7 +157,7 @@ router.patch(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireModuleAccess('evaluations', 'admin'),
+  requireModuleAccess('evaluations', 'write'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
@@ -150,6 +172,23 @@ router.patch(
       status
     } = req.body;
 
+    const parsedStatus = parseCycleStatus(status);
+    if (status !== undefined && status !== null && !parsedStatus) {
+      return res.status(400).json({ error: 'Invalid status value' });
+    }
+    const resolvedStart = startDate || start_date;
+    const resolvedEnd = endDate || end_date;
+    if (resolvedStart && resolvedEnd) {
+      const startDateObj = new Date(resolvedStart);
+      const endDateObj = new Date(resolvedEnd);
+      if (Number.isNaN(startDateObj.getTime()) || Number.isNaN(endDateObj.getTime())) {
+        return res.status(400).json({ error: 'Invalid start or end date' });
+      }
+      if (endDateObj <= startDateObj) {
+        return res.status(400).json({ error: 'End date must be after start date' });
+      }
+    }
+
     const cycle = await prisma.evaluationCycle.update({
       where: { id: parseInt(id) },
       data: {
@@ -157,13 +196,13 @@ router.patch(
         ...(description && { description }),
         ...(startDate || start_date ? { startDate: new Date(startDate || start_date) } : {}),
         ...(endDate || end_date ? { endDate: new Date(endDate || end_date) } : {}),
-        ...(status && { status: status as EvaluationCycleStatus }),
+        ...(parsedStatus && { status: parsedStatus }),
       },
     });
     return res.json(cycle);
   } catch (err: any) {
     console.error('Error updating evaluation cycle:', err);
-    return res.status(500).json({ error: 'Failed to update evaluation cycle' });
+    return res.status(500).json({ error: err?.message || 'Failed to update evaluation cycle' });
   }
 });
 
@@ -172,7 +211,7 @@ router.delete(
   '/:id',
   authMiddleware,
   loadProfile,
-  requireModuleAccess('evaluations', 'admin'),
+  requireModuleAccess('evaluations', 'write'),
   async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;

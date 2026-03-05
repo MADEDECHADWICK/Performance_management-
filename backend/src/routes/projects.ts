@@ -21,7 +21,7 @@ const parsePositiveInt = (value: unknown): number | null => {
 };
 
 const normalizeRoles = (req: AuthRequest): Set<string> => {
-  const roles = [...(req.userRoles || []), ...(req.user?.authRoles || [])].map((role) =>
+  const roles = [...(req.userRoles || [])].map((role) =>
     String(role).toLowerCase().trim()
   );
   return new Set(roles);
@@ -29,13 +29,10 @@ const normalizeRoles = (req: AuthRequest): Set<string> => {
 
 const hasBroadJobAccess = (roles: Set<string>) => {
   return (
-    roles.has("admin") ||
     roles.has("super_admin") ||
     roles.has("hr") ||
-    roles.has("hr_manager") ||
     roles.has("human_resources") ||
-    roles.has("gmp") ||
-    roles.has("group_managing_partner")
+    roles.has("gmp")
   );
 };
 

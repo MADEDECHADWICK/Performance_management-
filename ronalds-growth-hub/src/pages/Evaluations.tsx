@@ -72,6 +72,40 @@ export default function Evaluations() {
   const [evaluationData, setEvaluationData] = useState<any>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
 
+  const normalizeAssignmentType = (assignment: Assignment) =>
+    String(assignment.evaluatorType ?? assignment.evaluation_type ?? "")
+      .toLowerCase()
+      .trim();
+
+  const isClosedAssignment = (status: string) => {
+    const normalizedStatus = String(status || "").toLowerCase().trim();
+    return normalizedStatus === "submitted" || normalizedStatus === "completed" || normalizedStatus === "cancelled";
+  };
+
+  const resolveSelfAssignment = () => {
+    const selfAssignments = assignments.filter((assignment) => normalizeAssignmentType(assignment) === "self");
+    if (selfAssignments.length === 0) return null;
+
+    const openAssignment = selfAssignments.find((assignment) => !isClosedAssignment(assignment.status));
+    return openAssignment ?? selfAssignments[0];
+  };
+
+  const openSelfEvaluation = () => {
+    const selfAssignment = resolveSelfAssignment();
+    if (selfAssignment) {
+      navigate(`/evaluation/${selfAssignment.id}`);
+      return;
+    }
+
+    setMainTab("assignments");
+    setSearchParams({ tab: "assignments" });
+    toast({
+      title: "No self evaluation assignment found",
+      description: "Ask HR/Admin to create cycle evaluations for this active cycle.",
+      variant: "destructive",
+    });
+  };
+
   useEffect(() => {
     if (authLoading) return;
     if (!user) {
@@ -182,15 +216,20 @@ export default function Evaluations() {
 
       // Load self evaluation
       const selfEval = await apiFetch<any>(
-        'GET', `/employee-evaluations?employee_id=${actorProfileId}&cycle_id=${cycle.id}&single=true`
+        'GET',
+        `/employee-evaluations?employeeId=${actorProfileId}&cycleId=${cycle.id}&single=true`
       );
 
       // Load peer evaluations (as evaluator)
-      const peerEvals = await apiFetch<any[]>('GET', `/peer-evaluations?evaluator_id=${actorProfileId}&cycle_id=${cycle.id}`);
+      const peerEvals = await apiFetch<any[]>(
+        'GET',
+        `/peer-evaluations?evaluatorId=${actorProfileId}&cycleId=${cycle.id}`
+      );
 
       // Load upward evaluation
       const upwardEval = await apiFetch<any>(
-        'GET', `/upward-evaluations?evaluator_id=${actorProfileId}&cycle_id=${cycle.id}&single=true`
+        'GET',
+        `/upward-evaluations?evaluatorId=${actorProfileId}&cycleId=${cycle.id}&single=true`
       );
 
       // Load ad-hoc assignments (if your backend doesn't support this yet, it may 404 — that's OK for now)
@@ -234,7 +273,7 @@ export default function Evaluations() {
 
       setSummary({
         overallScore,
-        period: `${new Date(cycle.start_date).toLocaleDateString()} - ${new Date(cycle.end_date).toLocaleDateString()}`,
+        period: `${new Date(cycle.startDate ?? cycle.start_date).toLocaleDateString()} - ${new Date(cycle.endDate ?? cycle.end_date).toLocaleDateString()}`,
         completionStatus,
       });
 
@@ -426,14 +465,14 @@ export default function Evaluations() {
                         <p className="text-sm text-muted-foreground">
                           Score: {summary.completionStatus.self.score?.toFixed(1)}/5.0
                         </p>
-                        <Button variant="outline" onClick={() => navigate("/self-evaluation")}>
+                        <Button variant="outline" onClick={openSelfEvaluation}>
                           View Details
                         </Button>
                       </div>
                     ) : (
                       <div className="space-y-4">
                         <Badge variant="outline">Pending</Badge>
-                        <Button onClick={() => navigate("/self-evaluation")}>Start Self Evaluation</Button>
+                        <Button onClick={openSelfEvaluation}>Start Self Evaluation</Button>
                       </div>
                     )}
                   </CardContent>
@@ -460,7 +499,7 @@ export default function Evaluations() {
                           </Badge>
                           <span className="text-sm text-muted-foreground">{summary?.completionStatus.peer.count} Total</span>
                         </div>
-                        <Button onClick={() => navigate("/peer-reviews")}>View Peer Evaluations</Button>
+                        <Button onClick={() => navigate("/evaluations?tab=performance")}>View Peer Evaluations</Button>
                       </div>
                     )}
                   </CardContent>
@@ -507,7 +546,7 @@ export default function Evaluations() {
                         <p className="text-sm text-muted-foreground">
                           Score: {summary.completionStatus.manager.score?.toFixed(1)}/5.0
                         </p>
-                        <Button variant="outline" onClick={() => navigate("/self-evaluation")}>
+                        <Button variant="outline" onClick={() => navigate("/evaluations?tab=performance")}>
                           View Manager Feedback
                         </Button>
                       </div>
@@ -728,7 +767,7 @@ export default function Evaluations() {
                           <Button
                             className="w-full"
                             variant={overdue ? "destructive" : "default"}
-                            onClick={() => navigate(`/complete-evaluation/${assignment.id}`)}
+                            onClick={() => navigate(`/evaluation/${assignment.id}`)}
                           >
                             <ClipboardCheck className="mr-2 h-4 w-4" />
                             {overdue ? "Complete Now (Overdue)" : "Start Evaluation"}
@@ -792,7 +831,7 @@ export default function Evaluations() {
                               </div>
                             )}
                           </div>
-                          <Button className="w-full" variant="outline" onClick={() => navigate(`/complete-evaluation/${assignment.id}`)}>
+                          <Button className="w-full" variant="outline" onClick={() => navigate(`/evaluation/${assignment.id}`)}>
                             <Eye className="mr-2 h-4 w-4" />
                             View Evaluation
                           </Button>

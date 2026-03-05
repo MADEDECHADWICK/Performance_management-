@@ -42,7 +42,7 @@ export class FeedbackService {
     if (recipientId) where.recipientProfileId = recipientId;
 
     // ✅ ACCESS CONTROL
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    if (!['super_admin', 'manager'].includes(auth.roleName || '')) {
       // Non-admins see only feedback for themselves or public feedback
       where.OR = [
         { recipientProfileId: auth.profileId },
@@ -166,7 +166,7 @@ export class FeedbackService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       feedback.recipientProfileId === auth.profileId ||
       feedback.giverProfileId === auth.profileId;
 
@@ -194,7 +194,7 @@ export class FeedbackService {
     auth: AuthContext
   ) {
     // ✅ VERIFY AUTHORIZATION
-    if (auth.roleName !== 'admin') {
+    if (auth.roleName !== 'super_admin') {
       throw {
         statusCode: 403,
         message: 'Only admins can update feedback status',
@@ -244,7 +244,7 @@ export class FeedbackService {
    */
   static async getFeedbackAnalytics(profileId: number, auth: AuthContext) {
     // ✅ VERIFY ACCESS
-    if (profileId !== auth.profileId && auth.roleName !== 'admin') {
+    if (profileId !== auth.profileId && auth.roleName !== 'super_admin') {
       throw {
         statusCode: 403,
         message: 'You can only view your own feedback analytics',
@@ -298,7 +298,7 @@ export class FeedbackService {
 
     // ✅ VERIFY ACCESS
     const canDelete =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       feedback.giverProfileId === auth.profileId;
 
     if (!canDelete) {

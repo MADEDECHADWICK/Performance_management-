@@ -80,6 +80,49 @@ export class TimeEntryController {
   }
 
   /**
+   * GET /time-entries/my
+   * List only the authenticated user's time entries
+   */
+  static async listMyTimeEntries(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const page = Number(req.query.page) || 1;
+      const pageSize = Number(req.query.pageSize) || 10;
+      const status = (req.query.status as string) || undefined;
+      const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const billableOnly =
+        typeof req.query.billableOnly === 'string'
+          ? req.query.billableOnly.toLowerCase() === 'true'
+          : undefined;
+      const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
+      const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
+
+      const result = await TimeEntryService.listTimeEntries(
+        {
+          page,
+          pageSize,
+          status,
+          jobId,
+          dateFrom,
+          dateTo,
+          billableOnly,
+        },
+        {
+          userId: req.user!.userId,
+          profileId: req.profile!.id,
+          // Force employee-level scoping even for managers/partners/admins.
+          roleName: 'employee',
+        }
+      );
+
+      res.json(paginatedResponse(result.timeEntries, result.total, page, pageSize));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500, error.details)
+      );
+    }
+  }
+
+  /**
    * POST /time-entries/approval-requests
    * Create approval request for additional hours
    */
@@ -508,6 +551,94 @@ export class TimeEntryController {
     } catch (error: any) {
       res.status(error.statusCode || 400).json(
         errorResponse(error.message, error.statusCode || 400, error.details)
+      );
+    }
+  }
+
+  /**
+   * GET /time-entries/weekly-summary
+   * Get weekly time summary for current user scope
+   */
+  static async getWeeklySummary(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const weekStartRaw = String(req.query.weekStart || '').trim();
+      const parsedWeekStart = new Date(weekStartRaw);
+      if (!weekStartRaw || Number.isNaN(parsedWeekStart.getTime())) {
+        res.status(400).json(errorResponse('Valid weekStart (ISO date) is required', 400));
+        return;
+      }
+
+      const weekStart = new Date(parsedWeekStart);
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile!.id,
+        roleName: req.profile!.role?.name,
+      };
+
+      const result = await TimeEntryService.listTimeEntries(
+        {
+          page: 1,
+          pageSize: 5000,
+          dateFrom: weekStart,
+          dateTo: weekEnd,
+        },
+        auth
+      );
+
+      const byJobMap = new Map<number, { jobId: number; jobName: string; hours: number }>();
+      const byDay: Record<string, number> = {};
+      let totalHours = 0;
+      let billableHours = 0;
+
+      result.timeEntries.forEach((entry: any) => {
+        const hours = Number(entry?.hours || 0);
+        if (!Number.isFinite(hours) || hours <= 0) return;
+
+        totalHours += hours;
+        if (entry?.billable) {
+          billableHours += hours;
+        }
+
+        const workedAt = entry?.dateWorked ? new Date(entry.dateWorked) : null;
+        if (workedAt && !Number.isNaN(workedAt.getTime())) {
+          const dayKey = workedAt.toISOString().slice(0, 10);
+          byDay[dayKey] = Number(byDay[dayKey] || 0) + hours;
+        }
+
+        const jobId = Number(entry?.jobId || 0);
+        if (!Number.isFinite(jobId) || jobId <= 0) return;
+
+        const existing = byJobMap.get(jobId) || {
+          jobId,
+          jobName: entry?.job?.jobName || `Job ${jobId}`,
+          hours: 0,
+        };
+        existing.hours += hours;
+        byJobMap.set(jobId, existing);
+      });
+
+      const byJob = Array.from(byJobMap.values()).sort((a, b) => b.hours - a.hours);
+
+      res.json(
+        successResponse(
+          {
+            totalHours,
+            billableHours,
+            nonBillableHours: Math.max(0, totalHours - billableHours),
+            byJob,
+            byDay,
+          },
+          'Weekly summary retrieved'
+        )
+      );
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500, error.details)
       );
     }
   }

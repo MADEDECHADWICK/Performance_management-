@@ -34,7 +34,7 @@ export class TimeEntryService {
 
   private static isAdminRole(roleName?: string): boolean {
     const normalized = TimeEntryService.normalizeRole(roleName);
-    return normalized === 'admin' || normalized === 'super_admin';
+    return normalized === 'super_admin';
   }
 
   private static hasScopedManagerAccess(
@@ -463,7 +463,7 @@ export class TimeEntryService {
 
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
     const isAdmin = TimeEntryService.isAdminRole(roleName);
-    const isHr = roleName === 'hr' || roleName === 'hr_manager';
+    const isHr = roleName === 'hr' || roleName === 'hr';
     const isPartner = roleName === 'partner' && job.partnerProfileId === auth.profileId;
     const isManager = roleName === 'manager' && job.managerProfileId === auth.profileId;
     const isStaffAssigned = job.staffing.length > 0;
@@ -1701,7 +1701,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can approve time entries',
@@ -1824,7 +1824,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can reject time entries',
@@ -2438,7 +2438,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw {
         statusCode: 403,
         message: 'Only managers/partners can approve time entries',
@@ -2648,7 +2648,7 @@ export class TimeEntryService {
           user: {
             roles: {
               some: {
-                role: { name: { in: ['gmp', 'group_managing_partner'] } },
+                role: { name: { in: ['gmp'] } },
               },
             },
           },
@@ -2778,7 +2778,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to approve requests' };
     }
 
@@ -2976,7 +2976,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to reject requests' };
     }
 
@@ -3081,7 +3081,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to approve over-budget requests' };
     }
 
@@ -3191,7 +3191,7 @@ export class TimeEntryService {
     auth: AuthContext
   ) {
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
-    if (!['manager', 'partner', 'admin', 'super_admin'].includes(roleName)) {
+    if (!['manager', 'partner', 'super_admin'].includes(roleName)) {
       throw { statusCode: 403, message: 'Not authorized to reject over-budget requests' };
     }
 

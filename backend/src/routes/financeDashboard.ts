@@ -450,9 +450,20 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
             reused: true,
             payment: existingPayment,
             partnerProfileId: null as number | null,
+            managerProfileId: null as number | null,
+            receivableOwnerProfileId: null as number | null,
+            departmentId: null as number | null,
             jobName: null as string | null,
             jobId: existingPayment.jobId,
-            riskAlerts: [] as Array<{ month: string; variancePercent: number; jobId: number }>,
+            riskAlerts: [] as Array<{
+              month: string;
+              variancePercent: number;
+              jobId: number;
+              partnerProfileId: number | null;
+              managerProfileId: number | null;
+              receivableOwnerProfileId: number | null;
+              departmentId: number | null;
+            }>,
           };
         }
 
@@ -492,9 +503,20 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
         });
 
         let partnerProfileId: number | null = null;
+        let managerProfileId: number | null = null;
+        let receivableOwnerProfileId: number | null = null;
+        let departmentId: number | null = null;
         let jobName: string | null = null;
         let targetJobId: number | null = payment.jobId;
-        const riskAlerts: Array<{ month: string; variancePercent: number; jobId: number }> = [];
+        const riskAlerts: Array<{
+          month: string;
+          variancePercent: number;
+          jobId: number;
+          partnerProfileId: number | null;
+          managerProfileId: number | null;
+          receivableOwnerProfileId: number | null;
+          departmentId: number | null;
+        }> = [];
 
         if (payment.jobId) {
           const job = await tx.job.findUnique({
@@ -505,6 +527,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
               departmentId: true,
               partnerProfileId: true,
               managerProfileId: true,
+              receivableOwnerProfileId: true,
               billingType: true,
               fixedFeeAmount: true,
               jobCosting: {
@@ -524,6 +547,9 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
 
           if (job) {
             partnerProfileId = job.partnerProfileId ?? null;
+            managerProfileId = job.managerProfileId ?? null;
+            receivableOwnerProfileId = job.receivableOwnerProfileId ?? null;
+            departmentId = job.departmentId ?? null;
             jobName = job.jobName;
             targetJobId = job.id;
 
@@ -695,6 +721,10 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
                     month: projection.monthYear.toISOString().slice(0, 7),
                     variancePercent,
                     jobId: job.id,
+                    partnerProfileId: job.partnerProfileId ?? null,
+                    managerProfileId: job.managerProfileId ?? null,
+                    receivableOwnerProfileId: job.receivableOwnerProfileId ?? null,
+                    departmentId: job.departmentId ?? null,
                   });
                 }
 
@@ -715,6 +745,9 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
           reused: false,
           payment,
           partnerProfileId,
+          managerProfileId,
+          receivableOwnerProfileId,
+          departmentId,
           jobName,
           jobId: targetJobId,
           riskAlerts,
@@ -723,34 +756,114 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
 
       if (!txResult.reused) {
         try {
-          if (txResult.partnerProfileId && txResult.jobName && txResult.jobId) {
-            await notifyProfile(
+          if (txResult.jobName && txResult.jobId) {
+            const stakeholderProfiles = new Set<number>();
+            [
               txResult.partnerProfileId,
-              {
-                title: 'Revenue allocation updated',
-                message: `Payment recorded for "${txResult.jobName}". Revenue allocations have been refreshed.`,
-                link: `/jobs/${txResult.jobId}`,
-                relatedEntityId: txResult.jobId,
-                actionRequired: false,
-              },
-              req
-            );
-          }
+              txResult.managerProfileId,
+              txResult.receivableOwnerProfileId,
+            ].forEach((profileId) => {
+              if (profileId && profileId !== context.profileId) {
+                stakeholderProfiles.add(profileId);
+              }
+            });
 
-          await Promise.all(
-            txResult.riskAlerts.map((alert) =>
+            await Promise.all(
+              Array.from(stakeholderProfiles).map((profileId) =>
+                notifyProfile(
+                  profileId,
+                  {
+                    title: 'Payment recorded',
+                    message: `Payment of ${normalizedCurrency} ${paymentAmountNumber.toLocaleString()} was recorded for "${txResult.jobName}".`,
+                    link: '/finance-balances',
+                    relatedEntityId: txResult.jobId!,
+                    actionRequired: false,
+                  },
+                  req
+                )
+              )
+            );
+
+            await Promise.all([
               notifyProfilesByRoles(
-                ['gmp'],
+                ['finance'],
                 {
-                  title: 'Collection risk detected',
-                  message: `Collections are ${Math.abs(alert.variancePercent).toFixed(1)}% below projection for ${alert.month}.`,
-                  link: `/finance-dashboard?month=${alert.month}`,
-                  relatedEntityId: alert.jobId,
+                  title: 'Payment recorded',
+                  message: `A payment was recorded for "${txResult.jobName}".`,
+                  link: '/finance-balances',
+                  relatedEntityId: txResult.jobId,
                   actionRequired: false,
                 },
                 req
-              )
-            )
+              ),
+              notifyProfilesByRoles(
+                ['gmp'],
+                {
+                  title: 'Payment recorded',
+                  message: `Collections updated for "${txResult.jobName}".`,
+                  link: '/finance-balances',
+                  relatedEntityId: txResult.jobId,
+                  actionRequired: false,
+                },
+                req
+              ),
+            ]);
+          }
+
+          await Promise.all(
+            txResult.riskAlerts.map(async (alert) => {
+              const profileTargets = new Set<number>();
+              [
+                alert.partnerProfileId,
+                alert.managerProfileId,
+                alert.receivableOwnerProfileId,
+              ].forEach((profileId) => {
+                if (profileId && profileId !== context.profileId) {
+                  profileTargets.add(profileId);
+                }
+              });
+
+              await Promise.all(
+                Array.from(profileTargets).map((profileId) =>
+                  notifyProfile(
+                    profileId,
+                    {
+                      title: 'Collection risk detected',
+                      message: `Collections are ${Math.abs(alert.variancePercent).toFixed(1)}% below projection for ${alert.month}.`,
+                      link: `/finance-dashboard?month=${alert.month}`,
+                      relatedEntityId: alert.jobId,
+                      actionRequired: true,
+                    },
+                    req
+                  )
+                )
+              );
+
+              await Promise.all([
+                notifyProfilesByRoles(
+                  ['finance'],
+                  {
+                    title: 'Collection risk detected',
+                    message: `Collections are ${Math.abs(alert.variancePercent).toFixed(1)}% below projection for ${alert.month}.`,
+                    link: `/finance-dashboard?month=${alert.month}`,
+                    relatedEntityId: alert.jobId,
+                    actionRequired: true,
+                  },
+                  req
+                ),
+                notifyProfilesByRoles(
+                  ['gmp'],
+                  {
+                    title: 'Collection risk detected',
+                    message: `Collections are ${Math.abs(alert.variancePercent).toFixed(1)}% below projection for ${alert.month}.`,
+                    link: `/finance-dashboard?month=${alert.month}`,
+                    relatedEntityId: alert.jobId,
+                    actionRequired: true,
+                  },
+                  req
+                ),
+              ]);
+            })
           );
 
           if (txResult.jobId) {
@@ -1335,6 +1448,8 @@ router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, 
         clientId: true,
         jobName: true,
         receivableOwnerProfileId: true,
+        managerProfileId: true,
+        partnerProfileId: true,
       },
     });
 
@@ -1427,19 +1542,64 @@ router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, 
       return createdFollowUp;
     });
 
-    if (followUp.ownerProfileId && followUp.ownerProfileId !== actorProfileId) {
-      await notifyProfile(
-        followUp.ownerProfileId,
+    const followUpTargets = new Set<number>();
+    [followUp.ownerProfileId, existingJob.managerProfileId, existingJob.partnerProfileId].forEach(
+      (profileId) => {
+        if (profileId && profileId !== actorProfileId) {
+          followUpTargets.add(profileId);
+        }
+      }
+    );
+    const followUpTitle = followUp.isResolved
+      ? 'Receivable resolved'
+      : 'Receivable follow-up logged';
+    const followUpMessage = followUp.isResolved
+      ? `Receivable for "${existingJob.jobName}" has been marked resolved.`
+      : `A follow-up action was logged for "${existingJob.jobName}".`;
+    const followUpActionRequired = !followUp.isResolved;
+
+    await Promise.all(
+      Array.from(followUpTargets).map((profileId) =>
+        notifyProfile(
+          profileId,
+          {
+            title: followUpTitle,
+            message: followUpMessage,
+            link: '/finance-balances',
+            relatedEntityId: existingJob.id,
+            actionRequired: followUpActionRequired,
+          },
+          req
+        )
+      )
+    );
+
+    await Promise.all([
+      notifyProfilesByRoles(
+        ['finance'],
         {
-          title: 'Receivable follow-up logged',
-          message: `A follow-up action was logged for "${existingJob.jobName}".`,
+          title: followUpTitle,
+          message: followUpMessage,
           link: '/finance-balances',
           relatedEntityId: existingJob.id,
-          actionRequired: !followUp.isResolved,
+          actionRequired: followUpActionRequired,
         },
         req
-      );
-    }
+      ),
+      followUp.isResolved
+        ? notifyProfilesByRoles(
+            ['gmp'],
+            {
+              title: followUpTitle,
+              message: followUpMessage,
+              link: '/finance-balances',
+              relatedEntityId: existingJob.id,
+              actionRequired: false,
+            },
+            req
+          )
+        : Promise.resolve(),
+    ]);
 
     res.status(201).json({
       id: followUp.id,
@@ -1602,20 +1762,25 @@ router.post('/job-balances/:jobId/escalate', authMiddleware, canApproveFinance, 
     };
 
     const notifyTasks: Promise<any>[] = [];
-    if (ownerProfileId && ownerProfileId !== actorProfileId) {
-      notifyTasks.push(notifyProfile(ownerProfileId, notificationPayload, req));
-    }
-    if (escalationLevel === 'manager' && existingJob.managerProfileId) {
-      notifyTasks.push(notifyProfile(existingJob.managerProfileId, notificationPayload, req));
-    }
-    if (escalationLevel === 'partner' && existingJob.partnerProfileId) {
-      notifyTasks.push(notifyProfile(existingJob.partnerProfileId, notificationPayload, req));
-    }
+    const directTargets = new Set<number>();
+    [ownerProfileId, existingJob.managerProfileId, existingJob.partnerProfileId].forEach(
+      (profileId) => {
+        if (profileId && profileId !== actorProfileId) {
+          directTargets.add(profileId);
+        }
+      }
+    );
+    directTargets.forEach((profileId) => {
+      notifyTasks.push(notifyProfile(profileId, notificationPayload, req));
+    });
+
+    notifyTasks.push(notifyProfilesByRoles(['finance'], notificationPayload, req));
+
     if (escalationLevel === 'hr') {
-      notifyTasks.push(notifyProfilesByRoles(['hr', 'hr_manager'], notificationPayload, req));
+      notifyTasks.push(notifyProfilesByRoles(['hr'], notificationPayload, req));
     }
     if (escalationLevel === 'gmp') {
-      notifyTasks.push(notifyProfilesByRoles(['gmp', 'group_managing_partner'], notificationPayload, req));
+      notifyTasks.push(notifyProfilesByRoles(['gmp'], notificationPayload, req));
     }
 
     await Promise.all(notifyTasks);
@@ -1864,6 +2029,7 @@ router.patch('/job-balances/:jobId/collection-stage', authMiddleware, canApprove
         readyForCollectionAt: true,
         partnerProfileId: true,
         managerProfileId: true,
+        receivableOwnerProfileId: true,
       },
     });
 
@@ -1913,25 +2079,67 @@ router.patch('/job-balances/:jobId/collection-stage', authMiddleware, canApprove
       return nextValue;
     });
 
-    if (requestedStage === 'ready_for_collection' && job.collectionStage !== 'ready_for_collection') {
-      const notifyTargets = [job.partnerProfileId, job.managerProfileId].filter(
-        (profileId): profileId is number => Number.isFinite(profileId as number)
+    if (job.collectionStage !== requestedStage) {
+      const directTargets = new Set<number>();
+      [job.partnerProfileId, job.managerProfileId, job.receivableOwnerProfileId].forEach(
+        (profileId) => {
+          if (profileId) {
+            directTargets.add(profileId);
+          }
+        }
       );
-      await Promise.all(
-        notifyTargets.map((profileId) =>
-          notifyProfile(
-            profileId,
-            {
-              title: 'Job ready for collection',
-              message: `Finance marked "${job.jobName}" as ready for collection.`,
-              link: `/finance-balances`,
-              relatedEntityId: job.id,
-              actionRequired: true,
-            },
-            req
+
+      if (requestedStage === 'ready_for_collection') {
+        await Promise.all(
+          Array.from(directTargets).map((profileId) =>
+            notifyProfile(
+              profileId,
+              {
+                title: 'Job ready for collection',
+                message: `Finance marked "${job.jobName}" as ready for collection.`,
+                link: `/finance-balances`,
+                relatedEntityId: job.id,
+                actionRequired: true,
+              },
+              req
+            )
           )
-        )
-      );
+        );
+      }
+
+      if (requestedStage === 'overdue') {
+        const overduePayload = {
+          title: 'Receivable overdue',
+          message: `Receivable for "${job.jobName}" is now overdue and needs immediate follow-up.`,
+          link: `/finance-balances`,
+          relatedEntityId: job.id,
+          actionRequired: true,
+        };
+        await Promise.all([
+          ...Array.from(directTargets).map((profileId) =>
+            notifyProfile(profileId, overduePayload, req)
+          ),
+          notifyProfilesByRoles(['finance'], overduePayload, req),
+          notifyProfilesByRoles(['hr'], overduePayload, req),
+          notifyProfilesByRoles(['gmp'], overduePayload, req),
+        ]);
+      }
+
+      if (requestedStage === 'fully_collected') {
+        const resolvedPayload = {
+          title: 'Receivable fully collected',
+          message: `Receivable for "${job.jobName}" has been fully collected.`,
+          link: `/finance-balances`,
+          relatedEntityId: job.id,
+          actionRequired: false,
+        };
+        await Promise.all([
+          ...Array.from(directTargets).map((profileId) =>
+            notifyProfile(profileId, resolvedPayload, req)
+          ),
+          notifyProfilesByRoles(['finance'], resolvedPayload, req),
+        ]);
+      }
     }
 
     res.json(updated);

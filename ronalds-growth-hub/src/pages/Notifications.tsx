@@ -16,6 +16,7 @@ import { Bell, CheckCircle2, ExternalLink, Filter, Loader2, Trash2, Shield } fro
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { canonicalizeRoles } from "@/auth/canonicalRoles";
 import notificationTemplatesAPI, { NotificationTemplate } from "@/lib/api/notificationTemplates";
 
 type NotificationItem = {
@@ -36,6 +37,19 @@ type NotificationItem = {
 
 const PAGE_SIZE = 12;
 
+const BROADCAST_ROLE_OPTIONS = [
+  { value: "super_admin", label: "Super Admin" },
+  { value: "hr", label: "HR" },
+  { value: "gmp", label: "GMP" },
+  { value: "partner", label: "Partner" },
+  { value: "manager", label: "Manager" },
+  { value: "finance", label: "Finance" },
+  { value: "marketing", label: "Marketing" },
+  { value: "employee", label: "Employee" },
+] as const;
+
+type BroadcastRole = (typeof BROADCAST_ROLE_OPTIONS)[number]["value"];
+
 const Notifications = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -51,7 +65,7 @@ const Notifications = () => {
   const [isSending, setIsSending] = useState(false);
   const [isTemplatesLoading, setIsTemplatesLoading] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
-  const [broadcastRole, setBroadcastRole] = useState("manager");
+  const [broadcastRole, setBroadcastRole] = useState<BroadcastRole>("manager");
   const [broadcastForm, setBroadcastForm] = useState({
     title: "",
     message: "",
@@ -280,7 +294,13 @@ const Notifications = () => {
     }
 
     const recipients = users
-      .filter((user) => Array.isArray(user.roles) && user.roles.includes(broadcastRole))
+      .filter((user) => {
+        const roleNames = (Array.isArray(user.roles) ? user.roles : [])
+          .map((role: any) => (typeof role === "string" ? role : role?.role?.name))
+          .filter(Boolean);
+        const canonicalRoles = canonicalizeRoles(roleNames);
+        return canonicalRoles.includes(broadcastRole as any);
+      })
       .map((user) => user.profileId)
       .filter(Boolean);
 
@@ -808,19 +828,19 @@ const Notifications = () => {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3 md:grid-cols-2">
-              <Select value={broadcastRole} onValueChange={setBroadcastRole}>
+              <Select
+                value={broadcastRole}
+                onValueChange={(value) => setBroadcastRole(value as BroadcastRole)}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="hr">HR</SelectItem>
-                  <SelectItem value="hr_manager">HR Manager</SelectItem>
-                  <SelectItem value="manager">Manager</SelectItem>
-                  <SelectItem value="partner">Partner</SelectItem>
-                  <SelectItem value="finance">Finance</SelectItem>
-                  <SelectItem value="marketing">Marketing</SelectItem>
-                  <SelectItem value="gmp">GMP</SelectItem>
-                  <SelectItem value="employee">Employee</SelectItem>
+                  {BROADCAST_ROLE_OPTIONS.map((role) => (
+                    <SelectItem key={role.value} value={role.value}>
+                      {role.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select

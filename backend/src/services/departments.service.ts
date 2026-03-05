@@ -99,10 +99,8 @@ export class DepartmentService {
   private isPrivileged(auth: AuthContext): boolean {
     const roles = this.normalizeRoles(auth);
     return (
-      roles.has("admin") ||
       roles.has("super_admin") ||
-      roles.has("hr") ||
-      roles.has("hr_manager")
+      roles.has("hr")
     );
   }
 
@@ -110,7 +108,7 @@ export class DepartmentService {
     if (this.isPrivileged(auth)) return false;
     const roles = this.normalizeRoles(auth);
     return Array.from(roles).some(
-      (role) => role.includes("manager") && role !== "hr_manager"
+      (role) => role.includes("manager") && role !== "hr"
     );
   }
 

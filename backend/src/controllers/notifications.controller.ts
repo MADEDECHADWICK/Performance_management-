@@ -29,7 +29,7 @@ export class NotificationController {
       };
 
       const roleName = auth.roleName?.toLowerCase() || '';
-      const canViewAll = ['admin', 'super_admin', 'hr', 'hr_manager'].includes(roleName);
+      const canViewAll = ['super_admin', 'hr'].includes(roleName);
 
       const result =
         scope === 'all' && canViewAll

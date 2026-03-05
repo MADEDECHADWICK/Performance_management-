@@ -305,10 +305,25 @@ export const listJobsValidators = [
     .isInt({ min: 1 })
     .withMessage("Valid clientId required if provided"),
 
+  query("partnerProfileId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid partnerProfileId required if provided"),
+
+  query("managerProfileId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Valid managerProfileId required if provided"),
+
   query("departmentId")
     .optional()
     .isInt({ min: 1 })
     .withMessage("Valid departmentId required if provided"),
+
+  query("priority")
+    .optional()
+    .isIn(["low", "medium", "high", "urgent"])
+    .withMessage("Priority must be one of: low, medium, high, urgent"),
 
   query("sortBy")
     .optional()

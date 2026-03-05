@@ -14,10 +14,8 @@ const resolveRoles = (req: AuthRequest) => {
 };
 
 const isPrivileged = (roles: string[]) =>
-  roles.includes('admin') ||
   roles.includes('super_admin') ||
-  roles.includes('hr') ||
-  roles.includes('hr_manager');
+  roles.includes('hr');
 
 const isManagerRole = (roles: string[]) => roles.includes('manager');
 

@@ -2,8 +2,8 @@
  * Department scope middleware
  *
  * Rules:
- * - Admin/Super Admin: full access
- * - HR/HR Manager: full access
+ * - Super Admin: full access
+ * - HR: full access
  * - Assigned Partner: access to departments they own
  * - Department Head: access to their department
  * - Managers/Employees: access only to departments directly linked to their profile
@@ -21,11 +21,9 @@ const normalizeRoles = (roles: string[]) =>
   Array.from(new Set(roles.map((role) => String(role).toLowerCase())));
 
 const isAdmin = (roles: string[]) =>
-  roles.includes("admin") || roles.includes("super_admin");
-const isHR = (roles: string[]) =>
-  roles.includes("hr") || roles.includes("hr_manager");
-const isManagerRole = (roles: string[]) =>
-  roles.some((role) => role.includes("manager") && role !== "hr_manager");
+  roles.includes("super_admin");
+const isHR = (roles: string[]) => roles.includes("hr");
+const isManagerRole = (roles: string[]) => roles.includes("manager");
 
 export const requireDepartmentAccess = async (
   req: AuthRequest,
@@ -41,7 +39,6 @@ export const requireDepartmentAccess = async (
 
     const roles: string[] = normalizeRoles([
       ...(req.userRoles || []),
-      ...((req.user?.authRoles || []) as string[]),
     ]);
 
     // Admin/HR can access any department

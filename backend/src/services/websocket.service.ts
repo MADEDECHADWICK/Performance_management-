@@ -296,14 +296,11 @@ class WebSocketService {
 
   private canSubscribeToBudget(user: SocketUserContext, departmentId: number) {
     const privilegedRoles = new Set([
-      "admin",
       "super_admin",
       "hr",
-      "hr_manager",
       "finance",
       "finance_manager",
       "gmp",
-      "group_managing_partner",
     ]);
     if (user.roles.some((role) => privilegedRoles.has(role))) return true;
     return user.departmentId === departmentId;
@@ -311,12 +308,9 @@ class WebSocketService {
 
   private async canSubscribeToStaffing(user: SocketUserContext, jobId: number) {
     const privilegedRoles = new Set([
-      "admin",
       "super_admin",
       "hr",
-      "hr_manager",
       "gmp",
-      "group_managing_partner",
     ]);
     if (user.roles.some((role) => privilegedRoles.has(role))) return true;
 
@@ -341,14 +335,11 @@ class WebSocketService {
 
   private canSubscribeToEvaluations(user: SocketUserContext) {
     const allowed = new Set([
-      "admin",
       "super_admin",
       "hr",
-      "hr_manager",
       "manager",
       "partner",
       "gmp",
-      "group_managing_partner",
       "employee",
       "associate",
       "intern",
@@ -452,7 +443,7 @@ class WebSocketService {
       socket.join(`user:${user.profileId}`);
       user.roles.forEach((role) => socket.join(`role:${role}`));
 
-      if (user.roles.some((role) => ["admin", "super_admin", "hr", "hr_manager"].includes(role))) {
+      if (user.roles.some((role) => ["super_admin", "hr"].includes(role))) {
         socket.join("admin:notifications");
       }
 

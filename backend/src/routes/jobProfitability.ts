@@ -74,24 +74,24 @@ async function calculateJobProfitability(jobId: number) {
 // GET /job_profitability - Get financial metrics for all jobs
 // Role-based visibility:
 // - Partners: See only their own jobs
-// - HR/HR Manager/Super Admin: See all jobs
+// - HR/Super Admin: See all jobs
 // - Employees: Not allowed (403)
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
-    const userRoles = req.user?.authRoles || [];
+    const userRoles = req.userRoles || [];
 
     // DEBUG: Log what we received
     console.log('[jobProfitability GET /] User roles:', userRoles, 'req.user:', req.user);
 
-    // Check if user is admin (super_admin, hr, hr_manager, or admin)
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager') || userRoles.includes('admin');
+    // Check if user is admin (super_admin or hr)
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr');
     const isPartner = userRoles.includes('partner');
 
     let jobs;
 
     if (isAdmin) {
-      // HR/HR Manager/Super Admin see all jobs
+      // HR/Super Admin see all jobs
       jobs = await prisma.job.findMany({
         include: { partner: true, client: true },
       });
@@ -137,7 +137,7 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { jobId } = req.params;
     const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
-    const userRoles = req.user?.authRoles || [];
+    const userRoles = req.userRoles || [];
 
     const job = await prisma.job.findUnique({
       where: { id: parseInt(jobId) },
@@ -148,8 +148,8 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    // Check visibility - Super Admin, HR, HR Manager, and Admin can see all jobs
-    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr') || userRoles.includes('hr_manager') || userRoles.includes('admin');
+    // Check visibility - Super Admin and HR can see all jobs
+    const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr');
     const isPartner = userRoles.includes('partner');
 
     if (!isAdmin) {
@@ -173,14 +173,14 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // POST /job_profitability/:jobId/recalculate - Manually trigger profitability recalculation
-// Only available to HR, HR Manager, and Super Admin
+// Only available to HR and Super Admin
 router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const { jobId } = req.params;
-    const userRoles = req.user?.authRoles || [];
+    const userRoles = req.userRoles || [];
 
-    if (!userRoles.includes('super_admin') && !userRoles.includes('hr') && !userRoles.includes('hr_manager') && !userRoles.includes('admin')) {
-      return res.status(403).json({ error: 'Only HR, HR Manager, Super Admin, and Admin can recalculate profitability' });
+    if (!userRoles.includes('super_admin') && !userRoles.includes('hr')) {
+      return res.status(403).json({ error: 'Only HR and Super Admin can recalculate profitability' });
     }
 
     const jobIdNumber = parseInt(jobId);

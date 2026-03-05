@@ -22,7 +22,12 @@ export interface CreateOffboardingChecklistItemsInput {
 class OffboardingChecklistServiceClass {
   private isPrivileged(auth: AuthContext) {
     const roles = auth.roles ?? [];
-    return roles.includes("admin") || roles.includes("super_admin") || roles.includes("hr") || roles.includes("hr_manager");
+    return (
+      roles.includes("admin") ||
+      roles.includes("super_admin") ||
+      roles.includes("hr") ||
+      roles.includes("hr_manager")
+    );
   }
 
   async listItems(offboardingCaseId: number, auth: AuthContext) {
@@ -104,7 +109,13 @@ class OffboardingChecklistServiceClass {
 
     const item = await prisma.offboardingChecklistItem.findUnique({
       where: { id: itemId },
-      select: { id: true, offboardingCaseId: true, isCompleted: true },
+      select: {
+        id: true,
+        offboardingCaseId: true,
+        isCompleted: true,
+        requiresDocument: true,
+        documentId: true,
+      },
     });
 
     if (!item || item.offboardingCaseId !== offboardingCaseId) {
@@ -115,6 +126,12 @@ class OffboardingChecklistServiceClass {
 
     if (item.isCompleted) {
       return this.listItems(offboardingCaseId, auth);
+    }
+
+    if (item.requiresDocument && !item.documentId) {
+      const err = new Error("Attach the required document before marking this task complete");
+      (err as any).statusCode = 400;
+      throw err;
     }
 
     await prisma.offboardingChecklistItem.update({

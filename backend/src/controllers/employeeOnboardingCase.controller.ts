@@ -7,7 +7,7 @@ import { OnboardingStatus } from "@prisma/client";
 const authFromReq = (req: AuthRequest) => ({
   userId: req.user!.userId,
   profileId: req.user!.profileId!,
-  roles: req.userRoles ?? req.user?.authRoles ?? [],
+  roles: req.userRoles ?? [],
 });
 
 export class EmployeeOnboardingCaseController {

@@ -3,7 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import AppRouteGuard from "@/components/auth/AppRouteGuard";
 import PageLoader from "@/components/ui/page-loader";
@@ -49,7 +49,7 @@ const ClientEvaluation = lazy(() => import("./pages/ClientEvaluation"));
 const ProjectEvaluations = lazy(() => import("./pages/ProjectEvaluations"));
 
 // KPIs & Goals
-const KPIManagement = lazy(() => import("./pages/KPIManagement"));
+const KPIManagement = lazy(() => import("./pages/KPICascadeV2Management"));
 const Goals = lazy(() => import("./pages/Goals"));
 const Scorecard = lazy(() => import("./pages/Scorecard"));
 
@@ -94,7 +94,6 @@ const KnowledgeHub = lazy(() => import("./pages/KnowledgeHub"));
 const ClientSurveys = lazy(() => import("./pages/ClientSurveys"));
 
 // Other
-const GMPLogin = lazy(() => import("./pages/GMPLogin"));
 const Todos = lazy(() => import("./pages/Todos"));
 const RoleManagement = lazy(() => import("./pages/RoleManagement"));
 const PositionsRates = lazy(() => import("./pages/PositionsRates"));
@@ -123,14 +122,13 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/set-password" element={<SetPassword />} />
-              <Route path="/gmp-login" element={<GMPLogin />} />
               
               {/* Dashboards */}
               <Route path="/dashboard" element={<AppRouteGuard><Dashboard /></AppRouteGuard>} />
               <Route
                 path="/hr-dashboard"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <HRDashboard />
                   </AppRouteGuard>
                 }
@@ -138,7 +136,7 @@ const App = () => (
               <Route
                 path="/partner-dashboard"
                 element={
-                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <PartnerDashboard />
                   </AppRouteGuard>
                 }
@@ -146,7 +144,7 @@ const App = () => (
               <Route
                 path="/manager-dashboard"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ManagerDashboard />
                   </AppRouteGuard>
                 }
@@ -154,7 +152,7 @@ const App = () => (
               <Route
                 path="/gmp-dashboard"
                 element={
-                  <AppRouteGuard allow={["gmp", "admin"]}>
+                  <AppRouteGuard>
                     <GMPDashboard />
                   </AppRouteGuard>
                 }
@@ -162,7 +160,7 @@ const App = () => (
               <Route
                 path="/department-dashboard"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <DepartmentDashboard />
                   </AppRouteGuard>
                 }
@@ -172,7 +170,7 @@ const App = () => (
               <Route
                 path="/clients"
                 element={
-                  <AppRouteGuard allow={["marketing", "manager", "partner", "finance", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ClientsListPage />
                   </AppRouteGuard>
                 }
@@ -180,7 +178,7 @@ const App = () => (
               <Route
                 path="/clients/new"
                 element={
-                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ClientFormPage />
                   </AppRouteGuard>
                 }
@@ -188,7 +186,7 @@ const App = () => (
               <Route
                 path="/clients/:id"
                 element={
-                  <AppRouteGuard allow={["marketing", "manager", "partner", "finance", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ClientDetailPage />
                   </AppRouteGuard>
                 }
@@ -196,7 +194,7 @@ const App = () => (
               <Route
                 path="/clients/:id/edit"
                 element={
-                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ClientFormPage />
                   </AppRouteGuard>
                 }
@@ -204,7 +202,7 @@ const App = () => (
               <Route
                 path="/client-portfolio"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr", "marketing"]}>
+                  <AppRouteGuard>
                     <ClientPortfolio />
                   </AppRouteGuard>
                 }
@@ -212,7 +210,7 @@ const App = () => (
               <Route
                 path="/marketing-dashboard"
                 element={
-                  <AppRouteGuard allow={["marketing", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <MarketingDashboard />
                   </AppRouteGuard>
                 }
@@ -220,7 +218,7 @@ const App = () => (
               <Route
                 path="/engagement-letters"
                 element={
-                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <EngagementLetters />
                   </AppRouteGuard>
                 }
@@ -228,7 +226,7 @@ const App = () => (
               <Route
                 path="/client-onboarding-queue"
                 element={
-                  <AppRouteGuard allow={["marketing", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <ClientOnboardingQueue />
                   </AppRouteGuard>
                 }
@@ -238,7 +236,7 @@ const App = () => (
               <Route
                 path="/jobs"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <JobWorkflowDashboard />
                   </AppRouteGuard>
                 }
@@ -246,7 +244,7 @@ const App = () => (
               <Route
                 path="/jobs/create"
                 element={
-                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <AdminJobCreation />
                   </AppRouteGuard>
                 }
@@ -254,7 +252,7 @@ const App = () => (
               <Route
                 path="/admin-job-creation"
                 element={
-                  <AppRouteGuard allow={["partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <AdminJobCreation />
                   </AppRouteGuard>
                 }
@@ -262,7 +260,7 @@ const App = () => (
               <Route
                 path="/job-workflow-dashboard"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "gmp", "admin", "hr"]}>
+                  <AppRouteGuard>
                     <JobWorkflowDashboard />
                   </AppRouteGuard>
                 }
@@ -276,7 +274,7 @@ const App = () => (
               <Route
                 path="/employee-management"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <EmployeeManagement />
                   </AppRouteGuard>
                 }
@@ -284,7 +282,7 @@ const App = () => (
               <Route
                 path="/role-management"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <RoleManagement />
                   </AppRouteGuard>
                 }
@@ -292,7 +290,7 @@ const App = () => (
               <Route
                 path="/positions-rates"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <PositionsRates />
                   </AppRouteGuard>
                 }
@@ -300,7 +298,7 @@ const App = () => (
               <Route
                 path="/calibration"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <Calibration />
                   </AppRouteGuard>
                 }
@@ -308,7 +306,7 @@ const App = () => (
               <Route
                 path="/recruitment-candidates"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <RecruitmentCandidates />
                   </AppRouteGuard>
                 }
@@ -316,10 +314,35 @@ const App = () => (
               
               {/* Evaluations */}
               <Route path="/evaluations" element={<AppRouteGuard><Evaluations /></AppRouteGuard>} />
+              {/* Legacy evaluation route aliases */}
+              <Route
+                path="/my-evaluations"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations" replace />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/self-evaluation"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations?tab=performance" replace />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/peer-reviews"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations?tab=performance" replace />
+                  </AppRouteGuard>
+                }
+              />
               <Route
                 path="/evaluation-management"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <EvaluationManagement />
                   </AppRouteGuard>
                 }
@@ -327,16 +350,17 @@ const App = () => (
               <Route
                 path="/create-evaluation"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <CreateEvaluation />
                   </AppRouteGuard>
                 }
               />
               <Route path="/evaluation/:assignmentId" element={<AppRouteGuard><CompleteEvaluation /></AppRouteGuard>} />
+              <Route path="/complete-evaluation/:assignmentId" element={<AppRouteGuard><CompleteEvaluation /></AppRouteGuard>} />
               <Route
                 path="/manager-evaluation"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ManagerEvaluationPage />
                   </AppRouteGuard>
                 }
@@ -344,7 +368,7 @@ const App = () => (
               <Route
                 path="/project-evaluations"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ProjectEvaluations />
                   </AppRouteGuard>
                 }
@@ -356,7 +380,7 @@ const App = () => (
               <Route
                 path="/kpi-management"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <KPIManagement />
                   </AppRouteGuard>
                 }
@@ -372,7 +396,7 @@ const App = () => (
               <Route
                 path="/analytics/employee"
                 element={
-                  <AppRouteGuard allow={["employee"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="employee" />
                   </AppRouteGuard>
                 }
@@ -380,7 +404,7 @@ const App = () => (
               <Route
                 path="/analytics/finance"
                 element={
-                  <AppRouteGuard allow={["finance", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="finance" />
                   </AppRouteGuard>
                 }
@@ -388,7 +412,7 @@ const App = () => (
               <Route
                 path="/analytics/marketing"
                 element={
-                  <AppRouteGuard allow={["marketing", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="marketing" />
                   </AppRouteGuard>
                 }
@@ -396,7 +420,7 @@ const App = () => (
               <Route
                 path="/analytics/manager"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="manager" />
                   </AppRouteGuard>
                 }
@@ -404,7 +428,7 @@ const App = () => (
               <Route
                 path="/analytics/partner"
                 element={
-                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="partner" />
                   </AppRouteGuard>
                 }
@@ -412,7 +436,7 @@ const App = () => (
               <Route
                 path="/analytics/hr"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="hr" />
                   </AppRouteGuard>
                 }
@@ -420,7 +444,7 @@ const App = () => (
               <Route
                 path="/analytics/gmp"
                 element={
-                  <AppRouteGuard allow={["gmp", "admin"]}>
+                  <AppRouteGuard>
                     <ModuleAnalytics module="gmp" />
                   </AppRouteGuard>
                 }
@@ -429,7 +453,7 @@ const App = () => (
               <Route
                 path="/non-financial-analytics"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <NonFinancialAnalytics />
                   </AppRouteGuard>
                 }
@@ -437,7 +461,7 @@ const App = () => (
               <Route
                 path="/financial-summary"
                 element={
-                  <AppRouteGuard allow={["finance", "manager", "partner", "admin", "hr", "gmp", "employee"]}>
+                  <AppRouteGuard>
                     <FinancialSummary />
                   </AppRouteGuard>
                 }
@@ -493,7 +517,7 @@ const App = () => (
               <Route
                 path="/audit-logs"
                 element={
-                  <AppRouteGuard allow={["admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <AuditLogs />
                   </AppRouteGuard>
                 }
@@ -504,7 +528,7 @@ const App = () => (
               <Route
                 path="/team-performance"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <TeamPerformance />
                   </AppRouteGuard>
                 }
@@ -512,7 +536,7 @@ const App = () => (
               <Route
                 path="/team-overview"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <TeamOverview />
                   </AppRouteGuard>
                 }
@@ -520,7 +544,7 @@ const App = () => (
               <Route
                 path="/staff-development"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <StaffDevelopment />
                   </AppRouteGuard>
                 }
@@ -531,7 +555,7 @@ const App = () => (
               <Route
                 path="/workload-management"
                 element={
-                  <AppRouteGuard allow={["manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <WorkloadManagement />
                   </AppRouteGuard>
                 }
@@ -539,7 +563,7 @@ const App = () => (
               <Route
                 path="/business-development"
                 element={
-                  <AppRouteGuard allow={["partner", "manager", "admin", "hr", "gmp", "marketing"]}>
+                  <AppRouteGuard>
                     <BusinessDevelopment />
                   </AppRouteGuard>
                 }
@@ -547,7 +571,7 @@ const App = () => (
               <Route
                 path="/partner-metrics"
                 element={
-                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <PartnerMetrics />
                   </AppRouteGuard>
                 }
@@ -555,7 +579,7 @@ const App = () => (
               <Route
                 path="/partner-portfolio-summary"
                 element={
-                  <AppRouteGuard allow={["partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <PartnerPortfolioSummary />
                   </AppRouteGuard>
                 }
@@ -565,7 +589,7 @@ const App = () => (
               <Route
                 path="/documents"
                 element={
-                  <AppRouteGuard allow={["employee", "marketing", "manager", "partner", "finance", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <DocumentManagement />
                   </AppRouteGuard>
                 }
@@ -581,7 +605,7 @@ const App = () => (
               <Route
                 path="/client-surveys"
                 element={
-                  <AppRouteGuard allow={["marketing", "manager", "partner", "admin", "hr", "gmp"]}>
+                  <AppRouteGuard>
                     <ClientSurveys />
                   </AppRouteGuard>
                 }
@@ -601,3 +625,4 @@ const App = () => (
 );
 
 export default App;
+

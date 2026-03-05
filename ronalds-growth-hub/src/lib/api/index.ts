@@ -17,6 +17,7 @@ export { default as timeEntriesAPI } from './timeEntries';
 export { default as employeesAPI } from './employees';
 export { default as evaluationsAPI } from './evaluations';
 export { default as kpisAPI } from './kpis';
+export { default as kpiCascadeV2API } from './kpiCascadeV2';
 export { default as dashboardsAPI } from './dashboards';
 export { default as documentsAPI } from './documents';
 export { default as departmentsAPI } from './departments';
@@ -39,6 +40,7 @@ import timeEntriesAPI from './timeEntries';
 import employeesAPI from './employees';
 import evaluationsAPI from './evaluations';
 import kpisAPI from './kpis';
+import kpiCascadeV2API from './kpiCascadeV2';
 import dashboardsAPI from './dashboards';
 import documentsAPI from './documents';
 import departmentsAPI from './departments';
@@ -61,6 +63,7 @@ const API = {
   employees: employeesAPI,
   evaluations: evaluationsAPI,
   kpis: kpisAPI,
+  kpiCascadeV2: kpiCascadeV2API,
   dashboards: dashboardsAPI,
   documents: documentsAPI,
   departments: departmentsAPI,

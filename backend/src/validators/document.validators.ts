@@ -95,6 +95,49 @@ export const uploadDocumentFileValidators = [
 ];
 
 /**
+ * Validators for POST /documents/request - request targeted document upload
+ */
+export const requestDocumentValidators = [
+  body("requestedProfileId")
+    .isInt({ min: 1 })
+    .withMessage("Valid requestedProfileId (integer) is required"),
+
+  body("documentType")
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 120 })
+    .withMessage("documentType is required"),
+
+  body("entityType")
+    .isString()
+    .trim()
+    .matches(/^[A-Za-z][A-Za-z0-9_-]{1,80}$/)
+    .withMessage("entityType must be an identifier (letters, numbers, _ or -)"),
+
+  body("entityId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("entityId must be a positive integer"),
+
+  body("dueDate")
+    .optional()
+    .isISO8601()
+    .withMessage("dueDate must be a valid ISO8601 date"),
+
+  body("message")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("message must be <= 500 characters"),
+
+  body("priority")
+    .optional()
+    .isIn(["low", "medium", "high", "critical"])
+    .withMessage("priority must be one of: low, medium, high, critical"),
+];
+
+/**
  * Validators for GET /documents/:documentId - Get document
  */
 export const getDocumentValidator = [

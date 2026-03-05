@@ -47,7 +47,8 @@ export default function FinanceCollections() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { hasModuleAccess } = useAuth();
-  const canWriteCollections = hasModuleAccess("finance", "write");
+  const canWriteCollections =
+    hasModuleAccess("finance", "write") || hasModuleAccess("finance_collections", "write");
   const [loading, setLoading] = useState(true);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);

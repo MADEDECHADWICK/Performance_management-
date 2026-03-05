@@ -4,10 +4,14 @@ import request from "supertest";
 import prisma from "../prisma";
 import { authMiddleware } from "../middleware/auth";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
+import { CANONICAL_ROLES } from "../auth/canonicalRoles";
 import moduleAccessRoutes from "./moduleAccess";
 
 jest.mock("../prisma", () => {
   const prismaMock = {
+    session: {
+      findFirst: jest.fn(),
+    },
     user: {
       findUnique: jest.fn(),
     },
@@ -24,6 +28,9 @@ jest.mock("../prisma", () => {
 });
 
 type PrismaMock = {
+  session: {
+    findFirst: jest.Mock;
+  };
   user: {
     findUnique: jest.Mock;
   };
@@ -63,12 +70,14 @@ const createToken = (userId = 1, email = "user@ronalds.local") =>
       sub: userId,
       email,
       authRoles: ["hr"],
+      sessionToken: "session_token_1",
     },
     process.env.JWT_SECRET || "secret",
     { expiresIn: "1h" }
   );
 
 const mockActiveUser = (userId = 1, email = "user@ronalds.local") => {
+  mockedPrisma.session.findFirst.mockResolvedValue({ id: 1 });
   mockedPrisma.user.findUnique.mockResolvedValue({
     id: userId,
     email,
@@ -98,6 +107,7 @@ describe("module-access protected route pipeline", () => {
         message: "Unauthorized - Missing or invalid token",
       })
     );
+    expect(mockedPrisma.session.findFirst).not.toHaveBeenCalled();
     expect(mockedPrisma.user.findUnique).not.toHaveBeenCalled();
     expect(mockedPrisma.userAuthRole.findMany).not.toHaveBeenCalled();
   });
@@ -144,5 +154,50 @@ describe("module-access protected route pipeline", () => {
     );
     expect(Array.isArray(response.body.modules)).toBe(true);
     expect(response.body.modules.length).toBeGreaterThan(0);
+  });
+
+  it("returns 403 on /matrix when role has access_control.read but not admin", async () => {
+    const app = createApp();
+    const token = createToken();
+    mockActiveUser();
+    mockedPrisma.userAuthRole.findMany.mockResolvedValue([
+      roleRow("partner", true, ["module.access_control.read"]),
+    ]);
+
+    const response = await request(app)
+      .get("/api/module-access/matrix")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        error: "Forbidden - insufficient module access",
+        module: "access_control",
+        action: "admin",
+      })
+    );
+  });
+
+  it("returns canonical-only matrix payload without alias map", async () => {
+    const app = createApp();
+    const token = createToken();
+    mockActiveUser();
+    mockedPrisma.userAuthRole.findMany.mockResolvedValue([
+      roleRow("hr", true, ["module.access_control.admin"]),
+    ]);
+
+    const response = await request(app)
+      .get("/api/module-access/matrix")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        canonicalRoles: CANONICAL_ROLES,
+        roleModulePermissionMatrix: expect.any(Object),
+      })
+    );
+    expect(response.body).not.toHaveProperty("roleAliasMigrationMap");
+    expect(response.body.roleModulePermissionMatrix).toHaveProperty("hr");
   });
 });

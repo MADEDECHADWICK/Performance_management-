@@ -6,6 +6,17 @@ import prisma from '../prisma';
 
 const router = Router();
 
+const legacyKpiWriteBlocked = () => process.env.KPI_V2_HARD_CUTOVER !== "false";
+router.use((req, res, next) => {
+  if (req.method !== "GET" && legacyKpiWriteBlocked()) {
+    return res.status(410).json({
+      error: "Legacy KPI workflow is decommissioned. Use /api/kpi (cascade V2).",
+      code: "LEGACY_KPI_DECOMMISSIONED",
+    });
+  }
+  return next();
+});
+
 type InitiativeKeyResultInput = {
   title: string;
   unit?: string;

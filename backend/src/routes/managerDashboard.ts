@@ -7,10 +7,8 @@ const router = Router();
 
 const allowedManagerRoles = new Set([
   'manager',
-  'admin',
   'super_admin',
   'hr',
-  'hr_manager',
 ]);
 
 const getManagerContext = async (req: AuthRequest) => {

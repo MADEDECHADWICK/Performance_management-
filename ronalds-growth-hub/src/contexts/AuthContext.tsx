@@ -3,9 +3,18 @@
  * Provides user authentication, role-based access, and session management
  */
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
-import { authAPI, getToken, getUser, clearAuth } from '@/lib/api';
+import { authAPI, getToken, clearAuth } from '@/lib/api';
 import type { User, Profile } from '@/lib/api/types';
 import PageLoader from '@/components/ui/page-loader';
+import {
+  canonicalizeRoles,
+  resolveCanonicalRole,
+  type CanonicalRole,
+} from "@/auth/canonicalRoles";
+import {
+  getEffectiveViewEntitlements,
+  getViewPermissionDefinition,
+} from "@/auth/viewAccess";
 
 interface AuthUser extends User {
   profile?: Profile;
@@ -75,6 +84,18 @@ const normalizeModuleKey = (value: string) => {
   return MODULE_KEY_ALIASES[normalized] || normalized;
 };
 
+const VIEW_MODULE_ACCESS_FALLBACKS: Record<
+  string,
+  Array<{ moduleKey: string; action?: ModuleAction }>
+> = {
+  "finance.collections": [
+    { moduleKey: "finance_collections", action: "read" },
+  ],
+  "finance.projections": [
+    { moduleKey: "finance_projections", action: "read" },
+  ],
+};
+
 const toModuleAction = (value: string): ModuleAction => {
   const normalized = String(value || '').toLowerCase().trim();
   if (MODULE_ACTION_SET.has(normalized as ModuleAction)) {
@@ -89,6 +110,8 @@ const toModuleAction = (value: string): ModuleAction => {
 interface AuthContextType {
   user: AuthUser | null;
   profile: Profile | null;
+  roles: CanonicalRole[];
+  viewAccessKeys: string[];
   isLoading: boolean;
   isAuthenticated: boolean;
   
@@ -104,7 +127,9 @@ interface AuthContextType {
   
   // Permission helpers
   hasRole: (role: string) => boolean;
+  hasAnyRole: (roles: string[]) => boolean;
   hasModuleAccess: (moduleKey: string, action?: ModuleAction) => boolean;
+  hasViewAccess: (viewKey: string) => boolean;
   hasPermission: (permission: string) => boolean;
   canAccess: (resource: string, action: string) => boolean;
   
@@ -115,7 +140,18 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+type GlobalAuthContextStore = typeof globalThis & {
+  __BSC_AUTH_CONTEXT__?: React.Context<AuthContextType | undefined>;
+};
+
+const globalAuthStore = globalThis as GlobalAuthContextStore;
+const AuthContext =
+  globalAuthStore.__BSC_AUTH_CONTEXT__ ??
+  createContext<AuthContextType | undefined>(undefined);
+
+if (!globalAuthStore.__BSC_AUTH_CONTEXT__) {
+  globalAuthStore.__BSC_AUTH_CONTEXT__ = AuthContext;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -125,18 +161,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const profile = user?.profile || null;
   const isAuthenticated = !!user && !!getToken();
 
-  // Role checks based on user's auth roles or position
+  // Canonical role checks based on persisted auth roles.
   const rawRoles = Array.isArray(user?.roles) ? user.roles : [];
   const roleNames = rawRoles
     .map((role) => (typeof role === "string" ? role : role?.role?.name))
     .filter(Boolean) as string[];
-  if (Array.isArray((user as any)?.authRoles)) {
-    roleNames.push(...((user as any).authRoles as string[]));
-  }
-  const userRoles = Array.from(new Set(roleNames.map((role) => role.toLowerCase())));
-  const positionRole = profile?.role?.name?.toLowerCase() || "";
-  const positionTitle = profile?.positionTitle?.toLowerCase() || "";
-  const roleSource = `${positionRole} ${positionTitle}`.trim();
+
+  const canonicalRoles = useMemo<CanonicalRole[]>(() => {
+    return canonicalizeRoles(roleNames);
+  }, [roleNames]);
+
+  const viewAccessKeys = useMemo(
+    () => getEffectiveViewEntitlements(canonicalRoles),
+    [canonicalRoles]
+  );
+  const viewAccessSet = useMemo(
+    () => new Set(viewAccessKeys.map((key) => String(key).toLowerCase().trim())),
+    [viewAccessKeys]
+  );
+
   const moduleAccessMatrix = useMemo<Record<string, ModuleAction[]>>(() => {
     const source = user?.moduleAccess;
     if (!source || typeof source !== 'object') return {};
@@ -159,45 +202,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return Object.fromEntries(normalizedEntries);
   }, [user?.moduleAccess]);
 
-  const isAdmin = userRoles.includes("admin") || userRoles.includes("super_admin") || userRoles.includes("administrator");
-  const isHR =
-    userRoles.includes("hr") ||
-    userRoles.includes("hr_manager") ||
-    userRoles.includes("human_resources") ||
-    roleSource.includes("hr");
-  const isGMP =
-    userRoles.includes("gmp") ||
-    userRoles.includes("group_managing_partner") ||
-    roleSource.includes("group managing partner") ||
-    roleSource.includes("group_managing_partner") ||
-    roleSource.includes("gmp");
-  const isPartner = profile?.isPartner || userRoles.includes("partner") || roleSource.includes("partner");
-  const isMarketing =
-    userRoles.includes("marketing") ||
-    userRoles.includes("business_development") ||
-    roleSource.includes("marketing") ||
-    roleSource.includes("business development");
-  const isFinance = userRoles.includes("finance") || roleSource.includes("finance");
-  const isManager =
-    !isAdmin &&
-    !isHR &&
-    !isGMP &&
-    (userRoles.includes("manager") ||
-      (roleSource.includes("manager") &&
-        !roleSource.includes("hr manager") &&
-        !roleSource.includes("managing partner")));
-  const isEmployee = isAuthenticated && !isAdmin; // All authenticated users are employees
+  const isAdmin = canonicalRoles.includes("super_admin");
+  const isHR = canonicalRoles.includes("hr");
+  const isGMP = canonicalRoles.includes("gmp");
+  const isPartner = canonicalRoles.includes("partner");
+  const isMarketing = canonicalRoles.includes("marketing");
+  const isFinance = canonicalRoles.includes("finance");
+  const isManager = canonicalRoles.includes("manager");
+  const isEmployee = canonicalRoles.includes("employee");
 
   // Helper functions
   const hasRole = useCallback((role: string): boolean => {
-    const roleLower = role.toLowerCase();
-    return userRoles.includes(roleLower) || roleSource.includes(roleLower);
-  }, [userRoles, roleSource]);
+    const canonical = resolveCanonicalRole(role);
+    return canonical ? canonicalRoles.includes(canonical) : false;
+  }, [canonicalRoles]);
+
+  const hasAnyRole = useCallback(
+    (rolesToCheck: string[]) => rolesToCheck.some((role) => hasRole(role)),
+    [hasRole]
+  );
 
   const hasModuleAccess = useCallback(
     (moduleKey: string, action: ModuleAction = 'read'): boolean => {
-      if (isAdmin || isHR) return true;
-
       const normalizedModuleKey = normalizeModuleKey(moduleKey);
       const normalizedAction = toModuleAction(action);
       const allowedActions = moduleAccessMatrix[normalizedModuleKey] || [];
@@ -215,71 +241,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return false;
     },
-    [isAdmin, isHR, moduleAccessMatrix]
+    [moduleAccessMatrix]
+  );
+
+  const hasViewAccess = useCallback(
+    (viewKey: string): boolean => {
+      const normalizedViewKey = String(viewKey || "").toLowerCase().trim();
+      if (!normalizedViewKey) return false;
+      if (!viewAccessSet.has(normalizedViewKey)) return false;
+
+      const viewDefinition = getViewPermissionDefinition(normalizedViewKey);
+      if (!viewDefinition?.module) return true;
+
+      const requiredAction = viewDefinition.action || "read";
+      if (hasModuleAccess(viewDefinition.module, requiredAction)) {
+        return true;
+      }
+
+      const fallbackChecks = VIEW_MODULE_ACCESS_FALLBACKS[normalizedViewKey] || [];
+      return fallbackChecks.some((fallback) =>
+        hasModuleAccess(fallback.moduleKey, fallback.action || requiredAction)
+      );
+    },
+    [hasModuleAccess, viewAccessSet]
   );
 
   const hasPermission = useCallback((permission: string): boolean => {
-    if (isAdmin || isHR) return true;
     const normalized = String(permission || '').toLowerCase().trim();
     const parts = normalized.split('.');
+    if (parts.length >= 2 && parts[0] === "view") {
+      return hasViewAccess(parts.slice(1).join("."));
+    }
     if (parts.length === 3 && parts[0] === 'module') {
       return hasModuleAccess(parts[1], toModuleAction(parts[2]));
     }
     return false;
-  }, [isAdmin, isHR, hasModuleAccess]);
+  }, [hasModuleAccess, hasViewAccess]);
 
   const canAccess = useCallback((resource: string, action: string): boolean => {
-    // Admin can access everything
-    if (isAdmin || isHR) return true;
-
     const moduleKey = normalizeModuleKey(resource);
-    if (moduleAccessMatrix[moduleKey]) {
-      return hasModuleAccess(moduleKey, toModuleAction(action));
-    }
-
-    // Resource-based access control
-    switch (resource) {
-      case 'employees':
-        if (action === 'read') return true; // All can read limited employee info
-        if (action === 'write') return isHR || isAdmin;
-        break;
-      case 'jobs':
-        if (action === 'read') return true;
-        if (action === 'write') return isPartner || isManager || isHR;
-        if (action === 'approve') return isPartner;
-        break;
-      case 'time-entries':
-        if (action === 'read') return true;
-        if (action === 'write') return true; // Own time entries
-        if (action === 'approve') return isManager || isPartner;
-        break;
-      case 'evaluations':
-        if (action === 'read') return true;
-        if (action === 'write') return isHR || isManager;
-        if (action === 'admin') return isHR;
-        break;
-      case 'clients':
-        if (action === 'read') return isPartner || isManager || isHR;
-        if (action === 'write') return isPartner || isHR;
-        break;
-      case 'kpis':
-        if (action === 'read') return true;
-        if (action === 'write') return isHR || isAdmin;
-        break;
-      case 'reports':
-        return isPartner || isManager || isGMP || isHR;
-      case 'gmp-dashboard':
-        return isGMP;
-      case 'partner-dashboard':
-        return isPartner;
-      case 'manager-dashboard':
-        return isManager;
-      case 'hr-dashboard':
-        return isHR;
-    }
-
-    return hasModuleAccess(resource, toModuleAction(action));
-  }, [isAdmin, isHR, isGMP, isPartner, isManager, hasModuleAccess, moduleAccessMatrix]);
+    return hasModuleAccess(moduleKey, toModuleAction(action));
+  }, [hasModuleAccess]);
 
   // Load user on mount
   useEffect(() => {
@@ -364,6 +366,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthContextType = {
     user,
     profile,
+    roles: canonicalRoles,
+    viewAccessKeys,
     isLoading,
     isAuthenticated,
     isAdmin,
@@ -375,7 +379,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isFinance,
     isEmployee,
     hasRole,
+    hasAnyRole,
     hasModuleAccess,
+    hasViewAccess,
     hasPermission,
     canAccess,
     login,

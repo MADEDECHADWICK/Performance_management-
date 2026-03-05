@@ -28,9 +28,8 @@ export async function seedDatabase() {
   });
 
   const authRoleNames = [
-    'admin',
+    'super_admin',
     'hr',
-    'hr_manager',
     'manager',
     'partner',
     'employee',
@@ -56,21 +55,22 @@ export async function seedDatabase() {
   const defaultFinanceActionsByRole: Record<string, ModuleAction[]> = {
     finance: ['admin'],
     hr: ['read'],
-    hr_manager: ['read'],
     gmp: ['read'],
-    group_managing_partner: ['read'],
     partner: ['read'],
     manager: ['read'],
+    employee: ['read'],
+    marketing: ['read'],
   };
 
   const financePolicyRoles = [
+    'super_admin',
     'finance',
     'hr',
-    'hr_manager',
     'gmp',
-    'group_managing_partner',
     'partner',
     'manager',
+    'employee',
+    'marketing',
   ];
 
   const seedRoleModulePolicy = async (roleName: string) => {

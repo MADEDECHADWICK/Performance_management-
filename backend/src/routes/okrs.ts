@@ -6,20 +6,28 @@ import { createAudit } from "../utils/audit";
 import { OkrApprovalStatus, OkrStatus } from "@prisma/client";
 
 const router = Router();
+
+const legacyKpiWriteBlocked = () => process.env.KPI_V2_HARD_CUTOVER !== "false";
+router.use((req, res, next) => {
+  if (req.method !== "GET" && legacyKpiWriteBlocked()) {
+    return res.status(410).json({
+      error: "Legacy OKR workflow is decommissioned. Use /api/kpi (cascade V2).",
+      code: "LEGACY_KPI_DECOMMISSIONED",
+    });
+  }
+  return next();
+});
 const privilegedRoles = new Set([
-  "admin",
   "super_admin",
   "hr",
-  "hr_manager",
   "gmp",
-  "group_managing_partner",
   "partner",
 ]);
 
 const getRoleNames = (req: AuthRequest) => {
   const roles = [
     ...(req.userRoles || []),
-    ...(req.user?.authRoles || []),
+    ...(req.userRoles || []),
     req.profile?.role?.name,
   ]
     .filter(Boolean)

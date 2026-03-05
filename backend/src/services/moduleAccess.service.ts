@@ -1,3 +1,5 @@
+import { canonicalizeRoleName } from "../auth/canonicalRoles";
+
 export type ModuleAction = "read" | "write" | "approve" | "admin";
 
 export const MODULE_ACTIONS: ModuleAction[] = ["read", "write", "approve", "admin"];
@@ -126,39 +128,33 @@ const SELF_SERVICE_BASELINE_ACCESS: Partial<Record<ModuleKey, ModuleAction[]>> =
   time_entries: ["write"],
   evaluations: ["write"],
   kpis: ["write"],
+  documents: ["write"],
   knowledge_hub: ["read"],
+  notifications: ["write"],
 };
 
-const FULL_SYSTEM_ACCESS_ROLES = new Set(["super_admin", "admin", "hr", "hr_manager"]);
+const FULL_SYSTEM_ACCESS_ROLES = new Set(["super_admin", "hr"]);
 
 const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", ModuleAction[]>>> = {
   super_admin: { "*": ["admin"] },
-  admin: { "*": ["admin"] },
   hr: { "*": ["admin"] },
-  hr_manager: { "*": ["admin"] },
   gmp: {
     dashboard: ["admin"],
+    users: ["read"],
+    clients: ["admin"],
+    jobs: ["admin"],
+    time_entries: ["approve"],
+    evaluations: ["admin"],
+    kpis: ["admin"],
+    finance: ["admin"],
+    finance_collections: ["admin"],
+    finance_projections: ["admin"],
+    proposals: ["admin"],
+    surveys: ["admin"],
+    documents: ["admin"],
+    knowledge_hub: ["admin"],
+    notifications: ["admin"],
     reports: ["admin"],
-    finance: ["read"],
-    jobs: ["read"],
-    clients: ["read"],
-    evaluations: ["read"],
-    proposals: ["read"],
-    surveys: ["read"],
-    knowledge_hub: ["read"],
-    notifications: ["write"],
-  },
-  group_managing_partner: {
-    dashboard: ["admin"],
-    reports: ["admin"],
-    finance: ["read"],
-    jobs: ["read"],
-    clients: ["read"],
-    evaluations: ["read"],
-    proposals: ["read"],
-    surveys: ["read"],
-    knowledge_hub: ["read"],
-    notifications: ["write"],
   },
   partner: {
     dashboard: ["read"],
@@ -168,9 +164,11 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     evaluations: ["approve"],
     kpis: ["read"],
     finance: ["read"],
-    proposals: ["read"],
+    finance_collections: ["read"],
+    finance_projections: ["read"],
+    proposals: ["write"],
     surveys: ["read"],
-    documents: ["read"],
+    documents: ["write"],
     knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
@@ -182,7 +180,8 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     time_entries: ["approve"],
     evaluations: ["write"],
     kpis: ["read"],
-    documents: ["read"],
+    finance: ["read"],
+    documents: ["write"],
     knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
@@ -197,32 +196,39 @@ const ROLE_MODULE_FALLBACK: Record<string, Partial<Record<ModuleKey | "*", Modul
     jobs: ["read"],
     proposals: ["read"],
     surveys: ["read"],
-    documents: ["read"],
+    documents: ["write"],
     knowledge_hub: ["read"],
     notifications: ["write"],
   },
   marketing: {
     dashboard: ["read"],
-    clients: ["write"],
+    clients: ["admin"],
+    jobs: ["read"],
     proposals: ["admin"],
-    surveys: ["write"],
-    documents: ["read"],
+    surveys: ["admin"],
+    documents: ["write"],
     knowledge_hub: ["read"],
     reports: ["read"],
     notifications: ["write"],
   },
   employee: {
     dashboard: ["read"],
+    users: ["read"],
+    jobs: ["read"],
     time_entries: ["write"],
     evaluations: ["write"],
     kpis: ["write"],
+    finance: ["read"],
     documents: ["write"],
     knowledge_hub: ["read"],
     notifications: ["write"],
+    reports: ["read"],
   },
 };
 
-const normalizeRole = (value: string) => value.toLowerCase().trim();
+export const ROLE_MODULE_PERMISSION_MATRIX = ROLE_MODULE_FALLBACK;
+
+const normalizeRole = (value: string) => canonicalizeRoleName(value);
 
 export const isModuleKey = (value: string): value is ModuleKey =>
   moduleKeySet.has(value as ModuleKey);

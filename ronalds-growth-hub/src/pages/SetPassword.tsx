@@ -7,37 +7,20 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { canonicalizeRoles } from "@/auth/canonicalRoles";
 
 const PASSWORD_SETUP_TOKEN_KEY = "rg_password_setup_token";
 
 const resolveDashboardPath = (user: any) => {
-  const roles = [
-    ...(Array.isArray(user?.roles) ? user.roles : []),
-    ...(Array.isArray(user?.authRoles) ? user.authRoles : []),
-  ]
+  const roleNames = (Array.isArray(user?.roles) ? user.roles : [])
     .map((role: any) => (typeof role === "string" ? role : role?.role?.name))
-    .filter(Boolean)
-    .map((role: string) => role.toLowerCase());
+    .filter(Boolean);
 
-  const profile = user?.profile;
-  const positionTitle = profile?.positionTitle?.toLowerCase() || "";
+  const roles = canonicalizeRoles(roleNames);
 
-  if (
-    roles.includes("gmp") ||
-    roles.includes("group_managing_partner") ||
-    positionTitle.includes("group managing partner")
-  ) {
-    return "/gmp-dashboard";
-  }
-  if (
-    roles.includes("admin") ||
-    roles.includes("super_admin") ||
-    roles.includes("hr") ||
-    roles.includes("hr_manager")
-  ) {
-    return "/hr-dashboard";
-  }
-  if (profile?.isPartner || roles.includes("partner")) return "/partner-dashboard";
+  if (roles.includes("gmp")) return "/gmp-dashboard";
+  if (roles.includes("super_admin") || roles.includes("hr")) return "/hr-dashboard";
+  if (roles.includes("partner")) return "/partner-dashboard";
   if (roles.includes("manager")) return "/manager-dashboard";
   if (roles.includes("marketing")) return "/marketing-dashboard";
   if (roles.includes("finance")) return "/finance-dashboard";

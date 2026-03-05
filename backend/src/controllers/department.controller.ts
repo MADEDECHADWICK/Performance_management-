@@ -19,7 +19,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const result = await departmentService.listDepartments({ page, pageSize }, auth);
@@ -41,7 +41,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const department = await departmentService.createDepartment(req.body, auth);
@@ -66,7 +66,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const department = await departmentService.getDepartment(departmentId, auth);
@@ -90,7 +90,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const department = await departmentService.updateDepartment(
@@ -118,7 +118,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       await departmentService.deleteDepartment(departmentId, auth);
@@ -150,7 +150,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const employees = await departmentService.listDepartmentEmployees(
@@ -178,7 +178,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const manager = await departmentService.getDepartmentManager(
@@ -205,7 +205,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const managers = await departmentService.getDepartmentManagers(
@@ -232,7 +232,7 @@ export class DepartmentController {
       const auth = {
         userId: req.user!.userId,
         profileId: req.profile!.id,
-        roles: req.userRoles ?? req.user?.authRoles ?? [],
+        roles: req.userRoles ?? [],
       };
 
       const data = await departmentService.getDepartmentTeamKpis(departmentId, {

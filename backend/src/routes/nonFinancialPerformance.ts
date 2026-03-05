@@ -11,16 +11,14 @@ const router = Router();
 const resolveRoles = (req: any) => {
   const roles = new Set<string>();
   (req.userRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
-  (req.user?.authRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
+  (req.userRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
   if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
   return Array.from(roles);
 };
 
 const isPrivileged = (roles: string[]) =>
-  roles.includes('admin') ||
   roles.includes('super_admin') ||
-  roles.includes('hr') ||
-  roles.includes('hr_manager');
+  roles.includes('hr');
 
 const isManagerRole = (roles: string[]) => roles.includes('manager');
 

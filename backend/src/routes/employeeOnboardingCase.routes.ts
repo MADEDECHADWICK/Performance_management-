@@ -32,7 +32,7 @@ router.get(
  */
 router.post(
   "/",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(createOnboardingCaseValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.create
@@ -54,7 +54,7 @@ router.get(
  */
 router.patch(
   "/:caseId",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(updateOnboardingCaseValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.update
@@ -65,7 +65,7 @@ router.patch(
  */
 router.patch(
   "/stages/:stageId",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(updateOnboardingStageValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.updateStage
@@ -76,7 +76,7 @@ router.patch(
  */
 router.post(
   "/:caseId/initialize-stages",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(initializeOnboardingStagesValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.initializeStages
@@ -98,7 +98,7 @@ router.get(
  */
 router.post(
   "/:caseId/policies",
-  withRoles("hr", "hr_manager", "admin", "super_admin"),
+  withRoles("hr", "super_admin"),
   validateRequest(assignOnboardingPoliciesValidators),
   handleValidationErrors,
   EmployeeOnboardingCaseController.assignPolicies

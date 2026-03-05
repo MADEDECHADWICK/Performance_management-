@@ -48,7 +48,7 @@ export class PartnerService {
    */
   static async createPartner(input: any, auth: AuthContext) {
     // ✅ VERIFY AUTHORIZATION
-    if (!['admin', 'manager'].includes(auth.roleName || '')) {
+    if (!['super_admin', 'manager'].includes(auth.roleName || '')) {
       throw {
         statusCode: 403,
         message: 'Only admins/managers can create partners',
@@ -107,7 +107,7 @@ export class PartnerService {
 
     // ✅ VERIFY ACCESS - can only view self or if admin/manager
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       auth.roleName === 'manager' ||
       partnerId === auth.profileId;
 
@@ -128,7 +128,7 @@ export class PartnerService {
     // ✅ VERIFY AUTHORIZATION
     if (
       partnerId !== auth.profileId &&
-      !['admin', 'manager'].includes(auth.roleName || '')
+      !['super_admin', 'manager'].includes(auth.roleName || '')
     ) {
       throw {
         statusCode: 403,
@@ -192,7 +192,7 @@ export class PartnerService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       auth.roleName === 'manager' ||
       partnerId === auth.profileId;
 
@@ -232,7 +232,7 @@ export class PartnerService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       auth.roleName === 'manager' ||
       partnerId === auth.profileId;
 
@@ -649,10 +649,10 @@ export class PartnerService {
     }
 
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       auth.roleName === 'manager' ||
       auth.roleName === 'hr' ||
-      auth.roleName === 'hr_manager' ||
+      auth.roleName === 'hr' ||
       auth.profileId === partnerId;
 
     if (!canView) {
@@ -844,10 +844,10 @@ export class PartnerService {
     }
 
     const canView =
-      auth.roleName === 'admin' ||
+      auth.roleName === 'super_admin' ||
       auth.roleName === 'manager' ||
       auth.roleName === 'hr' ||
-      auth.roleName === 'hr_manager' ||
+      auth.roleName === 'hr' ||
       auth.profileId === partnerId;
 
     if (!canView) {

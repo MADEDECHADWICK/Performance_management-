@@ -25,12 +25,12 @@ router.get("/", ...authenticated(), DepartmentController.listDepartments);
 /**
  * POST /departments
  * Create new department
- * Requires: admin role
+ * Requires: super_admin or hr role
  * Body: name, description, departmentCode, departmentHeadId
  */
 router.post(
   "/",
-  ...withRoles("admin", "hr", "hr_manager"),
+  ...withRoles("super_admin", "hr"),
   validateRequest(createDepartmentValidators),
   handleValidationErrors,
   DepartmentController.createDepartment
@@ -49,7 +49,7 @@ router.get("/:departmentId", ...withDepartmentAccess(), DepartmentController.get
  */
 router.patch(
   "/:departmentId",
-  ...withRoles("admin", "hr", "hr_manager"),
+  ...withRoles("super_admin", "hr"),
   validateRequest(updateDepartmentValidators),
   handleValidationErrors,
   DepartmentController.updateDepartment

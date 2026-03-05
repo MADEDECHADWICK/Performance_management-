@@ -133,6 +133,73 @@ const normalizeMetrics = (payload: any): StaffDevelopmentMetrics => {
   };
 };
 
+const normalizeTrainingRecord = (payload: any): TrainingRecord => {
+  const source = payload ?? {};
+  return {
+    id: toNumber(source.id),
+    employee_id: toNumber(source.employee_id ?? source.employeeId),
+    employee_name: String(source.employee_name ?? source.employeeName ?? "Team Session"),
+    course_name: String(source.course_name ?? source.courseName ?? ""),
+    training_type: String(source.training_type ?? source.trainingType ?? "internal") as TrainingRecord["training_type"],
+    status: String(source.status ?? "planned") as TrainingRecord["status"],
+    start_date: String(source.start_date ?? source.startDate ?? new Date().toISOString()),
+    end_date: String(source.end_date ?? source.endDate ?? source.start_date ?? source.startDate ?? new Date().toISOString()),
+    provider: String(source.provider ?? "Internal"),
+    cost: toNumber(source.cost),
+    completion_percentage: toNumber(source.completion_percentage ?? source.completionPercentage),
+    certificate_url: source.certificate_url ?? source.certificateUrl ?? undefined,
+    notes: source.notes ?? undefined,
+  };
+};
+
+const normalizeCertification = (payload: any): Certification => {
+  const source = payload ?? {};
+  return {
+    id: toNumber(source.id),
+    employee_id: toNumber(source.employee_id ?? source.employeeId),
+    employee_name: String(source.employee_name ?? source.employeeName ?? "Team Session"),
+    certification_name: String(source.certification_name ?? source.certificationName ?? ""),
+    issuing_organization: String(source.issuing_organization ?? source.issuingOrganization ?? "Internal"),
+    issue_date: String(source.issue_date ?? source.issueDate ?? new Date().toISOString()),
+    expiry_date: source.expiry_date ?? source.expiryDate ?? undefined,
+    status: String(source.status ?? "active") as Certification["status"],
+    certificate_number: String(source.certificate_number ?? source.certificateNumber ?? ""),
+    verification_url: source.verification_url ?? source.verificationUrl ?? undefined,
+  };
+};
+
+const normalizeSkillAssessment = (payload: any): SkillAssessment => {
+  const source = payload ?? {};
+  return {
+    id: toNumber(source.id),
+    employee_id: toNumber(source.employee_id ?? source.employeeId),
+    employee_name: String(source.employee_name ?? source.employeeName ?? "Employee"),
+    skill_category: String(source.skill_category ?? source.skillCategory ?? "General"),
+    skill_name: String(source.skill_name ?? source.skillName ?? ""),
+    current_level: toNumber(source.current_level ?? source.currentLevel, 1),
+    target_level: toNumber(source.target_level ?? source.targetLevel, 1),
+    assessment_date: String(source.assessment_date ?? source.assessmentDate ?? new Date().toISOString()),
+    assessor_name: String(source.assessor_name ?? source.assessorName ?? "Manager"),
+    notes: source.notes ?? undefined,
+  };
+};
+
+const normalizeDevelopmentGoal = (payload: any): DevelopmentGoal => {
+  const source = payload ?? {};
+  return {
+    id: toNumber(source.id),
+    employee_id: toNumber(source.employee_id ?? source.employeeId),
+    employee_name: String(source.employee_name ?? source.employeeName ?? "Employee"),
+    goal_title: String(source.goal_title ?? source.goalTitle ?? ""),
+    goal_description: String(source.goal_description ?? source.goalDescription ?? ""),
+    target_completion: String(source.target_completion ?? source.targetCompletion ?? new Date().toISOString()),
+    current_progress: toNumber(source.current_progress ?? source.currentProgress),
+    status: String(source.status ?? "active") as DevelopmentGoal["status"],
+    assigned_mentor: source.assigned_mentor ?? source.assignedMentor ?? undefined,
+    created_date: String(source.created_date ?? source.createdDate ?? new Date().toISOString()),
+  };
+};
+
 const StaffDevelopment = () => {
   const apiBaseUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api`;
   const [trainingRecords, setTrainingRecords] = useState<TrainingRecord[]>([]);
@@ -201,22 +268,22 @@ const StaffDevelopment = () => {
 
       if (trainingRes.ok) {
         const data = await trainingRes.json();
-        setTrainingRecords(data);
+        setTrainingRecords(Array.isArray(data) ? data.map(normalizeTrainingRecord) : []);
       }
       
       if (certificationsRes.ok) {
         const data = await certificationsRes.json();
-        setCertifications(data);
+        setCertifications(Array.isArray(data) ? data.map(normalizeCertification) : []);
       }
       
       if (skillsRes.ok) {
         const data = await skillsRes.json();
-        setSkillAssessments(data);
+        setSkillAssessments(Array.isArray(data) ? data.map(normalizeSkillAssessment) : []);
       }
       
       if (goalsRes.ok) {
         const data = await goalsRes.json();
-        setDevelopmentGoals(data);
+        setDevelopmentGoals(Array.isArray(data) ? data.map(normalizeDevelopmentGoal) : []);
       }
       
       if (metricsRes.ok) {
@@ -260,13 +327,24 @@ const StaffDevelopment = () => {
       const token = getToken();
       if (!token) return;
 
+      const trainingPayload = {
+        employeeId: newTraining.employee_id ? Number(newTraining.employee_id) : undefined,
+        courseName: newTraining.course_name,
+        trainingType: newTraining.training_type,
+        deliveryMode: newTraining.delivery_mode,
+        startDate: newTraining.start_date,
+        provider: newTraining.provider,
+        cost: newTraining.cost,
+        notes: newTraining.notes,
+      };
+
       const response = await fetch(`${apiBaseUrl}/manager/training-records`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(newTraining)
+        body: JSON.stringify(trainingPayload)
       });
       
       if (response.ok) {

@@ -136,8 +136,19 @@ export default function CreateEvaluation() {
 
   const loadKPIs = async () => {
     try {
-      const data = await apiFetch('GET', '/kpis?isActive=true');
-      setKPIs(extractItems(data));
+      const data = await apiFetch('GET', '/kpi/archive/kpis');
+      const archiveRows = extractItems(data);
+      setKPIs(
+        archiveRows
+          .filter((row: any) => row?.is_active !== false)
+          .map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            description: row.description || null,
+            category: row.category || null,
+            kpiType: row.kpi_type || null,
+          }))
+      );
     } catch (error: any) {
       if (error?.status === 401) {
         navigate('/auth');

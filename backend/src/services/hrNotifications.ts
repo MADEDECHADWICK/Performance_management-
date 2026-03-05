@@ -4,11 +4,8 @@ import { AuthRequest } from '../middleware/auth';
 
 export const HR_ROLE_NAMES = [
   'hr',
-  'hr_manager',
-  'admin',
   'super_admin',
   'gmp',
-  'group_managing_partner',
 ];
 
 const buildAuthContext = (req: AuthRequest) => ({

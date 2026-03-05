@@ -32,6 +32,8 @@ interface ChecklistItem {
   id: number;
   itemName: string;
   description?: string | null;
+  itemType?: string | null;
+  resourceUrl?: string | null;
   requiresDocument?: boolean;
   documentId?: number | null;
   isCompleted?: boolean;
@@ -74,6 +76,27 @@ interface ProfileUpdatePayload {
   managerId?: number | null;
 }
 
+type ChecklistItemType =
+  | "task"
+  | "document_upload"
+  | "video_watch"
+  | "policy_link"
+  | "external_link";
+
+const CHECKLIST_ITEM_TYPE_LABELS: Record<ChecklistItemType, string> = {
+  task: "Task",
+  document_upload: "Document Upload",
+  video_watch: "Video",
+  policy_link: "Policy",
+  external_link: "Link",
+};
+
+const normalizeChecklistItemType = (value?: string | null): ChecklistItemType => {
+  const normalized = String(value || "task").toLowerCase().trim() as ChecklistItemType;
+  if (normalized in CHECKLIST_ITEM_TYPE_LABELS) return normalized;
+  return "task";
+};
+
 const EMPTY_PROFILE: EmployeeProfileRecord = {
   id: 0,
   firstName: "",
@@ -105,7 +128,7 @@ export default function EmployeeProfile() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const { user, isLoading: authLoading, isHR, isAdmin } = useAuth();
+  const { user, isLoading: authLoading, isHR, isAdmin, refreshUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<EmployeeProfileRecord>(EMPTY_PROFILE);
@@ -211,6 +234,7 @@ export default function EmployeeProfile() {
     try {
       await apiFetch("PATCH", `/induction-checklist/${checklistId}/items/${itemId}/complete`);
       await loadChecklist(profile.id);
+      await refreshUser();
       toast({
         title: "Checklist updated",
         description: "Item marked as complete.",
@@ -239,7 +263,7 @@ export default function EmployeeProfile() {
         description: `Checklist item document`,
       });
 
-      const documentId = upload?.id;
+      const documentId = (upload as any)?.id ?? (upload as any)?.data?.id;
       if (!documentId) {
         throw new Error("Upload succeeded but document id was missing.");
       }
@@ -251,6 +275,7 @@ export default function EmployeeProfile() {
       );
 
       await loadChecklist(profile.id);
+      await refreshUser();
       toast({
         title: "Document attached",
         description: "Checklist document uploaded successfully.",
@@ -564,87 +589,117 @@ export default function EmployeeProfile() {
                     </div>
 
                     <div className="space-y-3">
-                      {(checklist.items || []).map((item: ChecklistItem) => (
-                        <div
-                          key={item.id}
-                          className="flex items-center justify-between rounded-lg border border-border p-3"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{item.itemName}</span>
-                              {item.requiresDocument && (
+                      {(checklist.items || []).map((item: ChecklistItem) => {
+                        const itemType = normalizeChecklistItemType(item.itemType);
+                        const rawResourceUrl = String(item.resourceUrl || "").trim();
+                        const resourceUrl = rawResourceUrl
+                          ? rawResourceUrl.startsWith("/uploads/")
+                            ? `${import.meta.env.VITE_API_URL || "http://localhost:4000"}${rawResourceUrl}`
+                            : rawResourceUrl
+                          : "";
+                        const resourceLabel =
+                          itemType === "video_watch"
+                            ? "Open video"
+                            : itemType === "policy_link"
+                              ? "Open policy"
+                              : itemType === "external_link"
+                                ? "Open link"
+                                : "Open resource";
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="flex items-center justify-between rounded-lg border border-border p-3"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{item.itemName}</span>
                                 <Badge variant="outline" className="text-xs">
-                                  Document required
+                                  {CHECKLIST_ITEM_TYPE_LABELS[itemType]}
                                 </Badge>
+                                {item.requiresDocument && (
+                                  <Badge variant="outline" className="text-xs">
+                                    Document required
+                                  </Badge>
+                                )}
+                              </div>
+                              {item.description && (
+                                <p className="text-xs text-muted-foreground">{item.description}</p>
+                              )}
+                              {resourceUrl && (
+                                <div>
+                                  <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                    <a href={resourceUrl} target="_blank" rel="noreferrer">
+                                      {resourceLabel}
+                                    </a>
+                                  </Button>
+                                </div>
+                              )}
+                              {item.documentId && item.document?.filePath && (
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                  <FileText className="h-4 w-4 text-emerald-500" />
+                                  <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                    <a
+                                      href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      Preview
+                                    </a>
+                                  </Button>
+                                  <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                    <a
+                                      href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
+                                      download
+                                    >
+                                      Download
+                                    </a>
+                                  </Button>
+                                </div>
                               )}
                             </div>
-                            {item.description && (
-                              <p className="text-xs text-muted-foreground">{item.description}</p>
-                            )}
-                            {item.documentId && item.document?.filePath && (
-                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                <FileText className="h-4 w-4 text-emerald-500" />
-                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                                  <a
-                                    href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    Preview
-                                  </a>
+                            <div className="flex items-center gap-2">
+                              {!item.isCompleted && item.requiresDocument && !item.documentId && (
+                                <label className="inline-flex items-center">
+                                  <input
+                                    type="file"
+                                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                    className="hidden"
+                                    onChange={(event) => {
+                                      const file = event.target.files?.[0];
+                                      if (file) {
+                                        handleAttachChecklistDocument(checklist.id, item.id, file);
+                                      }
+                                      event.currentTarget.value = "";
+                                    }}
+                                  />
+                                  <Button size="sm" variant="outline" asChild>
+                                    <span>
+                                      <Upload className="mr-2 h-4 w-4" />
+                                      Upload
+                                    </span>
+                                  </Button>
+                                </label>
+                              )}
+                              {item.isCompleted ? (
+                                <div className="flex items-center gap-2 text-success">
+                                  <CheckCircle2 className="h-4 w-4" />
+                                  <span className="text-xs">Completed</span>
+                                </div>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleCompleteChecklistItem(checklist.id, item.id)}
+                                  disabled={item.requiresDocument && !item.documentId}
+                                >
+                                  Mark complete
                                 </Button>
-                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                                  <a
-                                    href={`${import.meta.env.VITE_API_URL || "http://localhost:4000"}${item.document.filePath}`}
-                                    download
-                                  >
-                                    Download
-                                  </a>
-                                </Button>
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {!item.isCompleted && item.requiresDocument && !item.documentId && (
-                              <label className="inline-flex items-center">
-                                <input
-                                  type="file"
-                                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                                  className="hidden"
-                                  onChange={(event) => {
-                                    const file = event.target.files?.[0];
-                                    if (file) {
-                                      handleAttachChecklistDocument(checklist.id, item.id, file);
-                                    }
-                                    event.currentTarget.value = "";
-                                  }}
-                                />
-                                <Button size="sm" variant="outline" asChild>
-                                  <span>
-                                    <Upload className="mr-2 h-4 w-4" />
-                                    Upload
-                                  </span>
-                                </Button>
-                              </label>
-                            )}
-                            {item.isCompleted ? (
-                              <div className="flex items-center gap-2 text-success">
-                                <CheckCircle2 className="h-4 w-4" />
-                                <span className="text-xs">Completed</span>
-                              </div>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleCompleteChecklistItem(checklist.id, item.id)}
-                                disabled={item.requiresDocument && !item.documentId}
-                              >
-                                Mark complete
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </>
                 )}
