@@ -108,8 +108,9 @@ export const createJobValidators = [
     .withMessage("Valid managerProfileId required if provided"),
 
   body("startDate")
+    .optional()
     .isISO8601()
-    .withMessage("Valid startDate (ISO8601) required"),
+    .withMessage("Valid startDate (ISO8601) required if provided"),
 
   body("dueDate")
     .optional()
@@ -122,25 +123,14 @@ export const createJobValidators = [
     .withMessage("Priority must be one of: low, medium, high, urgent"),
 
   body("billingType")
+    .optional()
     .isIn(["hourly", "fixed_fee"])
-    .withMessage("Billing type must be: hourly or fixed_fee"),
+    .withMessage("Billing type must be: hourly or fixed_fee if provided"),
 
   body("fixedFeeAmount")
     .optional()
     .isFloat({ min: 0.01 })
     .withMessage("Fixed fee amount must be > 0 if provided"),
-
-  body().custom((value) => {
-    const billingType = value.billingType;
-    const hasEngagementLetter = value.engagementLetterId !== undefined && value.engagementLetterId !== null && value.engagementLetterId !== "";
-    const hasFixedFeeAmount = value.fixedFeeAmount !== undefined && value.fixedFeeAmount !== null && value.fixedFeeAmount !== "";
-
-    if (billingType === "fixed_fee" && !hasEngagementLetter && !hasFixedFeeAmount) {
-      throw new Error("Fixed fee amount required for fixed fee jobs");
-    }
-
-    return true;
-  }),
 
   body("budgetHours")
     .optional()
@@ -201,8 +191,9 @@ export const createJobFromOnboardingValidators = [
     .withMessage("Valid managerProfileId required"),
 
   body("startDate")
+    .optional()
     .isISO8601()
-    .withMessage("Valid startDate (ISO8601) required"),
+    .withMessage("Valid startDate (ISO8601) required if provided"),
 
   body("dueDate")
     .optional()
@@ -531,3 +522,39 @@ export const upsertJobCostingValidators = [
     .isBoolean()
     .withMessage("partnerApprove must be boolean"),
 ];
+
+/**
+ * Validators for GET /jobs/:jobId/time-entries
+ */
+export const getJobTimeEntriesValidators = [
+  param("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId (integer) required"),
+
+  query("page")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("page must be >= 1"),
+
+  query("pageSize")
+    .optional()
+    .isInt({ min: 1, max: 200 })
+    .withMessage("pageSize must be between 1 and 200"),
+
+  query("status")
+    .optional()
+    .isIn(["pending", "submitted", "approved", "rejected", "cancelled"])
+    .withMessage("status must be one of: pending, submitted, approved, rejected, cancelled"),
+
+  query("dateFrom")
+    .optional()
+    .isISO8601()
+    .withMessage("dateFrom must be a valid ISO8601 date"),
+
+  query("dateTo")
+    .optional()
+    .isISO8601()
+    .withMessage("dateTo must be a valid ISO8601 date"),
+];
+
+

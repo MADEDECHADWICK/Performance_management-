@@ -51,6 +51,16 @@ interface FirmMetrics {
   total_departments: number;
   evaluations_this_month: number;
   utilization_rate?: number;
+  totalEmployees?: number;
+  totalPartners?: number;
+  totalManagers?: number;
+  totalRevenue?: number;
+  totalFees?: number;
+  activeJobs?: number;
+  activeClients?: number;
+  totalDepartments?: number;
+  evaluationsThisMonth?: number;
+  utilizationRate?: number;
 }
 
 interface PartnerRanking {
@@ -67,6 +77,16 @@ interface PartnerRanking {
   direct_reports: number;
   client_count: number;
   avg_team_score: number;
+  partnerId?: number;
+  portfolioRevenue?: number;
+  portfolioFees?: number;
+  portfolioProfit?: number;
+  collectionRate?: number;
+  utilizationRate?: number;
+  activeJobs?: number;
+  directReports?: number;
+  clientCount?: number;
+  avgTeamScore?: number;
 }
 
 interface ManagerRanking {
@@ -85,6 +105,18 @@ interface ManagerRanking {
   portfolio_profit?: number;
   utilization_rate?: number;
   collection_rate?: number;
+  managerId?: number;
+  reportsTo?: string;
+  teamSize?: number;
+  teamTotalHours?: number;
+  evaluationCount?: number;
+  avgPerformance?: number;
+  jobsManaged?: number;
+  portfolioRevenue?: number;
+  portfolioFees?: number;
+  portfolioProfit?: number;
+  utilizationRate?: number;
+  collectionRate?: number;
 }
 
 interface DepartmentData {
@@ -100,6 +132,18 @@ interface DepartmentData {
   active_jobs?: number;
   jobs_count: number;
   avg_department_performance: number | null;
+  departmentId?: number;
+  departmentName?: string;
+  departmentCode?: string;
+  employeeCount?: number;
+  partnerCount?: number;
+  managerCount?: number;
+  departmentRevenue?: number;
+  departmentFees?: number;
+  collectionRate?: number;
+  activeJobs?: number;
+  jobsCount?: number;
+  avgDepartmentPerformance?: number | null;
 }
 
 interface TopClient {
@@ -113,6 +157,15 @@ interface TopClient {
   projected_amount?: number;
   projection_collected?: number;
   variance?: number;
+  clientId?: number;
+  clientName?: string;
+  totalCollected?: number;
+  totalFees?: number;
+  outstandingAmount?: number;
+  activeJobs?: number;
+  collectionRate?: number;
+  projectedAmount?: number;
+  projectionCollected?: number;
 }
 
 interface DashboardData {
@@ -172,6 +225,7 @@ interface PersonalData {
 interface AlertsData {
   jobsAtRisk: Array<{
     id: number;
+    trackingPath?: string | null;
     jobNumber?: string | null;
     jobName?: string | null;
     clientName?: string | null;
@@ -370,9 +424,11 @@ export default function GMPDashboard() {
     lines.push(`Executive,At-Risk Exposure,${asNumber(dashboardData?.riskSummary?.atRiskExposure ?? 0)}`);
 
     (dashboardData.partnerRankings || []).forEach((partner) => {
-      lines.push(`Partner,${partner.name} Revenue,${asNumber(partner.portfolio_revenue)}`);
-      lines.push(`Partner,${partner.name} Profit,${asNumber(partner.portfolio_profit)}`);
-      lines.push(`Partner,${partner.name} Utilization,${asNumber(partner.utilization_rate).toFixed(2)}%`);
+      lines.push(`Partner,${partner.name} Revenue,${asNumber(partner.portfolioRevenue ?? partner.portfolio_revenue)}`);
+      lines.push(`Partner,${partner.name} Profit,${asNumber(partner.portfolioProfit ?? partner.portfolio_profit)}`);
+      lines.push(
+        `Partner,${partner.name} Utilization,${asNumber(partner.utilizationRate ?? partner.utilization_rate).toFixed(2)}%`
+      );
     });
 
     const csv = lines.join("\n");
@@ -411,14 +467,19 @@ export default function GMPDashboard() {
     return `${(value || 0).toFixed(1)}%`;
   };
 
+  const resolveTrackingPath = (jobId: number, trackingPath?: string | null) =>
+    trackingPath || `/jobs/${jobId}/tracking`;
+
   const firmMetrics = dashboardData?.firmMetrics;
   const collected =
     dashboardData?.financials?.collectedAmount ??
     dashboardData?.financials?.totalRevenue ??
+    firmMetrics?.totalRevenue ??
     firmMetrics?.total_revenue ??
     0;
   const projected =
     dashboardData?.financials?.projectedRevenue ??
+    firmMetrics?.totalFees ??
     firmMetrics?.total_fees ??
     0;
   const profitability =
@@ -461,8 +522,8 @@ export default function GMPDashboard() {
       : [];
 
   const departmentSplit = dashboardData?.departmentBreakdown?.map((dept) => ({
-    department: dept.department_code || dept.department_name,
-    revenue: Number(dept.department_revenue ?? 0),
+    department: dept.departmentCode || dept.department_name || dept.departmentName,
+    revenue: Number(dept.departmentRevenue ?? dept.department_revenue ?? 0),
   })) ?? [];
 
   const topClients = (dashboardData?.topClients ?? []).slice(0, 5);
@@ -583,7 +644,7 @@ export default function GMPDashboard() {
             </CardHeader>
             <CardContent>
               <div className="kpi-value text-primary">
-                {formatPercentage(firmMetrics?.utilization_rate ?? 0)}
+                {formatPercentage(firmMetrics?.utilizationRate ?? firmMetrics?.utilization_rate ?? 0)}
               </div>
               <p className="text-xs text-muted-foreground">Billable vs total hours</p>
             </CardContent>
@@ -695,13 +756,13 @@ export default function GMPDashboard() {
                 <div className="space-y-2">
                   {topClients.length > 0 ? (
                     topClients.map((client) => (
-                      <div key={client.client_id} className="flex items-center justify-between text-sm">
-                        <span className="truncate pr-3">{client.client_name}</span>
+                      <div key={client.clientId ?? client.client_id} className="flex items-center justify-between text-sm">
+                        <span className="truncate pr-3">{client.clientName || client.client_name}</span>
                         <span
                           className="font-semibold"
-                          title={formatCurrency(client.total_collected)}
+                          title={formatCurrency(client.totalCollected ?? client.total_collected ?? 0)}
                         >
-                          {formatCompactCurrency(client.total_collected)}
+                          {formatCompactCurrency(client.totalCollected ?? client.total_collected ?? 0)}
                         </span>
                       </div>
                     ))
@@ -749,6 +810,54 @@ export default function GMPDashboard() {
 
         <Card>
           <CardHeader>
+            <CardTitle>At-Risk Job Tracking</CardTitle>
+            <CardDescription>
+              Open per-job workflow tracking for overdue or risky engagements.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(alertsData?.jobsAtRisk || []).length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No at-risk jobs are currently flagged.
+              </p>
+            )}
+            {(alertsData?.jobsAtRisk || []).slice(0, 8).map((job) => (
+              <div
+                key={job.id}
+                className="rounded-lg border p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
+              >
+                <div>
+                  <p className="font-medium">{job.jobName || `Job #${job.id}`}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {job.clientName || 'Client'} | {job.status || 'status unknown'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {resolveTrackingPath(job.id, job.trackingPath)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {Number(job.daysOverdue || 0) > 0 && (
+                    <Badge variant="destructive">
+                      {Number(job.daysOverdue)} day(s) overdue
+                    </Badge>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      navigate(resolveTrackingPath(job.id, job.trackingPath))
+                    }
+                  >
+                    Open tracking
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Partner Performance Summary</CardTitle>
             <CardDescription>Portfolio health, utilization, and profitability</CardDescription>
           </CardHeader>
@@ -767,14 +876,15 @@ export default function GMPDashboard() {
                   </TableHeader>
                   <TableBody>
                     {dashboardData.partnerRankings.map((partner) => {
-                      const revenue = Number(partner.portfolio_revenue || 0);
-                      const fees = Number(partner.portfolio_fees || 0);
+                      const revenue = Number((partner.portfolioRevenue ?? partner.portfolio_revenue) ?? 0);
+                      const fees = Number((partner.portfolioFees ?? partner.portfolio_fees) ?? 0);
                       const profit =
-                        Number(partner.portfolio_profit ?? revenue - fees) || 0;
+                        Number((partner.portfolioProfit ?? partner.portfolio_profit) ?? (revenue - fees));
+                      const utilization = Number(partner.utilizationRate ?? partner.utilization_rate);
                       return (
-                        <TableRow key={partner.partner_id}>
+                        <TableRow key={partner.partnerId ?? partner.partner_id}>
                           <TableCell className="font-medium">{partner.name}</TableCell>
-                          <TableCell className="text-right">{partner.active_jobs}</TableCell>
+                          <TableCell className="text-right">{partner.activeJobs ?? partner.active_jobs}</TableCell>
                           <TableCell className="text-right" title={formatCurrency(revenue)}>
                             {formatCompactCurrency(revenue)}
                           </TableCell>
@@ -782,9 +892,9 @@ export default function GMPDashboard() {
                             {formatCompactCurrency(profit)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {Number.isFinite(partner.utilization_rate) ? (
+                            {Number.isFinite(utilization) ? (
                               <Badge variant="outline">
-                                {formatPercentage(partner.utilization_rate as number)}
+                                {formatPercentage(utilization)}
                               </Badge>
                             ) : (
                               <Badge variant="outline">--</Badge>
@@ -823,19 +933,21 @@ export default function GMPDashboard() {
                   </TableHeader>
                   <TableBody>
                     {dashboardData.managerRankings.map((manager) => (
-                      <TableRow key={manager.manager_id}>
+                      <TableRow key={manager.managerId ?? manager.manager_id}>
                         <TableCell className="font-medium">{manager.name}</TableCell>
-                        <TableCell className="text-right">{manager.team_size}</TableCell>
-                        <TableCell className="text-right">{manager.jobs_managed}</TableCell>
+                        <TableCell className="text-right">{manager.teamSize ?? manager.team_size}</TableCell>
+                        <TableCell className="text-right">{manager.jobsManaged ?? manager.jobs_managed}</TableCell>
                         <TableCell className="text-right">
-                          {formatCompactCurrency(Number(manager.portfolio_revenue || 0))}
+                          {formatCompactCurrency(Number((manager.portfolioRevenue ?? manager.portfolio_revenue) ?? 0))}
                         </TableCell>
                         <TableCell className="text-right">
                           <Badge variant="outline">
-                            {formatPercentage(Number(manager.utilization_rate || 0))}
+                            {formatPercentage(Number((manager.utilizationRate ?? manager.utilization_rate) ?? 0))}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-right">{Number(manager.avg_performance || 0).toFixed(1)}</TableCell>
+                        <TableCell className="text-right">
+                          {Number((manager.avgPerformance ?? manager.avg_performance) ?? 0).toFixed(1)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

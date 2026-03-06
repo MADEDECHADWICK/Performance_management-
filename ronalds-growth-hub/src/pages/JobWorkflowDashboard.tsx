@@ -14,9 +14,10 @@ import type {
   JobStaffAssignment,
   JobInvoiceMilestoneTracking,
   JobInvoiceMilestoneTrackingItem,
+  JobWorkflowTrackingResponse,
 } from '@/lib/api/types';
-import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText, Upload } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText, Upload, ArrowRight } from 'lucide-react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 
 const statusColors: Record<string, string> = {
@@ -25,6 +26,14 @@ const statusColors: Record<string, string> = {
   on_hold: 'bg-yellow-100 text-yellow-800',
   completed: 'bg-green-100 text-green-800',
   cancelled: 'bg-red-100 text-red-800',
+};
+
+const WORKFLOW_STATUS_TRANSITIONS: Record<string, Array<Job['status']>> = {
+  planned: ['in_progress', 'cancelled'],
+  in_progress: ['on_hold', 'completed', 'cancelled'],
+  on_hold: ['in_progress', 'cancelled'],
+  completed: [],
+  cancelled: [],
 };
 
 interface AllocationInput {
@@ -136,11 +145,15 @@ export default function JobWorkflowDashboard() {
   const { toast } = useToast();
   const { profile, isEmployee, isAdmin, isHR, isGMP, isPartner, isManager } = useAuth();
   const navigate = useNavigate();
+  const { jobId: routeJobId } = useParams<{ jobId?: string }>();
   const [searchParams] = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [staff, setStaff] = useState<JobStaffAssignment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState<Job['status'] | null>(null);
+  const [jobTracking, setJobTracking] = useState<JobWorkflowTrackingResponse | null>(null);
   const [costingForm, setCostingForm] = useState<CostingFormState | null>(null);
   const [costingLoading, setCostingLoading] = useState(false);
   const [costingSaving, setCostingSaving] = useState(false);
@@ -154,7 +167,7 @@ export default function JobWorkflowDashboard() {
   const isEmployeeExperience =
     isEmployee && !isAdmin && !isHR && !isGMP && !isPartner && !isManager;
   const isFixedFeeJob = selectedJob?.billingType === 'fixed_fee';
-  const selectedJobIdParam = Number(searchParams.get('jobId'));
+  const selectedJobIdParam = Number(routeJobId || searchParams.get('jobId'));
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
   const resolveDocumentUrl = (filePath?: string | null) => {
@@ -220,12 +233,15 @@ export default function JobWorkflowDashboard() {
 
   const loadJobDetails = async (jobId: number) => {
     try {
-      const [job, staffAssignments] = await Promise.all([
+      setTrackingLoading(true);
+      const [job, staffAssignments, tracking] = await Promise.all([
         jobsAPI.getById(jobId),
         jobsAPI.getStaff(jobId),
+        jobsAPI.getTracking(jobId),
       ]);
       setSelectedJob(job);
       setStaff(staffAssignments);
+      setJobTracking(tracking);
       await Promise.all([loadAllocationSummary(jobId), loadJobDocuments(jobId)]);
 
       if (isEmployeeExperience) {
@@ -242,11 +258,14 @@ export default function JobWorkflowDashboard() {
       setCostingForm(null);
       setJobDocuments([]);
       setAllocationSummary(null);
+      setJobTracking(null);
       toast({
         title: 'Error',
         description: 'Failed to load job details',
         variant: 'destructive',
       });
+    } finally {
+      setTrackingLoading(false);
     }
   };
 
@@ -320,10 +339,82 @@ export default function JobWorkflowDashboard() {
     }
   };
 
+  const trackingEmployeeByProfileId = useMemo(() => {
+    const map = new Map<number, JobWorkflowTrackingResponse['tracking']['staffing']['employees'][number]>();
+    const employees = jobTracking?.tracking?.staffing?.employees || [];
+    employees.forEach((employee) => map.set(Number(employee.profileId || 0), employee));
+    return map;
+  }, [jobTracking]);
+
+  const moveJobToStatus = async (nextStatus: Job['status']) => {
+    if (!selectedJob) return;
+    try {
+      setStatusUpdating(nextStatus);
+      await jobsAPI.updateStatus(selectedJob.id, nextStatus);
+      await Promise.all([loadJobs(), loadJobDetails(selectedJob.id)]);
+      toast({
+        title: 'Workflow updated',
+        description: `Job moved to ${String(nextStatus).replace(/_/g, ' ')}.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Status update failed',
+        description: error?.message || 'Unable to update job workflow status.',
+        variant: 'destructive',
+      });
+    } finally {
+      setStatusUpdating(null);
+    }
+  };
+
   const employeeAssignment = useMemo(() => {
     if (!profile?.id) return null;
     return staff.find((assignment) => assignment.employeeProfileId === profile.id) || null;
   }, [profile?.id, staff]);
+
+  const employeeTracking = useMemo(() => {
+    if (!profile?.id) return null;
+    return trackingEmployeeByProfileId.get(Number(profile.id)) || null;
+  }, [profile?.id, trackingEmployeeByProfileId]);
+
+  const trackingSnapshot = jobTracking?.tracking || null;
+  const workflowSnapshot = jobTracking?.workflow || null;
+  const executionSnapshot = workflowSnapshot?.execution || null;
+  const selectedWorkflowStatus = (
+    selectedJob?.status ||
+    jobTracking?.job?.status ||
+    'planned'
+  ) as Job['status'];
+  const availableStatusTransitions =
+    WORKFLOW_STATUS_TRANSITIONS[selectedWorkflowStatus] || [];
+
+  const formatCurrency = (value: number) =>
+    new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(Number.isFinite(value) ? value : 0);
+
+  const formatPercent = (value: number) => `${Number(value || 0).toFixed(1)}%`;
+
+  const formatStatusLabel = (status: string) => status.replace(/_/g, ' ');
+
+  const resolveTransitionBlockers = (targetStatus: Job['status']) => {
+    if (!executionSnapshot) return [];
+    if (targetStatus === 'in_progress') {
+      return executionSnapshot.blockersForInProgress || [];
+    }
+    if (targetStatus === 'completed') {
+      return executionSnapshot.blockersForCompletion || [];
+    }
+    return [];
+  };
+
+  const openTrackingJob = (jobId: number) => {
+    navigate(`/jobs/${jobId}/tracking`);
+    void loadJobDetails(jobId);
+  };
 
   const requiredDocumentDefinitions = useMemo(() => {
     if (!selectedJob?.status) return [];
@@ -388,12 +479,15 @@ export default function JobWorkflowDashboard() {
   }, [selectedJob]);
 
   const employeeUtilizationPercent = useMemo(() => {
+    if (employeeTracking) {
+      return Math.round(Number(employeeTracking.utilizationPercent || 0));
+    }
     if (!allocationSummary || allocationSummary.allowedEmployeeHours <= 0) return 0;
     return Math.min(
       100,
       Math.round((allocationSummary.loggedEmployeeHours / allocationSummary.allowedEmployeeHours) * 100)
     );
-  }, [allocationSummary]);
+  }, [allocationSummary, employeeTracking]);
 
   const requiredActions = useMemo<RequiredActionItem[]>(() => {
     if (!selectedJob) return [];
@@ -675,10 +769,9 @@ export default function JobWorkflowDashboard() {
   useEffect(() => {
     if (!Number.isFinite(selectedJobIdParam) || selectedJobIdParam <= 0) return;
     if (selectedJob?.id === selectedJobIdParam) return;
-    if (!jobs.some((job) => job.id === selectedJobIdParam)) return;
 
     loadJobDetails(selectedJobIdParam);
-  }, [jobs, selectedJob?.id, selectedJobIdParam]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedJob?.id, selectedJobIdParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -690,6 +783,7 @@ export default function JobWorkflowDashboard() {
     setCostingForm(null);
     setAllocationSummary(null);
     setJobDocuments([]);
+    setJobTracking(null);
   }, [jobs, selectedJob]);
 
   const totalAllocatedHours = costingForm
@@ -702,6 +796,27 @@ export default function JobWorkflowDashboard() {
       )
     : 0;
   const remainingBudget = costingForm ? Number(costingForm.jobFee || 0) - totalEstimatedCost : 0;
+  const managerDisplayName =
+    jobTracking?.ownership?.manager
+      ? `${jobTracking.ownership.manager.firstName || ''} ${jobTracking.ownership.manager.lastName || ''}`.trim()
+      : selectedJob?.manager
+        ? `${selectedJob.manager.firstName} ${selectedJob.manager.lastName}`
+        : 'Not assigned';
+  const partnerDisplayName =
+    jobTracking?.ownership?.partner
+      ? `${jobTracking.ownership.partner.firstName || ''} ${jobTracking.ownership.partner.lastName || ''}`.trim()
+      : selectedJob?.partner
+        ? `${selectedJob.partner.firstName} ${selectedJob.partner.lastName}`
+        : 'Not assigned';
+  const employeeAllocatedHours = employeeTracking
+    ? Number(employeeTracking.allocatedHours || 0)
+    : Number(allocationSummary?.allowedEmployeeHours || 0);
+  const employeeLoggedHours = employeeTracking
+    ? Number(employeeTracking.loggedHours || 0)
+    : Number(allocationSummary?.loggedEmployeeHours || 0);
+  const employeeRemainingHours = employeeTracking
+    ? Number(employeeTracking.remainingAllocatedHours || 0)
+    : Number(allocationSummary?.remainingEmployeeHours || 0);
 
   return (
     <DashboardLayout>
@@ -734,7 +849,7 @@ export default function JobWorkflowDashboard() {
                 <button
                   key={job.id}
                   type="button"
-                  onClick={() => loadJobDetails(job.id)}
+                  onClick={() => openTrackingJob(job.id)}
                   className={`w-full text-left border rounded-lg p-3 transition-colors ${
                     selectedJob?.id === job.id ? 'bg-blue-50 border-blue-300' : 'hover:bg-gray-50'
                   }`}
@@ -750,9 +865,18 @@ export default function JobWorkflowDashboard() {
                       {job.status.replace('_', ' ')}
                     </Badge>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground flex items-center gap-2">
-                    <Calendar className="h-3 w-3" />
-                    {job.dueDate ? new Date(job.dueDate).toLocaleDateString() : 'No due date'}
+                  <div className="mt-2 text-xs text-muted-foreground flex items-center gap-2 justify-between">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-3 w-3" />
+                      {job.dueDate ? new Date(job.dueDate).toLocaleDateString() : 'No due date'}
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-primary">
+                      Tracking
+                      <ArrowRight className="h-3 w-3" />
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground truncate">
+                    {job.trackingPath || `/jobs/${job.id}/tracking`}
                   </div>
                 </button>
               ))}
@@ -776,6 +900,12 @@ export default function JobWorkflowDashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {trackingLoading && (
+                <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Refreshing tracking data from /jobs/:jobId/tracking...
+                </div>
+              )}
               {selectedJob ? (
                 <div className="space-y-6">
                   <div>
@@ -788,19 +918,11 @@ export default function JobWorkflowDashboard() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="border rounded-lg p-3">
                       <p className="text-xs text-muted-foreground">Partner</p>
-                      <p className="font-medium">
-                        {selectedJob.partner
-                          ? `${selectedJob.partner.firstName} ${selectedJob.partner.lastName}`
-                          : 'Not assigned'}
-                      </p>
+                      <p className="font-medium">{partnerDisplayName}</p>
                     </div>
                     <div className="border rounded-lg p-3">
                       <p className="text-xs text-muted-foreground">Manager</p>
-                      <p className="font-medium">
-                        {selectedJob.manager
-                          ? `${selectedJob.manager.firstName} ${selectedJob.manager.lastName}`
-                          : 'Not assigned'}
-                      </p>
+                      <p className="font-medium">{managerDisplayName}</p>
                     </div>
                     <div className="border rounded-lg p-3">
                       <p className="text-xs text-muted-foreground">Billing</p>
@@ -812,6 +934,237 @@ export default function JobWorkflowDashboard() {
                     </div>
                   </div>
 
+                  {jobTracking && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Workflow Visibility</CardTitle>
+                        <CardDescription>
+                          Primary tracking source: /jobs/:jobId/tracking
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                          <div className="border rounded-lg p-3 space-y-2">
+                            <p className="text-xs text-muted-foreground">Marketing</p>
+                            <p className="font-medium capitalize">
+                              {workflowSnapshot?.marketing?.onboardingStatus || 'No onboarding status'}
+                            </p>
+                            <p className="text-xs text-muted-foreground capitalize">
+                              Engagement letter:{' '}
+                              {workflowSnapshot?.marketing?.engagementLetterStatus || 'pending'}
+                            </p>
+                            <Badge
+                              variant={
+                                workflowSnapshot?.marketing?.engagementLetterDocumentUploaded
+                                  ? 'default'
+                                  : 'secondary'
+                              }
+                            >
+                              {workflowSnapshot?.marketing?.engagementLetterDocumentUploaded
+                                ? 'Document uploaded'
+                                : 'Document missing'}
+                            </Badge>
+                          </div>
+                          <div className="border rounded-lg p-3 space-y-2">
+                            <p className="text-xs text-muted-foreground">HR</p>
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant={workflowSnapshot?.hr?.jobCreated ? 'default' : 'secondary'}>
+                                Job created
+                              </Badge>
+                              <Badge variant={workflowSnapshot?.hr?.managerAssigned ? 'default' : 'secondary'}>
+                                Manager assigned
+                              </Badge>
+                              <Badge variant={workflowSnapshot?.hr?.partnerAssigned ? 'default' : 'secondary'}>
+                                Partner assigned
+                              </Badge>
+                              <Badge variant={workflowSnapshot?.hr?.departmentAssigned ? 'default' : 'secondary'}>
+                                Department assigned
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="border rounded-lg p-3 space-y-2">
+                            <p className="text-xs text-muted-foreground">Manager</p>
+                            <p className="font-medium">
+                              Team: {trackingSnapshot?.staffing?.headcount ?? workflowSnapshot?.manager?.staffCount ?? 0}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Costing:{' '}
+                              <span className="capitalize">
+                                {workflowSnapshot?.manager?.costingStatus || 'not started'}
+                              </span>
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant={workflowSnapshot?.manager?.teamAssigned ? 'default' : 'secondary'}>
+                                Team assigned
+                              </Badge>
+                              <Badge
+                                variant={workflowSnapshot?.manager?.costingCompleted ? 'default' : 'secondary'}
+                              >
+                                Costing complete
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="border rounded-lg p-3 space-y-2">
+                            <p className="text-xs text-muted-foreground">Execution</p>
+                            <Badge className={statusColors[selectedWorkflowStatus] || statusColors.planned}>
+                              {formatStatusLabel(selectedWorkflowStatus)}
+                            </Badge>
+                            <p className="text-xs text-muted-foreground">
+                              Tasks incomplete: {trackingSnapshot?.tasks?.incomplete ?? 0}
+                            </p>
+                            {executionSnapshot?.isOverdue && (
+                              <p className="text-xs font-medium text-red-600">
+                                Overdue by {executionSnapshot.overdueDays} day(s)
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Hours Worked</p>
+                            <p className="text-lg font-semibold">
+                              {Number(trackingSnapshot?.timesheets?.totalHoursWorked || 0).toFixed(1)}h
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Approved {Number(trackingSnapshot?.timesheets?.approvedHoursWorked || 0).toFixed(1)}h
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Billable Split</p>
+                            <p className="text-lg font-semibold">
+                              {Number(trackingSnapshot?.timesheets?.totalBillableHours || 0).toFixed(1)}h
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Non-billable {Number(trackingSnapshot?.timesheets?.totalNonBillableHours || 0).toFixed(1)}h
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Profitability</p>
+                            <p className="text-lg font-semibold">
+                              {formatCurrency(Number(trackingSnapshot?.financials?.profitToDate || 0))}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Margin {formatPercent(Number(trackingSnapshot?.financials?.marginPercent || 0))}
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Collections</p>
+                            <p className="text-lg font-semibold">
+                              {formatPercent(Number(trackingSnapshot?.collections?.collectionPercent || 0))}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Outstanding {formatCurrency(Number(trackingSnapshot?.collections?.outstandingAmount || 0))}
+                            </p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {!isEmployeeExperience && jobTracking && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Status Workflow Actions</CardTitle>
+                        <CardDescription>
+                          Status updates follow backend workflow guards and blocker checks.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {availableStatusTransitions.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">
+                            No status transitions available from {formatStatusLabel(selectedWorkflowStatus)}.
+                          </p>
+                        ) : (
+                          availableStatusTransitions.map((nextStatus) => {
+                            const blockers = resolveTransitionBlockers(nextStatus);
+                            const hasBlockers = blockers.length > 0;
+                            return (
+                              <div
+                                key={nextStatus}
+                                className="border rounded-lg p-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between"
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 text-sm font-medium">
+                                    <span className="capitalize">{formatStatusLabel(selectedWorkflowStatus)}</span>
+                                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                                    <span className="capitalize">{formatStatusLabel(nextStatus)}</span>
+                                  </div>
+                                  {hasBlockers ? (
+                                    <div className="space-y-1">
+                                      {blockers.map((blocker, index) => (
+                                        <p key={`${nextStatus}-blocker-${index}`} className="text-xs text-red-600">
+                                          {blocker}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                      Ready for transition.
+                                    </p>
+                                  )}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  onClick={() => moveJobToStatus(nextStatus)}
+                                  disabled={Boolean(statusUpdating) || hasBlockers}
+                                >
+                                  {statusUpdating === nextStatus ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                      Updating...
+                                    </>
+                                  ) : (
+                                    `Move to ${formatStatusLabel(nextStatus)}`
+                                  )}
+                                </Button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {jobTracking && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Status Timeline</CardTitle>
+                        <CardDescription>
+                          Audit trail of lifecycle transitions on this job.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {jobTracking.statusTimeline.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">
+                            No status transitions recorded yet.
+                          </p>
+                        ) : (
+                          jobTracking.statusTimeline.map((transition) => (
+                            <div
+                              key={transition.id}
+                              className="border rounded-lg p-3 flex flex-col gap-1"
+                            >
+                              <p className="text-sm font-medium">
+                                {transition.fromStatus
+                                  ? `${formatStatusLabel(String(transition.fromStatus))} -> ${formatStatusLabel(String(transition.toStatus || ''))}`
+                                  : `Set to ${formatStatusLabel(String(transition.toStatus || ''))}`}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {transition.createdAt
+                                  ? new Date(transition.createdAt).toLocaleString()
+                                  : 'Unknown timestamp'}
+                              </p>
+                              {transition.reason && (
+                                <p className="text-xs text-muted-foreground">Reason: {transition.reason}</p>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
                   {isEmployeeExperience && (
                     <>
                       <Card>
@@ -821,29 +1174,45 @@ export default function JobWorkflowDashboard() {
                             Track your utilization, assigned role, and remaining time budget.
                           </CardDescription>
                         </CardHeader>
-                        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3">
                           <div className="border rounded-lg p-3">
                             <p className="text-xs text-muted-foreground">Assigned Role</p>
-                            <p className="font-medium">{employeeAssignment?.role?.name || 'Not set'}</p>
+                            <p className="font-medium">
+                              {employeeTracking?.assignedRole || employeeAssignment?.role?.name || 'Not set'}
+                            </p>
                           </div>
                           <div className="border rounded-lg p-3">
                             <p className="text-xs text-muted-foreground">Allocated (You)</p>
                             <p className="font-semibold">
-                              {allocationSummary ? `${allocationSummary.allowedEmployeeHours.toFixed(1)}h` : '-'}
+                              {employeeTracking || allocationSummary
+                                ? `${employeeAllocatedHours.toFixed(1)}h`
+                                : '-'}
                             </p>
                           </div>
                           <div className="border rounded-lg p-3">
                             <p className="text-xs text-muted-foreground">Logged (You)</p>
                             <p className="font-semibold">
-                              {allocationSummary ? `${allocationSummary.loggedEmployeeHours.toFixed(1)}h` : '-'}
+                              {employeeTracking || allocationSummary
+                                ? `${employeeLoggedHours.toFixed(1)}h`
+                                : '-'}
+                            </p>
+                          </div>
+                          <div className="border rounded-lg p-3">
+                            <p className="text-xs text-muted-foreground">Billable / Non-billable</p>
+                            <p className="font-semibold">
+                              {employeeTracking
+                                ? `${Number(employeeTracking.billableHours || 0).toFixed(1)}h / ${Number(
+                                    employeeTracking.nonBillableHours || 0
+                                  ).toFixed(1)}h`
+                                : '-'}
                             </p>
                           </div>
                           <div className="border rounded-lg p-3">
                             <p className="text-xs text-muted-foreground">Utilization</p>
                             <p className="font-semibold">{employeeUtilizationPercent}%</p>
                             <p className="text-xs text-muted-foreground mt-1">
-                              {allocationSummary
-                                ? `${allocationSummary.remainingEmployeeHours.toFixed(1)}h remaining`
+                              {employeeTracking || allocationSummary
+                                ? `${employeeRemainingHours.toFixed(1)}h remaining`
                                 : 'No allocation summary'}
                             </p>
                           </div>
@@ -934,6 +1303,62 @@ export default function JobWorkflowDashboard() {
                         </CardContent>
                       </Card>
                     </>
+                  )}
+
+                  {!isEmployeeExperience && trackingSnapshot && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Team Delivery Tracking</CardTitle>
+                        <CardDescription>
+                          Per-employee hours, utilization, and profitability from tracking metrics.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {trackingSnapshot.staffing.employees.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">
+                            No team members are assigned to this job yet.
+                          </p>
+                        ) : (
+                          trackingSnapshot.staffing.employees.map((employee) => (
+                            <div
+                              key={employee.profileId}
+                              className="border rounded-lg p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3"
+                            >
+                              <div>
+                                <p className="font-medium">{employee.employeeName}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {employee.assignedRole || employee.positionTitle || 'Team member'}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Allocated</p>
+                                <p className="font-semibold">{Number(employee.allocatedHours || 0).toFixed(1)}h</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Logged</p>
+                                <p className="font-semibold">{Number(employee.loggedHours || 0).toFixed(1)}h</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Billable</p>
+                                <p className="font-semibold">{Number(employee.billableHours || 0).toFixed(1)}h</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Utilization</p>
+                                <p className="font-semibold">{formatPercent(Number(employee.utilizationPercent || 0))}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Profit/Loss</p>
+                                <p className="font-semibold">
+                                  {formatCurrency(
+                                    Number(employee.billableAmount || 0) - Number(employee.costAmount || 0)
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </CardContent>
+                    </Card>
                   )}
 
                   {!isEmployeeExperience && (

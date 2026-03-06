@@ -1,4 +1,4 @@
-﻿import DashboardLayout from "@/components/DashboardLayout";
+import DashboardLayout from "@/components/DashboardLayout";
 import PageLoader from '@/components/ui/page-loader';
 import UserRoleManagement from "@/components/UserRoleManagement";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,6 +120,7 @@ interface HrApprovalControls {
   overBudgetRequests: Array<{
     id: number;
     jobId: number;
+    trackingPath?: string | null;
     jobName: string;
     clientName?: string | null;
     employeeName?: string;
@@ -169,14 +170,15 @@ const HRDashboard = () => {
   const loadAllData = async () => {
     try {
       if (!user) return;
+      const profileId = user?.profile?.id ?? user.id;
 
       await Promise.all([
         loadPendingTasks(user.id),
         loadNotifications(),
-        loadPersonalPerformance(user.id),
+        loadPersonalPerformance(profileId),
         loadCompanyMetrics(),
         loadApprovalControls(),
-        loadSubordinates(user.id),
+        loadSubordinates(profileId),
         loadMissingChecklists()
       ]);
 
@@ -236,7 +238,7 @@ const HRDashboard = () => {
     if (jobMatch) {
       const jobId = Number(jobMatch[1]);
       if (hasModuleAccess("jobs", "read")) {
-        return `/jobs?jobId=${jobId}`;
+        return `/jobs/${jobId}/tracking`;
       }
       return `/timesheets?jobId=${jobId}`;
     }
@@ -245,6 +247,9 @@ const HRDashboard = () => {
     }
     return rawLink;
   };
+
+  const resolveTrackingPath = (jobId: number, trackingPath?: string | null) =>
+    trackingPath || `/jobs/${jobId}/tracking`;
 
   const markNotificationRead = async (id: number) => {
     try {
@@ -264,7 +269,7 @@ const HRDashboard = () => {
     }
   };
 
-  const loadPersonalPerformance = async (userId: number | string) => {
+  const loadPersonalPerformance = async (profileId: number | string) => {
     try {
       const performanceResponse = await apiFetch('GET', '/performance-scores/me');
       const performancePayload = (performanceResponse as any)?.data ?? performanceResponse;
@@ -297,32 +302,86 @@ const HRDashboard = () => {
         return;
       }
 
-      // Get employee allocations for revenue contribution
-      const allocations = await apiFetch('GET', `/employee_project_allocations?employee_id=${userId}`);
+      const asRows = (payload: any) => {
+        if (Array.isArray(payload)) return payload;
+        return Array.isArray(payload?.data) ? payload.data : [];
+      };
+      const toNumber = (value: any) => {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
 
-      const totalRevenue = allocations?.reduce((sum, a) => sum + (a.allocation_amount || 0), 0) || 0;
-      const totalBillableHours = allocations?.reduce((sum, a) => sum + (a.billable_hours || 0), 0) || 0;
+      // Fallback source paths aligned to mounted backend routes.
+      const allocationsPayload = await apiFetch(
+        'GET',
+        `/employee-project-allocations?employeeIds=${profileId}`
+      );
+      const allocations = asRows(allocationsPayload);
+      const totalRevenue = allocations.reduce(
+        (sum, row) =>
+          sum +
+          toNumber(
+            row.allocationAmount ??
+            row.allocation_amount ??
+            row.allocatedAmount ??
+            row.allocated_amount
+          ),
+        0
+      );
+      const totalBillableHours = allocations.reduce(
+        (sum, row) =>
+          sum +
+          toNumber(
+            row.billableHours ??
+            row.billable_hours ??
+            row.allocatedHours ??
+            row.allocated_hours
+          ),
+        0
+      );
 
-      // Get client ratings
-      const clientEvals = await apiFetch('GET', `/client_evaluations?employee_id=${userId}`);
-
-      const avgClientRating = clientEvals && clientEvals.length > 0
-        ? clientEvals.reduce((sum, e) => sum + (e.overall_rating || 0), 0) / clientEvals.length
+      const clientEvalsPayload = await apiFetch(
+        'GET',
+        `/client-evaluations?employeeIds=${profileId}`
+      );
+      const clientEvals = asRows(clientEvalsPayload);
+      const avgClientRating = clientEvals.length > 0
+        ? clientEvals.reduce(
+            (sum, row) => sum + toNumber(row.overallRating ?? row.overall_rating),
+            0
+          ) / clientEvals.length
         : 0;
 
-      // Get KPI scores by BSC category
-      const kpiAssignments = await apiFetch('GET', `/employee_kpi_assignments?employee_id=${userId}&include_kpis=true`);
+      const assignmentsPayload = await apiFetch(
+        'GET',
+        `/employee-kpi-assignments?employeeProfileId=${profileId}&includeTracking=true`
+      );
+      const kpiAssignments = asRows(assignmentsPayload);
+      const bscCategory = (assignment: any) =>
+        String(
+          assignment?.kpi?.bscCategory ??
+          assignment?.kpi?.bsc_category ??
+          assignment?.kpis?.bscCategory ??
+          assignment?.kpis?.bsc_category ??
+          ""
+        ).toLowerCase();
 
-      const financialKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "financial") || [];
-      const customerKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "customer") || [];
-      const internalKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "internal_processes") || [];
-      const learningKPIs = kpiAssignments?.filter(k => k.kpis?.bsc_category === "learning_growth") || [];
+      const financialKPIs = kpiAssignments.filter((k) => bscCategory(k) === "financial");
+      const customerKPIs = kpiAssignments.filter((k) => bscCategory(k) === "customer");
+      const internalKPIs = kpiAssignments.filter((k) => {
+        const category = bscCategory(k);
+        return category === "internal_processes" || category === "internalprocesses";
+      });
+      const learningKPIs = kpiAssignments.filter((k) => {
+        const category = bscCategory(k);
+        return category === "learning_growth" || category === "learninggrowth";
+      });
 
       const calculateScore = (kpis: any[]) => {
         if (kpis.length === 0) return 0;
-        const total = kpis.reduce((sum, k) => {
-          const achieved = k.achieved_value || 0;
-          const target = k.target_value || 1;
+        const total = kpis.reduce((sum, row) => {
+          const achieved = toNumber(row.achievedValue ?? row.achieved_value);
+          const target = toNumber(row.targetValue ?? row.target_value) || 1;
           return sum + (achieved / target) * 100;
         }, 0);
         return Math.min(100, total / kpis.length);
@@ -370,8 +429,8 @@ const HRDashboard = () => {
         title: "Scores refreshed",
         description: "Performance scores have been recalculated.",
       });
-      if (user?.id) {
-        await loadPersonalPerformance(user.id);
+      if (user?.profile?.id || user?.id) {
+        await loadPersonalPerformance(user?.profile?.id ?? user?.id);
       }
       await loadCompanyMetrics();
     } catch (error) {
@@ -462,9 +521,9 @@ const HRDashboard = () => {
       minimumFractionDigits: 0,
     }).format(amount);
 
-  const loadSubordinates = async (userId: number | string) => {
+  const loadSubordinates = async (profileId: number | string) => {
     try {
-      const subs = await apiFetch('GET', `/subordinates?user_id=${userId}`);
+      const subs = await apiFetch('GET', `/subordinates?profileId=${profileId}`);
       setSubordinates(subs || []);
     } catch (error) {
       console.error("Error loading subordinates:", error);
@@ -479,7 +538,7 @@ const HRDashboard = () => {
     hasModuleAccess("jobs", "read") ||
     hasModuleAccess("kpis", "read") ||
     hasModuleAccess("finance", "read");
-  const canRecomputeScores = hasModuleAccess("reports", "write");
+  const canRecomputeScores = hasModuleAccess("reports", "admin");
 
   const enabledTabs = useMemo(() => {
     const tabs: string[] = [];
@@ -1064,10 +1123,10 @@ const HRDashboard = () => {
                       <div>
                         <p className="font-medium">{request.jobName}</p>
                         <p className="text-xs text-muted-foreground">
-                          {request.clientName || 'Client'} Â· {request.employeeName || 'Team member'}
+                          {request.clientName || 'Client'} · {request.employeeName || 'Team member'}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          +{Number(request.requestedAdditional || 0).toFixed(1)}h Â·
+                          +{Number(request.requestedAdditional || 0).toFixed(1)}h ·
                           {' '}Impact {formatCurrency(Number(request.estimatedCostImpact || 0))}
                         </p>
                       </div>
@@ -1080,8 +1139,20 @@ const HRDashboard = () => {
                         </p>
                       </div>
                     </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Link to={resolveTrackingPath(request.jobId, request.trackingPath)}>
+                        <Button size="sm" variant="ghost">
+                          Open tracking
+                        </Button>
+                      </Link>
+                      {request.status !== 'manager_approved' && (
+                        <p className="text-xs text-muted-foreground">
+                          Awaiting manager decision before partner stage.
+                        </p>
+                      )}
+                    </div>
                     {isAdmin &&
-                      (request.status === 'pending' || request.status === 'manager_approved') && (
+                      request.status === 'manager_approved' && (
                         <div className="mt-2 flex items-center gap-2">
                           <Button size="sm" onClick={() => handleApproveOverBudget(request.id)}>
                             Approve
@@ -1409,3 +1480,5 @@ const HRDashboard = () => {
 };
 
 export default HRDashboard;
+
+

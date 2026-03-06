@@ -244,6 +244,21 @@ export interface AuthContext {
 }
 
 class JobService {
+  private buildTrackingPath(jobId: number) {
+    return `/jobs/${jobId}/tracking`;
+  }
+
+  private normalizeRoleName(role?: string) {
+    return String(role || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_');
+  }
+
+  private roleSet(roles?: string[]) {
+    return new Set((roles || []).map((role) => this.normalizeRoleName(role)));
+  }
+
   private withDerivedOverdueStatus<T extends { dueDate?: Date | null; status: JobStatus }>(job: T) {
     const now = new Date();
     const isOverdue =
@@ -1116,7 +1131,13 @@ class JobService {
       prisma.job.count({ where: whereClause }),
     ]);
 
-    return { jobs: jobs.map((job) => this.withDerivedOverdueStatus(job as any)), total };
+    return {
+      jobs: jobs.map((job) => ({
+        ...this.withDerivedOverdueStatus(job as any),
+        trackingPath: this.buildTrackingPath(job.id),
+      })),
+      total,
+    };
   }
 
   /**
@@ -1160,7 +1181,7 @@ class JobService {
     });
 
     if (!job) {
-      throw new Error('Job not found');
+      throw { statusCode: 404, message: 'Job not found' };
     }
 
     return this.withDerivedOverdueStatus(job as any);
@@ -1392,6 +1413,14 @@ class JobService {
     const isAdmin = authContext.roles?.includes('super_admin');
     if (!isAdmin && job.managerProfileId !== authContext.profileId) {
       throw new Error('Not authorized to update this job');
+    }
+
+    if (input.status !== undefined) {
+      // Keep status transitions inside updateJobStatus so workflow gates always run.
+      throw {
+        statusCode: 400,
+        message: 'Use PATCH /jobs/:jobId/status to update status with workflow validation',
+      };
     }
 
     const updated = await prisma.job.update({
@@ -1763,16 +1792,54 @@ class JobService {
     const roleIds = Array.from(new Set(input.allocations.map((alloc) => alloc.roleId)));
     const roles = await prisma.positionRole.findMany({
       where: { id: { in: roleIds } },
-      select: { id: true, name: true, billingRate: true },
+      select: { id: true, name: true, billingRate: true, costRate: true },
     });
+
+    if (roles.length !== roleIds.length) {
+      throw new Error('One or more allocation roles are invalid');
+    }
+
+    const allocationEmployeeIds = Array.from(
+      new Set(input.allocations.map((alloc) => alloc.employeeProfileId))
+    );
+    const staffAssignments = await prisma.jobStaffAssignment.findMany({
+      where: { jobId, employeeProfileId: { in: allocationEmployeeIds } },
+      select: {
+        employeeProfileId: true,
+        assignedHourlyRate: true,
+      },
+    });
+    const assignmentRateMap = new Map<number, number>(
+      staffAssignments.map((assignment) => [
+        assignment.employeeProfileId,
+        Number(assignment.assignedHourlyRate || 0),
+      ])
+    );
 
     const roleRateMap = new Map<number, number>(
       roles.map((role) => [role.id, Number(role.billingRate)])
     );
-    const allocationData = input.allocations.map((alloc) => {
-      const rate = alloc.hourlyRate ?? roleRateMap.get(alloc.roleId) ?? 0;
+    const roleCostRateMap = new Map<number, number>(
+      roles.map((role) => [role.id, Number(role.costRate)])
+    );
+    const allocationData = input.allocations.map((alloc, index) => {
+      const fallbackAssignmentRate = assignmentRateMap.get(alloc.employeeProfileId) ?? 0;
+      const fallbackRoleRate = roleRateMap.get(alloc.roleId) ?? 0;
+      const rate = Number(
+        alloc.hourlyRate ?? (fallbackAssignmentRate > 0 ? fallbackAssignmentRate : fallbackRoleRate)
+      );
       const hours = Number(alloc.allocatedHours);
-      const estimatedCost = hours * rate;
+      if (!Number.isFinite(hours) || hours <= 0) {
+        throw new Error(`Allocation #${index + 1} has invalid allocatedHours`);
+      }
+      if (!Number.isFinite(rate) || rate <= 0) {
+        throw new Error(
+          `Allocation #${index + 1} has invalid hourlyRate. Provide a rate or configure role/staff rates.`
+        );
+      }
+      const fallbackCostRate = roleCostRateMap.get(alloc.roleId) ?? 0;
+      const costRate = fallbackCostRate > 0 ? fallbackCostRate : rate;
+      const estimatedCost = hours * costRate;
 
       return {
         employeeProfileId: alloc.employeeProfileId,
@@ -1784,6 +1851,17 @@ class JobService {
         taskDescription: alloc.taskDescription,
       };
     });
+
+    const uniqueAllocationKeys = new Set<string>();
+    for (const allocation of allocationData) {
+      const key = `${allocation.employeeProfileId}:${allocation.roleId}`;
+      if (uniqueAllocationKeys.has(key)) {
+        throw new Error(
+          `Duplicate allocation detected for employee ${allocation.employeeProfileId} and role ${allocation.roleId}`
+        );
+      }
+      uniqueAllocationKeys.add(key);
+    }
 
     const totalEstimatedHours = allocationData.reduce(
       (sum, alloc) => sum + Number(alloc.allocatedHours),
@@ -1798,9 +1876,6 @@ class JobService {
       0
     );
 
-    const allocationEmployeeIds = Array.from(
-      new Set(allocationData.map((alloc) => alloc.employeeProfileId))
-    );
     const existingAssignments = await prisma.jobStaffAssignment.findMany({
       where: { jobId, employeeProfileId: { in: allocationEmployeeIds } },
       select: { employeeProfileId: true },
@@ -2441,6 +2516,504 @@ class JobService {
     });
 
     return allocations;
+  }
+
+  /**
+   * Comprehensive workflow tracking payload for dashboards and cross-module visibility.
+   */
+  async getJobWorkflowTracking(jobId: number, authContext?: AuthContext) {
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        clientOnboarding: {
+          select: {
+            id: true,
+            status: true,
+            uploadedByProfileId: true,
+            hrReviewerProfileId: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+        client: { select: { id: true, clientName: true, clientCode: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
+        partner: { select: { id: true, firstName: true, lastName: true } },
+        receivableOwner: { select: { id: true, firstName: true, lastName: true } },
+        department: { select: { id: true, name: true } },
+        engagementLetter: {
+          select: {
+            id: true,
+            status: true,
+            documentId: true,
+            feeAmount: true,
+            currency: true,
+            startDate: true,
+            endDate: true,
+          },
+        },
+        staffing: {
+          include: {
+            employee: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                positionTitle: true,
+              },
+            },
+            role: {
+              select: {
+                id: true,
+                name: true,
+                billingRate: true,
+                costRate: true,
+              },
+            },
+          },
+        },
+        jobCosting: {
+          include: {
+            budgetCap: true,
+            allocations: true,
+          },
+        },
+        tasks: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            billable: true,
+            dueDate: true,
+            assignedToProfileId: true,
+            estimatedHours: true,
+          },
+        },
+        timeEntries: {
+          select: {
+            id: true,
+            employeeProfileId: true,
+            hours: true,
+            billable: true,
+            status: true,
+            dateWorked: true,
+            billableAmount: true,
+            costAmount: true,
+            profitLoss: true,
+          },
+        },
+        payments: {
+          select: {
+            id: true,
+            paymentAmount: true,
+            paymentDate: true,
+            invoiceNumber: true,
+          },
+        },
+        revenueAllocations: {
+          select: {
+            id: true,
+            employeeProfileId: true,
+            allocationPercentage: true,
+            allocatedAmount: true,
+            employeeBillable: true,
+            employeeProfit: true,
+            employeeLoss: true,
+            allocationMonth: true,
+          },
+        },
+        statusTransitions: {
+          where: { entityType: 'Job', entityId: jobId },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            reason: true,
+            changedByProfileId: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      throw { statusCode: 404, message: 'Job not found' };
+    }
+
+    if (authContext) {
+      const roleSet = this.roleSet(authContext.roles);
+      const isAdmin =
+        roleSet.has('super_admin') ||
+        roleSet.has('hr') ||
+        roleSet.has('gmp');
+      const isManager = job.managerProfileId === authContext.profileId;
+      const isPartner = job.partnerProfileId === authContext.profileId;
+      const isStaffAssigned = job.staffing.some(
+        (item) => item.employeeProfileId === authContext.profileId
+      );
+
+      if (!isAdmin && !isManager && !isPartner && !isStaffAssigned) {
+        throw { statusCode: 403, message: 'Not authorized to view tracking for this job' };
+      }
+    }
+
+    const activeTimeEntries = job.timeEntries.filter((entry) =>
+      ['pending', 'submitted', 'approved'].includes(String(entry.status))
+    );
+    const approvedTimeEntries = job.timeEntries.filter(
+      (entry) => String(entry.status) === 'approved'
+    );
+    const taskTotals = {
+      total: job.tasks.length,
+      pending: job.tasks.filter((task) => task.status === 'pending').length,
+      inProgress: job.tasks.filter((task) => task.status === 'in_progress').length,
+      blocked: job.tasks.filter((task) => task.status === 'blocked').length,
+      completed: job.tasks.filter((task) => task.status === 'completed').length,
+      cancelled: job.tasks.filter((task) => task.status === 'cancelled').length,
+    };
+    const incompleteTaskCount = job.tasks.filter(
+      (task) => !['completed', 'cancelled'].includes(String(task.status))
+    ).length;
+
+    const expectedFeeAmount = this.resolveJobFeeForTracking(job as any);
+    const collectedAmount = roundCurrency(
+      job.payments.reduce((sum, payment) => sum + Number(payment.paymentAmount || 0), 0)
+    );
+    const outstandingAmount = roundCurrency(Math.max(0, expectedFeeAmount - collectedAmount));
+    const billedAmount = roundCurrency(
+      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
+    );
+    const approvedBilledAmount = roundCurrency(
+      approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
+    );
+    const costToDate = roundCurrency(
+      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0)
+    );
+    const profitToDate = roundCurrency(
+      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0)
+    );
+
+    const totalHoursWorked = roundCurrency(
+      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+    );
+    const approvedHoursWorked = roundCurrency(
+      approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+    );
+    const totalBillableHours = roundCurrency(
+      activeTimeEntries
+        .filter((entry) => entry.billable)
+        .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+    );
+    const totalNonBillableHours = roundCurrency(
+      activeTimeEntries
+        .filter((entry) => !entry.billable)
+        .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+    );
+
+    const allocatedHours = roundCurrency(
+      (job.jobCosting?.allocations || []).reduce(
+        (sum, allocation) => sum + Number(allocation.allocatedHours || 0),
+        0
+      )
+    );
+
+    const byEmployee = new Map<
+      number,
+      {
+        profileId: number;
+        employeeName: string;
+        positionTitle: string | null;
+        assignedRole: string | null;
+        assignedHourlyRate: number;
+        allocatedHours: number;
+        loggedHours: number;
+        approvedHours: number;
+        billableHours: number;
+        nonBillableHours: number;
+        billableAmount: number;
+        costAmount: number;
+      }
+    >();
+
+    for (const staff of job.staffing) {
+      byEmployee.set(staff.employeeProfileId, {
+        profileId: staff.employeeProfileId,
+        employeeName: `${staff.employee.firstName} ${staff.employee.lastName}`.trim(),
+        positionTitle: staff.employee.positionTitle || null,
+        assignedRole: staff.role?.name || null,
+        assignedHourlyRate: Number(staff.assignedHourlyRate || 0),
+        allocatedHours: 0,
+        loggedHours: 0,
+        approvedHours: 0,
+        billableHours: 0,
+        nonBillableHours: 0,
+        billableAmount: 0,
+        costAmount: 0,
+      });
+    }
+
+    for (const allocation of job.jobCosting?.allocations || []) {
+      const current = byEmployee.get(allocation.employeeProfileId);
+      if (!current) {
+        byEmployee.set(allocation.employeeProfileId, {
+          profileId: allocation.employeeProfileId,
+          employeeName: `Profile ${allocation.employeeProfileId}`,
+          positionTitle: null,
+          assignedRole: null,
+          assignedHourlyRate: Number(allocation.hourlyRate || 0),
+          allocatedHours: Number(allocation.allocatedHours || 0),
+          loggedHours: 0,
+          approvedHours: 0,
+          billableHours: 0,
+          nonBillableHours: 0,
+          billableAmount: 0,
+          costAmount: 0,
+        });
+      } else {
+        current.allocatedHours += Number(allocation.allocatedHours || 0);
+        if (!current.assignedHourlyRate) {
+          current.assignedHourlyRate = Number(allocation.hourlyRate || 0);
+        }
+      }
+    }
+
+    for (const entry of activeTimeEntries) {
+      const current = byEmployee.get(entry.employeeProfileId) || {
+        profileId: entry.employeeProfileId,
+        employeeName: `Profile ${entry.employeeProfileId}`,
+        positionTitle: null,
+        assignedRole: null,
+        assignedHourlyRate: 0,
+        allocatedHours: 0,
+        loggedHours: 0,
+        approvedHours: 0,
+        billableHours: 0,
+        nonBillableHours: 0,
+        billableAmount: 0,
+        costAmount: 0,
+      };
+      current.loggedHours += Number(entry.hours || 0);
+      current.billableAmount += Number(entry.billableAmount || 0);
+      current.costAmount += Number(entry.costAmount || 0);
+      if (entry.billable) {
+        current.billableHours += Number(entry.hours || 0);
+      } else {
+        current.nonBillableHours += Number(entry.hours || 0);
+      }
+      if (String(entry.status) === 'approved') {
+        current.approvedHours += Number(entry.hours || 0);
+      }
+      byEmployee.set(entry.employeeProfileId, current);
+    }
+
+    const employeeTracking = Array.from(byEmployee.values()).map((item) => {
+      const utilizationPercent =
+        item.allocatedHours > 0
+          ? Number(((item.loggedHours / item.allocatedHours) * 100).toFixed(2))
+          : 0;
+      const remainingHours = roundCurrency(item.allocatedHours - item.loggedHours);
+      return {
+        ...item,
+        allocatedHours: roundCurrency(item.allocatedHours),
+        loggedHours: roundCurrency(item.loggedHours),
+        approvedHours: roundCurrency(item.approvedHours),
+        billableHours: roundCurrency(item.billableHours),
+        nonBillableHours: roundCurrency(item.nonBillableHours),
+        billableAmount: roundCurrency(item.billableAmount),
+        costAmount: roundCurrency(item.costAmount),
+        remainingAllocatedHours: roundCurrency(Math.max(0, remainingHours)),
+        overrunHours: roundCurrency(Math.max(0, -remainingHours)),
+        utilizationPercent,
+      };
+    });
+
+    const missingForInProgress = await this.getMissingStageDocuments(jobId, 'in_progress');
+    const missingForCompletion = await this.getMissingStageDocuments(jobId, 'completed');
+    const invoiceMilestones = await this.getJobInvoiceMilestoneTracking(jobId);
+
+    const lifecycleBlockersForInProgress: string[] = [];
+    if (!job.teamAssigned) lifecycleBlockersForInProgress.push('Team assignment is incomplete');
+    if (!job.costingCompleted) lifecycleBlockersForInProgress.push('Job costing is incomplete');
+    if (job.jobCosting?.costingStatus !== 'approved') {
+      lifecycleBlockersForInProgress.push('Costing is not partner-approved');
+    }
+    missingForInProgress.forEach((item) =>
+      lifecycleBlockersForInProgress.push(`Missing document: ${item.label}`)
+    );
+
+    const lifecycleBlockersForCompletion: string[] = [];
+    if (incompleteTaskCount > 0) {
+      lifecycleBlockersForCompletion.push(`${incompleteTaskCount} task(s) are still incomplete`);
+    }
+    missingForCompletion.forEach((item) =>
+      lifecycleBlockersForCompletion.push(`Missing document: ${item.label}`)
+    );
+
+    const now = new Date();
+    const dueDate = job.dueDate ? new Date(job.dueDate) : null;
+    const isOverdue =
+      Boolean(dueDate) &&
+      dueDate!.getTime() < now.getTime() &&
+      !['completed', 'cancelled'].includes(String(job.status));
+    const overdueDays =
+      isOverdue && dueDate
+        ? Math.max(1, Math.ceil((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)))
+        : 0;
+
+    const billedVsExpectedPercent =
+      expectedFeeAmount > 0
+        ? Number(((billedAmount / expectedFeeAmount) * 100).toFixed(2))
+        : 0;
+    const collectionPercent =
+      expectedFeeAmount > 0
+        ? Number(((collectedAmount / expectedFeeAmount) * 100).toFixed(2))
+        : 0;
+    const marginPercent =
+      billedAmount > 0 ? Number(((profitToDate / billedAmount) * 100).toFixed(2)) : 0;
+
+    return {
+      job: this.withDerivedOverdueStatus({
+        id: job.id,
+        jobCode: job.jobCode,
+        jobName: job.jobName,
+        description: job.description,
+        status: job.status,
+        priority: job.priority,
+        startDate: job.startDate,
+        dueDate: job.dueDate,
+        completionDate: job.completionDate,
+        billingType: job.billingType,
+        currency: job.currency,
+        fixedFeeAmount: Number(job.fixedFeeAmount || 0),
+        budgetHours: Number(job.budgetHours || 0),
+        collectionStage: job.collectionStage,
+        readyForCollectionAt: job.readyForCollectionAt,
+        teamAssigned: job.teamAssigned,
+        costingCompleted: job.costingCompleted,
+      }),
+      ownership: {
+        client: job.client,
+        department: job.department,
+        manager: job.manager,
+        partner: job.partner,
+        receivableOwner: job.receivableOwner,
+      },
+      workflow: {
+        marketing: {
+          clientOnboardingId: job.clientOnboarding?.id || null,
+          onboardingStatus: job.clientOnboarding?.status || null,
+          engagementLetterId: job.engagementLetter?.id || null,
+          engagementLetterStatus: job.engagementLetter?.status || null,
+          engagementLetterDocumentUploaded: Boolean(job.engagementLetter?.documentId),
+        },
+        hr: {
+          jobCreated: true,
+          managerAssigned: Boolean(job.managerProfileId),
+          partnerAssigned: Boolean(job.partnerProfileId),
+          departmentAssigned: Boolean(job.departmentId),
+        },
+        manager: {
+          teamAssigned: job.teamAssigned,
+          staffCount: job.staffing.length,
+          costingCompleted: job.costingCompleted,
+          costingStatus: job.jobCosting?.costingStatus || null,
+          budgetCapEnforced: job.jobCosting?.budgetCap?.capEnforced ?? null,
+          allowOverage: job.jobCosting?.budgetCap?.allowOverage ?? null,
+          maxOveragePercent: Number(job.jobCosting?.budgetCap?.maxOveragePercent || 0),
+        },
+        execution: {
+          currentStatus: job.status,
+          canMoveToInProgress: lifecycleBlockersForInProgress.length === 0,
+          canComplete: lifecycleBlockersForCompletion.length === 0,
+          blockersForInProgress: lifecycleBlockersForInProgress,
+          blockersForCompletion: lifecycleBlockersForCompletion,
+          isOverdue,
+          overdueDays,
+        },
+      },
+      tracking: {
+        tasks: {
+          ...taskTotals,
+          incomplete: incompleteTaskCount,
+        },
+        staffing: {
+          teamAssigned: job.teamAssigned,
+          headcount: job.staffing.length,
+          allocatedHours,
+          loggedHours: totalHoursWorked,
+          remainingAllocatedHours: roundCurrency(Math.max(0, allocatedHours - totalHoursWorked)),
+          overrunHours: roundCurrency(Math.max(0, totalHoursWorked - allocatedHours)),
+          employees: employeeTracking,
+        },
+        timesheets: {
+          totalEntries: job.timeEntries.length,
+          activeEntries: activeTimeEntries.length,
+          approvedEntries: approvedTimeEntries.length,
+          pendingOrSubmittedEntries: activeTimeEntries.filter((entry) =>
+            ['pending', 'submitted'].includes(String(entry.status))
+          ).length,
+          totalHoursWorked,
+          approvedHoursWorked,
+          totalBillableHours,
+          totalNonBillableHours,
+          billableUtilizationPercent:
+            totalHoursWorked > 0
+              ? Number(((totalBillableHours / totalHoursWorked) * 100).toFixed(2))
+              : 0,
+        },
+        financials: {
+          expectedFeeAmount,
+          billedAmount,
+          approvedBilledAmount,
+          costToDate,
+          profitToDate,
+          marginPercent,
+          billedVsExpectedPercent,
+        },
+        collections: {
+          collectionStage: job.collectionStage,
+          paymentCount: job.payments.length,
+          collectedAmount,
+          outstandingAmount,
+          collectionPercent,
+          readyForCollectionAt: job.readyForCollectionAt,
+        },
+        revenueAllocations: {
+          count: job.revenueAllocations.length,
+          allocatedAmount: roundCurrency(
+            job.revenueAllocations.reduce(
+              (sum, allocation) => sum + Number(allocation.allocatedAmount || 0),
+              0
+            )
+          ),
+          employeeBillableAmount: roundCurrency(
+            job.revenueAllocations.reduce(
+              (sum, allocation) => sum + Number(allocation.employeeBillable || 0),
+              0
+            )
+          ),
+          employeeProfitAmount: roundCurrency(
+            job.revenueAllocations.reduce(
+              (sum, allocation) => sum + Number(allocation.employeeProfit || 0),
+              0
+            )
+          ),
+          employeeLossAmount: roundCurrency(
+            job.revenueAllocations.reduce(
+              (sum, allocation) => sum + Number(allocation.employeeLoss || 0),
+              0
+            )
+          ),
+        },
+        milestones: invoiceMilestones,
+        documentReadiness: {
+          missingForInProgress: missingForInProgress.map((item) => item.label),
+          missingForCompletion: missingForCompletion.map((item) => item.label),
+        },
+      },
+      statusTimeline: job.statusTransitions,
+      generatedAt: new Date(),
+    };
   }
 
   /**

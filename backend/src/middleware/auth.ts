@@ -4,6 +4,7 @@
  * - Verifies user is active
  * - Attaches minimal user context to request
  *
+ * 
  * IMPORTANT:
  * - Does NOT load Profile (handled by loadProfile middleware)
  */

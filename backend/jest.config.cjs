@@ -10,5 +10,6 @@ module.exports = {
   transform: {
     "^.+\\.ts$": ["ts-jest", { tsconfig: path.join(__dirname, "tsconfig.json") }],
   },
+  setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   moduleFileExtensions: ["ts", "js", "json"],
 };

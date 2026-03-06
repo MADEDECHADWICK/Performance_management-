@@ -100,7 +100,7 @@ export class TimeEntryService {
       select: {
         assignedHourlyRate: true,
         roleSnapshot: true,
-        role: { select: { billingRate: true } },
+        role: { select: { billingRate: true, costRate: true } },
       },
     });
 
@@ -113,8 +113,16 @@ export class TimeEntryService {
           assignment?.role?.billingRate ??
           0
       ) || 0;
+    const costRate =
+      Number(
+        snapshot.costRate ??
+          assignment?.role?.costRate ??
+          snapshot.billingRate ??
+          assignment?.role?.billingRate ??
+          billingRate
+      ) || billingRate;
 
-    return { billingRate };
+    return { billingRate, costRate };
   }
 
   private static async calculateAmounts(
@@ -122,19 +130,19 @@ export class TimeEntryService {
     employeeProfileId: number,
     hours: number,
     billable: boolean,
-    rates?: { billingRate: number }
+    rates?: { billingRate: number; costRate: number }
   ) {
     const resolvedRates =
       rates ?? (await TimeEntryService.resolveRates(jobId, employeeProfileId));
-    const { billingRate } = resolvedRates;
+    const { billingRate, costRate } = resolvedRates;
     const totalHours = Number(hours || 0);
     const billableAmount = billable ? totalHours * billingRate : 0;
-    const costAmount = totalHours * billingRate;
+    const costAmount = totalHours * costRate;
     const profitLoss = billableAmount - costAmount;
 
     return {
       hourlyRate: billingRate,
-      costRate: billingRate,
+      costRate,
       billableAmount,
       costAmount,
       profitLoss,
@@ -3097,6 +3105,8 @@ export class TimeEntryService {
     const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
+    const canActAsManager = isJobManager || isAdmin;
+    const canActAsPartner = isJobPartner || isAdmin;
 
     if (!isAdmin && !isJobManager && !isJobPartner) {
       throw { statusCode: 403, message: 'Not authorized to approve this over-budget request' };
@@ -3110,20 +3120,51 @@ export class TimeEntryService {
       throw { statusCode: 409, message: 'This over-budget request is already closed' };
     }
 
-    const actingAsManager = isJobManager && !isJobPartner && !isAdmin;
-    const finalApprove = !request.requiresPartnerApproval || isJobPartner || isAdmin;
+    let nextStatus: 'manager_approved' | 'partner_approved';
+    let managerApproved = false;
+    let partnerApproved = false;
 
-    if (actingAsManager && request.status !== 'pending') {
-      throw { statusCode: 409, message: 'Only pending over-budget requests can be manager-approved' };
+    if (request.requiresPartnerApproval) {
+      if (request.status === 'pending') {
+        if (!canActAsManager) {
+          throw {
+            statusCode: 409,
+            message: 'Manager approval is required before partner approval',
+          };
+        }
+        nextStatus = 'manager_approved';
+        managerApproved = true;
+      } else if (request.status === 'manager_approved') {
+        if (!canActAsPartner) {
+          throw {
+            statusCode: 409,
+            message: 'Only partner can finalize approval after manager stage',
+          };
+        }
+        nextStatus = 'partner_approved';
+        managerApproved = true;
+        partnerApproved = true;
+      } else {
+        throw { statusCode: 409, message: 'Over-budget request is not in an approvable stage' };
+      }
+    } else {
+      if (request.status !== 'pending') {
+        throw { statusCode: 409, message: 'Only pending over-budget requests can be approved' };
+      }
+      if (!canActAsManager) {
+        throw { statusCode: 403, message: 'Manager approval is required for this request' };
+      }
+      nextStatus = 'partner_approved';
+      managerApproved = true;
+      partnerApproved = true;
     }
 
-    const nextStatus = finalApprove ? 'partner_approved' : 'manager_approved';
     const updated = await prisma.timeOverBudgetRequest.update({
       where: { id: requestId },
       data: {
         status: nextStatus,
-        managerApproved: request.managerApproved || actingAsManager || isAdmin,
-        partnerApproved: finalApprove,
+        managerApproved,
+        partnerApproved,
         approvalNotes: approvalNotes || null,
       },
       include: {
@@ -3149,7 +3190,11 @@ export class TimeEntryService {
       },
     });
 
-    if (nextStatus === 'manager_approved' && request.job.partnerProfileId) {
+    if (
+      nextStatus === 'manager_approved' &&
+      request.requiresPartnerApproval &&
+      request.job.partnerProfileId
+    ) {
       await NotificationService.createNotification(
         {
           recipientProfileId: request.job.partnerProfileId,
@@ -3207,6 +3252,8 @@ export class TimeEntryService {
     const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isJobManager = request.job.managerProfileId === auth.profileId;
     const isJobPartner = request.job.partnerProfileId === auth.profileId;
+    const canActAsManager = isJobManager || isAdmin;
+    const canActAsPartner = isJobPartner || isAdmin;
 
     if (!isAdmin && !isJobManager && !isJobPartner) {
       throw { statusCode: 403, message: 'Not authorized to reject this over-budget request' };
@@ -3220,8 +3267,37 @@ export class TimeEntryService {
       throw { statusCode: 409, message: 'This over-budget request is already closed' };
     }
 
-    const actingAsManager = isJobManager && !isJobPartner && !isAdmin;
-    const nextStatus = actingAsManager ? 'manager_rejected' : 'partner_rejected';
+    let nextStatus: 'manager_rejected' | 'partner_rejected';
+
+    if (request.requiresPartnerApproval) {
+      if (request.status === 'pending') {
+        if (!canActAsManager) {
+          throw {
+            statusCode: 409,
+            message: 'Manager decision is required before partner rejection',
+          };
+        }
+        nextStatus = 'manager_rejected';
+      } else if (request.status === 'manager_approved') {
+        if (!canActAsPartner) {
+          throw {
+            statusCode: 409,
+            message: 'Only partner can reject after manager approval',
+          };
+        }
+        nextStatus = 'partner_rejected';
+      } else {
+        throw { statusCode: 409, message: 'Over-budget request is not in a rejectable stage' };
+      }
+    } else {
+      if (request.status !== 'pending') {
+        throw { statusCode: 409, message: 'Only pending over-budget requests can be rejected' };
+      }
+      if (!canActAsManager) {
+        throw { statusCode: 403, message: 'Manager approval is required for this request' };
+      }
+      nextStatus = 'manager_rejected';
+    }
 
     const updated = await prisma.timeOverBudgetRequest.update({
       where: { id: requestId },

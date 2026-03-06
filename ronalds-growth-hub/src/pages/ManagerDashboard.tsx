@@ -73,6 +73,7 @@ interface TeamPerformance {
 
 interface Job {
   jobId: number;
+  trackingPath?: string | null;
   title: string;
   jobNumber: string | null;
   status: string;
@@ -183,9 +184,13 @@ interface PendingTimeEntry {
 interface ApprovalRequest {
   id: number;
   jobId: number;
+  trackingPath?: string | null;
   status: string;
   additionalHoursRequested: number;
   requestedAt?: string;
+  requiresPartnerApproval?: boolean;
+  managerApproved?: boolean;
+  pendingPartnerApproval?: boolean;
   job?: { id: number; jobName: string; client?: { clientName?: string } };
   employee?: { firstName: string; lastName: string };
 }
@@ -193,6 +198,7 @@ interface ApprovalRequest {
 interface OverBudgetApprovalRequest {
   id: number;
   jobId: number;
+  trackingPath?: string | null;
   jobName: string;
   status: string;
   requestedAdditional: number;
@@ -223,6 +229,13 @@ interface WorkloadMetrics {
   critical_deadlines: number;
   capacity_variance: number;
   burnout_risk: number;
+  totalTeamMembers?: number;
+  avgUtilization?: number;
+  overloadedEmployees?: number;
+  underutilizedEmployees?: number;
+  criticalDeadlines?: number;
+  capacityVariance?: number;
+  burnoutRisk?: number;
 }
 
 const ManagerDashboard = () => {
@@ -262,12 +275,24 @@ const ManagerDashboard = () => {
   };
 
   const safeWorkloadMetrics = {
-    total_team_members: toNumber(workloadMetrics?.total_team_members),
-    avg_utilization: toNumber(workloadMetrics?.avg_utilization),
-    overloaded_employees: toNumber(workloadMetrics?.overloaded_employees),
-    underutilized_employees: toNumber(workloadMetrics?.underutilized_employees),
-    critical_deadlines: toNumber(workloadMetrics?.critical_deadlines),
-    burnout_risk: toNumber(workloadMetrics?.burnout_risk),
+    total_team_members: toNumber(
+      workloadMetrics?.totalTeamMembers ?? workloadMetrics?.total_team_members
+    ),
+    avg_utilization: toNumber(
+      workloadMetrics?.avgUtilization ?? workloadMetrics?.avg_utilization
+    ),
+    overloaded_employees: toNumber(
+      workloadMetrics?.overloadedEmployees ?? workloadMetrics?.overloaded_employees
+    ),
+    underutilized_employees: toNumber(
+      workloadMetrics?.underutilizedEmployees ?? workloadMetrics?.underutilized_employees
+    ),
+    critical_deadlines: toNumber(
+      workloadMetrics?.criticalDeadlines ?? workloadMetrics?.critical_deadlines
+    ),
+    burnout_risk: toNumber(
+      workloadMetrics?.burnoutRisk ?? workloadMetrics?.burnout_risk
+    ),
   };
   const [pendingOnly, setPendingOnly] = useState(false);
 
@@ -433,8 +458,14 @@ const ManagerDashboard = () => {
       const overBudget = Array.isArray(chainPayload.overBudgetRequests)
         ? chainPayload.overBudgetRequests
         : [];
+      const managerStageRequests = Array.isArray(requests)
+        ? requests.filter((request: ApprovalRequest) => {
+            if (!request.requiresPartnerApproval) return true;
+            return !request.pendingPartnerApproval && !request.managerApproved;
+          })
+        : [];
       setPendingTimeEntries(Array.isArray(pendingEntries) ? pendingEntries.slice(0, 5) : []);
-      setApprovalRequests(Array.isArray(requests) ? requests.slice(0, 5) : []);
+      setApprovalRequests(managerStageRequests.slice(0, 5));
       setOverBudgetRequests(overBudget.slice(0, 5));
     } catch (error) {
       console.error('Error loading approvals:', error);
@@ -620,6 +651,9 @@ const ManagerDashboard = () => {
     return <Badge variant={config.variant as any}>{config.label}</Badge>;
   };
 
+  const resolveTrackingPath = (jobId: number, trackingPath?: string | null) =>
+    trackingPath || `/jobs/${jobId}/tracking`;
+
   const resolveAlertLink = (alert: NotificationItem) => {
     const rawLink = alert.link?.trim();
     if (!rawLink) return null;
@@ -655,7 +689,7 @@ const ManagerDashboard = () => {
 
     const jobMatch = rawLink.match(/^\/jobs\/(\d+)(?:\/.*)?$/);
     if (jobMatch) {
-      return `/jobs?jobId=${Number(jobMatch[1])}`;
+      return `/jobs/${Number(jobMatch[1])}/tracking`;
     }
 
     const evaluationMatch = rawLink.match(/^\/evaluations\/(\d+)$/);
@@ -760,6 +794,35 @@ const ManagerDashboard = () => {
   const hasFinancialMixData = financialMixData.some((item) => item.value > 0);
   const hasApprovalMixData = approvalMixData.some((item) => item.value > 0);
   const hasRiskData = riskBreakdownData.some((item) => item.value > 0);
+
+  const recentActivity = [
+    ...alerts.map((alert) => ({
+      id: `alert-${alert.id}`,
+      title: alert.title || 'Notification',
+      detail: alert.message || 'Action required',
+      createdAt: alert.createdAt,
+      tone: 'bg-blue-500',
+      open: () => openAlert(alert),
+    })),
+    ...approvalAudit.map((log) => ({
+      id: `audit-${log.id}`,
+      title: String(log.action || 'approval update').replace(/_/g, ' '),
+      detail: log.metadata?.jobId
+        ? `Job #${log.metadata.jobId}`
+        : 'Workflow approval update',
+      createdAt: log.createdAt,
+      tone: String(log.action || '').includes('rejected') ? 'bg-orange-500' : 'bg-green-500',
+      open: log.metadata?.jobId
+        ? () => navigate(resolveTrackingPath(Number(log.metadata.jobId)))
+        : undefined,
+    })),
+  ]
+    .sort((a, b) => {
+      const aTs = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTs = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTs - aTs;
+    })
+    .slice(0, 6);
 
   if (loading && !overview) {
     return (
@@ -1127,6 +1190,15 @@ const ManagerDashboard = () => {
                             - {entry.job?.jobName || 'Job'} - {Number(entry.hours || 0).toFixed(1)}h
                           </div>
                           <div className="flex items-center gap-2">
+                            {entry.job?.id ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => navigate(resolveTrackingPath(entry.job!.id))}
+                              >
+                                Open tracking
+                              </Button>
+                            ) : null}
                             <Badge variant="outline">Submitted</Badge>
                             <Button size="sm" onClick={() => handleApproveTimeEntry(entry.id)}>
                               Approve
@@ -1155,6 +1227,15 @@ const ManagerDashboard = () => {
                             - {request.job?.jobName || 'Job'} - {request.additionalHoursRequested}h
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                navigate(resolveTrackingPath(request.jobId, request.trackingPath))
+                              }
+                            >
+                              Open tracking
+                            </Button>
                             <Badge variant="secondary">Pending</Badge>
                             <Button size="sm" onClick={() => handleApproveRequest(request.id)}>
                               Approve
@@ -1181,6 +1262,15 @@ const ManagerDashboard = () => {
                             - {request.jobName || 'Job'} - +{Number(request.requestedAdditional || 0).toFixed(1)}h
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                navigate(resolveTrackingPath(request.jobId, request.trackingPath))
+                              }
+                            >
+                              Open tracking
+                            </Button>
                             <Badge variant={request.status === 'pending' ? 'secondary' : 'outline'}>
                               {String(request.status).replace(/_/g, ' ')}
                             </Badge>
@@ -1257,32 +1347,34 @@ const ManagerDashboard = () => {
               <Card>
                 <CardHeader>
                   <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>Latest team and job updates</CardDescription>
+                  <CardDescription>Live updates from notifications and approval audit logs.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-3">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <div className="flex-1">
-                        <p className="text-sm">John Smith completed evaluation for Project Alpha</p>
-                        <p className="text-xs text-muted-foreground">2 hours ago</p>
-                      </div>
+                  {recentActivity.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No recent activity returned by notifications/audit endpoints.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {recentActivity.map((item) => (
+                        <div key={item.id} className="flex items-center space-x-3">
+                          <div className={`w-2 h-2 rounded-full ${item.tone}`}></div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">{item.title}</p>
+                            <p className="text-xs text-muted-foreground">{item.detail}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Recently'}
+                            </p>
+                          </div>
+                          {item.open && (
+                            <Button size="sm" variant="ghost" onClick={item.open}>
+                              Open
+                            </Button>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <div className="flex-1">
-                        <p className="text-sm">New timesheet submitted by Sarah Johnson</p>
-                        <p className="text-xs text-muted-foreground">4 hours ago</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                      <div className="flex-1">
-                        <p className="text-sm">Client Evaluation request for Beta Project</p>
-                        <p className="text-xs text-muted-foreground">1 day ago</p>
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -1580,8 +1672,16 @@ const ManagerDashboard = () => {
                         <TableRow key={job.jobId}>
                           <TableCell>
                             <div>
-                              <div className="font-medium">{job.title}</div>
+                              <Link
+                                to={resolveTrackingPath(job.jobId, job.trackingPath)}
+                                className="font-medium text-primary hover:underline"
+                              >
+                                {job.title}
+                              </Link>
                               <div className="text-sm text-muted-foreground">{job.jobNumber}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {resolveTrackingPath(job.jobId, job.trackingPath)}
+                              </div>
                             </div>
                           </TableCell>
                           <TableCell>{job.clientName}</TableCell>

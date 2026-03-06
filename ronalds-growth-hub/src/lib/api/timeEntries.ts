@@ -173,7 +173,13 @@ export const timeEntriesAPI = {
     params.append('status', 'submitted');
     
     const query = params.toString();
-    return api.get(`/time-entries${query ? `?${query}` : ''}`);
+    const response = await api.get<TimeEntry[] | PaginatedResponse<TimeEntry>>(
+      `/time-entries${query ? `?${query}` : ''}`
+    );
+    if (Array.isArray(response)) {
+      return response;
+    }
+    return Array.isArray(response?.data) ? response.data : [];
   },
 
   /**

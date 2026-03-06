@@ -34,6 +34,7 @@ import createCycleEvaluationsRoutes from './createCycleEvaluations';
 import developmentRecommendationsRoutes from './developmentRecommendations';
 import employeeEvaluationsRoutes from './employeeEvaluations';
 import employeeProjectAllocationsRoutes from './employeeProjectAllocations';
+import employeeKpiAssignmentsRoutes from './employeeKpiAssignments';
 import employeeRolesRoutes from './employeeRoles';
 import employeesRoutes from './employees';
 import evaluationAssignmentsRoutes from './evaluationAssignments';
@@ -142,6 +143,8 @@ router.use('/evaluation_templates', authMiddleware, requireModuleAccess('evaluat
 router.use('/evaluation-definitions', authMiddleware, requireModuleAccess('evaluations'), evaluationDefinitionsRoutes);
 router.use('/employee-evaluations', authMiddleware, requireModuleAccess('evaluations'), employeeEvaluationsRoutes);
 router.use('/client-evaluations', authMiddleware, requireModuleAccess('evaluations'), clientEvaluationsRoutes);
+// Backward-compatible alias for legacy query paths.
+router.use('/client_evaluations', authMiddleware, requireModuleAccess('evaluations'), clientEvaluationsRoutes);
 router.use('/peer-evaluations', authMiddleware, requireModuleAccess('evaluations'), peerEvaluationsRoutes);
 router.use('/upward-evaluations', authMiddleware, requireModuleAccess('evaluations'), upwardEvaluationsRoutes);
 router.use('/ad-hoc-evaluations', authMiddleware, requireModuleAccess('evaluations'), adHocEvaluationsRoutes);
@@ -156,6 +159,10 @@ router.use('/employees', authMiddleware, requireModuleAccess('users'), employees
 router.use('/profiles', authMiddleware, requireModuleAccess('users', 'read'), profilesRoutes);
 router.use('/employee-roles', authMiddleware, requireModuleAccess('users'), employeeRolesRoutes);
 router.use('/employee-project-allocations', authMiddleware, requireModuleAccess('users'), employeeProjectAllocationsRoutes);
+// Backward-compatible alias for legacy query paths.
+router.use('/employee_project_allocations', authMiddleware, requireModuleAccess('users'), employeeProjectAllocationsRoutes);
+router.use('/employee-kpi-assignments', authMiddleware, requireModuleAccess('kpis'), employeeKpiAssignmentsRoutes);
+router.use('/employee_kpi_assignments', authMiddleware, requireModuleAccess('kpis'), employeeKpiAssignmentsRoutes);
 router.use('/subordinates', authMiddleware, requireModuleAccess('users'), subordinatesRoutes);
 router.use('/team-management', authMiddleware, requireModuleAccess('jobs'), teamManagementRoutes);
 // Backward-compatible alias for manager workload endpoints

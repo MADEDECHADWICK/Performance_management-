@@ -11,6 +11,8 @@ const allowedManagerRoles = new Set([
   'hr',
 ]);
 
+const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
+
 const getManagerContext = async (req: AuthRequest) => {
   const userId = req.user?.userId;
   if (!userId) {
@@ -365,6 +367,7 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
 
       return {
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         title: job.jobName,
         jobNumber: job.jobCode,
         status: job.status,
@@ -565,6 +568,7 @@ router.get('/approval-chain', authMiddleware, async (req: AuthRequest, res) => {
     return res.json({
       jobs: managedJobs.map((job) => ({
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobName: job.jobName,
         jobCode: job.jobCode,
         clientName: job.client?.clientName ?? null,
@@ -576,6 +580,7 @@ router.get('/approval-chain', authMiddleware, async (req: AuthRequest, res) => {
       standardRequests: standardRequests.map((item) => ({
         id: item.id,
         jobId: item.jobId,
+        trackingPath: buildTrackingPath(item.jobId),
         jobName: item.job.jobName,
         jobCode: item.job.jobCode,
         clientName: item.job.client?.clientName ?? null,
@@ -596,6 +601,7 @@ router.get('/approval-chain', authMiddleware, async (req: AuthRequest, res) => {
       overBudgetRequests: overBudgetRequests.map((item) => ({
         id: item.id,
         jobId: item.jobId,
+        trackingPath: buildTrackingPath(item.jobId),
         jobName: item.job.jobName,
         jobCode: item.job.jobCode,
         clientName: item.job.client?.clientName ?? null,
@@ -719,6 +725,8 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
       const revenue = revenueByJob.get(job.id) ?? timeEntryRevenue;
       const cost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
       return {
+        jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobName: job.jobName,
         jobCode: job.jobCode,
         clientName: job.client?.clientName ?? 'Unassigned',

@@ -15,6 +15,7 @@ const LEGACY_ACTIVITY_TYPES = new Set([
 ]);
 const NON_BILLABLE_ACTIVITY_TYPES = new Set(["training", "holiday", "sick_leave"]);
 const ACTIVITY_PREFIX = /^\[activity:([a-z_]+)\]\s*/i;
+const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
 
 const parsePositiveInt = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -136,6 +137,7 @@ const mapTimeEntryToLegacyWorkLog = (entry: any) => {
   const billable = Boolean(entry?.billable);
   const status = String(entry?.status || "pending");
   const activityType = extracted.activityType;
+  const trackingPath = jobId > 0 ? buildTrackingPath(jobId) : null;
 
   return {
     id: Number(entry?.id || 0),
@@ -159,11 +161,13 @@ const mapTimeEntryToLegacyWorkLog = (entry: any) => {
     hoursWorked: hours,
     taskDescription,
     activityType,
+    trackingPath,
     jobs: entry?.job
       ? {
           id: Number(entry.job.id),
           title: entry.job.jobName,
           jobNumber: entry.job.jobCode || null,
+          trackingPath,
         }
       : undefined,
     projects: entry?.job
@@ -171,6 +175,7 @@ const mapTimeEntryToLegacyWorkLog = (entry: any) => {
           id: Number(entry.job.id),
           projectName: entry.job.jobName,
           projectCode: entry.job.jobCode || null,
+          trackingPath,
         }
       : undefined,
   };

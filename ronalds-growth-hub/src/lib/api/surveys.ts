@@ -160,8 +160,10 @@ const surveysAPI = {
    * Submit survey response (token-based, no auth required)
    */
   submit: async (token: string, data: SubmitSurveyData): Promise<ClientSatisfactionSurvey> => {
+    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '');
+    const apiRoot = baseUrl.endsWith('/api') ? baseUrl : `${baseUrl}/api`;
     const res = await fetch(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/surveys/token/${token}/submit`,
+      `${apiRoot}/surveys/token/${token}/submit`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,12 +171,16 @@ const surveysAPI = {
       }
     );
     
+    const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      throw new Error(error.message || 'Failed to submit survey');
+      throw new Error(payload?.error || payload?.message || 'Failed to submit survey');
     }
     
-    return res.json();
+    if (payload && typeof payload === 'object' && 'success' in payload && 'data' in payload) {
+      return payload.data as ClientSatisfactionSurvey;
+    }
+
+    return payload as ClientSatisfactionSurvey;
   },
 
   /**
@@ -235,7 +241,7 @@ const surveysAPI = {
    * Build external survey URL for sharing
    */
   getSurveyUrl: (token: string): string => {
-    return `${window.location.origin}/survey/${token}`;
+    return `${window.location.origin}/client-evaluation/${token}`;
   },
 };
 

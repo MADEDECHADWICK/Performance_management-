@@ -422,7 +422,7 @@ const Notifications = () => {
     if (jobMatch) {
       const jobId = Number(jobMatch[1]);
       if (hasModuleAccess("jobs", "read")) {
-        return `/jobs?jobId=${jobId}`;
+        return `/jobs/${jobId}/tracking`;
       }
       return `/timesheets?jobId=${jobId}`;
     }
@@ -461,7 +461,7 @@ const Notifications = () => {
 
     if (item.jobId && item.jobId > 0) {
       return hasModuleAccess("jobs", "read")
-        ? `/jobs?jobId=${item.jobId}`
+        ? `/jobs/${item.jobId}/tracking`
         : `/timesheets?jobId=${item.jobId}`;
     }
 

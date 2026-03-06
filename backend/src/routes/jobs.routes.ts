@@ -12,12 +12,14 @@ import {
   createJobValidators,
   updateJobValidators,
   listJobsValidators,
+  getJobParamValidator,
   updateJobStatusValidator,
   assignJobTeamValidators,
   updateJobStaffAssignmentValidators,
   removeJobStaffAssignmentValidators,
   upsertJobCostingValidators,
   createJobFromOnboardingValidators,
+  getJobTimeEntriesValidators,
 } from "../validators/job.validators";
 
 const router = Router();
@@ -200,6 +202,71 @@ router.get(
   ...authenticated(),
   requireJobAccess("view"),
   JobController.getJobProfitability
+);
+
+/**
+ * GET /jobs/:jobId/time-entries
+ * Get job time entries with pagination/filtering
+ */
+router.get(
+  "/:jobId/time-entries",
+  ...authenticated(),
+  requireJobAccess("view"),
+  validateRequest(getJobTimeEntriesValidators),
+  handleValidationErrors,
+  JobController.getJobTimeEntries
+);
+
+/**
+ * GET /jobs/:jobId/utilization
+ * Get job utilization metrics
+ */
+router.get(
+  "/:jobId/utilization",
+  ...authenticated(),
+  requireJobAccess("view"),
+  validateRequest(getJobParamValidator),
+  handleValidationErrors,
+  JobController.getJobUtilization
+);
+
+/**
+ * GET /jobs/:jobId/budget-status
+ * Get allocated vs logged budget status
+ */
+router.get(
+  "/:jobId/budget-status",
+  ...authenticated(),
+  requireJobAccess("view"),
+  validateRequest(getJobParamValidator),
+  handleValidationErrors,
+  JobController.getJobBudgetStatus
+);
+
+/**
+ * GET /jobs/:jobId/revenue-allocations
+ * Get job revenue allocations
+ */
+router.get(
+  "/:jobId/revenue-allocations",
+  ...authenticated(),
+  requireJobAccess("view"),
+  validateRequest(getJobParamValidator),
+  handleValidationErrors,
+  JobController.getJobRevenueAllocations
+);
+
+/**
+ * GET /jobs/:jobId/tracking
+ * Unified workflow + KPI tracking view
+ */
+router.get(
+  "/:jobId/tracking",
+  ...authenticated(),
+  requireJobAccess("view"),
+  validateRequest(getJobParamValidator),
+  handleValidationErrors,
+  JobController.getJobWorkflowTracking
 );
 
 export default router;

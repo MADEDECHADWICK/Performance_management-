@@ -8,6 +8,7 @@ import type {
   JobCosting,
   TaskStatus,
   JobInvoiceMilestoneTracking,
+  JobWorkflowTrackingResponse,
   PaginatedResponse,
   JobStatus,
   Priority,
@@ -159,6 +160,13 @@ export const jobsAPI = {
    */
   getInvoiceMilestones: async (jobId: number): Promise<JobInvoiceMilestoneTracking> => {
     return api.get(`/jobs/${jobId}/invoice-milestones`);
+  },
+
+  /**
+   * Get unified workflow + KPI tracking payload for a job
+   */
+  getTracking: async (jobId: number): Promise<JobWorkflowTrackingResponse> => {
+    return api.get(`/jobs/${jobId}/tracking`);
   },
 
   /**

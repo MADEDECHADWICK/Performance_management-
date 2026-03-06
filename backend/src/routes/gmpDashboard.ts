@@ -73,6 +73,7 @@ const resolveJobFee = (job: { fixedFeeAmount?: any; jobCosting?: { jobFee?: any 
   Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
 
 const ACTIVE_JOB_STATUSES = new Set(['planned', 'in_progress', 'on_hold']);
+const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
 
 const fullName = (firstName?: string | null, lastName?: string | null) =>
   `${firstName || ''} ${lastName || ''}`.trim();
@@ -770,6 +771,7 @@ router.get('/partner/:partnerId', authMiddleware, async (req: AuthRequest, res) 
       },
       jobs: partnerJobs.map((job) => ({
         id: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobNumber: job.jobCode,
         clientName: job.client?.clientName,
         status: job.status,
@@ -850,6 +852,7 @@ router.get('/personal', authMiddleware, async (req: AuthRequest, res) => {
       },
       jobs: personalJobs.map((job) => ({
         id: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobNumber: job.jobCode,
         clientName: job.client?.clientName,
         status: job.status,
@@ -961,6 +964,7 @@ router.get('/alerts', authMiddleware, async (req: AuthRequest, res) => {
     return res.json({
       jobsAtRisk: jobsAtRisk.map((job) => ({
         id: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobNumber: job.jobCode,
         jobName: job.jobName,
         clientName: job.client?.clientName,

@@ -55,6 +55,8 @@ const resolveJobFee = (job: {
   return 0;
 };
 
+const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
+
 // GET /hr-dashboard/company-metrics
 router.get('/company-metrics', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -312,6 +314,7 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
       );
       return {
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobName: job.jobName,
         jobCode: job.jobCode,
         clientName: job.client?.clientName ?? null,
@@ -342,6 +345,7 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
       standardRequests: standardRequests.map((request) => ({
         id: request.id,
         jobId: request.jobId,
+        trackingPath: buildTrackingPath(request.jobId),
         jobName: request.job.jobName,
         jobCode: request.job.jobCode,
         clientName: request.job.client?.clientName ?? null,
@@ -358,6 +362,7 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
       overBudgetRequests: overBudgetRequests.map((request) => ({
         id: request.id,
         jobId: request.jobId,
+        trackingPath: buildTrackingPath(request.jobId),
         jobName: request.job.jobName,
         jobCode: request.job.jobCode,
         clientName: request.job.client?.clientName ?? null,

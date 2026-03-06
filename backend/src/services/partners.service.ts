@@ -12,6 +12,8 @@ interface ListOptions {
   status?: string;
 }
 
+const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
+
 export class PartnerService {
   /**
    * List partners (profiles with isPartner flag)
@@ -212,7 +214,10 @@ export class PartnerService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return jobs;
+    return jobs.map((job) => ({
+      ...job,
+      trackingPath: buildTrackingPath(job.id),
+    }));
   }
 
   /**
@@ -538,6 +543,7 @@ export class PartnerService {
 
       return {
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobCode: job.jobCode,
         jobName: job.jobName,
         title: job.jobName,
@@ -773,6 +779,7 @@ export class PartnerService {
     return {
       jobs: jobs.map((job) => ({
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobName: job.jobName,
         jobCode: job.jobCode,
         clientName: job.client?.clientName ?? null,
@@ -784,6 +791,7 @@ export class PartnerService {
       standardRequests: standardRequests.map((item) => ({
         id: item.id,
         jobId: item.jobId,
+        trackingPath: buildTrackingPath(item.jobId),
         jobName: item.job.jobName,
         jobCode: item.job.jobCode,
         clientName: item.job.client?.clientName ?? null,
@@ -804,6 +812,7 @@ export class PartnerService {
       overBudgetRequests: overBudgetRequests.map((item) => ({
         id: item.id,
         jobId: item.jobId,
+        trackingPath: buildTrackingPath(item.jobId),
         jobName: item.job.jobName,
         jobCode: item.job.jobCode,
         clientName: item.job.client?.clientName ?? null,
@@ -923,6 +932,7 @@ export class PartnerService {
 
       return {
         jobId: job.id,
+        trackingPath: buildTrackingPath(job.id),
         jobName: job.jobName,
         jobCode: job.jobCode,
         clientName: job.client?.clientName ?? '',
@@ -949,6 +959,7 @@ export class PartnerService {
       allocations: allocations.map((allocation) => ({
         id: allocation.id,
         jobId: allocation.jobId,
+        trackingPath: buildTrackingPath(allocation.jobId),
         jobName: allocation.job.jobName,
         jobCode: allocation.job.jobCode,
         clientName: allocation.clientPayment.client.clientName,

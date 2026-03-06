@@ -242,6 +242,14 @@ const App = () => (
                 }
               />
               <Route
+                path="/jobs/:jobId/tracking"
+                element={
+                  <AppRouteGuard>
+                    <JobWorkflowDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
                 path="/jobs/create"
                 element={
                   <AppRouteGuard>
@@ -375,6 +383,7 @@ const App = () => (
               />
               <Route path="/upward-reviews" element={<AppRouteGuard><UpwardReviews /></AppRouteGuard>} />
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
+              <Route path="/survey/:token" element={<ClientEvaluation />} />
               
               {/* KPIs & Goals */}
               <Route

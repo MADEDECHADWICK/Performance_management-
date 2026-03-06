@@ -54,6 +54,7 @@ interface PortfolioMetrics {
 
 interface JobSummary {
   jobId: number;
+  trackingPath?: string | null;
   jobCode: string | null;
   jobName: string;
   title: string;
@@ -119,6 +120,7 @@ interface AllocationTotals {
 interface AllocationRow {
   id: number;
   jobId: number;
+  trackingPath?: string | null;
   jobName: string;
   jobCode: string | null;
   clientName: string;
@@ -133,6 +135,7 @@ interface AllocationRow {
 
 interface JobBalanceRow {
   jobId: number;
+  trackingPath?: string | null;
   jobName: string;
   jobCode: string | null;
   clientName: string;
@@ -168,9 +171,11 @@ interface NotificationItem {
 }
 
 interface PartnerApprovalRequest extends TimeEntryApprovalRequest {
+  trackingPath?: string | null;
   job?: {
     id?: number;
     jobName?: string;
+    trackingPath?: string | null;
     client?: { id?: number; clientName?: string };
   };
   employee?: {
@@ -183,6 +188,7 @@ interface PartnerApprovalRequest extends TimeEntryApprovalRequest {
 interface PartnerOverBudgetRequest {
   id: number;
   jobId: number;
+  trackingPath?: string | null;
   jobName: string;
   status: string;
   employeeName?: string;
@@ -354,10 +360,16 @@ const PartnerDashboard = () => {
       const overBudget = Array.isArray(chainPayload.overBudgetRequests)
         ? chainPayload.overBudgetRequests
         : [];
+      const partnerStageRequests = Array.isArray(pending)
+        ? pending.filter((request: PartnerApprovalRequest) => {
+            if (!request.requiresPartnerApproval) return false;
+            return Boolean(request.pendingPartnerApproval || request.managerApproved);
+          })
+        : [];
       const activeOverBudget = overBudget.filter((row: PartnerOverBudgetRequest) =>
-        ['pending', 'manager_approved'].includes(String(row.status || '').toLowerCase())
+        ['manager_approved'].includes(String(row.status || '').toLowerCase())
       );
-      setApprovalRequests(Array.isArray(pending) ? pending : []);
+      setApprovalRequests(partnerStageRequests);
       setRecentApprovals(Array.isArray(recent) ? recent.slice(0, 5) : []);
       setOverBudgetRequests(activeOverBudget.slice(0, 8));
     } catch (err) {
@@ -458,6 +470,20 @@ const PartnerDashboard = () => {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return '?';
     return parsed.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const resolveTrackingPath = (jobId: number, trackingPath?: string | null) =>
+    trackingPath || `/jobs/${jobId}/tracking`;
+
+  const resolveAlertLink = (link?: string | null) => {
+    const rawLink = String(link || '').trim();
+    if (!rawLink) return null;
+    if (rawLink.startsWith('http://') || rawLink.startsWith('https://')) return rawLink;
+    const jobMatch = rawLink.match(/^\/jobs\/(\d+)(?:\/.*)?$/);
+    if (jobMatch) {
+      return `/jobs/${Number(jobMatch[1])}/tracking`;
+    }
+    return rawLink;
   };
 
   if (loading) {
@@ -914,7 +940,15 @@ const PartnerDashboard = () => {
                           className="mt-2"
                           size="sm"
                           variant="outline"
-                          onClick={() => navigate(alert.link!)}
+                          onClick={() => {
+                            const resolved = resolveAlertLink(alert.link);
+                            if (!resolved) return;
+                            if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+                              window.open(resolved, '_blank', 'noopener,noreferrer');
+                              return;
+                            }
+                            navigate(resolved);
+                          }}
                         >
                           Review
                         </Button>
@@ -1013,6 +1047,9 @@ const PartnerDashboard = () => {
                           <p className="text-sm text-muted-foreground">
                             {job.jobCode || `Job #${job.jobId}`}
                           </p>
+                          <p className="text-xs text-muted-foreground">
+                            {resolveTrackingPath(job.jobId, job.trackingPath)}
+                          </p>
                         </div>
                         <div className="flex gap-4 text-sm">
                           <div className="text-right">
@@ -1079,6 +1116,13 @@ const PartnerDashboard = () => {
                           >
                             {job.status}
                           </Badge>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => navigate(resolveTrackingPath(job.jobId, job.trackingPath))}
+                          >
+                            Tracking
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -1219,7 +1263,16 @@ const PartnerDashboard = () => {
                     No pending approval requests.
                   </div>
                 )}
-                {approvalRequests.map((request) => (
+                {approvalRequests.map((request) => {
+                  const trackingJobId = Number(request.jobId || request.job?.id || 0);
+                  const trackingPath =
+                    trackingJobId > 0
+                      ? resolveTrackingPath(
+                          trackingJobId,
+                          request.trackingPath || request.job?.trackingPath
+                        )
+                      : null;
+                  return (
                   <div key={request.id} className="rounded-md border p-4">
                     <div className="flex flex-wrap items-center justify-between gap-4">
                       <div>
@@ -1234,6 +1287,15 @@ const PartnerDashboard = () => {
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
+                        {trackingPath && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => navigate(trackingPath)}
+                          >
+                            Open tracking
+                          </Button>
+                        )}
                         <Button size="sm" onClick={() => handleApproveRequest(request.id)}>
                           Approve
                         </Button>
@@ -1250,7 +1312,8 @@ const PartnerDashboard = () => {
                       Justification: {request.justification || 'â€”'}
                     </p>
                   </div>
-                ))}
+                  );
+                })}
                 {overBudgetRequests.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">Over-budget approval chain</p>
@@ -1272,7 +1335,23 @@ const PartnerDashboard = () => {
                             </p>
                           </div>
                         </div>
-                        {(request.status === 'pending' || request.status === 'manager_approved') && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              navigate(resolveTrackingPath(request.jobId, request.trackingPath))
+                            }
+                          >
+                            Open tracking
+                          </Button>
+                          {request.status !== 'manager_approved' && (
+                            <p className="text-xs text-muted-foreground">
+                              Awaiting manager decision.
+                            </p>
+                          )}
+                        </div>
+                        {request.status === 'manager_approved' && (
                           <div className="mt-2 flex items-center gap-2">
                             <Button
                               size="sm"
@@ -1416,6 +1495,9 @@ const PartnerDashboard = () => {
                               <p className="text-xs text-muted-foreground">
                                 {job.jobCode || `Job #${job.jobId}`} Â· {job.clientName || 'Client'}
                               </p>
+                              <p className="text-xs text-muted-foreground">
+                                {resolveTrackingPath(job.jobId, job.trackingPath)}
+                              </p>
                             </div>
                             <div className="flex flex-wrap gap-4 text-sm">
                               <div>
@@ -1441,6 +1523,15 @@ const PartnerDashboard = () => {
                               {job.totalLoss > 0 && (
                                 <Badge variant="destructive">Loss detected</Badge>
                               )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  navigate(resolveTrackingPath(job.jobId, job.trackingPath))
+                                }
+                              >
+                                Tracking
+                              </Button>
                             </div>
                           </div>
                         ))}
@@ -1467,6 +1558,9 @@ const PartnerDashboard = () => {
                               <p className="text-xs text-muted-foreground">
                                 {allocation.jobName} Â· {allocation.clientName}
                               </p>
+                              <p className="text-xs text-muted-foreground">
+                                {resolveTrackingPath(allocation.jobId, allocation.trackingPath)}
+                              </p>
                             </div>
                             <div className="flex flex-wrap items-center gap-4 text-sm">
                               <div>
@@ -1486,6 +1580,15 @@ const PartnerDashboard = () => {
                               {allocation.employeeLoss > 0 && (
                                 <Badge variant="destructive">Loss</Badge>
                               )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  navigate(resolveTrackingPath(allocation.jobId, allocation.trackingPath))
+                                }
+                              >
+                                Tracking
+                              </Button>
                             </div>
                           </div>
                         ))}

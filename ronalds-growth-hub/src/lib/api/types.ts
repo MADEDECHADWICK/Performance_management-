@@ -214,6 +214,7 @@ export interface Job {
   id: number;
   jobName: string;
   jobCode?: string;
+  trackingPath?: string;
   description?: string;
   clientId?: number;
   departmentId?: number;
@@ -358,6 +359,182 @@ export interface JobInvoiceMilestoneTracking {
   milestones: JobInvoiceMilestoneTrackingItem[];
 }
 
+export interface JobWorkflowOwnership {
+  client?: {
+    id?: number;
+    clientName?: string;
+    clientCode?: string;
+  } | null;
+  department?: {
+    id?: number;
+    name?: string;
+  } | null;
+  manager?: {
+    id?: number;
+    firstName?: string;
+    lastName?: string;
+  } | null;
+  partner?: {
+    id?: number;
+    firstName?: string;
+    lastName?: string;
+  } | null;
+  receivableOwner?: {
+    id?: number;
+    firstName?: string;
+    lastName?: string;
+  } | null;
+}
+
+export interface JobWorkflowExecutionState {
+  currentStatus: JobStatus;
+  canMoveToInProgress: boolean;
+  canComplete: boolean;
+  blockersForInProgress: string[];
+  blockersForCompletion: string[];
+  isOverdue: boolean;
+  overdueDays: number;
+}
+
+export interface JobWorkflowTrackingEmployee {
+  profileId: number;
+  employeeName: string;
+  positionTitle?: string | null;
+  assignedRole?: string | null;
+  assignedHourlyRate?: number;
+  allocatedHours: number;
+  loggedHours: number;
+  approvedHours: number;
+  billableHours: number;
+  nonBillableHours: number;
+  billableAmount: number;
+  costAmount: number;
+  remainingAllocatedHours: number;
+  overrunHours: number;
+  utilizationPercent: number;
+}
+
+export interface JobWorkflowTrackingPayload {
+  tasks: {
+    total: number;
+    pending: number;
+    inProgress: number;
+    blocked: number;
+    completed: number;
+    cancelled: number;
+    incomplete: number;
+  };
+  staffing: {
+    teamAssigned: boolean;
+    headcount: number;
+    allocatedHours: number;
+    loggedHours: number;
+    remainingAllocatedHours: number;
+    overrunHours: number;
+    employees: JobWorkflowTrackingEmployee[];
+  };
+  timesheets: {
+    totalEntries: number;
+    activeEntries: number;
+    approvedEntries: number;
+    pendingOrSubmittedEntries: number;
+    totalHoursWorked: number;
+    approvedHoursWorked: number;
+    totalBillableHours: number;
+    totalNonBillableHours: number;
+    billableUtilizationPercent: number;
+  };
+  financials: {
+    expectedFeeAmount: number;
+    billedAmount: number;
+    approvedBilledAmount: number;
+    costToDate: number;
+    profitToDate: number;
+    marginPercent: number;
+    billedVsExpectedPercent: number;
+  };
+  collections: {
+    collectionStage?: string | null;
+    paymentCount: number;
+    collectedAmount: number;
+    outstandingAmount: number;
+    collectionPercent: number;
+    readyForCollectionAt?: string | null;
+  };
+  revenueAllocations: {
+    count: number;
+    allocatedAmount: number;
+    employeeBillableAmount: number;
+    employeeProfitAmount: number;
+    employeeLossAmount: number;
+  };
+  milestones?: JobInvoiceMilestoneTracking;
+  documentReadiness: {
+    missingForInProgress: string[];
+    missingForCompletion: string[];
+  };
+}
+
+export interface JobWorkflowTrackingResponse {
+  job: {
+    id: number;
+    jobCode?: string | null;
+    jobName: string;
+    description?: string | null;
+    status: JobStatus;
+    effectiveStatus?: JobStatus | "overdue";
+    isOverdue?: boolean;
+    priority?: Priority;
+    startDate?: string | null;
+    dueDate?: string | null;
+    completionDate?: string | null;
+    billingType: BillingType;
+    currency?: string | null;
+    fixedFeeAmount?: number;
+    budgetHours?: number;
+    collectionStage?: string | null;
+    readyForCollectionAt?: string | null;
+    teamAssigned?: boolean;
+    costingCompleted?: boolean;
+  };
+  ownership: JobWorkflowOwnership;
+  workflow: {
+    marketing: {
+      clientOnboardingId?: number | null;
+      onboardingStatus?: string | null;
+      engagementLetterId?: number | null;
+      engagementLetterStatus?: string | null;
+      engagementLetterDocumentUploaded: boolean;
+    };
+    hr: {
+      jobCreated: boolean;
+      managerAssigned: boolean;
+      partnerAssigned: boolean;
+      departmentAssigned: boolean;
+    };
+    manager: {
+      teamAssigned: boolean;
+      staffCount: number;
+      costingCompleted: boolean;
+      costingStatus?: string | null;
+      budgetCapEnforced?: boolean | null;
+      allowOverage?: boolean | null;
+      maxOveragePercent?: number;
+    };
+    execution: JobWorkflowExecutionState;
+  };
+  tracking: JobWorkflowTrackingPayload;
+  statusTimeline: Array<{
+    id: number;
+    fromStatus?: string | null;
+    toStatus?: string | null;
+    reason?: string | null;
+    changedByProfileId?: number | null;
+    createdAt?: string;
+  }>;
+  generatedAt?: string;
+}
+
 // Time Entry Models
 export interface TimeEntry {
   id: number;
@@ -406,6 +583,10 @@ export interface TimeEntryApprovalRequest {
   requestedAt: string;
   createdAt: string;
   updatedAt: string;
+  trackingPath?: string | null;
+  requiresPartnerApproval?: boolean;
+  managerApproved?: boolean;
+  pendingPartnerApproval?: boolean;
 }
 
 export interface TimeOverBudgetRequest {

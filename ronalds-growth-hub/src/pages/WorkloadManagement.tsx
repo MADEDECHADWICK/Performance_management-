@@ -75,6 +75,13 @@ interface WorkloadMetrics {
   critical_deadlines: number;
   capacity_variance: number;
   burnout_risk: number;
+  totalTeamMembers?: number;
+  avgUtilization?: number;
+  overloadedEmployees?: number;
+  underutilizedEmployees?: number;
+  criticalDeadlines?: number;
+  capacityVariance?: number;
+  burnoutRisk?: number;
 }
 
 interface CapacityRecommendation {
@@ -142,11 +149,13 @@ const WorkloadManagement = () => {
             employee_id: Number(assignment.employee_id ?? assignment.employeeId ?? 0),
             employee_name: String(assignment.employee_name ?? assignment.employeeName ?? 'Unassigned'),
             role_in_project: String(assignment.role_in_project ?? assignment.role ?? 'Team'),
-            allocated_hours: Number(assignment.allocated_hours ?? 0),
+            allocated_hours: Number(assignment.allocatedHours ?? assignment.allocated_hours ?? 0),
             deadline: assignment.deadline ?? assignment.dueDate ?? assignment.due_date ?? null,
             priority: assignment.priority ?? 'medium',
-            completion_percentage: Number(assignment.completion_percentage ?? 0),
-            estimated_remaining_hours: Number(assignment.estimated_remaining_hours ?? 0),
+            completion_percentage: Number(assignment.completionPercentage ?? assignment.completion_percentage ?? 0),
+            estimated_remaining_hours: Number(
+              assignment.estimatedRemainingHours ?? assignment.estimated_remaining_hours ?? 0
+            ),
             job_id: Number(assignment.jobId ?? assignment.job_id ?? assignment.id ?? 0),
           }))
         : [];
@@ -368,9 +377,9 @@ const WorkloadManagement = () => {
   const redistributeWorkload = async (fromEmployee: number, toEmployee: number, projectId: number) => {
     try {
       await apiFetch("POST", "/team-management/redistribute-workload", {
-        from_employee_id: fromEmployee,
-        to_employee_id: toEmployee,
-        project_id: projectId,
+        fromEmployeeId: fromEmployee,
+        toEmployeeId: toEmployee,
+        jobId: projectId,
       });
       
       fetchWorkloadData(); // Refresh data
@@ -380,13 +389,13 @@ const WorkloadManagement = () => {
   };
 
   const safeMetrics: WorkloadMetrics = {
-    total_team_members: metrics?.total_team_members ?? 0,
-    avg_utilization: Number(metrics?.avg_utilization ?? 0) || 0,
-    overloaded_employees: metrics?.overloaded_employees ?? 0,
-    underutilized_employees: metrics?.underutilized_employees ?? 0,
-    critical_deadlines: metrics?.critical_deadlines ?? 0,
-    capacity_variance: metrics?.capacity_variance ?? 0,
-    burnout_risk: Number(metrics?.burnout_risk ?? 0) || 0,
+    total_team_members: metrics?.totalTeamMembers ?? metrics?.total_team_members ?? 0,
+    avg_utilization: Number(metrics?.avgUtilization ?? metrics?.avg_utilization ?? 0) || 0,
+    overloaded_employees: metrics?.overloadedEmployees ?? metrics?.overloaded_employees ?? 0,
+    underutilized_employees: metrics?.underutilizedEmployees ?? metrics?.underutilized_employees ?? 0,
+    critical_deadlines: metrics?.criticalDeadlines ?? metrics?.critical_deadlines ?? 0,
+    capacity_variance: metrics?.capacityVariance ?? metrics?.capacity_variance ?? 0,
+    burnout_risk: Number(metrics?.burnoutRisk ?? metrics?.burnout_risk ?? 0) || 0,
   };
 
   if (loading) {
@@ -835,7 +844,7 @@ const WorkloadManagement = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">
-                    {metrics ? Math.round(metrics.avg_utilization) : 0}%
+                    {safeMetrics ? Math.round(safeMetrics.avg_utilization) : 0}%
                   </div>
                   <p className="text-xs text-muted-foreground">Current period</p>
                 </CardContent>
@@ -846,7 +855,7 @@ const WorkloadManagement = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-destructive">
-                    {metrics?.overloaded_employees ?? 0}
+                    {safeMetrics?.overloaded_employees ?? 0}
                   </div>
                   <p className="text-xs text-muted-foreground">Employees at risk</p>
                 </CardContent>
@@ -857,7 +866,7 @@ const WorkloadManagement = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">
-                    {metrics?.critical_deadlines ?? 0}
+                    {safeMetrics?.critical_deadlines ?? 0}
                   </div>
                   <p className="text-xs text-muted-foreground">Next 7 days</p>
                 </CardContent>

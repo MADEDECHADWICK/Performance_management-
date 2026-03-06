@@ -30,8 +30,14 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     const roles = resolveRoles(req);
     const privileged = isPrivileged(roles);
 
+    const rawEmployeeIds =
+      req.query.employeeIds ??
+      req.query.employeeId ??
+      req.query.employee_id ??
+      req.query.employee_ids;
+
     let ids =
-      (req.query.employeeIds as string | undefined)
+      (rawEmployeeIds as string | undefined)
         ?.split(',')
         .map((s) => s.trim())
         .filter(Boolean) || [];

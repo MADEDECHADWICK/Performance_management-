@@ -450,4 +450,105 @@ export class JobController {
       res.status(statusCode).json(errorResponse(error.message, statusCode));
     }
   }
+
+  /**
+   * GET /jobs/:jobId/time-entries
+   * Get job time entries with pagination/filtering
+   */
+  static async getJobTimeEntries(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const page = Number(req.query.page) || 1;
+      const pageSize = Number(req.query.pageSize) || 50;
+      const status = req.query.status ? String(req.query.status) : undefined;
+      const dateFrom = req.query.dateFrom ? new Date(String(req.query.dateFrom)) : undefined;
+      const dateTo = req.query.dateTo ? new Date(String(req.query.dateTo)) : undefined;
+
+      const result = await jobService.getJobTimeEntries(jobId, {
+        page,
+        pageSize,
+        status,
+        dateFrom,
+        dateTo,
+      });
+
+      res.json(
+        paginatedResponse(
+          result.entries,
+          result.total,
+          page,
+          pageSize,
+          "Job time entries retrieved"
+        )
+      );
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * GET /jobs/:jobId/utilization
+   * Get job utilization metrics
+   */
+  static async getJobUtilization(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const utilization = await jobService.getJobUtilization(jobId);
+      res.json(successResponse(utilization, "Job utilization retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * GET /jobs/:jobId/budget-status
+   * Get allocated vs logged budget status
+   */
+  static async getJobBudgetStatus(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const budgetStatus = await jobService.getJobBudgetStatus(jobId);
+      res.json(successResponse(budgetStatus, "Job budget status retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * GET /jobs/:jobId/revenue-allocations
+   * Get job revenue allocations
+   */
+  static async getJobRevenueAllocations(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const allocations = await jobService.getJobRevenueAllocations(jobId);
+      res.json(successResponse(allocations, "Job revenue allocations retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * GET /jobs/:jobId/tracking
+   * Unified workflow + KPI tracking view
+   */
+  static async getJobWorkflowTracking(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.profile?.id ?? req.user?.profileId ?? 0,
+        roles: req.userRoles || [],
+      };
+      const tracking = await jobService.getJobWorkflowTracking(jobId, auth);
+      res.json(successResponse(tracking, "Job tracking retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
 }
