@@ -1043,13 +1043,13 @@ const EmployeeManagement = () => {
       let departmentId: string | undefined;
       const departmentData = {
         name: departmentForm.name.trim(),
-        description: departmentForm.description.trim() || null,
+        description: departmentForm.description.trim() || undefined,
         departmentHeadId: departmentForm.department_head_id
           ? Number(departmentForm.department_head_id)
-          : null,
+          : undefined,
         partnerProfileId: departmentForm.partner_profile_id
           ? Number(departmentForm.partner_profile_id)
-          : null,
+          : undefined,
       };
 
       if (editingDepartment) {
@@ -2203,7 +2203,7 @@ const EmployeeManagement = () => {
                       </SelectItem>
                     )}
                     {managerEmployees.map((emp: any) => (
-                      <SelectItem key={emp.id} value={emp.id}>
+                      <SelectItem key={emp.id} value={String(emp.id)}>
                         {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Manager"}
                       </SelectItem>
                     ))}
@@ -2232,7 +2232,7 @@ const EmployeeManagement = () => {
                       </SelectItem>
                     )}
                     {partnerEmployees.map((emp: any) => (
-                      <SelectItem key={emp.id} value={emp.id}>
+                      <SelectItem key={emp.id} value={String(emp.id)}>
                         {emp.first_name} {emp.last_name} - {getRoleLabel(emp) || "Partner"}
                       </SelectItem>
                     ))}
@@ -2550,7 +2550,7 @@ const EmployeeManagement = () => {
                     <SelectContent>
                       <SelectItem value="none">No Department</SelectItem>
                       {safeDepartments.map((dept) => (
-                        <SelectItem key={dept.id} value={dept.id}>
+                        <SelectItem key={dept.id} value={String(dept.id)}>
                           {dept.name}
                         </SelectItem>
                       ))}
@@ -2574,7 +2574,7 @@ const EmployeeManagement = () => {
                     <SelectContent>
                       <SelectItem value="none">No Manager</SelectItem>
                       {safeEmployees.map((emp) => (
-                        <SelectItem key={emp.id} value={emp.id}>
+                        <SelectItem key={emp.id} value={String(emp.id)}>
                           {emp.first_name} {emp.last_name}
                         </SelectItem>
                       ))}

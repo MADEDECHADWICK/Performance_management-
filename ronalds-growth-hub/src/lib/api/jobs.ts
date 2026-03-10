@@ -90,6 +90,12 @@ interface JobCostingPayload {
   capEnforced?: boolean;
   allowOverage?: boolean;
   maxOveragePercent?: number;
+  milestones?: JobMilestonePayload[];
+}
+
+interface ReviewJobCostingPayload {
+  decision: 'approved' | 'rejected';
+  reviewNotes?: string;
 }
 
 export const jobsAPI = {
@@ -225,6 +231,10 @@ export const jobsAPI = {
    */
   upsertCosting: async (jobId: number, data: JobCostingPayload): Promise<JobCosting> => {
     return api.post(`/jobs/${jobId}/costing`, data);
+  },
+
+  reviewCosting: async (jobId: number, data: ReviewJobCostingPayload): Promise<JobCosting> => {
+    return api.patch(`/jobs/${jobId}/costing/review`, data);
   },
 
   // ==================

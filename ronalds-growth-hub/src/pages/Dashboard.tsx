@@ -14,7 +14,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 interface PerformanceData {
   overallScore: number;
-  grade: string;
+  grade: string | null;
   revenueContribution: number;
   allocatedRevenue: number;
   billableHours: number;
@@ -240,7 +240,7 @@ const Dashboard = () => {
 
         setPerformance({
           overallScore: Math.round((performancePayload.overall.totalScore || 0) * 10) / 10,
-          grade: String(performancePayload.overall.grade || "N/A"),
+          grade: performancePayload.overall.grade ?? null,
           revenueContribution: financial.revenue || 0,
           allocatedRevenue: allocatedRevenueTotal,
           billableHours: financial.billableHours || 0,
@@ -307,9 +307,24 @@ const Dashboard = () => {
       // Calculate utilization (assuming 160 billable hours per month target)
       const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
 
+      const hasFallbackSignals =
+        assignmentRows.length > 0 ||
+        (Array.isArray(clientEvals) && clientEvals.length > 0) ||
+        scopedAssignments.length > 0;
+
       setPerformance({
         overallScore: Math.round(overallScore * 10) / 10,
-        grade: overallScore >= 90 ? "A" : overallScore >= 80 ? "B" : overallScore >= 70 ? "C" : overallScore >= 60 ? "D" : "E",
+        grade: hasFallbackSignals
+          ? overallScore >= 90
+            ? "A"
+            : overallScore >= 80
+              ? "B"
+              : overallScore >= 70
+                ? "C"
+                : overallScore >= 60
+                  ? "D"
+                  : "E"
+          : null,
         revenueContribution: totalRevenue,
         allocatedRevenue: totalRevenue,
         billableHours: totalBillableHours,
@@ -583,7 +598,7 @@ const Dashboard = () => {
                 {performance?.overallScore || 0}
               </div>
               <p className="text-xs text-muted-foreground">
-                Grade {performance?.grade || "N/A"} | {roleLabel}
+                {performance?.grade ? `Grade ${performance.grade}` : "No grade yet"} | {roleLabel}
               </p>
               <MiniStatGraph
                 value={performance?.overallScore || 0}

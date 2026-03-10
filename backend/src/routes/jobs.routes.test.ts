@@ -37,6 +37,7 @@ jest.mock("../validators/job.validators", () => ({
   updateJobStaffAssignmentValidators: [],
   removeJobStaffAssignmentValidators: [],
   upsertJobCostingValidators: [],
+  reviewJobCostingValidators: [],
   createJobFromOnboardingValidators: [],
   getJobTimeEntriesValidators: [],
 }));
@@ -62,6 +63,9 @@ jest.mock("../controllers/job.controller", () => ({
     getJobCosting: jest.fn((_req: any, res: any) => res.status(200).json({ ok: "getJobCosting" })),
     upsertJobCosting: jest.fn((_req: any, res: any) =>
       res.status(200).json({ ok: "upsertJobCosting" })
+    ),
+    reviewJobCosting: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "reviewJobCosting" })
     ),
     assignStaff: jest.fn((_req: any, res: any) => res.status(201).json({ ok: "assignStaff" })),
     getStaffAssignments: jest.fn((_req: any, res: any) =>

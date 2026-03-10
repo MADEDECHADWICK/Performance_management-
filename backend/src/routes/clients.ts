@@ -4,6 +4,7 @@ import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { notifyProfilesByRoles } from "../services/notificationRecipients";
+import { NotificationService } from "../services/notifications.service";
 
 const router = Router();
 
@@ -12,11 +13,87 @@ const parseId = (value: string) => {
   return Number.isFinite(id) ? id : null;
 };
 
+const hasOwn = (value: unknown, key: string) =>
+  Boolean(value) && Object.prototype.hasOwnProperty.call(value, key);
+
+const parseOptionalPositiveInt = (value: unknown) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+};
+
+const buildGeneratedClientCode = (clientId: number) =>
+  `CL-${String(clientId).padStart(4, "0")}`;
+
+const normalizeRole = (value: string | null | undefined) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const resolveRoleSet = (req: AuthRequest) =>
+  new Set(
+    [
+      ...(req.userRoles || []),
+      ...(req.user?.authRoles || []),
+      req.profile?.role?.name || "",
+    ]
+      .map((role) => normalizeRole(role))
+      .filter(Boolean)
+  );
+
+const isMarketingOrAdmin = (req: AuthRequest) => {
+  const roles = resolveRoleSet(req);
+  return roles.has("marketing") || roles.has("super_admin");
+};
+
+const isHrOrAdmin = (req: AuthRequest) => {
+  const roles = resolveRoleSet(req);
+  return roles.has("hr") || roles.has("super_admin");
+};
+
+const engagementLetterIncludeWithFeedback = {
+  document: { select: { id: true, fileName: true, filePath: true, mimeType: true } },
+  statusTransitions: {
+    where: { toStatus: EngagementLetterStatus.rejected },
+    orderBy: { createdAt: "desc" as const },
+    take: 1,
+    select: {
+      reason: true,
+      createdAt: true,
+      changedBy: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
+  },
+};
+
+const decorateEngagementLetter = (letter: any) => {
+  if (!letter) return letter;
+  const latestRejection = Array.isArray(letter.statusTransitions)
+    ? letter.statusTransitions[0]
+    : undefined;
+  const { statusTransitions, ...rest } = letter;
+  return {
+    ...rest,
+    latestRejectionReason: latestRejection?.reason ?? null,
+    latestRejectionAt: latestRejection?.createdAt ?? null,
+    latestRejectedBy: latestRejection?.changedBy ?? null,
+  };
+};
+
 // Engagement letter approvals (must come before /:clientId routes)
 router.post(
   "/engagement-letters/:letterId/approve",
   async (req: AuthRequest, res) => {
     try {
+      if (!isHrOrAdmin(req)) {
+        res.status(403).json(errorResponse("Only HR/Admin can approve engagement letters", 403));
+        return;
+      }
+
       const letterId = parseId(req.params.letterId);
       if (!letterId) {
         res.status(400).json(errorResponse("Invalid engagement letter id", 400));
@@ -39,9 +116,7 @@ router.post(
           approvedByProfileId: req.user?.profileId,
           approvedAt: new Date(),
         },
-        include: {
-          document: { select: { id: true, fileName: true, filePath: true } },
-        },
+        include: engagementLetterIncludeWithFeedback,
       });
 
       await prisma.statusTransition.create({
@@ -65,7 +140,7 @@ router.post(
         req
       );
 
-      res.json(successResponse(updated, "Engagement letter approved"));
+      res.json(successResponse(decorateEngagementLetter(updated), "Engagement letter approved"));
     } catch (error: any) {
       console.error("Error approving engagement letter:", error);
       res.status(500).json(errorResponse("Failed to approve engagement letter", 500));
@@ -77,16 +152,32 @@ router.post(
   "/engagement-letters/:letterId/reject",
   async (req: AuthRequest, res) => {
     try {
+      if (!isHrOrAdmin(req)) {
+        res.status(403).json(errorResponse("Only HR/Admin can reject engagement letters", 403));
+        return;
+      }
+
       const letterId = parseId(req.params.letterId);
       if (!letterId) {
         res.status(400).json(errorResponse("Invalid engagement letter id", 400));
         return;
       }
 
-      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const reason =
+        typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!reason) {
+        res.status(400).json(errorResponse("A review point is required before rejecting an engagement letter", 400));
+        return;
+      }
 
       const letter = await prisma.engagementLetter.findUnique({
         where: { id: letterId },
+        select: {
+          id: true,
+          clientId: true,
+          uploadedByProfileId: true,
+          status: true,
+        },
       });
 
       if (!letter) {
@@ -94,31 +185,87 @@ router.post(
         return;
       }
 
-      const updated = await prisma.engagementLetter.update({
-        where: { id: letterId },
-        data: {
-          status: EngagementLetterStatus.rejected,
-          approvedByProfileId: req.user?.profileId,
-          approvedAt: new Date(),
-        },
-        include: {
-          document: { select: { id: true, fileName: true, filePath: true } },
-        },
+      const { updated, onboardings } = await prisma.$transaction(async (tx: any) => {
+        const updatedLetter = await tx.engagementLetter.update({
+          where: { id: letterId },
+          data: {
+            status: EngagementLetterStatus.rejected,
+            approvedByProfileId: req.user?.profileId,
+            approvedAt: new Date(),
+          },
+          include: engagementLetterIncludeWithFeedback,
+        });
+
+        await tx.statusTransition.create({
+          data: {
+            entityType: "EngagementLetter",
+            entityId: letterId,
+            fromStatus: letter.status,
+            toStatus: EngagementLetterStatus.rejected,
+            reason,
+            changedByProfileId: req.user?.profileId,
+            engagementLetterId: letterId,
+            clientId: letter.clientId,
+          },
+        });
+
+        await tx.clientOnboarding.updateMany({
+          where: { engagementLetterId: letterId },
+          data: {
+            status: ClientOnboardingStatus.rejected,
+            hrReviewerProfileId: req.user?.profileId,
+            notes: reason,
+          },
+        });
+
+        const linkedOnboardings = await tx.clientOnboarding.findMany({
+          where: { engagementLetterId: letterId },
+          select: {
+            id: true,
+            clientId: true,
+            clientName: true,
+            uploadedByProfileId: true,
+          },
+        });
+
+        return { updated: updatedLetter, onboardings: linkedOnboardings };
       });
 
-      await prisma.statusTransition.create({
-        data: {
-          entityType: "EngagementLetter",
-          entityId: letterId,
-          fromStatus: letter.status,
-          toStatus: EngagementLetterStatus.rejected,
-          reason,
-          changedByProfileId: req.user?.profileId,
-          engagementLetterId: letterId,
-        },
+      const recipients = new Set<number>();
+      if (letter.uploadedByProfileId && letter.uploadedByProfileId !== req.user?.profileId) {
+        recipients.add(letter.uploadedByProfileId);
+      }
+      onboardings.forEach((item: any) => {
+        if (item.uploadedByProfileId && item.uploadedByProfileId !== req.user?.profileId) {
+          recipients.add(item.uploadedByProfileId);
+        }
       });
 
-      res.json(successResponse(updated, "Engagement letter rejected"));
+      await Promise.allSettled(
+        Array.from(recipients).map((recipientProfileId) =>
+          NotificationService.createNotification(
+            {
+              recipientProfileId,
+              type: "action",
+              title: "Engagement letter returned by HR",
+              message: `HR returned the engagement letter for client #${letter.clientId}: ${reason}`,
+              actionRequired: true,
+              link:
+                onboardings[0]?.clientId
+                  ? `/clients/${onboardings[0].clientId}/edit?onboardingId=${onboardings[0].id}&resubmit=1`
+                  : `/client-onboarding-queue`,
+              clientId: onboardings[0]?.clientId ?? letter.clientId,
+            },
+            {
+              userId: req.user?.userId ?? 0,
+              profileId: req.user?.profileId ?? 0,
+              roleName: req.userRoles?.[0] || "system",
+            }
+          )
+        )
+      );
+
+      res.json(successResponse(decorateEngagementLetter(updated), "Engagement letter rejected"));
     } catch (error: any) {
       console.error("Error rejecting engagement letter:", error);
       res.status(500).json(errorResponse("Failed to reject engagement letter", 500));
@@ -208,6 +355,13 @@ router.get("/:clientId", async (req, res) => {
 // POST /clients - Create client
 router.post("/", async (req: AuthRequest, res) => {
   try {
+    if (!isMarketingOrAdmin(req)) {
+      res.status(403).json(
+        errorResponse("Only marketing can submit new client intakes with engagement letters", 403)
+      );
+      return;
+    }
+
     const {
       clientName,
       clientCode,
@@ -277,10 +431,15 @@ router.post("/", async (req: AuthRequest, res) => {
     }
 
     const created = await prisma.$transaction(async (tx) => {
-      const client = await tx.client.create({
+      const normalizedClientCode =
+        typeof clientCode === "string" && clientCode.trim()
+          ? clientCode.trim().toUpperCase()
+          : undefined;
+
+      const createdClient = await tx.client.create({
         data: {
           clientName,
-          clientCode,
+          clientCode: normalizedClientCode,
           industry,
           contactPerson,
           contactEmail,
@@ -298,6 +457,20 @@ router.post("/", async (req: AuthRequest, res) => {
           department: { select: { id: true, name: true } },
         },
       });
+
+      const clientCodeToUse = createdClient.clientCode || buildGeneratedClientCode(createdClient.id);
+      const client =
+        createdClient.clientCode
+          ? createdClient
+          : await tx.client.update({
+              where: { id: createdClient.id },
+              data: { clientCode: clientCodeToUse },
+              include: {
+                partner: { select: { id: true, firstName: true, lastName: true } },
+                manager: { select: { id: true, firstName: true, lastName: true } },
+                department: { select: { id: true, name: true } },
+              },
+            });
 
       const letter = await tx.engagementLetter.create({
         data: {
@@ -474,13 +647,11 @@ router.get("/:clientId/engagement-letters", async (req, res) => {
 
     const letters = await prisma.engagementLetter.findMany({
       where: { clientId },
-      include: {
-        document: { select: { id: true, fileName: true, filePath: true, mimeType: true } },
-      },
+      include: engagementLetterIncludeWithFeedback,
       orderBy: { createdAt: "desc" },
     });
 
-    res.json(successResponse(letters, "Engagement letters retrieved"));
+    res.json(successResponse(letters.map((letter: any) => decorateEngagementLetter(letter)), "Engagement letters retrieved"));
   } catch (error: any) {
     console.error("Error fetching engagement letters:", error);
     res.status(500).json(errorResponse("Failed to fetch engagement letters", 500));
@@ -490,6 +661,13 @@ router.get("/:clientId/engagement-letters", async (req, res) => {
 // POST /clients/:clientId/engagement-letters - Upload engagement letter metadata
 router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
   try {
+    if (!isMarketingOrAdmin(req)) {
+      res.status(403).json(
+        errorResponse("Only marketing can upload engagement letters for HR review", 403)
+      );
+      return;
+    }
+
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
       res.status(400).json(errorResponse("Invalid client id", 400));
@@ -498,6 +676,9 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
 
     const {
       documentId,
+      departmentId,
+      partnerProfileId,
+      managerProfileId,
       jobTitle,
       engagementType,
       feeAmount,
@@ -517,6 +698,35 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
 
     if (!engagementType) {
       res.status(400).json(errorResponse("engagementType is required", 400));
+      return;
+    }
+
+    const parsedFeeAmount =
+      feeAmount === undefined || feeAmount === null || feeAmount === ""
+        ? undefined
+        : Number(feeAmount);
+    if (
+      parsedFeeAmount !== undefined &&
+      (!Number.isFinite(parsedFeeAmount) || parsedFeeAmount <= 0)
+    ) {
+      res.status(400).json(errorResponse("feeAmount must be greater than 0", 400));
+      return;
+    }
+
+    const hasDepartmentId = hasOwn(req.body, "departmentId");
+    const hasPartnerProfileId = hasOwn(req.body, "partnerProfileId");
+    const hasManagerProfileId = hasOwn(req.body, "managerProfileId");
+
+    const parsedDepartmentId = parseOptionalPositiveInt(departmentId);
+    const parsedPartnerProfileId = parseOptionalPositiveInt(partnerProfileId);
+    const parsedManagerProfileId = parseOptionalPositiveInt(managerProfileId);
+
+    if (
+      (hasDepartmentId && Number.isNaN(parsedDepartmentId)) ||
+      (hasPartnerProfileId && Number.isNaN(parsedPartnerProfileId)) ||
+      (hasManagerProfileId && Number.isNaN(parsedManagerProfileId))
+    ) {
+      res.status(400).json(errorResponse("Ownership fields must be valid positive ids", 400));
       return;
     }
 
@@ -544,55 +754,79 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
       return;
     }
 
-    const letter = await prisma.engagementLetter.create({
-      data: {
-        clientId,
-        documentId: parsedDocumentId,
-        jobTitle,
-        engagementType,
-        feeAmount,
-        currency,
-        startDate: startDate ? new Date(startDate) : undefined,
-        endDate: endDate ? new Date(endDate) : undefined,
-        scopeDescription,
-        termsConditions,
-        uploadedByProfileId: req.user?.profileId,
-        status: EngagementLetterStatus.pending_review,
-      },
-      include: {
-        document: { select: { id: true, fileName: true, filePath: true } },
-      },
-    });
+    const created = await prisma.$transaction(async (tx) => {
+      const routingClient =
+        hasDepartmentId || hasPartnerProfileId || hasManagerProfileId
+          ? await tx.client.update({
+              where: { id: client.id },
+              data: {
+                departmentId: hasDepartmentId ? parsedDepartmentId : undefined,
+                partnerProfileId: hasPartnerProfileId ? parsedPartnerProfileId : undefined,
+                managerProfileId: hasManagerProfileId ? parsedManagerProfileId : undefined,
+              },
+            })
+          : client;
 
-    const existingOnboarding = await prisma.clientOnboarding.findFirst({
-      where: { engagementLetterId: letter.id },
-    });
+      const createdLetter = await tx.engagementLetter.create({
+        data: {
+          clientId,
+          documentId: parsedDocumentId,
+          jobTitle,
+          engagementType,
+          feeAmount: parsedFeeAmount,
+          currency,
+          startDate: startDate ? new Date(startDate) : undefined,
+          endDate: endDate ? new Date(endDate) : undefined,
+          scopeDescription,
+          termsConditions,
+          uploadedByProfileId: req.user?.profileId,
+          status: EngagementLetterStatus.pending_review,
+        },
+        include: {
+          document: { select: { id: true, fileName: true, filePath: true, mimeType: true } },
+        },
+      });
 
-    if (!existingOnboarding) {
-      const existingClientOnboarding = await prisma.clientOnboarding.findFirst({
-        where: { clientId: client.id },
+      const existingClientOnboarding = await tx.clientOnboarding.findFirst({
+        where: { clientId: routingClient.id },
         select: { id: true },
       });
 
-      await prisma.clientOnboarding.create({
+      const onboarding = await tx.clientOnboarding.create({
         data: {
-          engagementLetterId: letter.id,
+          engagementLetterId: createdLetter.id,
           // IMPLEMENTED: Multi-job onboarding support — keep client linkage on first onboarding, allow additional pending jobs for same client.
-          clientId: existingClientOnboarding ? null : client.id,
-          clientName: client.clientName,
-          industry: client.industry || "",
-          contactPerson: client.contactPerson || "",
-          contactEmail: client.contactEmail || "",
-          contactPhone: client.contactPhone || "",
-          location: client.location || "",
-          departmentId: client.departmentId,
+          clientId: existingClientOnboarding ? null : routingClient.id,
+          clientName: routingClient.clientName,
+          industry: routingClient.industry || "",
+          contactPerson: routingClient.contactPerson || "",
+          contactEmail: routingClient.contactEmail || "",
+          contactPhone: routingClient.contactPhone || "",
+          location: routingClient.location || "",
+          departmentId: routingClient.departmentId,
           uploadedByProfileId: req.user?.profileId!,
           status: ClientOnboardingStatus.pending_hr_review,
         },
       });
-    }
+      return {
+        letter: createdLetter,
+        onboarding,
+        clientName: routingClient.clientName,
+      };
+    });
 
-    res.status(201).json(successResponse(letter, "Engagement letter created", 201));
+    await notifyProfilesByRoles(
+      ["hr"],
+      {
+        title: "Engagement letter submitted for HR review",
+        message: `Client "${created.clientName}" engagement letter is awaiting HR review for job setup.`,
+        link: "/client-onboarding-queue",
+        relatedEntityId: created.onboarding.id,
+      },
+      req
+    );
+
+    res.status(201).json(successResponse(created.letter, "Engagement letter created", 201));
   } catch (error: any) {
     console.error("Error creating engagement letter:", error);
     res.status(500).json(errorResponse("Failed to create engagement letter", 500));

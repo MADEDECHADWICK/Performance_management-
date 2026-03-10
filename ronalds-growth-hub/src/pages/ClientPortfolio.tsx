@@ -2,6 +2,7 @@
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
+import DocumentPreviewDialog from "@/components/DocumentPreviewDialog";
 import { clientOnboardingsAPI, clientsAPI, documentsAPI, jobsAPI, surveysAPI } from "@/lib/api";
 import type { Client } from "@/lib/api/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { Users, Briefcase, FileText, MapPin, Search, Plus, Download, Upload } from "lucide-react";
 
 const statusVariant = (status?: string) => {
@@ -33,11 +35,19 @@ const ENGAGEMENT_TYPES = ["audit", "tax", "advisory", "consulting", "bookkeeping
 export default function ClientPortfolio() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { canAccess, hasAnyRole } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
   const [letterDialogOpen, setLetterDialogOpen] = useState(false);
+  const [previewLetter, setPreviewLetter] = useState<{
+    title: string;
+    filePath?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    description?: string;
+  } | null>(null);
   const [isSubmittingLetter, setIsSubmittingLetter] = useState(false);
   const [editForm, setEditForm] = useState<{
     clientName: string;
@@ -68,6 +78,8 @@ export default function ClientPortfolio() {
     startDate: "",
     endDate: "",
   });
+  const canSubmitMarketingIntake =
+    canAccess("clients", "write") && hasAnyRole(["marketing", "super_admin"]);
 
   const { data: clientsData, isLoading } = useQuery({
     queryKey: ["client-portfolio", "clients"],
@@ -191,6 +203,15 @@ export default function ClientPortfolio() {
     value ? new Date(value).toLocaleDateString() : "—";
 
   const handleUploadEngagement = async () => {
+    if (!canSubmitMarketingIntake) {
+      toast({
+        title: "Marketing only",
+        description: "Only marketing can submit engagement letters for HR review.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!selectedClientId) {
       toast({
         title: "Select a client",
@@ -255,12 +276,14 @@ export default function ClientPortfolio() {
             <h2 className="text-3xl font-bold text-foreground">Client Portfolio</h2>
             <p className="text-muted-foreground">View client records, jobs, and engagement history.</p>
           </div>
-          <Button asChild>
-            <Link to="/clients/new">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Client
-            </Link>
-          </Button>
+          {canSubmitMarketingIntake && (
+            <Button asChild>
+              <Link to="/clients/new">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Client
+              </Link>
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -663,15 +686,22 @@ export default function ClientPortfolio() {
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <p className="text-sm text-muted-foreground">Engagement letters for the client.</p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setLetterDialogOpen(true)}
-                          >
-                            <Upload className="h-4 w-4 mr-2" />
-                            Add Engagement
-                          </Button>
+                          {canSubmitMarketingIntake && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setLetterDialogOpen(true)}
+                            >
+                              <Upload className="h-4 w-4 mr-2" />
+                              Add Engagement
+                            </Button>
+                          )}
                         </div>
+                        {!canSubmitMarketingIntake && (
+                          <p className="text-xs text-muted-foreground">
+                            Marketing submits engagement letters here. HR reviews them in the onboarding queue.
+                          </p>
+                        )}
                         {(lettersData || []).length === 0 ? (
                           <p className="text-sm text-muted-foreground">No engagement letters yet.</p>
                         ) : (
@@ -689,11 +719,21 @@ export default function ClientPortfolio() {
                                   {letter.createdAt ? new Date(letter.createdAt).toLocaleDateString() : "N/A"}
                                 </span>
                                 {letter.document?.filePath && (
-                                  <a href={letter.document.filePath} target="_blank" rel="noopener noreferrer">
-                                    <Button variant="ghost" size="icon" title="Download">
-                                      <Download className="h-4 w-4" />
-                                    </Button>
-                                  </a>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      setPreviewLetter({
+                                        title: letter.jobTitle || letter.engagementType || "Engagement Letter",
+                                        filePath: letter.document.filePath,
+                                        fileName: letter.document.fileName,
+                                        mimeType: letter.document.mimeType,
+                                        description: `Preview the engagement letter for ${selectedClient?.clientName || "this client"}.`,
+                                      })
+                                    }
+                                  >
+                                    Preview
+                                  </Button>
                                 )}
                               </div>
                             </div>
@@ -727,6 +767,20 @@ export default function ClientPortfolio() {
           </Card>
         </div>
       </div>
+
+      <DocumentPreviewDialog
+        open={!!previewLetter}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewLetter(null);
+          }
+        }}
+        title={previewLetter?.title || "Engagement Letter"}
+        filePath={previewLetter?.filePath}
+        fileName={previewLetter?.fileName}
+        mimeType={previewLetter?.mimeType}
+        description={previewLetter?.description}
+      />
 
       <Dialog open={letterDialogOpen} onOpenChange={setLetterDialogOpen}>
         <DialogContent className="max-w-2xl">

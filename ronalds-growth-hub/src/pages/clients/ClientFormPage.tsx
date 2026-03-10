@@ -2,12 +2,12 @@
  * Client Form Page - Create or Edit Client
  * Includes engagement letter capture for intake
  */
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { clientsAPI, employeesAPI, documentsAPI } from '@/lib/api';
+import { clientsAPI, employeesAPI, documentsAPI, departmentsAPI, clientOnboardingsAPI } from '@/lib/api';
 import type { CreateClientPayload, UpdateClientPayload } from '@/lib/api/clients';
-import type { Client } from '@/lib/api/types';
+import type { Client, Department, Profile } from '@/lib/api/types';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
 import { Building2, ArrowLeft, Save, Loader2, FileText } from 'lucide-react';
 
 const INDUSTRIES = [
@@ -49,6 +50,13 @@ const ENGAGEMENT_TYPES = [
   'other',
 ];
 
+const MAX_INT_32 = 2_147_483_647;
+
+const createDraftDocumentEntityId = () => {
+  const candidate = Date.now() % MAX_INT_32;
+  return candidate > 0 ? candidate : 1;
+};
+
 interface ClientFormData {
   clientName: string;
   clientCode: string;
@@ -58,6 +66,7 @@ interface ClientFormData {
   contactPhone: string;
   location: string;
   address: string;
+  departmentId: string;
   partnerProfileId: string;
   managerProfileId: string;
   isActive: boolean;
@@ -76,6 +85,8 @@ interface EngagementLetterFormData {
   termsConditions: string;
 }
 
+type ClientIntakeMode = 'new' | 'existing';
+
 const initialFormData: ClientFormData = {
   clientName: '',
   clientCode: '',
@@ -85,6 +96,7 @@ const initialFormData: ClientFormData = {
   contactPhone: '',
   location: '',
   address: '',
+  departmentId: '',
   partnerProfileId: '',
   managerProfileId: '',
   isActive: true,
@@ -107,21 +119,39 @@ export function ClientFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditing = Boolean(id);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { canAccess, hasAnyRole } = useAuth();
 
   const [formData, setFormData] = useState<ClientFormData>(initialFormData);
+  const [clientMode, setClientMode] = useState<ClientIntakeMode>('new');
+  const [selectedExistingClientId, setSelectedExistingClientId] = useState('');
   const [engagementLetter, setEngagementLetter] = useState<EngagementLetterFormData>(
     initialEngagementLetter
   );
   const [errors, setErrors] = useState<Partial<Record<keyof ClientFormData, string>>>({});
   const [duplicateClients, setDuplicateClients] = useState<Client[]>([]);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const canSubmitMarketingIntake =
+    canAccess('clients', 'write') && hasAnyRole(['marketing', 'super_admin']);
+  const resubmissionOnboardingId = Number(searchParams.get('onboardingId') || '');
+  const isResubmissionFlow =
+    isEditing &&
+    searchParams.get('resubmit') === '1' &&
+    Number.isFinite(resubmissionOnboardingId) &&
+    resubmissionOnboardingId > 0;
 
   const { data: client, isLoading: isLoadingClient } = useQuery({
     queryKey: ['client', id],
     queryFn: () => clientsAPI.getById(Number(id)),
     enabled: isEditing,
+  });
+
+  const { data: resubmissionOnboarding, isLoading: isLoadingResubmission } = useQuery({
+    queryKey: ['client-onboarding', resubmissionOnboardingId],
+    queryFn: () => clientOnboardingsAPI.getById(resubmissionOnboardingId),
+    enabled: isResubmissionFlow,
   });
 
   const { data: partnersData } = useQuery({
@@ -131,11 +161,91 @@ export function ClientFormPage() {
 
   const { data: managersData } = useQuery({
     queryKey: ['employees', 'managers'],
-    queryFn: () => employeesAPI.list({ pageSize: 100 }),
+    queryFn: () => employeesAPI.list({ pageSize: 200 }),
+  });
+
+  const { data: departmentsData } = useQuery({
+    queryKey: ['departments', 'client-intake'],
+    queryFn: () => departmentsAPI.list({ page: 1, pageSize: 200 }),
+  });
+
+  const { data: existingClientsData } = useQuery({
+    queryKey: ['clients', 'intake-options'],
+    queryFn: () => clientsAPI.list({ page: 1, pageSize: 200 }),
+    enabled: !isEditing,
   });
 
   const partners = partnersData || [];
-  const managers = managersData?.data || [];
+  const managers = (managersData?.data || []).filter((employee: Profile) => {
+    const title = String(employee.positionTitle || '').toLowerCase();
+    return title.includes('manager') && !employee.isPartner;
+  });
+  const departments = departmentsData?.data || [];
+  const existingClients = existingClientsData?.data || [];
+  const isExistingClientFlow = !isEditing && clientMode === 'existing';
+  const selectedExistingClient =
+    existingClients.find((item) => String(item.id) === selectedExistingClientId) || null;
+  const currentResubmissionLetter = resubmissionOnboarding?.engagementLetter;
+  const selectedDepartment = useMemo(
+    () => departments.find((department: Department) => String(department.id) === formData.departmentId) || null,
+    [departments, formData.departmentId]
+  );
+  const availableManagers = useMemo(() => {
+    const scopedManagers = formData.departmentId
+      ? managers.filter(
+          (manager) =>
+            String(manager.departmentId || '') === formData.departmentId ||
+            manager.id === selectedDepartment?.departmentHeadId ||
+            manager.id === selectedDepartment?.departmentHead?.id
+        )
+      : managers;
+
+    const departmentHead = selectedDepartment?.departmentHead;
+    if (!departmentHead) {
+      return scopedManagers;
+    }
+
+    const alreadyIncluded = scopedManagers.some((manager) => manager.id === departmentHead.id);
+    return alreadyIncluded ? scopedManagers : [...scopedManagers, departmentHead];
+  }, [formData.departmentId, managers, selectedDepartment]);
+
+  const toDateInputValue = (value?: string | null) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+  };
+
+  const resetNewClientForm = () => {
+    setSelectedExistingClientId('');
+    setFormData((prev) => ({
+      ...initialFormData,
+      departmentId: prev.departmentId,
+      partnerProfileId: prev.partnerProfileId,
+      managerProfileId: prev.managerProfileId,
+    }));
+  };
+
+  const applyExistingClient = (selectedClient: Client | null) => {
+    if (!selectedClient) {
+      resetNewClientForm();
+      return;
+    }
+
+    setFormData({
+      clientName: selectedClient.clientName || '',
+      clientCode: selectedClient.clientCode || `CL-${String(selectedClient.id).padStart(4, '0')}`,
+      industry: selectedClient.industry || '',
+      contactPerson: selectedClient.contactPerson || '',
+      contactEmail: selectedClient.contactEmail || '',
+      contactPhone: selectedClient.contactPhone || '',
+      location: selectedClient.location || '',
+      address: selectedClient.address || '',
+      departmentId: selectedClient.departmentId ? String(selectedClient.departmentId) : '',
+      partnerProfileId: selectedClient.partnerProfileId ? String(selectedClient.partnerProfileId) : '',
+      managerProfileId: selectedClient.managerProfileId ? String(selectedClient.managerProfileId) : '',
+      isActive: selectedClient.status === 'active',
+    });
+  };
 
   useEffect(() => {
     if (client) {
@@ -148,6 +258,7 @@ export function ClientFormPage() {
         contactPhone: client.contactPhone || '',
         location: client.location || '',
         address: client.address || '',
+        departmentId: client.departmentId ? String(client.departmentId) : '',
         partnerProfileId: client.partnerProfileId ? String(client.partnerProfileId) : '',
         managerProfileId: client.managerProfileId ? String(client.managerProfileId) : '',
         isActive: client.status === 'active',
@@ -156,6 +267,34 @@ export function ClientFormPage() {
   }, [client]);
 
   useEffect(() => {
+    if (!isExistingClientFlow) return;
+    applyExistingClient(selectedExistingClient);
+  }, [isExistingClientFlow, selectedExistingClientId, existingClientsData]);
+
+  useEffect(() => {
+    if (!isResubmissionFlow || !resubmissionOnboarding?.engagementLetter) return;
+
+    const letter = resubmissionOnboarding.engagementLetter;
+    setEngagementLetter({
+      documentName: letter.document?.fileName || '',
+      documentFile: null,
+      engagementType: letter.engagementType || '',
+      jobTitle: letter.jobTitle || '',
+      feeAmount:
+        letter.feeAmount !== undefined && letter.feeAmount !== null ? String(letter.feeAmount) : '',
+      currency: letter.currency || 'KES',
+      startDate: toDateInputValue(letter.startDate),
+      endDate: toDateInputValue(letter.endDate),
+      scopeDescription: letter.scopeDescription || '',
+      termsConditions: letter.termsConditions || '',
+    });
+  }, [isResubmissionFlow, resubmissionOnboarding?.id]);
+
+  useEffect(() => {
+    if (isExistingClientFlow) {
+      setDuplicateClients([]);
+      return;
+    }
     if (!formData.clientName && !formData.contactEmail && !formData.contactPhone) {
       setDuplicateClients([]);
       return;
@@ -177,15 +316,62 @@ export function ClientFormPage() {
     }, 500);
 
     return () => clearTimeout(handle);
-  }, [formData.clientName, formData.contactEmail, formData.contactPhone, id]);
+  }, [formData.clientName, formData.contactEmail, formData.contactPhone, id, isExistingClientFlow]);
+
+  useEffect(() => {
+    if (!formData.managerProfileId) return;
+    const managerStillAvailable = availableManagers.some(
+      (manager) => String(manager.id) === formData.managerProfileId
+    );
+    if (managerStillAvailable) return;
+
+    setFormData((prev) => ({ ...prev, managerProfileId: '' }));
+  }, [availableManagers, formData.managerProfileId]);
+
+  useEffect(() => {
+    if (!selectedDepartment || !formData.departmentId) return;
+
+    const nextPartnerProfileId =
+      !formData.partnerProfileId && selectedDepartment.partnerProfileId
+        ? String(selectedDepartment.partnerProfileId)
+        : formData.partnerProfileId;
+    const nextManagerProfileId =
+      !formData.managerProfileId &&
+      (selectedDepartment.departmentHeadId || selectedDepartment.departmentHead?.id)
+        ? String(selectedDepartment.departmentHeadId || selectedDepartment.departmentHead?.id)
+        : formData.managerProfileId;
+
+    if (
+      nextPartnerProfileId === formData.partnerProfileId &&
+      nextManagerProfileId === formData.managerProfileId
+    ) {
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      partnerProfileId: nextPartnerProfileId,
+      managerProfileId: nextManagerProfileId,
+    }));
+  }, [
+    formData.departmentId,
+    formData.managerProfileId,
+    formData.partnerProfileId,
+    selectedDepartment,
+  ]);
+
+const hasExistingResubmissionDocument =
+  Boolean(currentResubmissionLetter?.document?.filePath) || Boolean(currentResubmissionLetter?.documentId);
 
 const hasEngagementLetter =
   engagementLetter.documentName.trim() &&
-  Boolean(engagementLetter.documentFile) &&
+  (Boolean(engagementLetter.documentFile) || hasExistingResubmissionDocument) &&
   engagementLetter.engagementType.trim();
 
   const engagementStatusLabel = hasEngagementLetter
-    ? 'Ready'
+    ? isResubmissionFlow
+      ? 'Ready to Resubmit'
+      : 'Ready'
     : isEditing
       ? 'Optional'
       : 'Required';
@@ -195,29 +381,61 @@ const hasEngagementLetter =
       ? 'secondary'
       : 'destructive';
 
-  const requiredChecks = [
-    { label: 'Client name', done: Boolean(formData.clientName.trim()) },
-    { label: 'Partner assigned', done: Boolean(formData.partnerProfileId) },
-    { label: 'Engagement letter', done: isEditing || hasEngagementLetter },
-  ];
+  const requiredChecks = isResubmissionFlow
+    ? [
+        { label: 'Client name', done: Boolean(formData.clientName.trim()) },
+        { label: 'Department assigned', done: Boolean(formData.departmentId) },
+        { label: 'Partner assigned', done: Boolean(formData.partnerProfileId) },
+        { label: 'Manager assigned', done: Boolean(formData.managerProfileId) },
+        { label: 'Engagement letter', done: hasEngagementLetter },
+      ]
+    : isExistingClientFlow
+    ? [
+        { label: 'Client selected', done: Boolean(selectedExistingClientId) },
+        { label: 'Department assigned', done: Boolean(formData.departmentId) },
+        { label: 'Partner assigned', done: Boolean(formData.partnerProfileId) },
+        { label: 'Manager assigned', done: Boolean(formData.managerProfileId) },
+        { label: 'Engagement letter', done: hasEngagementLetter },
+      ]
+    : [
+        { label: 'Client name', done: Boolean(formData.clientName.trim()) },
+        { label: 'Department assigned', done: Boolean(formData.departmentId) },
+        { label: 'Partner assigned', done: Boolean(formData.partnerProfileId) },
+        { label: 'Manager assigned', done: Boolean(formData.managerProfileId) },
+        { label: 'Engagement letter', done: isEditing || hasEngagementLetter },
+      ];
   const completedRequired = requiredChecks.filter((item) => item.done).length;
   const intakeReady = completedRequired === requiredChecks.length;
 
-  const uploadEngagementLetter = async (clientId: number) => {
-    if (!hasEngagementLetter) return;
-
+  const uploadEngagementDocument = async (clientId?: number) => {
+    const draftEntityId = clientId ?? createDraftDocumentEntityId();
     const document = await documentsAPI.uploadFile(engagementLetter.documentFile!, {
       fileName: engagementLetter.documentName.trim(),
       documentType: 'engagement_letter',
-      entityType: 'Client',
-      entityId: clientId,
+      // New-client intake uploads happen before a client record exists.
+      entityType: clientId ? 'Client' : 'ClientIntake',
+      entityId: draftEntityId,
       accessLevel: 'admin',
       description: `Engagement letter for ${formData.clientName}`,
     });
 
+    return document;
+  };
+
+  const uploadEngagementLetter = async (clientId: number) => {
+    if (!hasEngagementLetter) return;
+    if (!canSubmitMarketingIntake) {
+      throw new Error('Only marketing can submit engagement letters for HR review.');
+    }
+
+    const document = await uploadEngagementDocument(clientId);
+
     await clientsAPI.uploadEngagementLetter(clientId, {
       documentId: document.id,
       engagementType: engagementLetter.engagementType,
+      departmentId: formData.departmentId ? Number(formData.departmentId) : undefined,
+      partnerProfileId: formData.partnerProfileId ? Number(formData.partnerProfileId) : undefined,
+      managerProfileId: formData.managerProfileId ? Number(formData.managerProfileId) : undefined,
       jobTitle: engagementLetter.jobTitle || undefined,
       feeAmount: engagementLetter.feeAmount ? Number(engagementLetter.feeAmount) : undefined,
       currency: engagementLetter.currency || undefined,
@@ -230,11 +448,73 @@ const hasEngagementLetter =
 
   const saveMutation = useMutation({
     mutationFn: async (data: CreateClientPayload | UpdateClientPayload) => {
+      if (isResubmissionFlow) {
+        const clientId = Number(id);
+        const savedClient = await clientsAPI.update(clientId, data as UpdateClientPayload);
+        const replacementDocument = engagementLetter.documentFile
+          ? await uploadEngagementDocument(savedClient.id)
+          : null;
+
+        await clientOnboardingsAPI.resubmit(resubmissionOnboardingId, {
+          clientName: data.clientName,
+          clientCode: formData.clientCode || undefined,
+          industry: data.industry,
+          contactPerson: data.contactPerson,
+          contactEmail: data.contactEmail,
+          contactPhone: data.contactPhone,
+          location: data.location,
+          address: data.address,
+          departmentId: data.departmentId,
+          partnerProfileId: data.partnerProfileId,
+          managerProfileId: data.managerProfileId,
+          status: data.status,
+          documentId: replacementDocument?.id,
+          engagementType: engagementLetter.engagementType,
+          jobTitle: engagementLetter.jobTitle || undefined,
+          feeAmount: engagementLetter.feeAmount ? Number(engagementLetter.feeAmount) : undefined,
+          currency: engagementLetter.currency || undefined,
+          startDate: engagementLetter.startDate || undefined,
+          endDate: engagementLetter.endDate || undefined,
+          scopeDescription: engagementLetter.scopeDescription || undefined,
+          termsConditions: engagementLetter.termsConditions || undefined,
+        });
+
+        return savedClient;
+      }
+
+      if (isExistingClientFlow) {
+        const clientId = Number(selectedExistingClientId);
+        if (!Number.isFinite(clientId) || clientId <= 0) {
+          throw new Error('Select an existing client before submitting an engagement letter.');
+        }
+
+        await uploadEngagementLetter(clientId);
+        return selectedExistingClient || (await clientsAPI.getById(clientId));
+      }
+
+      if (!isEditing && hasEngagementLetter) {
+        const document = await uploadEngagementDocument();
+        return clientsAPI.create({
+          ...(data as CreateClientPayload),
+          engagementLetter: {
+            documentId: document.id,
+            engagementType: engagementLetter.engagementType,
+            jobTitle: engagementLetter.jobTitle || undefined,
+            feeAmount: Number(engagementLetter.feeAmount),
+            currency: engagementLetter.currency || undefined,
+            startDate: engagementLetter.startDate || undefined,
+            endDate: engagementLetter.endDate || undefined,
+            scopeDescription: engagementLetter.scopeDescription || undefined,
+            termsConditions: engagementLetter.termsConditions || undefined,
+          },
+        });
+      }
+
       const savedClient = isEditing
         ? await clientsAPI.update(Number(id), data as UpdateClientPayload)
         : await clientsAPI.create(data as CreateClientPayload);
 
-      if (hasEngagementLetter) {
+      if (isEditing && hasEngagementLetter) {
         await uploadEngagementLetter(savedClient.id);
       }
 
@@ -243,6 +523,28 @@ const hasEngagementLetter =
     onSuccess: (savedClient) => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['client', String(savedClient.id)] });
+      queryClient.invalidateQueries({ queryKey: ['engagement-letters', String(savedClient.id)] });
+      queryClient.invalidateQueries({ queryKey: ['client-onboardings'] });
+      queryClient.invalidateQueries({ queryKey: ['client-onboarding', resubmissionOnboardingId] });
+
+      if (isExistingClientFlow) {
+        toast({
+          title: 'Engagement Letter Submitted',
+          description: `The engagement letter for ${savedClient.clientName} has been submitted for HR review.`,
+        });
+        navigate(`/clients/${savedClient.id}`);
+        return;
+      }
+
+      if (isResubmissionFlow) {
+        toast({
+          title: 'Returned to HR',
+          description: `The revised submission for ${savedClient.clientName} has been sent back to HR for review.`,
+        });
+        navigate('/client-onboarding-queue');
+        return;
+      }
+
       toast({
         title: isEditing ? 'Client Updated' : 'Client Created',
         description: isEditing
@@ -264,8 +566,9 @@ const hasEngagementLetter =
 
   const validate = (): boolean => {
     const newErrors: Partial<Record<keyof ClientFormData, string>> = {};
+    const ownershipRequired = !isEditing || isResubmissionFlow;
 
-    if (!formData.clientName.trim()) {
+    if (!isExistingClientFlow && !formData.clientName.trim()) {
       newErrors.clientName = 'Client name is required';
     }
 
@@ -273,19 +576,70 @@ const hasEngagementLetter =
       newErrors.contactEmail = 'Invalid email address';
     }
 
-    if (!formData.partnerProfileId) {
+    if (ownershipRequired && !formData.partnerProfileId) {
       newErrors.partnerProfileId = 'Partner in charge is required';
+    }
+
+    if (ownershipRequired && !formData.managerProfileId) {
+      newErrors.managerProfileId = 'Manager in charge is required';
+    }
+
+    if (ownershipRequired && !formData.departmentId) {
+      newErrors.departmentId = 'Department is required';
     }
 
     setErrors(newErrors);
 
-    if (!isEditing && !hasEngagementLetter) {
+    if (isExistingClientFlow && !selectedExistingClientId) {
       toast({
-        title: 'Engagement Letter Required',
-        description: 'Upload engagement letter metadata before creating the client.',
+        title: 'Existing Client Required',
+        description: 'Select an existing client before submitting the engagement letter.',
         variant: 'destructive',
       });
       return false;
+    }
+
+    if ((!isEditing || isResubmissionFlow) && !canSubmitMarketingIntake) {
+      toast({
+        title: 'Marketing Only',
+        description: 'Only marketing can submit or resubmit this onboarding package to HR.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+
+    if (isEditing && hasEngagementLetter && !canSubmitMarketingIntake) {
+      toast({
+        title: 'Marketing Only',
+        description: 'Only marketing can add a new engagement letter to an existing client.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+
+    if ((!isEditing || isResubmissionFlow) && !hasEngagementLetter) {
+      toast({
+        title: 'Engagement Letter Required',
+        description: isResubmissionFlow
+          ? 'Keep or replace the engagement letter details before resubmitting to HR.'
+          : 'Upload engagement letter metadata before creating the client.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+
+    if (!isEditing || isResubmissionFlow) {
+      const feeAmount = Number(engagementLetter.feeAmount);
+      if (!Number.isFinite(feeAmount) || feeAmount <= 0) {
+        toast({
+          title: 'Engagement Fee Required',
+          description: isResubmissionFlow
+            ? 'Enter the engagement fee before resubmitting this item to HR.'
+            : 'Enter the engagement fee before submitting a new client intake.',
+          variant: 'destructive',
+        });
+        return false;
+      }
     }
 
     return Object.keys(newErrors).length === 0;
@@ -298,13 +652,14 @@ const hasEngagementLetter =
 
     const clientData: CreateClientPayload = {
       clientName: formData.clientName.trim(),
-      clientCode: formData.clientCode || undefined,
+      clientCode: isEditing ? formData.clientCode || undefined : undefined,
       industry: formData.industry || undefined,
       contactPerson: formData.contactPerson || undefined,
       contactEmail: formData.contactEmail || undefined,
       contactPhone: formData.contactPhone || undefined,
       location: formData.location || undefined,
       address: formData.address || undefined,
+      departmentId: formData.departmentId ? Number(formData.departmentId) : undefined,
       partnerProfileId: formData.partnerProfileId ? Number(formData.partnerProfileId) : undefined,
       managerProfileId: formData.managerProfileId ? Number(formData.managerProfileId) : undefined,
       status: formData.isActive ? 'active' : 'inactive',
@@ -314,13 +669,54 @@ const hasEngagementLetter =
   };
 
   const handleChange = (field: keyof ClientFormData, value: string | boolean) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: undefined }));
+    if (field === 'departmentId') {
+      const nextDepartmentId = String(value || '');
+      const department =
+        departments.find((item: Department) => String(item.id) === nextDepartmentId) || null;
+
+      setFormData((prev) => ({
+        ...prev,
+        departmentId: nextDepartmentId,
+        partnerProfileId: department?.partnerProfileId
+          ? String(department.partnerProfileId)
+          : department?.partner?.id
+            ? String(department.partner.id)
+            : '',
+        managerProfileId: department?.departmentHeadId
+          ? String(department.departmentHeadId)
+          : department?.departmentHead?.id
+            ? String(department.departmentHead.id)
+            : '',
+      }));
+      setErrors((prev) => ({
+        ...prev,
+        departmentId: undefined,
+        partnerProfileId: undefined,
+        managerProfileId: undefined,
+      }));
+    } else {
+      setFormData((prev) => ({ ...prev, [field]: value }));
+      if (errors[field]) {
+        setErrors((prev) => ({ ...prev, [field]: undefined }));
+      }
     }
   };
 
-  if (isEditing && isLoadingClient) {
+  const handleClientModeChange = (value: ClientIntakeMode) => {
+    setClientMode(value);
+    setErrors({});
+    if (value === 'new') {
+      resetNewClientForm();
+      return;
+    }
+    setFormData(initialFormData);
+  };
+
+  const clientIdentifierValue = isExistingClientFlow
+    ? selectedExistingClient?.clientCode || (selectedExistingClient ? `CL-${String(selectedExistingClient.id).padStart(4, '0')}` : '')
+    : formData.clientCode;
+
+  if ((isEditing && isLoadingClient) || (isResubmissionFlow && isLoadingResubmission)) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
@@ -341,16 +737,20 @@ const hasEngagementLetter =
             <div className="flex items-center gap-3">
               <h1 className="text-3xl font-bold flex items-center gap-2">
                 <Building2 className="h-8 w-8 text-primary" />
-                {isEditing ? 'Edit Client' : 'Client Intake'}
+                {isResubmissionFlow ? 'Revise Client Submission' : isEditing ? 'Edit Client' : 'Client Intake'}
               </h1>
               <Badge variant={intakeReady ? 'default' : 'outline'}>
-                {intakeReady ? 'Ready for HR' : 'Draft'}
+                {intakeReady ? (isResubmissionFlow ? 'Ready to Resubmit' : 'Ready for HR') : 'Draft'}
               </Badge>
             </div>
             <p className="text-muted-foreground mt-1">
-              {isEditing
+              {isResubmissionFlow
+                ? 'Update the client details or engagement letter based on HR feedback, then resubmit it for review.'
+                : isEditing
                 ? 'Update client information and engagement details'
-                : 'Capture the client profile and engagement letter for HR review'}
+                : isExistingClientFlow
+                  ? 'Select an existing client, then submit the new engagement letter for HR review'
+                  : 'Marketing captures the client profile and engagement letter, then HR reviews it for job creation'}
             </p>
           </div>
         </div>
@@ -358,34 +758,98 @@ const hasEngagementLetter =
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6">
             <div className="space-y-6">
+              {isResubmissionFlow && (
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900">
+                      <p className="font-medium">HR review feedback</p>
+                      {resubmissionOnboarding?.notes && (
+                        <p className="mt-2">
+                          <span className="font-medium">Client details:</span> {resubmissionOnboarding.notes}
+                        </p>
+                      )}
+                      {currentResubmissionLetter?.latestRejectionReason && (
+                        <p className="mt-2">
+                          <span className="font-medium">Engagement letter:</span>{" "}
+                          {currentResubmissionLetter.latestRejectionReason}
+                        </p>
+                      )}
+                      {!resubmissionOnboarding?.notes && !currentResubmissionLetter?.latestRejectionReason && (
+                        <p className="mt-2">HR returned this item for revision. Update it and resubmit.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               <Card>
                 <CardHeader>
                   <CardTitle>Client Identity</CardTitle>
-                  <CardDescription>Core details for the client record</CardDescription>
+                  <CardDescription>
+                    {isExistingClientFlow
+                      ? 'Select an existing client record. You can still set the routing partner, manager, and department for this engagement.'
+                      : 'Core details for the client record'}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {!isEditing && (
+                    <div className="space-y-2">
+                      <Label htmlFor="clientMode">Client Record Type</Label>
+                      <Select
+                        value={clientMode}
+                        onValueChange={(value: ClientIntakeMode) => handleClientModeChange(value)}
+                      >
+                        <SelectTrigger id="clientMode">
+                          <SelectValue placeholder="Select client record type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="new">New client</SelectItem>
+                          <SelectItem value="existing">Existing client</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="clientName">Client Name *</Label>
-                      <Input
-                        id="clientName"
-                        value={formData.clientName}
-                        onChange={(e) => handleChange('clientName', e.target.value)}
-                        placeholder="Enter client name"
-                        className={errors.clientName ? 'border-red-500' : ''}
-                      />
+                      <Label htmlFor="clientName">{isExistingClientFlow ? 'Existing Client *' : 'Client Name *'}</Label>
+                      {isExistingClientFlow ? (
+                        <Select
+                          value={selectedExistingClientId}
+                          onValueChange={(value) => setSelectedExistingClientId(value)}
+                        >
+                          <SelectTrigger id="clientName" className={errors.clientName ? 'border-red-500' : ''}>
+                            <SelectValue placeholder="Select an existing client" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {existingClients.map((existingClient) => (
+                              <SelectItem key={existingClient.id} value={String(existingClient.id)}>
+                                {existingClient.clientName} {existingClient.clientCode ? `(${existingClient.clientCode})` : `(#${existingClient.id})`}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          id="clientName"
+                          value={formData.clientName}
+                          onChange={(e) => handleChange('clientName', e.target.value)}
+                          placeholder="Enter client name"
+                          className={errors.clientName ? 'border-red-500' : ''}
+                        />
+                      )}
                       {errors.clientName && (
                         <p className="text-sm text-red-500">{errors.clientName}</p>
                       )}
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="clientCode">Client Code</Label>
+                      <Label htmlFor="clientCode">Client ID</Label>
                       <Input
                         id="clientCode"
-                        value={formData.clientCode}
-                        onChange={(e) => handleChange('clientCode', e.target.value)}
-                        placeholder="Optional client code"
+                        value={clientIdentifierValue}
+                        readOnly
+                        disabled
+                        placeholder={isEditing ? 'Client ID' : 'Auto-generated by the system'}
                       />
                     </div>
 
@@ -394,6 +858,7 @@ const hasEngagementLetter =
                       <Select
                         value={formData.industry}
                         onValueChange={(value) => handleChange('industry', value)}
+                        disabled={isExistingClientFlow}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Select industry" />
@@ -413,6 +878,7 @@ const hasEngagementLetter =
                         id="isActive"
                         checked={formData.isActive}
                         onCheckedChange={(checked) => handleChange('isActive', checked)}
+                        disabled={isExistingClientFlow}
                       />
                       <Label htmlFor="isActive">Active Client</Label>
                     </div>
@@ -434,6 +900,7 @@ const hasEngagementLetter =
                         value={formData.contactPerson}
                         onChange={(e) => handleChange('contactPerson', e.target.value)}
                         placeholder="Enter contact person name"
+                        disabled={isExistingClientFlow}
                       />
                     </div>
 
@@ -446,6 +913,7 @@ const hasEngagementLetter =
                         onChange={(e) => handleChange('contactEmail', e.target.value)}
                         placeholder="client@example.com"
                         className={errors.contactEmail ? 'border-red-500' : ''}
+                        disabled={isExistingClientFlow}
                       />
                       {errors.contactEmail && (
                         <p className="text-sm text-red-500">{errors.contactEmail}</p>
@@ -459,6 +927,7 @@ const hasEngagementLetter =
                         value={formData.contactPhone}
                         onChange={(e) => handleChange('contactPhone', e.target.value)}
                         placeholder="+254 700 000 000"
+                        disabled={isExistingClientFlow}
                       />
                     </div>
 
@@ -469,6 +938,7 @@ const hasEngagementLetter =
                         value={formData.location}
                         onChange={(e) => handleChange('location', e.target.value)}
                         placeholder="City, Country"
+                        disabled={isExistingClientFlow}
                       />
                     </div>
                   </div>
@@ -481,6 +951,7 @@ const hasEngagementLetter =
                       onChange={(e) => handleChange('address', e.target.value)}
                       placeholder="Enter full postal address"
                       rows={3}
+                      disabled={isExistingClientFlow}
                     />
                   </div>
                 </CardContent>
@@ -489,10 +960,32 @@ const hasEngagementLetter =
               <Card>
                 <CardHeader>
                   <CardTitle>Ownership</CardTitle>
-                  <CardDescription>Assign the partner and manager in charge</CardDescription>
+                  <CardDescription>Assign the department, partner, and manager that should own this engagement</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="departmentId">Department *</Label>
+                      <Select
+                        value={formData.departmentId}
+                        onValueChange={(value) => handleChange('departmentId', value)}
+                      >
+                        <SelectTrigger className={errors.departmentId ? 'border-red-500' : ''}>
+                          <SelectValue placeholder="Select department" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {departments.map((department) => (
+                            <SelectItem key={department.id} value={String(department.id)}>
+                              {department.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {errors.departmentId && (
+                        <p className="text-sm text-red-500">{errors.departmentId}</p>
+                      )}
+                    </div>
+
                     <div className="space-y-2">
                       <Label htmlFor="partnerProfileId">Partner In Charge *</Label>
                       <Select
@@ -516,24 +1009,32 @@ const hasEngagementLetter =
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="managerProfileId">Manager In Charge</Label>
+                      <Label htmlFor="managerProfileId">Manager In Charge *</Label>
                       <Select
                         value={formData.managerProfileId}
                         onValueChange={(value) => handleChange('managerProfileId', value)}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className={errors.managerProfileId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select manager" />
                         </SelectTrigger>
                         <SelectContent>
-                          {managers.map((manager) => (
+                          {availableManagers.map((manager) => (
                             <SelectItem key={manager.id} value={String(manager.id)}>
                               {manager.firstName} {manager.lastName}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                      {errors.managerProfileId && (
+                        <p className="text-sm text-red-500">{errors.managerProfileId}</p>
+                      )}
                     </div>
                   </div>
+                  {formData.departmentId && availableManagers.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      No managers were found for the selected department.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 
@@ -545,7 +1046,7 @@ const hasEngagementLetter =
                     <Badge variant={engagementStatusVariant}>{engagementStatusLabel}</Badge>
                   </CardTitle>
                   <CardDescription>
-                    Engagement letters are required before HR can create a job.
+                    Marketing submits the engagement letter here before HR can create a job.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -563,7 +1064,11 @@ const hasEngagementLetter =
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="documentFile">Upload Engagement Letter *</Label>
+                      <Label htmlFor="documentFile">
+                        {isResubmissionFlow
+                          ? 'Upload Replacement Engagement Letter'
+                          : 'Upload Engagement Letter *'}
+                      </Label>
                       <Input
                         id="documentFile"
                         type="file"
@@ -577,6 +1082,11 @@ const hasEngagementLetter =
                           }));
                         }}
                       />
+                      {isResubmissionFlow && currentResubmissionLetter?.document?.fileName && !engagementLetter.documentFile && (
+                        <p className="text-xs text-muted-foreground">
+                          Current file: {currentResubmissionLetter.document.fileName}. Leave this blank to keep it, or upload a replacement.
+                        </p>
+                      )}
                       {engagementLetter.documentFile && (
                         <p className="text-xs text-muted-foreground">
                           Selected: {engagementLetter.documentFile.name}
@@ -705,16 +1215,22 @@ const hasEngagementLetter =
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isSubmitting}>
+                  <Button type="submit" disabled={isSubmitting}>
                   {isSubmitting ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      {isEditing ? 'Updating...' : 'Creating...'}
+                      {isResubmissionFlow ? 'Resubmitting...' : isEditing ? 'Updating...' : 'Creating...'}
                     </>
                   ) : (
                     <>
                       <Save className="h-4 w-4 mr-2" />
-                      {isEditing ? 'Update Client' : 'Submit Intake'}
+                      {isResubmissionFlow
+                        ? 'Resubmit to HR'
+                        : isEditing
+                          ? 'Update Client'
+                          : isExistingClientFlow
+                            ? 'Submit Engagement'
+                            : 'Submit Intake'}
                     </>
                   )}
                 </Button>
@@ -724,7 +1240,7 @@ const hasEngagementLetter =
             <div className="space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Intake Checklist</CardTitle>
+                  <CardTitle>{isResubmissionFlow ? 'Resubmission Checklist' : 'Intake Checklist'}</CardTitle>
                   <CardDescription>{completedRequired} of {requiredChecks.length} required items completed</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
@@ -741,26 +1257,48 @@ const hasEngagementLetter =
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Duplicate Check</CardTitle>
-                  <CardDescription>Helps avoid duplicate client records.</CardDescription>
+                  <CardTitle>{isExistingClientFlow ? 'Selected Client' : 'Duplicate Check'}</CardTitle>
+                  <CardDescription>
+                    {isExistingClientFlow
+                      ? 'The engagement letter will be attached to this existing client record.'
+                      : 'Helps avoid duplicate client records.'}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
-                  {checkingDuplicates && <p className="text-muted-foreground">Checking...</p>}
-                  {!checkingDuplicates && duplicateClients.length === 0 && (
-                    <p className="text-muted-foreground">No similar clients found.</p>
-                  )}
-                  {!checkingDuplicates &&
-                    duplicateClients.map((dup) => (
-                      <div key={dup.id} className="flex items-center justify-between">
+                  {isExistingClientFlow ? (
+                    selectedExistingClient ? (
+                      <div className="flex items-center justify-between">
                         <div>
-                          <p className="font-medium">{dup.clientName}</p>
+                          <p className="font-medium">{selectedExistingClient.clientName}</p>
                           <p className="text-xs text-muted-foreground">
-                            {dup.contactEmail || dup.contactPhone || 'No contact info'}
+                            {selectedExistingClient.clientCode || `CL-${String(selectedExistingClient.id).padStart(4, '0')}`}
                           </p>
                         </div>
                         <Badge variant="outline">Existing</Badge>
                       </div>
-                    ))}
+                    ) : (
+                      <p className="text-muted-foreground">Select a client from the dropdown above.</p>
+                    )
+                  ) : (
+                    <>
+                      {checkingDuplicates && <p className="text-muted-foreground">Checking...</p>}
+                      {!checkingDuplicates && duplicateClients.length === 0 && (
+                        <p className="text-muted-foreground">No similar clients found.</p>
+                      )}
+                      {!checkingDuplicates &&
+                        duplicateClients.map((dup) => (
+                          <div key={dup.id} className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium">{dup.clientName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {dup.contactEmail || dup.contactPhone || 'No contact info'}
+                              </p>
+                            </div>
+                            <Badge variant="outline">Existing</Badge>
+                          </div>
+                        ))}
+                    </>
+                  )}
                 </CardContent>
               </Card>
 
@@ -804,6 +1342,14 @@ const hasEngagementLetter =
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Department</span>
+                    <span>
+                      {formData.departmentId
+                        ? departments.find((item) => String(item.id) === formData.departmentId)?.name || 'Selected'
+                        : 'Not set'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Partner</span>
                     <span>
                       {formData.partnerProfileId
@@ -823,7 +1369,7 @@ const hasEngagementLetter =
                     <span>
                       {formData.managerProfileId
                         ? (() => {
-                            const manager = managers.find(
+                            const manager = availableManagers.find(
                               (item) => String(item.id) === formData.managerProfileId
                             );
                             return manager

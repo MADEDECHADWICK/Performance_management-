@@ -452,6 +452,36 @@ export class JobController {
   }
 
   /**
+   * PATCH /jobs/:jobId/costing/review
+   * Partner reviews submitted job costing package
+   */
+  static async reviewJobCosting(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+
+      const costing = await jobService.reviewJobCosting(
+        jobId,
+        {
+          decision: req.body?.decision,
+          reviewNotes: req.body?.reviewNotes,
+        },
+        auth
+      );
+
+      res.json(successResponse(costing, "Job costing review updated"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
    * GET /jobs/:jobId/time-entries
    * Get job time entries with pagination/filtering
    */

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
+import DocumentPreviewDialog from "@/components/DocumentPreviewDialog";
 import { engagementLettersAPI } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Search, Download } from "lucide-react";
+import { FileText, Search } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = {
   uploaded: "Uploaded",
@@ -28,6 +29,13 @@ const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | 
 export default function EngagementLetters() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [previewLetter, setPreviewLetter] = useState<{
+    title: string;
+    filePath?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    description?: string;
+  } | null>(null);
   const formatDate = (value?: string | Date | null) =>
     value ? new Date(value).toLocaleDateString() : "N/A";
 
@@ -190,11 +198,21 @@ export default function EngagementLetters() {
                       </TableCell>
                       <TableCell className="text-right">
                         {letter.document?.filePath ? (
-                          <a href={letter.document.filePath} target="_blank" rel="noopener noreferrer">
-                            <Button variant="ghost" size="icon" title="Download">
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          </a>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setPreviewLetter({
+                                title: letter.jobTitle || letter.engagementType || "Engagement Letter",
+                                filePath: letter.document.filePath,
+                                fileName: letter.document.fileName,
+                                mimeType: letter.document.mimeType,
+                                description: `Preview the engagement letter for ${letter.client?.clientName || "this client"}.`,
+                              })
+                            }
+                          >
+                            Preview
+                          </Button>
                         ) : (
                           <span className="text-xs text-muted-foreground">N/A</span>
                         )}
@@ -206,6 +224,20 @@ export default function EngagementLetters() {
             )}
           </CardContent>
         </Card>
+
+        <DocumentPreviewDialog
+          open={!!previewLetter}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPreviewLetter(null);
+            }
+          }}
+          title={previewLetter?.title || "Engagement Letter"}
+          filePath={previewLetter?.filePath}
+          fileName={previewLetter?.fileName}
+          mimeType={previewLetter?.mimeType}
+          description={previewLetter?.description}
+        />
       </div>
     </DashboardLayout>
   );

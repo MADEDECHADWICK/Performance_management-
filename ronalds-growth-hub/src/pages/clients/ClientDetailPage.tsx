@@ -7,6 +7,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clientsAPI, surveysAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import DocumentPreviewDialog from '@/components/DocumentPreviewDialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -78,11 +79,22 @@ export function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { canAccess } = useAuth();
+  const [previewLetter, setPreviewLetter] = useState<{
+    title: string;
+    filePath?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    description?: string;
+  } | null>(null);
+  const { canAccess, hasAnyRole } = useAuth();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
 
   const canEditClient = canAccess('clients', 'write');
+  const canUploadEngagementLetter = canEditClient && hasAnyRole(['marketing', 'super_admin']);
+  const canReviewEngagementLetter =
+    canAccess('clients', 'admin') && hasAnyRole(['hr', 'super_admin']);
+  const canCreateJob = canAccess('jobs', 'write') && hasAnyRole(['hr', 'super_admin']);
 
   // Fetch client details
   const { data: client, isLoading, error } = useQuery({
@@ -429,7 +441,7 @@ export function ClientDetailPage() {
                   All jobs associated with this client
                 </CardDescription>
               </div>
-              {canEditClient && (
+              {canCreateJob && (
                 <Link to={`/jobs/create?clientId=${id}`}>
                   <Button>
                     <Plus className="h-4 w-4 mr-2" />
@@ -443,7 +455,7 @@ export function ClientDetailPage() {
                 <div className="text-center py-8 text-muted-foreground">
                   <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>No jobs found for this client</p>
-                  {canEditClient && (
+                  {canCreateJob && (
                     <Link to={`/jobs/create?clientId=${id}`}>
                       <Button variant="link" className="mt-2">
                         Create the first job
@@ -492,7 +504,7 @@ export function ClientDetailPage() {
                           }
                         </TableCell>
                         <TableCell className="text-right">
-                          <Link to={`/jobs/${job.id}`}>
+                          <Link to={`/jobs/${job.id}/tracking`}>
                             <Button variant="ghost" size="sm">View</Button>
                           </Link>
                         </TableCell>
@@ -512,10 +524,10 @@ export function ClientDetailPage() {
               <div>
                 <CardTitle>Engagement Letters</CardTitle>
                 <CardDescription>
-                  Upload and manage engagement letters for this client
+                  Marketing submits engagement letters here, then HR reviews them for job creation.
                 </CardDescription>
               </div>
-              {canEditClient && (
+              {canUploadEngagementLetter && (
                 <Link to={`/clients/${id}/edit`}>
                   <Button>
                     <Plus className="h-4 w-4 mr-2" />
@@ -529,7 +541,7 @@ export function ClientDetailPage() {
                 <div className="text-center py-8 text-muted-foreground">
                   <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>No engagement letters uploaded</p>
-                  {canEditClient && (
+                  {canUploadEngagementLetter && (
                     <Link to={`/clients/${id}/edit`}>
                       <Button variant="link" className="mt-2">
                         Add the first engagement letter
@@ -573,13 +585,24 @@ export function ClientDetailPage() {
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
                             {letter.document?.filePath && (
-                              <a href={letter.document.filePath} target="_blank" rel="noopener noreferrer">
-                                <Button variant="ghost" size="icon" title="Download">
-                                  <Download className="h-4 w-4" />
-                                </Button>
-                              </a>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  setPreviewLetter({
+                                    title: letter.jobTitle || letter.engagementType || 'Engagement Letter',
+                                    filePath: letter.document.filePath,
+                                    fileName: letter.document.fileName,
+                                    mimeType: letter.document.mimeType,
+                                    description: `Preview the engagement letter for ${client.clientName}.`,
+                                  })
+                                }
+                              >
+                                Preview
+                              </Button>
                             )}
-                            {['pending_review', 'uploaded'].includes(letter.status) && canEditClient && (
+                            {['pending_review', 'uploaded'].includes(letter.status) &&
+                              canReviewEngagementLetter && (
                               <>
                                 <Button
                                   variant="ghost"
@@ -612,6 +635,20 @@ export function ClientDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <DocumentPreviewDialog
+        open={!!previewLetter}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewLetter(null);
+          }
+        }}
+        title={previewLetter?.title || 'Engagement Letter'}
+        filePath={previewLetter?.filePath}
+        fileName={previewLetter?.fileName}
+        mimeType={previewLetter?.mimeType}
+        description={previewLetter?.description}
+      />
 
       {/* Meta Information */}
       <Card>

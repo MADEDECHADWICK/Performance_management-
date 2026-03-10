@@ -14,6 +14,7 @@ import prisma from "../prisma";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
 import { NotificationPriority, NotificationService } from "./notifications.service";
 const db = prisma as any;
+const MAX_INT_32 = 2_147_483_647;
 
 export interface ListDocumentsOptions {
   page: number;
@@ -548,7 +549,7 @@ class DocumentServiceClass {
             ? `An invoice document for "${job.jobName}" is ready for finance action.`
             : `A document for "${job.jobName}" was submitted and is ready for review.`,
           actionRequired: true,
-          link: isInvoiceDoc ? "/finance-balances" : `/jobs/${job.id}`,
+          link: isInvoiceDoc ? "/finance-balances" : `/jobs/${job.id}/tracking`,
           jobId: job.id,
           clientId: job.clientId ?? undefined,
         };
@@ -795,6 +796,14 @@ class DocumentServiceClass {
    * Access: any authenticated user can upload
    */
   async uploadDocument(input: DocumentUploadInput, auth: AuthContext) {
+    if (
+      input.entityId !== undefined &&
+      input.entityId !== null &&
+      (!Number.isInteger(input.entityId) || input.entityId <= 0 || input.entityId > MAX_INT_32)
+    ) {
+      throw new Error(`entityId must be a positive 32-bit integer (received ${input.entityId})`);
+    }
+
     const created = await prisma.document.create({
       data: {
         fileName: input.fileName,

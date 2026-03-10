@@ -277,7 +277,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
   },
   {
     key: "clients.onboarding_queue",
-    label: "Client Onboarding Queue",
+    label: "Jobs Creation",
     category: "Clients",
     module: "clients",
     action: "read",

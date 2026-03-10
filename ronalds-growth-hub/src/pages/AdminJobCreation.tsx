@@ -61,15 +61,6 @@ interface StaffAssignmentInput {
   roleOnJob?: string;
 }
 
-interface MilestoneFormInput {
-  id: string;
-  title: string;
-  targetPercent: string;
-  dueDate: string;
-  requirements: string;
-  assignedToProfileId: string;
-}
-
 const initialFormData: JobFormData = {
   jobName: '',
   description: '',
@@ -85,41 +76,6 @@ const initialFormData: JobFormData = {
   budgetHours: '',
 };
 
-const buildDefaultMilestones = (): MilestoneFormInput[] => [
-  {
-    id: `m-${Date.now()}-25`,
-    title: 'Planning and kickoff completed',
-    targetPercent: '25',
-    dueDate: '',
-    requirements: 'Approved work plan and kickoff sign-off uploaded.',
-    assignedToProfileId: '',
-  },
-  {
-    id: `m-${Date.now()}-50`,
-    title: 'Fieldwork midpoint completed',
-    targetPercent: '50',
-    dueDate: '',
-    requirements: 'Interim deliverables and midpoint review approved.',
-    assignedToProfileId: '',
-  },
-  {
-    id: `m-${Date.now()}-75`,
-    title: 'Draft report submitted',
-    targetPercent: '75',
-    dueDate: '',
-    requirements: 'Draft report uploaded and manager/partner comments addressed.',
-    assignedToProfileId: '',
-  },
-  {
-    id: `m-${Date.now()}-100`,
-    title: 'Final report and closure completed',
-    targetPercent: '100',
-    dueDate: '',
-    requirements: 'Final report uploaded and client closure sign-off recorded.',
-    assignedToProfileId: '',
-  },
-];
-
 export default function AdminJobCreation() {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -129,9 +85,6 @@ export default function AdminJobCreation() {
   const [employees, setEmployees] = useState<Profile[]>([]);
   const [engagementLetters, setEngagementLetters] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<StaffAssignmentInput[]>([]);
-  const [milestones, setMilestones] = useState<MilestoneFormInput[]>(() =>
-    buildDefaultMilestones()
-  );
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -147,7 +100,7 @@ export default function AdminJobCreation() {
   const [staffPickerOpen, setStaffPickerOpen] = useState(false);
 
   const handleSelectQueueItem = useCallback((item: ClientOnboarding) => {
-    const clientId = item.client?.id ?? item.clientId;
+    const clientId = item.client?.id ?? item.clientId ?? item.engagementLetter?.clientId;
     const engagementId = item.engagementLetter?.id ?? item.engagementLetterId;
     const startDate = item.engagementLetter?.startDate?.slice(0, 10);
     const endDate = item.engagementLetter?.endDate?.slice(0, 10);
@@ -169,7 +122,7 @@ export default function AdminJobCreation() {
 
     setSelectionNotice({
       title: 'Onboarding selected',
-      description: 'Scroll down to assign staff and finalize job details.',
+      description: 'Finalize the job details, assign staff, and hand the setup to the assigned manager.',
     });
 
     setTimeout(() => {
@@ -237,11 +190,6 @@ export default function AdminJobCreation() {
     [employees]
   );
 
-  const milestonesWithOwnerCount = useMemo(
-    () => milestones.filter((milestone) => Boolean(milestone.assignedToProfileId)).length,
-    [milestones]
-  );
-
   const filteredQueue = queueItems.filter((item) => {
     const normalizedStatus: QueueStatus =
       item.status === 'approved' || item.status === 'client_created' ? 'approved' : 'waiting';
@@ -274,9 +222,9 @@ export default function AdminJobCreation() {
           : Number(formData.budgetHours || 0) > 0
       ),
       staff: assignments.length > 0,
-      milestones: milestones.length > 0 && milestonesWithOwnerCount === milestones.length,
+      managerSetup: Boolean(assignments.length > 0 && formData.managerProfileId),
     }),
-    [formData, assignments.length, milestones.length, milestonesWithOwnerCount]
+    [formData, assignments.length]
   );
 
   useEffect(() => {
@@ -493,16 +441,6 @@ export default function AdminJobCreation() {
 
       return prev.filter((assignment) => assignment.employeeProfileId !== employee.id);
     });
-
-    if (!isChecked) {
-      setMilestones((prev) =>
-        prev.map((milestone) =>
-          milestone.assignedToProfileId === String(employee.id)
-            ? { ...milestone, assignedToProfileId: '' }
-            : milestone
-        )
-      );
-    }
   };
 
   const updateAssignmentRate = (employeeProfileId: number, rate: string) => {
@@ -518,86 +456,10 @@ export default function AdminJobCreation() {
     );
   };
 
-  const updateMilestoneField = (
-    milestoneId: string,
-    field: keyof Omit<MilestoneFormInput, 'id'>,
-    value: string
-  ) => {
-    setMilestones((prev) =>
-      prev.map((milestone) =>
-        milestone.id === milestoneId ? { ...milestone, [field]: value } : milestone
-      )
-    );
-  };
-
-  const addMilestone = () => {
-    setMilestones((prev) => [
-      ...prev,
-      {
-        id: `m-${Date.now()}-${prev.length + 1}`,
-        title: '',
-        targetPercent: '',
-        dueDate: '',
-        requirements: '',
-        assignedToProfileId: assignments[0]
-          ? String(assignments[0].employeeProfileId)
-          : '',
-      },
-    ]);
-  };
-
-  const removeMilestone = (milestoneId: string) => {
-    setMilestones((prev) => prev.filter((milestone) => milestone.id !== milestoneId));
-  };
-
-  const validateMilestones = () => {
-    if (milestones.length === 0) {
-      return 'Add at least one milestone before creating the job.';
-    }
-
-    const seenPercents = new Set<number>();
-    let hasFinalHundred = false;
-    const assignmentIds = new Set(assignments.map((assignment) => assignment.employeeProfileId));
-
-    for (let index = 0; index < milestones.length; index += 1) {
-      const milestone = milestones[index];
-      const title = milestone.title.trim();
-      const targetPercent = Number(milestone.targetPercent);
-
-      if (!title) {
-        return `Milestone #${index + 1} needs a title.`;
-      }
-
-      if (!Number.isFinite(targetPercent) || targetPercent <= 0 || targetPercent > 100) {
-        return `Milestone "${title}" needs a target percentage between 1 and 100.`;
-      }
-
-      if (seenPercents.has(targetPercent)) {
-        return `Duplicate milestone percentage detected: ${targetPercent}%.`;
-      }
-      seenPercents.add(targetPercent);
-
-      if (targetPercent === 100) {
-        hasFinalHundred = true;
-      }
-
-      if (milestone.assignedToProfileId) {
-        const ownerId = Number(milestone.assignedToProfileId);
-        if (!assignmentIds.has(ownerId)) {
-          return `Milestone "${title}" owner must be selected from assigned staff.`;
-        }
-      }
-    }
-
-    if (!hasFinalHundred) {
-      return 'Include a 100% milestone for final payment.';
-    }
-
-    return null;
-  };
-
   const validateForm = () => {
-    if (!selectedQueueId) {
+    const hasDirectClientPath = Boolean(formData.clientId && formData.engagementLetterId);
+
+    if (!selectedQueueId && !hasDirectClientPath) {
       const selectedClientId = formData.clientId ? Number(formData.clientId) : undefined;
       const hasMatchingQueueItem = selectedClientId
         ? queueItems.some((item) => (item.client?.id ?? item.clientId) === selectedClientId)
@@ -606,10 +468,10 @@ export default function AdminJobCreation() {
         onboardingLookup
           ? buildOnboardingNotReadyMessage(onboardingLookup)
           : selectedClientId && !hasMatchingQueueItem
-            ? 'No approved onboarding found for this client. Approve the onboarding and engagement letter in the HR queue first.'
-            : 'Choose an onboarding item from the queue to create a job.';
+            ? 'Select a marketing-submitted, HR-approved engagement letter for this client, or use an approved onboarding item from the HR queue.'
+            : 'Choose an onboarding item from the queue, or select an existing client with a marketing-submitted, HR-approved engagement letter.';
       toast({
-        title: 'Select from HR queue',
+        title: 'Select a job source',
         description,
         variant: 'destructive',
       });
@@ -638,14 +500,9 @@ export default function AdminJobCreation() {
     if (assignments.length === 0) {
       toast({
         title: 'Validation Error',
-        description: 'Assign at least one staff member before setting milestones.',
+        description: 'Assign at least one staff member before handing the job to the manager.',
         variant: 'destructive',
       });
-      return false;
-    }
-    const milestoneValidationError = validateMilestones();
-    if (milestoneValidationError) {
-      toast({ title: 'Validation Error', description: milestoneValidationError, variant: 'destructive' });
       return false;
     }
     return true;
@@ -657,33 +514,39 @@ export default function AdminJobCreation() {
 
     try {
       setIsSubmitting(true);
-      if (!selectedQueueId) {
-        throw new Error('Select an onboarding item to create a job.');
-      }
-
-      const jobPayload = {
-        jobName: formData.jobName.trim(),
-        description: formData.description || undefined,
-        partnerProfileId: Number(formData.partnerProfileId),
-        managerProfileId: Number(formData.managerProfileId),
-        startDate: formData.startDate,
-        dueDate: formData.dueDate,
-        priority: formData.priority,
-        budgetHours: formData.budgetHours ? Number(formData.budgetHours) : undefined,
-        milestones: milestones
-          .map((milestone) => ({
-            title: milestone.title.trim(),
-            targetPercent: Number(milestone.targetPercent),
-            dueDate: milestone.dueDate || undefined,
-            requirements: milestone.requirements.trim() || undefined,
-            assignedToProfileId: milestone.assignedToProfileId
-              ? Number(milestone.assignedToProfileId)
-              : undefined,
-          }))
-          .sort((a, b) => a.targetPercent - b.targetPercent),
-      };
-
-      const job = await jobsAPI.createFromOnboarding(selectedQueueId, jobPayload);
+      const selectedClient = clients.find((client) => String(client.id) === formData.clientId);
+      const job = selectedQueueId
+        ? await jobsAPI.createFromOnboarding(selectedQueueId, {
+            jobName: formData.jobName.trim(),
+            description: formData.description || undefined,
+            partnerProfileId: Number(formData.partnerProfileId),
+            managerProfileId: Number(formData.managerProfileId),
+            startDate: formData.startDate,
+            dueDate: formData.dueDate,
+            priority: formData.priority,
+            budgetHours: formData.budgetHours ? Number(formData.budgetHours) : undefined,
+          })
+        : await jobsAPI.create({
+            clientId: Number(formData.clientId),
+            departmentId: selectedClient?.departmentId || undefined,
+            engagementLetterId: Number(formData.engagementLetterId),
+            jobName: formData.jobName.trim(),
+            description: formData.description || undefined,
+            partnerProfileId: Number(formData.partnerProfileId),
+            managerProfileId: Number(formData.managerProfileId),
+            startDate: formData.startDate,
+            dueDate: formData.dueDate,
+            priority: formData.priority,
+            billingType: formData.billingType,
+            fixedFeeAmount:
+              formData.billingType === 'fixed_fee' && formData.fixedFeeAmount
+                ? Number(formData.fixedFeeAmount)
+                : undefined,
+            budgetHours:
+              formData.billingType === 'hourly' && formData.budgetHours
+                ? Number(formData.budgetHours)
+                : undefined,
+          });
 
       for (const assignment of assignments) {
         await jobsAPI.assignStaff(job.id, assignment);
@@ -691,20 +554,26 @@ export default function AdminJobCreation() {
 
       toast({
         title: 'Success',
-        description: 'Job created and staff assigned successfully.',
+        description: 'Job created, staff assigned, and handed to the assigned manager for costing and milestones.',
       });
 
       await loadQueue();
       setFormData(initialFormData);
       setAssignments([]);
-      setMilestones(buildDefaultMilestones());
       setSelectedQueueId(null);
-      navigate(`/client-onboarding-queue?jobCreated=1&onboardingId=${selectedQueueId}`);
+      if (selectedQueueId) {
+        navigate(`/client-onboarding-queue?jobCreated=1&onboardingId=${selectedQueueId}`);
+      } else {
+        navigate(`/jobs/${job.id}/tracking`);
+      }
     } catch (error) {
       console.error('Job creation failed:', error);
       toast({
         title: 'Error',
-        description: 'Failed to create job. Please try again.',
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to create job. Please try again.',
         variant: 'destructive'
       });
     } finally {
@@ -718,7 +587,7 @@ export default function AdminJobCreation() {
         <div>
           <h1 className="text-3xl font-bold">HR Job Intake</h1>
           <p className="text-muted-foreground">
-            Review marketing submissions, create jobs, and assign staff before managers allocate time.
+            HR creates the job shell and assigns staff after marketing approval. The assigned manager then completes costing and milestones before execution begins.
           </p>
         </div>
 
@@ -742,7 +611,7 @@ export default function AdminJobCreation() {
                 Upcoming Jobs
               </CardTitle>
               <CardDescription>
-                Engagement letters approved by marketing appear here.
+                Approved onboarding submissions appear here. Existing clients only become eligible after marketing submits and HR approves an engagement letter.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -780,8 +649,7 @@ export default function AdminJobCreation() {
                 <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
                   <p className="font-medium text-foreground">No upcoming jobs yet.</p>
                   <p className="mt-1">
-                    When marketing uploads an engagement letter, it will appear here for HR to
-                    create the job and assign staff.
+                    You can still create a job below for an existing client if marketing has already submitted an approved engagement letter.
                   </p>
                 </div>
               ) : (
@@ -872,10 +740,10 @@ export default function AdminJobCreation() {
                   </div>
                   <div
                     className={`rounded-md border bg-background px-3 py-2 text-xs font-medium ${
-                      stepStatus.milestones ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
+                      stepStatus.managerSetup ? 'border-emerald-300 text-emerald-700' : 'border-primary/20'
                     }`}
                   >
-                    5. Milestones by Owner
+                    5. Manager Costing & Milestones
                   </div>
                 </div>
               </CardContent>
@@ -887,7 +755,9 @@ export default function AdminJobCreation() {
                   <FileText className="h-5 w-5" />
                   Step 1. Job Details
                 </CardTitle>
-                <CardDescription>Core job information and client link</CardDescription>
+                <CardDescription>
+                  Select an approved onboarding item from the queue, or choose an existing client and a marketing-submitted, HR-approved engagement letter.
+                </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2 md:col-span-2">
@@ -946,7 +816,7 @@ export default function AdminJobCreation() {
                   </Select>
                   {selectedClientId && approvedEngagementLetters.length === 0 && (
                     <p className="text-xs text-muted-foreground">
-                      Upload and approve an engagement letter with a fee before creating a job.
+                      Marketing must submit and HR must approve an engagement letter with a fee before creating a job.
                     </p>
                   )}
                 </div>
@@ -1122,7 +992,7 @@ export default function AdminJobCreation() {
                   Step 4. Staff Assignment
                 </CardTitle>
                 <CardDescription>
-                  Select your job team first. Milestones can then be assigned to these team members.
+                  Select the job team that HR is handing over to the assigned manager.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1255,125 +1125,22 @@ export default function AdminJobCreation() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Flag className="h-5 w-5" />
-                  Step 5. Job Milestones & Invoice Triggers
+                  Step 5. Manager Setup Handoff
                 </CardTitle>
                 <CardDescription>
-                  Define payment milestones and assign a responsible team member for each one.
+                  After HR creates the job and assigns staff, the assigned manager completes costing, invoice milestones, and submits the setup for approval.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {assignments.length === 0 && (
-                  <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
-                    Assign staff first to enable milestone owner selection.
-                  </div>
-                )}
-
-                {milestones.map((milestone, index) => (
-                  <div key={milestone.id} className="rounded-lg border p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium text-sm">Milestone {index + 1}</p>
-                      {milestones.length > 1 && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => removeMilestone(milestone.id)}
-                        >
-                          Remove
-                        </Button>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="space-y-2 md:col-span-2">
-                        <Label>Milestone Title *</Label>
-                        <Input
-                          value={milestone.title}
-                          onChange={(event) =>
-                            updateMilestoneField(milestone.id, 'title', event.target.value)
-                          }
-                          placeholder="e.g. Draft report submitted"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Payment % *</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={milestone.targetPercent}
-                          onChange={(event) =>
-                            updateMilestoneField(
-                              milestone.id,
-                              'targetPercent',
-                              event.target.value
-                            )
-                          }
-                          placeholder="25"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="space-y-2">
-                        <Label>Due Date (optional)</Label>
-                        <Input
-                          type="date"
-                          value={milestone.dueDate}
-                          onChange={(event) =>
-                            updateMilestoneField(milestone.id, 'dueDate', event.target.value)
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Milestone Owner</Label>
-                        <Select
-                          value={milestone.assignedToProfileId || 'unassigned'}
-                          onValueChange={(value) =>
-                            updateMilestoneField(
-                              milestone.id,
-                              'assignedToProfileId',
-                              value === 'unassigned' ? '' : value
-                            )
-                          }
-                          disabled={assignments.length === 0}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select assigned staff" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="unassigned">Unassigned</SelectItem>
-                            {selectedStaffProfiles.map((staff) => (
-                              <SelectItem key={staff.id} value={String(staff.id)}>
-                                {staff.firstName} {staff.lastName}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Condition / Requirement</Label>
-                      <Textarea
-                        rows={2}
-                        value={milestone.requirements}
-                        onChange={(event) =>
-                          updateMilestoneField(
-                            milestone.id,
-                            'requirements',
-                            event.target.value
-                          )
-                        }
-                        placeholder="List what must be completed/uploaded before invoicing this milestone."
-                      />
-                    </div>
-                  </div>
-                ))}
-
-                <Button type="button" variant="outline" onClick={addMilestone}>
-                  Add Milestone
-                </Button>
+                <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">HR stops here.</p>
+                  <p className="mt-2">
+                    Once you create this job, the assigned manager receives it for costing, payment milestone setup, and final pre-execution approval.
+                  </p>
+                  <p className="mt-2">
+                    Employees remain blocked from starting work until that manager setup is completed and approved.
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
@@ -1389,10 +1156,8 @@ export default function AdminJobCreation() {
                     <span className="font-medium">{formData.billingType === 'fixed_fee' ? 'Fixed fee' : 'Hourly'}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm mt-2">
-                    <span className="text-muted-foreground">Milestones with owner</span>
-                    <span className="font-medium">
-                      {milestonesWithOwnerCount}/{milestones.length}
-                    </span>
+                    <span className="text-muted-foreground">Next owner</span>
+                    <span className="font-medium">Assigned manager</span>
                   </div>
                 </CardContent>
               </Card>

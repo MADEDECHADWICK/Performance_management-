@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import DocumentPreviewDialog from '@/components/DocumentPreviewDialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,8 +8,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { documentsAPI, jobsAPI, timeEntriesAPI } from '@/lib/api';
+import { ApiError } from '@/lib/api/client';
 import type {
   Job,
   JobStaffAssignment,
@@ -16,7 +19,19 @@ import type {
   JobInvoiceMilestoneTrackingItem,
   JobWorkflowTrackingResponse,
 } from '@/lib/api/types';
-import { Briefcase, Calendar, RefreshCw, Users, Loader2, FileText, Upload, ArrowRight } from 'lucide-react';
+import {
+  Briefcase,
+  Calendar,
+  RefreshCw,
+  Users,
+  Loader2,
+  FileText,
+  Upload,
+  ArrowRight,
+  Flag,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -56,6 +71,15 @@ interface CostingFormState {
   allocations: AllocationInput[];
 }
 
+interface MilestoneDraft {
+  id: string;
+  title: string;
+  targetPercent: string;
+  dueDate: string;
+  requirements: string;
+  assignedToProfileId: string;
+}
+
 interface AllocationSummary {
   jobId: number;
   remainingJobHours: number;
@@ -72,7 +96,10 @@ interface JobDocument {
   fileName: string;
   filePath: string;
   documentType: string;
+  mimeType?: string;
   verificationStatus?: string;
+  rejectionReason?: string;
+  description?: string;
   createdAt?: string;
 }
 
@@ -116,6 +143,7 @@ const REQUIRED_DOCUMENTS_BY_TYPE: Record<RequiredDocumentType, RequiredDocumentD
 };
 
 const REQUIRED_DOCUMENT_TYPES_BY_JOB_STATUS: Partial<Record<Job['status'], RequiredDocumentType[]>> = {
+  planned: ['work_plan', 'budget'],
   in_progress: ['work_plan', 'budget'],
   on_hold: ['work_plan', 'budget'],
   completed: ['work_plan', 'budget', 'draft_report', 'final_report'],
@@ -131,6 +159,14 @@ const documentMatchesRequirement = (documentType: string, requirement: RequiredD
   return requirement.matchingTokens.some((token) => normalized.includes(token));
 };
 
+const sortDocumentsNewestFirst = (documents: JobDocument[]) =>
+  [...documents].sort((left, right) => {
+    const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+    const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+    if (rightTime !== leftTime) return rightTime - leftTime;
+    return Number(right.id || 0) - Number(left.id || 0);
+  });
+
 const millisecondsInDay = 24 * 60 * 60 * 1000;
 
 const toStartOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -139,6 +175,62 @@ const differenceInDays = (startDate: Date, endDate: Date) => {
   const start = toStartOfDay(startDate).getTime();
   const end = toStartOfDay(endDate).getTime();
   return Math.floor((end - start) / millisecondsInDay);
+};
+
+const buildDefaultMilestoneDrafts = (): MilestoneDraft[] => [
+  {
+    id: `m-${Date.now()}-25`,
+    title: 'Planning and kickoff completed',
+    targetPercent: '25',
+    dueDate: '',
+    requirements: 'Approved work plan and kickoff sign-off uploaded.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-50`,
+    title: 'Fieldwork midpoint completed',
+    targetPercent: '50',
+    dueDate: '',
+    requirements: 'Interim deliverables and midpoint review approved.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-75`,
+    title: 'Draft report submitted',
+    targetPercent: '75',
+    dueDate: '',
+    requirements: 'Draft report uploaded and manager or partner comments addressed.',
+    assignedToProfileId: '',
+  },
+  {
+    id: `m-${Date.now()}-100`,
+    title: 'Final report and closure completed',
+    targetPercent: '100',
+    dueDate: '',
+    requirements: 'Final report uploaded and client closure sign-off recorded.',
+    assignedToProfileId: '',
+  },
+];
+
+const mapTrackingMilestonesToDrafts = (
+  tracking: JobInvoiceMilestoneTracking | null
+): MilestoneDraft[] => {
+  if (!tracking || tracking.milestones.length === 0) {
+    return buildDefaultMilestoneDrafts();
+  }
+
+  return [...tracking.milestones]
+    .sort((a, b) => a.targetPercent - b.targetPercent)
+    .map((milestone, index) => ({
+      id: `milestone-${milestone.taskId}-${index}`,
+      title: milestone.title,
+      targetPercent: String(milestone.targetPercent),
+      dueDate: milestone.dueDate ? String(milestone.dueDate).slice(0, 10) : '',
+      requirements: milestone.requirements || '',
+      assignedToProfileId: milestone.assignedToProfileId
+        ? String(milestone.assignedToProfileId)
+        : '',
+    }));
 };
 
 export default function JobWorkflowDashboard() {
@@ -159,22 +251,21 @@ export default function JobWorkflowDashboard() {
   const [costingSaving, setCostingSaving] = useState(false);
   const [allocationSummary, setAllocationSummary] = useState<AllocationSummary | null>(null);
   const [invoiceTracking, setInvoiceTracking] = useState<JobInvoiceMilestoneTracking | null>(null);
+  const [milestoneDrafts, setMilestoneDrafts] = useState<MilestoneDraft[]>(() =>
+    buildDefaultMilestoneDrafts()
+  );
   const [jobDocuments, setJobDocuments] = useState<JobDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<JobDocument | null>(null);
   const [pendingUploads, setPendingUploads] = useState<Record<string, File | null>>({});
   const [uploadingDocumentType, setUploadingDocumentType] = useState<RequiredDocumentType | null>(null);
   const [milestoneUpdatingId, setMilestoneUpdatingId] = useState<number | null>(null);
+  const [partnerReviewNotes, setPartnerReviewNotes] = useState('');
+  const [partnerReviewSaving, setPartnerReviewSaving] = useState<'approved' | 'rejected' | null>(null);
   const isEmployeeExperience =
     isEmployee && !isAdmin && !isHR && !isGMP && !isPartner && !isManager;
   const isFixedFeeJob = selectedJob?.billingType === 'fixed_fee';
   const selectedJobIdParam = Number(routeJobId || searchParams.get('jobId'));
-  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-
-  const resolveDocumentUrl = (filePath?: string | null) => {
-    if (!filePath) return '#';
-    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
-    return `${baseUrl}${filePath}`;
-  };
 
   const formatDocumentType = (value?: string) => {
     if (!value) return 'Document';
@@ -185,6 +276,13 @@ export default function JobWorkflowDashboard() {
     if (status === 'verified') return 'bg-green-100 text-green-800';
     if (status === 'rejected') return 'bg-red-100 text-red-800';
     return 'bg-yellow-100 text-yellow-800';
+  };
+
+  const getCostingStatusBadgeClass = (status?: string | null) => {
+    if (status === 'approved') return 'bg-green-100 text-green-800';
+    if (status === 'rejected') return 'bg-red-100 text-red-800';
+    if (status === 'submitted') return 'bg-blue-100 text-blue-800';
+    return 'bg-gray-100 text-gray-800';
   };
 
   const parseDocumentsResponse = (payload: any): JobDocument[] => {
@@ -198,10 +296,13 @@ export default function JobWorkflowDashboard() {
     try {
       setDocumentsLoading(true);
       const response = await documentsAPI.getJobDocuments(jobId);
-      setJobDocuments(parseDocumentsResponse(response));
+      const documents = parseDocumentsResponse(response);
+      setJobDocuments(documents);
+      return documents;
     } catch (error) {
       console.error('Failed to load job documents:', error);
       setJobDocuments([]);
+      return [] as JobDocument[];
     } finally {
       setDocumentsLoading(false);
     }
@@ -231,11 +332,22 @@ export default function JobWorkflowDashboard() {
     }
   };
 
+  const resetJobDetailState = () => {
+    setSelectedJob(null);
+    setStaff([]);
+    setInvoiceTracking(null);
+    setMilestoneDrafts(buildDefaultMilestoneDrafts());
+    setCostingForm(null);
+    setJobDocuments([]);
+    setAllocationSummary(null);
+    setJobTracking(null);
+  };
+
   const loadJobDetails = async (jobId: number) => {
     try {
       setTrackingLoading(true);
-      const [job, staffAssignments, tracking] = await Promise.all([
-        jobsAPI.getById(jobId),
+      const job = await jobsAPI.getById(jobId);
+      const [staffAssignments, tracking] = await Promise.all([
         jobsAPI.getStaff(jobId),
         jobsAPI.getTracking(jobId),
       ]);
@@ -246,24 +358,32 @@ export default function JobWorkflowDashboard() {
 
       if (isEmployeeExperience) {
         setInvoiceTracking(null);
+        setMilestoneDrafts(buildDefaultMilestoneDrafts());
         setCostingForm(null);
       } else {
         const invoiceMilestones = await jobsAPI.getInvoiceMilestones(jobId);
         setInvoiceTracking(invoiceMilestones);
+        setMilestoneDrafts(mapTrackingMilestonesToDrafts(invoiceMilestones));
         await initializeCosting(job, staffAssignments);
       }
     } catch (error) {
       console.error('Failed to load job details:', error);
-      setInvoiceTracking(null);
-      setCostingForm(null);
-      setJobDocuments([]);
-      setAllocationSummary(null);
-      setJobTracking(null);
-      toast({
-        title: 'Error',
-        description: 'Failed to load job details',
-        variant: 'destructive',
-      });
+      resetJobDetailState();
+
+      if (error instanceof ApiError && error.status === 404) {
+        navigate('/jobs', { replace: true });
+        toast({
+          title: 'Job not found',
+          description: `Job #${jobId} no longer exists or this link is outdated.`,
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: 'Failed to load job details',
+          variant: 'destructive',
+        });
+      }
     } finally {
       setTrackingLoading(false);
     }
@@ -442,6 +562,28 @@ export default function JobWorkflowDashboard() {
     [requiredDocumentChecklist]
   );
 
+  const partnerReviewDocumentChecklist = useMemo(
+    () =>
+      ['work_plan', 'budget'].map((type) => {
+        const requirement = REQUIRED_DOCUMENTS_BY_TYPE[type as RequiredDocumentType];
+        const matchingDocuments = sortDocumentsNewestFirst(
+          jobDocuments.filter((doc) => documentMatchesRequirement(doc.documentType, requirement))
+        );
+        return {
+          ...requirement,
+          uploaded: matchingDocuments.length > 0,
+          matchingDocuments,
+          latestDocument: matchingDocuments[0] || null,
+        };
+      }),
+    [jobDocuments]
+  );
+
+  const missingPartnerReviewDocuments = useMemo(
+    () => partnerReviewDocumentChecklist.filter((item) => !item.latestDocument),
+    [partnerReviewDocumentChecklist]
+  );
+
   const jobTimeline = useMemo(() => {
     if (!selectedJob) return null;
 
@@ -554,7 +696,10 @@ export default function JobWorkflowDashboard() {
     setPendingUploads((prev) => ({ ...prev, [documentType]: file }));
   };
 
-  const handleUploadRequiredDocument = async (documentType: RequiredDocumentType) => {
+  const uploadRequiredDocument = async (
+    documentType: RequiredDocumentType,
+    options?: { suppressSuccessToast?: boolean }
+  ) => {
     if (!selectedJob) return;
     const file = pendingUploads[documentType];
     if (!file) {
@@ -574,23 +719,77 @@ export default function JobWorkflowDashboard() {
         entityId: selectedJob.id,
         accessLevel: 'manager',
         isRequired: true,
-        description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded via employee workflow.`,
+        description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded via job workflow.`,
       });
       await loadJobDocuments(selectedJob.id);
       setPendingUploads((prev) => ({ ...prev, [documentType]: null }));
-      toast({
-        title: 'Document uploaded',
-        description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded successfully.`,
-      });
+      if (!options?.suppressSuccessToast) {
+        toast({
+          title: 'Document uploaded',
+          description: `${REQUIRED_DOCUMENTS_BY_TYPE[documentType].label} uploaded successfully.`,
+        });
+      }
+      return true;
     } catch (error) {
       console.error('Required document upload failed:', error);
       toast({
         title: 'Upload failed',
-        description: 'Unable to upload the selected document.',
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Unable to upload the selected document.',
+        variant: 'destructive',
+      });
+      return false;
+    } finally {
+      setUploadingDocumentType(null);
+    }
+  };
+
+  const handleUploadRequiredDocument = async (documentType: RequiredDocumentType) => {
+    await uploadRequiredDocument(documentType);
+  };
+
+  const handleReviewCosting = async (decision: 'approved' | 'rejected') => {
+    if (!selectedJob) return;
+
+    const trimmedNotes = partnerReviewNotes.trim();
+    if (decision === 'rejected' && !trimmedNotes) {
+      toast({
+        title: 'Review point required',
+        description: 'Add concrete review points before returning this costing package to the manager.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      setPartnerReviewSaving(decision);
+      await jobsAPI.reviewCosting(selectedJob.id, {
+        decision,
+        reviewNotes: trimmedNotes || undefined,
+      });
+      await Promise.all([loadJobs(), loadJobDetails(selectedJob.id)]);
+      setPartnerReviewNotes('');
+      toast({
+        title: decision === 'approved' ? 'Costing Approved' : 'Returned to Manager',
+        description:
+          decision === 'approved'
+            ? 'The costing package has been approved for execution readiness.'
+            : 'The costing package was returned to the manager with review points.',
+      });
+    } catch (error) {
+      console.error('Failed to review costing:', error);
+      toast({
+        title: 'Review failed',
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Unable to review the costing package.',
         variant: 'destructive',
       });
     } finally {
-      setUploadingDocumentType(null);
+      setPartnerReviewSaving(null);
     }
   };
 
@@ -698,13 +897,134 @@ export default function JobWorkflowDashboard() {
     });
   };
 
+  const updateMilestoneDraft = (
+    milestoneId: string,
+    field: keyof Omit<MilestoneDraft, 'id'>,
+    value: string
+  ) => {
+    setMilestoneDrafts((prev) =>
+      prev.map((milestone) =>
+        milestone.id === milestoneId ? { ...milestone, [field]: value } : milestone
+      )
+    );
+  };
+
+  const addMilestoneDraft = () => {
+    setMilestoneDrafts((prev) => [
+      ...prev,
+      {
+        id: `m-${Date.now()}-${prev.length + 1}`,
+        title: '',
+        targetPercent: '',
+        dueDate: '',
+        requirements: '',
+        assignedToProfileId: staff[0] ? String(staff[0].employeeProfileId) : '',
+      },
+    ]);
+  };
+
+  const removeMilestoneDraft = (milestoneId: string) => {
+    setMilestoneDrafts((prev) => prev.filter((milestone) => milestone.id !== milestoneId));
+  };
+
+  const validateMilestoneDrafts = () => {
+    if (milestoneDrafts.length === 0) {
+      return 'Add at least one milestone before saving costing.';
+    }
+
+    const seenPercents = new Set<number>();
+    let hasFinalHundred = false;
+    const staffIds = new Set(staff.map((assignment) => assignment.employeeProfileId));
+
+    for (let index = 0; index < milestoneDrafts.length; index += 1) {
+      const milestone = milestoneDrafts[index];
+      const title = milestone.title.trim();
+      const targetPercent = Number(milestone.targetPercent);
+
+      if (!title) {
+        return `Milestone #${index + 1} needs a title.`;
+      }
+
+      if (!Number.isFinite(targetPercent) || targetPercent <= 0 || targetPercent > 100) {
+        return `Milestone "${title}" needs a target percentage between 1 and 100.`;
+      }
+
+      if (seenPercents.has(targetPercent)) {
+        return `Duplicate milestone percentage detected: ${targetPercent}%.`;
+      }
+      seenPercents.add(targetPercent);
+
+      if (targetPercent === 100) {
+        hasFinalHundred = true;
+      }
+
+      if (milestone.assignedToProfileId) {
+        const ownerId = Number(milestone.assignedToProfileId);
+        if (!staffIds.has(ownerId)) {
+          return `Milestone "${title}" owner must be selected from assigned staff.`;
+        }
+      }
+    }
+
+    if (!hasFinalHundred) {
+      return 'Include a 100% milestone for final payment.';
+    }
+
+    return null;
+  };
+
   const handleSaveCosting = async () => {
     if (!selectedJob || !costingForm) return;
+
+    const canEditCosting = isAdmin || selectedJob.managerProfileId === profile?.id;
+    if (!canEditCosting) {
+      toast({
+        title: 'Access Restricted',
+        description: 'Only the assigned manager can complete costing and milestone setup for this job.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     if (!costingForm.jobFee || Number(costingForm.jobFee) <= 0) {
       toast({
         title: 'Validation Error',
         description: 'Job fee is required before saving costing.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    let latestDocuments = jobDocuments;
+    const pendingPartnerReviewUploads = missingPartnerReviewDocuments.filter(
+      (item) => pendingUploads[item.type]
+    );
+
+    if (pendingPartnerReviewUploads.length > 0) {
+      for (const requirement of pendingPartnerReviewUploads) {
+        const uploaded = await uploadRequiredDocument(requirement.type, {
+          suppressSuccessToast: true,
+        });
+        if (!uploaded) {
+          return;
+        }
+      }
+      latestDocuments = await loadJobDocuments(selectedJob.id);
+    }
+
+    const remainingPartnerReviewDocuments = ['work_plan', 'budget']
+      .map((type) => REQUIRED_DOCUMENTS_BY_TYPE[type as RequiredDocumentType])
+      .filter(
+        (requirement) =>
+          !latestDocuments.some((doc) => documentMatchesRequirement(doc.documentType, requirement))
+      );
+
+    if (remainingPartnerReviewDocuments.length > 0) {
+      toast({
+        title: 'Required Documents Missing',
+        description: `Upload ${remainingPartnerReviewDocuments
+          .map((item) => item.label)
+          .join(' and ')} before submitting costing for partner review.`,
         variant: 'destructive',
       });
       return;
@@ -730,8 +1050,30 @@ export default function JobWorkflowDashboard() {
       return;
     }
 
+    const milestoneValidationError = validateMilestoneDrafts();
+    if (milestoneValidationError) {
+      toast({
+        title: 'Validation Error',
+        description: milestoneValidationError,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       setCostingSaving(true);
+      const milestonePayload = milestoneDrafts
+        .map((milestone) => ({
+          title: milestone.title.trim(),
+          targetPercent: Number(milestone.targetPercent),
+          dueDate: milestone.dueDate || undefined,
+          requirements: milestone.requirements.trim() || undefined,
+          assignedToProfileId: milestone.assignedToProfileId
+            ? Number(milestone.assignedToProfileId)
+            : undefined,
+        }))
+        .sort((a, b) => a.targetPercent - b.targetPercent);
+
       await jobsAPI.upsertCosting(selectedJob.id, {
         jobFee: Number(costingForm.jobFee),
         allocations,
@@ -739,17 +1081,21 @@ export default function JobWorkflowDashboard() {
         capEnforced: costingForm.capEnforced,
         allowOverage: costingForm.allowOverage,
         maxOveragePercent: Number(costingForm.maxOveragePercent),
+        milestones: milestonePayload,
       });
-      await loadAllocationSummary(selectedJob.id);
+      await loadJobDetails(selectedJob.id);
       toast({
         title: 'Costing Saved',
-        description: 'Job costing and allocations updated successfully.',
+        description: 'Job costing, allocations, and milestones updated successfully.',
       });
     } catch (error) {
       console.error('Failed to save costing:', error);
       toast({
         title: 'Error',
-        description: 'Failed to save job costing.',
+        description:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to save job costing.',
         variant: 'destructive',
       });
     } finally {
@@ -764,6 +1110,7 @@ export default function JobWorkflowDashboard() {
   useEffect(() => {
     setPendingUploads({});
     setUploadingDocumentType(null);
+    setPartnerReviewNotes('');
   }, [selectedJob?.id]);
 
   useEffect(() => {
@@ -780,6 +1127,7 @@ export default function JobWorkflowDashboard() {
     setSelectedJob(null);
     setStaff([]);
     setInvoiceTracking(null);
+    setMilestoneDrafts(buildDefaultMilestoneDrafts());
     setCostingForm(null);
     setAllocationSummary(null);
     setJobDocuments([]);
@@ -796,6 +1144,10 @@ export default function JobWorkflowDashboard() {
       )
     : 0;
   const remainingBudget = costingForm ? Number(costingForm.jobFee || 0) - totalEstimatedCost : 0;
+  const canEditCosting = Boolean(selectedJob && (isAdmin || selectedJob.managerProfileId === profile?.id));
+  const canReviewCosting = Boolean(
+    selectedJob && (isAdmin || selectedJob.partnerProfileId === profile?.id)
+  );
   const managerDisplayName =
     jobTracking?.ownership?.manager
       ? `${jobTracking.ownership.manager.firstName || ''} ${jobTracking.ownership.manager.lastName || ''}`.trim()
@@ -808,6 +1160,12 @@ export default function JobWorkflowDashboard() {
       : selectedJob?.partner
         ? `${selectedJob.partner.firstName} ${selectedJob.partner.lastName}`
         : 'Not assigned';
+  const costingStatus = workflowSnapshot?.manager?.costingStatus || null;
+  const latestCostingReviewReason = workflowSnapshot?.manager?.latestReviewReason || null;
+  const latestCostingReviewBy = workflowSnapshot?.manager?.latestReviewBy || null;
+  const latestCostingReviewLabel = latestCostingReviewBy
+    ? `${latestCostingReviewBy.firstName || ''} ${latestCostingReviewBy.lastName || ''}`.trim()
+    : '';
   const employeeAllocatedHours = employeeTracking
     ? Number(employeeTracking.allocatedHours || 0)
     : Number(allocationSummary?.allowedEmployeeHours || 0);
@@ -817,6 +1175,17 @@ export default function JobWorkflowDashboard() {
   const employeeRemainingHours = employeeTracking
     ? Number(employeeTracking.remainingAllocatedHours || 0)
     : Number(allocationSummary?.remainingEmployeeHours || 0);
+  const milestoneOwnerOptions = useMemo(
+    () =>
+      staff.map((assignment) => ({
+        id: assignment.employeeProfileId,
+        name: assignment.employee
+          ? `${assignment.employee.firstName} ${assignment.employee.lastName}`
+          : `Employee ${assignment.employeeProfileId}`,
+        roleName: assignment.role?.name || assignment.roleOnJob || 'Assigned staff',
+      })),
+    [staff]
+  );
 
   return (
     <DashboardLayout>
@@ -1407,7 +1776,7 @@ export default function JobWorkflowDashboard() {
 
                           {invoiceTracking.milestones.length === 0 ? (
                             <p className="text-sm text-muted-foreground">
-                              No payment milestones were configured during job creation.
+                              The assigned manager has not configured payment milestones yet.
                             </p>
                           ) : (
                             <div className="space-y-3">
@@ -1497,13 +1866,26 @@ export default function JobWorkflowDashboard() {
                         Job Documents
                       </CardTitle>
                       <CardDescription>
-                        {isEmployeeExperience
-                          ? 'Upload required workflow documents and review your job files.'
+                        {canEditCosting
+                          ? 'Upload the work plan and budget for partner review, then keep all job-linked documents in one place.'
                           : 'Work plan, budget, draft report, final report, and all job-linked uploads.'}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-2">
-                      {isEmployeeExperience && requiredDocumentChecklist.length > 0 && (
+                      {canEditCosting && latestCostingReviewReason && costingStatus === 'rejected' && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+                          <p className="font-medium text-red-800">Partner review point</p>
+                          <p className="mt-1 text-red-700">{latestCostingReviewReason}</p>
+                          {workflowSnapshot?.manager?.latestReviewAt && (
+                            <p className="mt-2 text-xs text-red-700/80">
+                              Returned on {new Date(workflowSnapshot.manager.latestReviewAt).toLocaleString()}
+                              {latestCostingReviewLabel ? ` by ${latestCostingReviewLabel}` : ''}.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {canEditCosting && requiredDocumentChecklist.length > 0 && (
                         <div className="space-y-3 border rounded-lg p-3 mb-4">
                           <p className="text-sm font-medium">Required Documents</p>
                           {requiredDocumentChecklist.map((requirement) => {
@@ -1521,6 +1903,8 @@ export default function JobWorkflowDashboard() {
                                       ? `Uploaded (${requirement.matchingDocuments.length} file${
                                           requirement.matchingDocuments.length === 1 ? '' : 's'
                                         })`
+                                      : selectedFile
+                                        ? `Selected: ${selectedFile.name} (will upload when you click Upload or save costing)`
                                       : 'Missing'}
                                   </p>
                                 </div>
@@ -1573,10 +1957,10 @@ export default function JobWorkflowDashboard() {
                         </p>
                       ) : (
                         jobDocuments.map((doc) => (
-                          <div
-                            key={doc.id}
-                            className="flex items-center justify-between border-b pb-2 last:border-0 gap-3"
-                          >
+                            <div
+                              key={doc.id}
+                              className="flex items-center justify-between border-b pb-2 last:border-0 gap-3"
+                            >
                             <div className="min-w-0">
                               <p className="font-medium truncate">{doc.fileName}</p>
                               <p className="text-xs text-muted-foreground">
@@ -1590,21 +1974,158 @@ export default function JobWorkflowDashboard() {
                               <Badge className={getVerificationBadgeClass(doc.verificationStatus)}>
                                 {doc.verificationStatus || 'pending'}
                               </Badge>
-                              <a
-                                href={resolveDocumentUrl(doc.filePath)}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setPreviewDocument(doc)}
                               >
-                                <Button size="sm" variant="outline">
-                                  View
-                                </Button>
-                              </a>
+                                Preview
+                              </Button>
                             </div>
                           </div>
                         ))
                       )}
                     </CardContent>
                   </Card>
+
+                  {!isEmployeeExperience && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Partner Review Package</CardTitle>
+                        <CardDescription>
+                          The assigned partner reviews the costing, work plan, and budget before the team can start work.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-lg border p-4 space-y-2">
+                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Current costing status</p>
+                              <Badge className={getCostingStatusBadgeClass(costingStatus)}>
+                                {formatStatusLabel(costingStatus || 'draft')}
+                              </Badge>
+                            </div>
+                            {workflowSnapshot?.manager?.submittedAt && (
+                              <p className="text-xs text-muted-foreground">
+                                Submitted {new Date(workflowSnapshot.manager.submittedAt).toLocaleString()}
+                              </p>
+                            )}
+                          </div>
+                          {costingStatus === 'approved' && workflowSnapshot?.manager?.approvedAt && (
+                            <p className="text-sm text-green-700">
+                              Approved on {new Date(workflowSnapshot.manager.approvedAt).toLocaleString()}.
+                            </p>
+                          )}
+                          {latestCostingReviewReason && costingStatus === 'rejected' && (
+                            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                              <p className="font-medium">Latest partner review point</p>
+                              <p className="mt-1">{latestCostingReviewReason}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-3">
+                          <p className="text-sm font-medium">Required documents for partner review</p>
+                          {partnerReviewDocumentChecklist.map((requirement) => (
+                            <div
+                              key={`partner-review-${requirement.type}`}
+                              className="rounded-lg border p-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                            >
+                              <div className="min-w-0">
+                                <p className="font-medium">{requirement.label}</p>
+                                {requirement.latestDocument ? (
+                                  <p className="text-xs text-muted-foreground truncate">
+                                    Latest upload: {requirement.latestDocument.fileName}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-red-600">Missing</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  className={
+                                    requirement.latestDocument ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                  }
+                                >
+                                  {requirement.latestDocument ? 'Uploaded' : 'Missing'}
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    requirement.latestDocument && setPreviewDocument(requirement.latestDocument)
+                                  }
+                                  disabled={!requirement.latestDocument}
+                                >
+                                  Preview
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {canReviewCosting ? (
+                          <div className="space-y-3 rounded-lg border border-dashed p-4">
+                            <div>
+                              <p className="font-medium">Partner decision</p>
+                              <p className="text-sm text-muted-foreground">
+                                Approve when the costing, work plan, and budget are acceptable. Otherwise return the package with clear review points.
+                              </p>
+                            </div>
+                            <Textarea
+                              rows={3}
+                              value={partnerReviewNotes}
+                              onChange={(event) => setPartnerReviewNotes(event.target.value)}
+                              placeholder="Add review points if you are returning this to the manager."
+                              disabled={Boolean(partnerReviewSaving) || costingStatus !== 'submitted'}
+                            />
+                            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                              <Button
+                                variant="outline"
+                                onClick={() => handleReviewCosting('rejected')}
+                                disabled={
+                                  Boolean(partnerReviewSaving) ||
+                                  costingStatus !== 'submitted'
+                                }
+                              >
+                                {partnerReviewSaving === 'rejected' ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Returning...
+                                  </>
+                                ) : (
+                                  'Return to Manager'
+                                )}
+                              </Button>
+                              <Button
+                                onClick={() => handleReviewCosting('approved')}
+                                disabled={
+                                  Boolean(partnerReviewSaving) ||
+                                  costingStatus !== 'submitted' ||
+                                  missingPartnerReviewDocuments.length > 0
+                                }
+                              >
+                                {partnerReviewSaving === 'approved' ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Approving...
+                                  </>
+                                ) : (
+                                  'Approve Costing Package'
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                            {costingStatus === 'submitted'
+                              ? `${partnerDisplayName} is reviewing this package before execution can begin.`
+                              : 'The assigned partner reviews this package after the manager submits costing and the required documents.'}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
 
                   {!isEmployeeExperience && (
                     <Card>
@@ -1666,9 +2187,11 @@ export default function JobWorkflowDashboard() {
                   {!isEmployeeExperience && (
                     <Card>
                     <CardHeader>
-                      <CardTitle>Job Costing & Allocations</CardTitle>
+                      <CardTitle>Job Costing, Allocations & Milestones</CardTitle>
                       <CardDescription>
-                        Managers allocate hours per staff member before time logging begins.
+                        {canEditCosting
+                          ? 'The assigned manager completes costing, milestones, and the partner-review package before time logging begins.'
+                          : 'HR stops at staffing. The assigned manager completes costing and submits the work plan and budget for partner approval.'}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -1685,6 +2208,14 @@ export default function JobWorkflowDashboard() {
                         </p>
                       ) : (
                         <div className="space-y-5">
+                          {!canEditCosting && (
+                            <div className="rounded-lg border border-dashed bg-muted/30 p-4 text-sm text-muted-foreground">
+                              <p className="font-medium text-foreground">Manager-owned step</p>
+                              <p className="mt-2">
+                                {managerDisplayName} must complete costing, upload the work plan and budget, and submit the package before employees can start working on this job.
+                              </p>
+                            </div>
+                          )}
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="space-y-2">
                               <Label htmlFor="jobFee">Job Fee *</Label>
@@ -1698,7 +2229,7 @@ export default function JobWorkflowDashboard() {
                                     prev ? { ...prev, jobFee: event.target.value } : prev
                                   )
                                 }
-                                disabled={isFixedFeeJob}
+                                disabled={!canEditCosting || isFixedFeeJob}
                               />
                               {isFixedFeeJob && (
                                 <p className="text-xs text-muted-foreground">
@@ -1755,6 +2286,7 @@ export default function JobWorkflowDashboard() {
                                     prev ? { ...prev, maxOveragePercent: event.target.value } : prev
                                   )
                                 }
+                                disabled={!canEditCosting}
                               />
                             </div>
                             <div className="flex flex-col gap-3 pt-2">
@@ -1767,6 +2299,7 @@ export default function JobWorkflowDashboard() {
                                       prev ? { ...prev, capEnforced: checked } : prev
                                     )
                                   }
+                                  disabled={!canEditCosting}
                                 />
                               </div>
                               <div className="flex items-center justify-between">
@@ -1778,6 +2311,7 @@ export default function JobWorkflowDashboard() {
                                       prev ? { ...prev, allowOverage: checked } : prev
                                     )
                                   }
+                                  disabled={!canEditCosting}
                                 />
                               </div>
                             </div>
@@ -1805,6 +2339,7 @@ export default function JobWorkflowDashboard() {
                                     placeholder="Task focus"
                                     rows={2}
                                     className="mt-2"
+                                    disabled={!canEditCosting}
                                   />
                                 </div>
                                 <div className="space-y-2">
@@ -1822,6 +2357,7 @@ export default function JobWorkflowDashboard() {
                                         event.target.value
                                       )
                                     }
+                                    disabled={!canEditCosting}
                                   />
                                 </div>
                                 <div className="space-y-2">
@@ -1839,6 +2375,7 @@ export default function JobWorkflowDashboard() {
                                         event.target.value
                                       )
                                     }
+                                    disabled={!canEditCosting}
                                   />
                                 </div>
                                 <div className="flex flex-col gap-2 pt-6">
@@ -1853,6 +2390,140 @@ export default function JobWorkflowDashboard() {
                                         checked
                                       )
                                     }
+                                    disabled={!canEditCosting}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="space-y-4 rounded-lg border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <Flag className="h-4 w-4 text-primary" />
+                                  <p className="font-medium">Invoice Milestones</p>
+                                </div>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  Define billing checkpoints and assign a responsible team member for each milestone.
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={addMilestoneDraft}
+                                disabled={!canEditCosting}
+                              >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Milestone
+                              </Button>
+                            </div>
+
+                            {milestoneDrafts.map((milestone, index) => (
+                              <div key={milestone.id} className="rounded-lg border p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="font-medium text-sm">Milestone {index + 1}</p>
+                                  {milestoneDrafts.length > 1 && (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => removeMilestoneDraft(milestone.id)}
+                                      disabled={!canEditCosting}
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      Remove
+                                    </Button>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="space-y-2 md:col-span-2">
+                                    <Label>Milestone Title *</Label>
+                                    <Input
+                                      value={milestone.title}
+                                      onChange={(event) =>
+                                        updateMilestoneDraft(milestone.id, 'title', event.target.value)
+                                      }
+                                      placeholder="e.g. Draft report submitted"
+                                      disabled={!canEditCosting}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label>Payment % *</Label>
+                                    <Input
+                                      type="number"
+                                      min="1"
+                                      max="100"
+                                      value={milestone.targetPercent}
+                                      onChange={(event) =>
+                                        updateMilestoneDraft(
+                                          milestone.id,
+                                          'targetPercent',
+                                          event.target.value
+                                        )
+                                      }
+                                      placeholder="25"
+                                      disabled={!canEditCosting}
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="space-y-2">
+                                    <Label>Due Date (optional)</Label>
+                                    <Input
+                                      type="date"
+                                      value={milestone.dueDate}
+                                      onChange={(event) =>
+                                        updateMilestoneDraft(milestone.id, 'dueDate', event.target.value)
+                                      }
+                                      disabled={!canEditCosting}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label>Milestone Owner</Label>
+                                    <Select
+                                      value={milestone.assignedToProfileId || 'unassigned'}
+                                      onValueChange={(value) =>
+                                        updateMilestoneDraft(
+                                          milestone.id,
+                                          'assignedToProfileId',
+                                          value === 'unassigned' ? '' : value
+                                        )
+                                      }
+                                      disabled={!canEditCosting}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Select assigned staff" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="unassigned">Unassigned</SelectItem>
+                                        {milestoneOwnerOptions.map((option) => (
+                                          <SelectItem key={option.id} value={String(option.id)}>
+                                            {option.name} - {option.roleName}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label>Condition / Requirement</Label>
+                                  <Textarea
+                                    rows={2}
+                                    value={milestone.requirements}
+                                    onChange={(event) =>
+                                      updateMilestoneDraft(
+                                        milestone.id,
+                                        'requirements',
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder="List what must be completed or uploaded before invoicing this milestone."
+                                    disabled={!canEditCosting}
                                   />
                                 </div>
                               </div>
@@ -1890,18 +2561,21 @@ export default function JobWorkflowDashboard() {
                               }
                               rows={3}
                               placeholder="Manager notes for this costing"
+                              disabled={!canEditCosting}
                             />
                           </div>
 
                           <div className="flex justify-end">
-                            <Button onClick={handleSaveCosting} disabled={costingSaving}>
+                            <Button onClick={handleSaveCosting} disabled={costingSaving || !canEditCosting}>
                               {costingSaving ? (
                                 <>
                                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                   Saving...
                                 </>
                               ) : (
-                                'Save Costing'
+                                costingStatus === 'rejected'
+                                  ? 'Resubmit for Partner Review'
+                                  : 'Save & Submit for Partner Review'
                               )}
                             </Button>
                           </div>
@@ -1919,6 +2593,17 @@ export default function JobWorkflowDashboard() {
             </CardContent>
           </Card>
         </div>
+        <DocumentPreviewDialog
+          open={Boolean(previewDocument)}
+          onOpenChange={(open) => {
+            if (!open) setPreviewDocument(null);
+          }}
+          title={previewDocument?.fileName || 'Job Document'}
+          filePath={previewDocument?.filePath}
+          fileName={previewDocument?.fileName}
+          mimeType={previewDocument?.mimeType}
+          description={previewDocument?.description || 'Preview the job document and download it if needed.'}
+        />
       </div>
     </DashboardLayout>
   );

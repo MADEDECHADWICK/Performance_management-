@@ -269,7 +269,7 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
           {
             label: "Overall Score",
             value: toNumber(overall?.totalScore).toFixed(1),
-            description: `Grade ${String(overall?.grade || "N/A")}`,
+            description: overall?.grade ? `Grade ${String(overall.grade)}` : "No grade yet",
           },
           {
             label: "Revenue Contribution",
@@ -406,7 +406,7 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
             description: `${toNumber(surveys?.totalSurveys)} total surveys`,
           },
           {
-            label: "Onboarding Queue",
+            label: "Jobs Creation",
             value: `${onboardings.length}`,
             description: `${upcomingJobs.length} upcoming jobs`,
           },

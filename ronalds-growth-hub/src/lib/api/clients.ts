@@ -18,6 +18,17 @@ export interface CreateClientPayload {
   managerProfileId?: number;
   departmentId?: number;
   status?: 'active' | 'inactive';
+  engagementLetter?: {
+    documentId: number;
+    engagementType: string;
+    jobTitle?: string;
+    feeAmount: number;
+    currency?: string;
+    startDate?: string;
+    endDate?: string;
+    scopeDescription?: string;
+    termsConditions?: string;
+  };
 }
 
 export interface UpdateClientPayload extends Partial<CreateClientPayload> {
@@ -100,6 +111,9 @@ export const clientsAPI = {
    */
   uploadEngagementLetter: async (clientId: number, data: {
     documentId: number;
+    departmentId?: number;
+    partnerProfileId?: number;
+    managerProfileId?: number;
     jobTitle?: string;
     engagementType: string;
     startDate?: string;

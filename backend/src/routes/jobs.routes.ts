@@ -18,6 +18,7 @@ import {
   updateJobStaffAssignmentValidators,
   removeJobStaffAssignmentValidators,
   upsertJobCostingValidators,
+  reviewJobCostingValidators,
   createJobFromOnboardingValidators,
   getJobTimeEntriesValidators,
 } from "../validators/job.validators";
@@ -136,11 +137,20 @@ router.get(
  */
 router.post(
   "/:jobId/costing",
-  withRoles("manager", "partner", "super_admin"),
+  ...authenticated(),
   requireJobAccess("manage"),
   validateRequest(upsertJobCostingValidators),
   handleValidationErrors,
   JobController.upsertJobCosting
+);
+
+router.patch(
+  "/:jobId/costing/review",
+  ...authenticated(),
+  requireJobAccess("manage"),
+  validateRequest(reviewJobCostingValidators),
+  handleValidationErrors,
+  JobController.reviewJobCosting
 );
 
 /**

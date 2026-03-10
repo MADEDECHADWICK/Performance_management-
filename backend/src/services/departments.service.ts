@@ -104,6 +104,11 @@ export class DepartmentService {
     );
   }
 
+  private canListAllDepartments(auth: AuthContext): boolean {
+    const roles = this.normalizeRoles(auth);
+    return this.isPrivileged(auth) || roles.has("marketing") || roles.has("gmp");
+  }
+
   private isManagerScoped(auth: AuthContext): boolean {
     if (this.isPrivileged(auth)) return false;
     const roles = this.normalizeRoles(auth);
@@ -233,6 +238,13 @@ export class DepartmentService {
         },
       },
     }).then(async (created) => {
+      if (created.departmentHeadId) {
+        await prisma.profile.update({
+          where: { id: created.departmentHeadId },
+          data: { departmentId: created.id },
+        });
+      }
+
       if (!created.partnerProfileId) return created;
       const partner = await prisma.profile.findUnique({
         where: { id: created.partnerProfileId },
@@ -298,7 +310,7 @@ export class DepartmentService {
     const skip = (page - 1) * pageSize;
     let where: Prisma.DepartmentWhereInput | undefined;
 
-    if (auth && !this.isPrivileged(auth)) {
+    if (auth && !this.canListAllDepartments(auth)) {
       const scopedIds = await this.getScopedDepartmentIds(auth);
       where = scopedIds.size > 0 ? { id: { in: Array.from(scopedIds) } } : { id: -1 };
     }
@@ -515,6 +527,14 @@ export class DepartmentService {
           _count: { select: { profiles: true, jobs: true, kpis: true } },
         },
       });
+
+      if (updated.departmentHeadId) {
+        await prisma.profile.update({
+          where: { id: updated.departmentHeadId },
+          data: { departmentId },
+        });
+      }
+
       if (!updated.partnerProfileId) return updated;
       const partner = await prisma.profile.findUnique({
         where: { id: updated.partnerProfileId },

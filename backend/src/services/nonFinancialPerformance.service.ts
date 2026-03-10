@@ -8,6 +8,14 @@ export interface BSCScores {
   okrScore: number;
   feedbackScore: number;
   projectEvaluationScore: number;
+  evidence: {
+    learningGrowth: boolean;
+    okr: boolean;
+    feedback: boolean;
+    customerSatisfaction: boolean;
+    internalProcesses: boolean;
+    projectEvaluation: boolean;
+  };
 }
 
 export interface NonFinancialWeightConfig {
@@ -43,6 +51,11 @@ export interface BSCBreakdown {
   };
 }
 
+interface ScoreSignal {
+  score: number;
+  hasData: boolean;
+}
+
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 
 const normalizeFivePointScore = (value: number) => clamp((value / 5) * 100);
@@ -67,7 +80,14 @@ export class NonFinancialPerformanceService {
     const start = periodStart || new Date(new Date().getFullYear(), 0, 1);
     const end = periodEnd || new Date();
 
-    const [evaluationScore, okrScore, feedbackScore, customerSatisfactionScore, internalProcessesScore, projectEvaluationScore] =
+    const [
+      learningGrowthSignal,
+      okrSignal,
+      feedbackSignal,
+      customerSatisfactionSignal,
+      internalProcessesSignal,
+      projectEvaluationSignal,
+    ] =
       await Promise.all([
         this.calculateLearningGrowthScore(employeeId, start, end),
         this.calculateOkrScore(employeeId, start, end),
@@ -76,6 +96,13 @@ export class NonFinancialPerformanceService {
         this.calculateInternalProcessesScore(employeeId, start, end),
         this.calculateProjectEvaluationScore(employeeId, start, end),
       ]);
+
+    const evaluationScore = learningGrowthSignal.score;
+    const okrScore = okrSignal.score;
+    const feedbackScore = feedbackSignal.score;
+    const customerSatisfactionScore = customerSatisfactionSignal.score;
+    const internalProcessesScore = internalProcessesSignal.score;
+    const projectEvaluationScore = projectEvaluationSignal.score;
 
     const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
     const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
@@ -116,6 +143,14 @@ export class NonFinancialPerformanceService {
       okrScore: Math.round(okrScore * 100) / 100,
       feedbackScore: Math.round(feedbackScore * 100) / 100,
       projectEvaluationScore: Math.round(projectEvaluationScore * 100) / 100,
+      evidence: {
+        learningGrowth: learningGrowthSignal.hasData,
+        okr: okrSignal.hasData,
+        feedback: feedbackSignal.hasData,
+        customerSatisfaction: customerSatisfactionSignal.hasData,
+        internalProcesses: internalProcessesSignal.hasData,
+        projectEvaluation: projectEvaluationSignal.hasData,
+      },
     };
   }
 
@@ -125,7 +160,13 @@ export class NonFinancialPerformanceService {
     periodEnd: Date,
     weights?: NonFinancialWeightConfig
   ): Promise<BSCBreakdown> {
-    const [evaluationScore, okrScore, feedbackScore, customerSatisfactionScore, internalProcessesScore] =
+    const [
+      learningGrowthSignal,
+      okrSignal,
+      feedbackSignal,
+      customerSatisfactionSignal,
+      internalProcessesSignal,
+    ] =
       await Promise.all([
         this.calculateLearningGrowthScore(employeeId, periodStart, periodEnd),
         this.calculateOkrScore(employeeId, periodStart, periodEnd),
@@ -133,6 +174,12 @@ export class NonFinancialPerformanceService {
         this.calculateCustomerSatisfactionScore(employeeId, periodStart, periodEnd),
         this.calculateInternalProcessesScore(employeeId, periodStart, periodEnd),
       ]);
+
+    const evaluationScore = learningGrowthSignal.score;
+    const okrScore = okrSignal.score;
+    const feedbackScore = feedbackSignal.score;
+    const customerSatisfactionScore = customerSatisfactionSignal.score;
+    const internalProcessesScore = internalProcessesSignal.score;
 
     const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
     const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
@@ -171,7 +218,7 @@ export class NonFinancialPerformanceService {
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const [evaluationResult, projectResult] = await Promise.all([
       prisma.evaluationAssignment.aggregate({
         _avg: { score: true },
@@ -199,18 +246,25 @@ export class NonFinancialPerformanceService {
     const projectScore = projectResult._count.id
       ? normalizeUnknownScale(Number(projectResult._avg.overallScore || 0))
       : 0;
+    const hasData = evaluationResult._count.id > 0 || projectResult._count.id > 0;
 
     if (evalScore && projectScore) {
-      return clamp(evalScore * 0.5 + projectScore * 0.5);
+      return {
+        score: clamp(evalScore * 0.5 + projectScore * 0.5),
+        hasData,
+      };
     }
-    return evalScore || projectScore || 0;
+    return {
+      score: evalScore || projectScore || 0,
+      hasData,
+    };
   }
 
   private async calculateProjectEvaluationScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const result = await prisma.projectEvaluation.aggregate({
       _avg: { overallScore: true },
       _count: { id: true },
@@ -221,16 +275,19 @@ export class NonFinancialPerformanceService {
       },
     });
 
-    return result._count.id
-      ? normalizeUnknownScale(Number(result._avg.overallScore || 0))
-      : 0;
+    return {
+      score: result._count.id
+        ? normalizeUnknownScale(Number(result._avg.overallScore || 0))
+        : 0,
+      hasData: result._count.id > 0,
+    };
   }
 
   private async calculateOkrScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const objectives = await prisma.okrObjective.findMany({
       where: {
         ownerProfileId: employeeId,
@@ -246,7 +303,9 @@ export class NonFinancialPerformanceService {
       include: { keyResults: true },
     });
 
-    if (objectives.length === 0) return 0;
+    if (objectives.length === 0) {
+      return { score: 0, hasData: false };
+    }
 
     const objectiveScores = objectives.map((objective) => {
       const keyResults = objective.keyResults || [];
@@ -272,14 +331,17 @@ export class NonFinancialPerformanceService {
 
     const avgObjectiveScore =
       objectiveScores.reduce((sum, score) => sum + score, 0) / objectiveScores.length;
-    return clamp(avgObjectiveScore);
+    return {
+      score: clamp(avgObjectiveScore),
+      hasData: true,
+    };
   }
 
   private async calculateCustomerSatisfactionScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const surveys = await prisma.clientSatisfactionSurvey.findMany({
       where: {
         completedAt: { not: null },
@@ -298,7 +360,9 @@ export class NonFinancialPerformanceService {
       },
     });
 
-    if (surveys.length === 0) return 0;
+    if (surveys.length === 0) {
+      return { score: 0, hasData: false };
+    }
 
     const ratings = surveys
       .map((survey) => survey.overallSatisfaction)
@@ -316,14 +380,17 @@ export class NonFinancialPerformanceService {
     const ratingScore = avgRating > 0 ? normalizeFivePointScore(avgRating) : 0;
     const recommendScore = clamp(recommendRate * 100);
 
-    return clamp(ratingScore * 0.7 + recommendScore * 0.3);
+    return {
+      score: clamp(ratingScore * 0.7 + recommendScore * 0.3),
+      hasData: true,
+    };
   }
 
   private async calculateContinuousFeedbackScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const [totalFeedback, resolvedFeedback] = await Promise.all([
       prisma.feedback.count({
         where: {
@@ -340,19 +407,24 @@ export class NonFinancialPerformanceService {
       }),
     ]);
 
-    if (totalFeedback === 0) return 0;
+    if (totalFeedback === 0) {
+      return { score: 0, hasData: false };
+    }
 
     const volumeScore = clamp((totalFeedback / 4) * 100);
     const resolutionRate = clamp((resolvedFeedback / totalFeedback) * 100);
 
-    return clamp(volumeScore * 0.7 + resolutionRate * 0.3);
+    return {
+      score: clamp(volumeScore * 0.7 + resolutionRate * 0.3),
+      hasData: true,
+    };
   }
 
   private async calculateInternalProcessesScore(
     employeeId: number,
     periodStart: Date,
     periodEnd: Date
-  ): Promise<number> {
+  ): Promise<ScoreSignal> {
     const [totalTasks, completedTasks] = await Promise.all([
       prisma.task.count({
         where: {
@@ -369,9 +441,15 @@ export class NonFinancialPerformanceService {
       }),
     ]);
 
-    if (totalTasks === 0) return 100;
+    // No assigned tasks means there is no execution data to score yet.
+    if (totalTasks === 0) {
+      return { score: 0, hasData: false };
+    }
 
-    return clamp((completedTasks / totalTasks) * 100);
+    return {
+      score: clamp((completedTasks / totalTasks) * 100),
+      hasData: true,
+    };
   }
 }
 

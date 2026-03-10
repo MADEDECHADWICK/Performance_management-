@@ -16,7 +16,7 @@ export const createDepartmentValidators = [
     .withMessage("Department name required (3-255 characters)"),
 
   body("description")
-    .optional()
+    .optional({ values: "null" })
     .isString()
     .trim(),
 
@@ -28,12 +28,12 @@ export const createDepartmentValidators = [
     .withMessage("Department code must be 1-50 characters if provided"),
 
   body("departmentHeadId")
-    .optional()
+    .optional({ values: "null" })
     .isInt({ min: 1 })
     .withMessage("Valid departmentHeadId required if provided"),
 
   body("partnerProfileId")
-    .optional()
+    .optional({ values: "null" })
     .isInt({ min: 1 })
     .withMessage("Valid partnerProfileId required if provided"),
 ];
@@ -54,17 +54,17 @@ export const updateDepartmentValidators = [
     .withMessage("Department name must be 3-255 characters if provided"),
 
   body("description")
-    .optional()
+    .optional({ values: "null" })
     .isString()
     .trim(),
 
   body("departmentHeadId")
-    .optional()
+    .optional({ values: "null" })
     .isInt({ min: 1 })
     .withMessage("Valid departmentHeadId required if provided"),
 
   body("partnerProfileId")
-    .optional()
+    .optional({ values: "null" })
     .isInt({ min: 1 })
     .withMessage("Valid partnerProfileId required if provided"),
 ];

@@ -521,6 +521,30 @@ export const upsertJobCostingValidators = [
     .optional()
     .isBoolean()
     .withMessage("partnerApprove must be boolean"),
+
+  ...milestoneValidators,
+];
+
+export const reviewJobCostingValidators = [
+  param("jobId")
+    .isInt({ min: 1 })
+    .withMessage("Valid jobId (integer) required"),
+
+  body("decision")
+    .isIn(["approved", "rejected"])
+    .withMessage("decision must be either approved or rejected"),
+
+  body("reviewNotes")
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 2000 })
+    .withMessage("reviewNotes must be <= 2000 characters"),
+
+  body("reviewNotes")
+    .if(body("decision").equals("rejected"))
+    .notEmpty()
+    .withMessage("reviewNotes are required when rejecting job costing"),
 ];
 
 /**

@@ -66,8 +66,20 @@ const parseDispatchMetadata = (metadata: unknown) => {
 class NotificationOutboxServiceClass {
   private workerTimer: NodeJS.Timeout | null = null;
   private processing = false;
+  private immediateProcessingQueued = false;
   private pollIntervalMs = 5000;
   private batchSize = 50;
+
+  private logProcessingError(error: any) {
+    if (error?.code === "P2028") {
+      console.warn(
+        "Notification outbox skipped a cycle because the database was busy starting the worker transaction."
+      );
+      return;
+    }
+
+    console.error("Notification outbox worker failed:", error);
+  }
 
   private shouldRunBackgroundProcessing() {
     if (process.env.DISABLE_NOTIFICATION_OUTBOX_WORKER === "true") return false;
@@ -95,8 +107,12 @@ class NotificationOutboxServiceClass {
 
   requestImmediateProcessing() {
     if (!this.shouldRunBackgroundProcessing()) return;
+    if (this.processing || this.immediateProcessingQueued) return;
+    this.immediateProcessingQueued = true;
     setTimeout(() => {
-      void this.processDueJobs(this.batchSize);
+      void this.processDueJobs(this.batchSize).finally(() => {
+        this.immediateProcessingQueued = false;
+      });
     }, 0).unref();
   }
 
@@ -136,6 +152,8 @@ class NotificationOutboxServiceClass {
 
     try {
       await this.processDueJobsWithDistributedLock(limit);
+    } catch (error: any) {
+      this.logProcessingError(error);
     } finally {
       this.processing = false;
     }
@@ -158,7 +176,7 @@ class NotificationOutboxServiceClass {
         await this.processDueJobsUnlocked(limit);
       },
       {
-        maxWait: 2_000,
+        maxWait: 10_000,
         timeout: OUTBOX_LEADER_LOCK_TIMEOUT_MS,
       }
     );

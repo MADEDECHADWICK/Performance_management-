@@ -88,9 +88,12 @@ export interface Department {
   description?: string;
   departmentCode?: string;
   departmentHeadId?: number;
+  partnerProfileId?: number;
   createdAt: string;
   updatedAt: string;
   departmentHead?: Profile;
+  partner?: Profile;
+  partner_name?: string;
 }
 
 export interface PositionRole {
@@ -178,6 +181,9 @@ export interface EngagementLetter {
   uploadedByProfileId?: number;
   approvedByProfileId?: number;
   approvedAt?: string;
+  latestRejectionReason?: string | null;
+  latestRejectionAt?: string | null;
+  latestRejectedBy?: Profile | null;
   createdAt: string;
   updatedAt: string;
   document?: Document;
@@ -336,6 +342,7 @@ export interface JobInvoiceMilestoneTrackingItem {
   targetPercent: number;
   dueDate?: string | null;
   requirements?: string | null;
+  assignedToProfileId?: number | null;
   conditionStatus: TaskStatus;
   conditionCompleted: boolean;
   milestoneAmount: number;
@@ -517,6 +524,15 @@ export interface JobWorkflowTrackingResponse {
       staffCount: number;
       costingCompleted: boolean;
       costingStatus?: string | null;
+      submittedAt?: string | null;
+      approvedAt?: string | null;
+      latestReviewReason?: string | null;
+      latestReviewAt?: string | null;
+      latestReviewBy?: {
+        id?: number;
+        firstName?: string;
+        lastName?: string;
+      } | null;
       budgetCapEnforced?: boolean | null;
       allowOverage?: boolean | null;
       maxOveragePercent?: number;

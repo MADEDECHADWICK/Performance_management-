@@ -379,23 +379,24 @@ function AppSidebar({
   }) => {
     if (viewKey && !hasViewAccess(viewKey)) return null;
     if (module && !hasModuleAccess(module, action)) return null;
+    const hasBadge = typeof badgeCount === "number" && badgeCount > 0;
     return (
       <SidebarMenuItem>
         <SidebarMenuButton
           asChild
           isActive={isActive(path)}
-          className={badgeCount && badgeCount > 0 ? "pr-8" : undefined}
+          className={hasBadge ? "pr-8" : undefined}
         >
           <a href={path} className="flex w-full items-center gap-2 rounded-xl">
             <Icon className="h-4 w-4" />
             {state !== "collapsed" && <span>{label}</span>}
           </a>
         </SidebarMenuButton>
-        {badgeCount && badgeCount > 0 && (
+        {hasBadge ? (
           <SidebarMenuBadge className="bg-destructive text-destructive-foreground">
             {badgeCount > 99 ? "99+" : badgeCount}
           </SidebarMenuBadge>
-        )}
+        ) : null}
       </SidebarMenuItem>
     );
   };
@@ -421,7 +422,6 @@ function AppSidebar({
   const hasManagementSectionAccess = canShowAnyView([
     "people.employee_management",
     "people.recruitment_candidates",
-    "clients.onboarding_queue",
     "jobs.admin_create",
     "jobs.workflow",
     "evaluations.management",
@@ -606,10 +606,10 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/clients" icon={Users} label="Client Intake" viewKey="clients.list" module="clients" />
+                    <NavItem path="/clients" icon={Users} label="Client Management" viewKey="clients.list" module="clients" />
                     <NavItem path="/clients/new" icon={Plus} label="New Client" viewKey="clients.create_edit" module="clients" action="write" />
                     <NavItem path="/engagement-letters" icon={FileText} label="Engagement Letters" viewKey="clients.engagement_letters" module="clients" />
-                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" viewKey="clients.onboarding_queue" module="clients" />
+                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Jobs Creation" viewKey="clients.onboarding_queue" module="clients" />
                     <NavItem path="/business-development" icon={TrendingUp} label="Pipeline" viewKey="clients.business_development" module="proposals" />
                     <NavItem path="/client-surveys" icon={FileText} label="Client Surveys" viewKey="clients.surveys" module="surveys" />
                     <NavItem path="/client-portfolio" icon={Briefcase} label="Client Portfolio" viewKey="clients.portfolio" module="clients" />
@@ -662,7 +662,6 @@ function AppSidebar({
                     <NavItem path="/employee-management" icon={Users} label="Employee Management" viewKey="people.employee_management" module="users" />
 
                     <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
-                    <NavItem path="/client-onboarding-queue" icon={ClipboardCheck} label="Onboarding Queue" viewKey="clients.onboarding_queue" module="clients" />
                     <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
                     <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" viewKey="jobs.workflow" module="jobs" />
                     <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" viewKey="evaluations.management" module="evaluations" />

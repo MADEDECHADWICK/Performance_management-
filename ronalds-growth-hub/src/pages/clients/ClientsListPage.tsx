@@ -53,7 +53,7 @@ const INDUSTRIES = [
 ];
 
 export function ClientsListPage() {
-  const { canAccess } = useAuth();
+  const { canAccess, hasAnyRole } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [industryFilter, setIndustryFilter] = useState<string>('');
   const [page, setPage] = useState(1);
@@ -103,7 +103,8 @@ export function ClientsListPage() {
   const avgSatisfaction = surveyAnalytics?.averageRatings?.overall ?? 0;
   const surveysByClient = surveyByClient || [];
 
-  const canCreateClient = canAccess('clients', 'write');
+  const canCreateClient =
+    canAccess('clients', 'write') && hasAnyRole(['marketing', 'super_admin']);
 
   if (error) {
     return (
@@ -130,7 +131,7 @@ export function ClientsListPage() {
               Client Management
             </h1>
             <p className="text-muted-foreground mt-1">
-              Manage clients and their engagement details
+              Marketing submits client intake packages, and HR reviews them before job creation
             </p>
           </div>
           {canCreateClient && (

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
+import DocumentPreviewDialog from "@/components/DocumentPreviewDialog";
 import { clientOnboardingsAPI, clientsAPI } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Search, ClipboardCheck, FileText, Upload, CheckCircle2, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -54,6 +62,13 @@ const LETTER_STATUS_VARIANTS: Record<string, "default" | "secondary" | "destruct
 export default function ClientOnboardingQueue() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [previewLetter, setPreviewLetter] = useState<{
+    title: string;
+    filePath?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    description?: string;
+  } | null>(null);
   const [checklistDialogOpen, setChecklistDialogOpen] = useState(false);
   const [activeOnboarding, setActiveOnboarding] = useState<any | null>(null);
   const [checklistLoading, setChecklistLoading] = useState(false);
@@ -61,15 +76,21 @@ export default function ClientOnboardingQueue() {
   const [checklistBusyItemId, setChecklistBusyItemId] = useState<number | null>(null);
   const [checklistUploadBusyItemId, setChecklistUploadBusyItemId] = useState<number | null>(null);
   const [clientChecklist, setClientChecklist] = useState<ClientOnboardingChecklist | null>(null);
+  const [rejectionDialog, setRejectionDialog] = useState<{
+    type: "onboarding" | "letter";
+    item: any;
+  } | null>(null);
+  const [reviewPoint, setReviewPoint] = useState("");
   const [checklistName, setChecklistName] = useState("");
   const [checklistDueDate, setChecklistDueDate] = useState("");
   const [checklistItemsText, setChecklistItemsText] = useState(
     "Collect signed engagement letter [doc]\nComplete KYC verification [doc]\nConfirm tax registration details\nSet client communication protocol\nApprove onboarding readiness"
   );
-  const { isHR, isAdmin } = useAuth();
+  const { isHR, isAdmin, isMarketing, canAccess } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canReview = isHR || isAdmin;
+  const canResubmit = canAccess("clients", "write") && (isMarketing || isAdmin);
   const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
   const resolveDocumentUrl = (filePath?: string | null) => {
@@ -113,10 +134,25 @@ export default function ClientOnboardingQueue() {
     );
   }, [onboardings, searchTerm]);
 
-  const handleReview = async (item: any, decision: "approve" | "reject") => {
+  const openRejectDialog = (type: "onboarding" | "letter", item: any) => {
+    setRejectionDialog({ type, item });
+    setReviewPoint("");
+  };
+
+  const closeRejectDialog = () => {
+    setRejectionDialog(null);
+    setReviewPoint("");
+  };
+
+  const getResubmitLink = (item: any) => {
+    const clientId = item.clientId || item.engagementLetter?.clientId;
+    if (!clientId) return null;
+    return `/clients/${clientId}/edit?onboardingId=${item.id}&resubmit=1`;
+  };
+
+  const handleReview = async (item: any, decision: "approve" | "reject", reason?: string) => {
     try {
       if (decision === "reject") {
-        const reason = window.prompt("Reason for rejection (optional):") || undefined;
         await clientOnboardingsAPI.reject(item.id, reason);
       } else {
         await clientOnboardingsAPI.approve(item.id);
@@ -127,7 +163,7 @@ export default function ClientOnboardingQueue() {
         description:
           decision === "approve"
             ? "Onboarding approved and ready for job creation."
-            : "Onboarding rejected.",
+            : "Onboarding returned to marketing with the HR review point.",
       });
     } catch (error: any) {
       toast({
@@ -138,14 +174,13 @@ export default function ClientOnboardingQueue() {
     }
   };
 
-  const handleLetterReview = async (item: any, decision: "approve" | "reject") => {
+  const handleLetterReview = async (item: any, decision: "approve" | "reject", reason?: string) => {
     try {
       const letterId = item.engagementLetter?.id;
       if (!letterId) {
         throw new Error("Engagement letter not found on this onboarding record.");
       }
       if (decision === "reject") {
-        const reason = window.prompt("Reason for rejection (optional):") || undefined;
         await clientsAPI.rejectEngagementLetter(letterId, reason);
       } else {
         await clientsAPI.approveEngagementLetter(letterId);
@@ -156,7 +191,7 @@ export default function ClientOnboardingQueue() {
         description:
           decision === "approve"
             ? "Engagement letter approved."
-            : "Engagement letter rejected.",
+            : "Engagement letter returned to marketing with the HR review point.",
       });
     } catch (error: any) {
       toast({
@@ -165,6 +200,26 @@ export default function ClientOnboardingQueue() {
         variant: "destructive",
       });
     }
+  };
+
+  const submitRejection = async () => {
+    if (!rejectionDialog) return;
+    const reason = reviewPoint.trim();
+    if (!reason) {
+      toast({
+        title: "Review point required",
+        description: "Add a clear review point before sending this back to marketing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (rejectionDialog.type === "letter") {
+      await handleLetterReview(rejectionDialog.item, "reject", reason);
+    } else {
+      await handleReview(rejectionDialog.item, "reject", reason);
+    }
+    closeRejectDialog();
   };
 
   const loadChecklist = async (onboardingId: number) => {
@@ -316,8 +371,8 @@ export default function ClientOnboardingQueue() {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold text-foreground">Client Onboarding Queue</h2>
-          <p className="text-muted-foreground">Track marketing submissions awaiting HR actions.</p>
+          <h2 className="text-3xl font-bold text-foreground">Jobs Creation</h2>
+          <p className="text-muted-foreground">Track approved marketing submissions and move them into HR job creation.</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -362,8 +417,8 @@ export default function ClientOnboardingQueue() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Onboarding Requests</CardTitle>
-            <CardDescription>Marketing submissions and current HR status.</CardDescription>
+            <CardTitle>Job Creation Requests</CardTitle>
+            <CardDescription>Marketing submissions and current HR readiness for job creation.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col md:flex-row gap-4 mb-4">
@@ -438,17 +493,33 @@ export default function ClientOnboardingQueue() {
                             </Badge>
                           </div>
                         )}
+                        {item.engagementLetter?.latestRejectionReason && (
+                          <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                            <span className="font-medium">HR review point:</span>{" "}
+                            {item.engagementLetter.latestRejectionReason}
+                          </div>
+                        )}
                         {item.engagementLetter?.document?.filePath ? (
                           <div className="mt-2">
-                            <a
-                              href={resolveDocumentUrl(item.engagementLetter.document.filePath)}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewLetter({
+                                  title:
+                                    item.engagementLetter?.jobTitle ||
+                                    item.engagementLetter?.engagementType ||
+                                    "Engagement Letter",
+                                  filePath: item.engagementLetter.document.filePath,
+                                  fileName: item.engagementLetter.document.fileName,
+                                  mimeType: item.engagementLetter.document.mimeType,
+                                  description: `Preview the engagement letter for ${item.clientName}.`,
+                                })
+                              }
                               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
                             >
                               <FileText className="h-3 w-3" />
-                              View engagement letter
-                            </a>
+                              Preview engagement letter
+                            </button>
                           </div>
                         ) : (
                           <div className="mt-2 text-xs text-muted-foreground">
@@ -460,6 +531,11 @@ export default function ClientOnboardingQueue() {
                         <Badge variant={STATUS_VARIANTS[item.status] || "outline"}>
                           {STATUS_LABELS[item.status] || item.status}
                         </Badge>
+                        {item.notes && item.status === "rejected" && (
+                          <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 p-2 text-xs text-orange-700">
+                            <span className="font-medium">HR review point:</span> {item.notes}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "N/A"}
@@ -479,7 +555,7 @@ export default function ClientOnboardingQueue() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => handleLetterReview(item, "reject")}
+                                onClick={() => openRejectDialog("letter", item)}
                               >
                                 Reject Letter
                               </Button>
@@ -492,7 +568,7 @@ export default function ClientOnboardingQueue() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => handleReview(item, "reject")}
+                                onClick={() => openRejectDialog("onboarding", item)}
                               >
                                 Reject
                               </Button>
@@ -504,6 +580,12 @@ export default function ClientOnboardingQueue() {
                               <Link to={`/admin-job-creation?onboardingId=${item.id}`}>
                                 Create Job
                               </Link>
+                            </Button>
+                          ) : canResubmit &&
+                            (item.status === "rejected" || item.engagementLetter?.status === "rejected") &&
+                            getResubmitLink(item) ? (
+                            <Button asChild size="sm" variant="outline">
+                              <Link to={getResubmitLink(item)!}>Revise & Resubmit</Link>
                             </Button>
                           ) : (
                             <Badge variant="outline">
@@ -545,6 +627,58 @@ export default function ClientOnboardingQueue() {
             )}
           </CardContent>
         </Card>
+
+        <DocumentPreviewDialog
+          open={!!previewLetter}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPreviewLetter(null);
+            }
+          }}
+          title={previewLetter?.title || "Engagement Letter"}
+          filePath={previewLetter?.filePath}
+          fileName={previewLetter?.fileName}
+          mimeType={previewLetter?.mimeType}
+          description={previewLetter?.description}
+        />
+
+        <Dialog
+          open={!!rejectionDialog}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeRejectDialog();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {rejectionDialog?.type === "letter" ? "Return engagement letter" : "Return client details"}
+              </DialogTitle>
+              <DialogDescription>
+                Send this item back to marketing with a concrete review point so they can correct it and resubmit.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="reviewPoint">HR review point</Label>
+              <Textarea
+                id="reviewPoint"
+                value={reviewPoint}
+                onChange={(event) => setReviewPoint(event.target.value)}
+                placeholder="Example: Client contact email is missing, and the engagement letter scope does not match the requested tax work."
+                rows={5}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeRejectDialog}>
+                Cancel
+              </Button>
+              <Button onClick={submitRejection}>
+                Send Back to Marketing
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog
           open={checklistDialogOpen}

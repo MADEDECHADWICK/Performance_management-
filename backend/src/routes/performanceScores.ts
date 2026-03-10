@@ -452,7 +452,15 @@ const calculateAndStoreScore = async (
     financialWeighted * performanceMix.financial +
       nonFinancialWeighted * performanceMix.nonFinancial
   );
-  const grade = gradeFromScore(totalScore);
+  const hasFinancialEvidence =
+    allocations.length > 0 ||
+    billableHours > 0 ||
+    allocatedHours > 0 ||
+    wonProposals.length > 0 ||
+    completedJobsCount > 0;
+  const hasNonFinancialEvidence = Object.values(nonFinancialScores.evidence || {}).some(Boolean);
+  const hasScorableData = hasFinancialEvidence || hasNonFinancialEvidence;
+  const grade = hasScorableData ? gradeFromScore(totalScore) : null;
 
   const financialWeightMap = {
     revenue: normalizedWeight(financialWeights, "revenue"),
@@ -612,6 +620,17 @@ const calculateAndStoreScore = async (
       periodEnd: period.endDate.toISOString(),
       frameworkModule,
       frameworkCoverage,
+      hasScorableData,
+      dataEvidence: {
+        financial: {
+          allocations: allocations.length > 0,
+          approvedBillableTime: billableHours > 0,
+          allocatedHours: allocatedHours > 0,
+          wonProposals: wonProposals.length > 0,
+          completedJobs: completedJobsCount > 0,
+        },
+        nonFinancial: nonFinancialScores.evidence,
+      },
     },
   };
 
@@ -680,6 +699,7 @@ const calculateAndStoreScore = async (
     overall: {
       totalScore,
       grade,
+      hasScorableData,
     },
   };
 };

@@ -1016,10 +1016,14 @@ model KnowledgeHubResource {
   summary     String?
   domain      String
   resourceType String   @map("resource_type")
+  assetKind   String    @default("link") @map("asset_kind")
   submodules  String[] @default([])
   tags        String[] @default([])
   linkUrl     String?  @map("link_url")
+  assetFileName String? @map("asset_file_name")
+  assetMimeType String? @map("asset_mime_type")
   content     String?
+  allowDownload Boolean @default(true) @map("allow_download")
   isFeatured  Boolean  @default(false) @map("is_featured")
   isPublished Boolean  @default(true) @map("is_published")
   publishedAt DateTime? @map("published_at")

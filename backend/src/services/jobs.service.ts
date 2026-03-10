@@ -95,6 +95,12 @@ export interface JobCostingInput {
   maxOveragePercent?: number;
   submitForApproval?: boolean;
   partnerApprove?: boolean;
+  milestones?: JobMilestoneInput[];
+}
+
+export interface JobCostingReviewInput {
+  decision: 'approved' | 'rejected';
+  reviewNotes?: string;
 }
 
 type NormalizedJobMilestone = {
@@ -112,12 +118,42 @@ type MilestoneTaskMetadata = {
   orderIndex?: number;
 };
 
+type EngagementLetterUploaderProfile = {
+  user?: {
+    roles?: Array<{
+      role?: {
+        name?: string | null;
+      } | null;
+    }> | null;
+  } | null;
+  role?: {
+    name?: string | null;
+  } | null;
+  positionTitle?: string | null;
+};
+
+type JobCreationEngagementLetter = {
+  id: number;
+  status: string;
+  clientId: number;
+  documentId: number | null;
+  feeAmount: unknown;
+  currency?: string | null;
+  jobTitle?: string | null;
+  engagementType?: string | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  uploadedByProfileId?: number | null;
+  uploadedBy?: EngagementLetterUploaderProfile | null;
+};
+
 export interface JobInvoiceMilestoneTrackingItem {
   taskId: number;
   title: string;
   targetPercent: number;
   dueDate: Date | null;
   requirements: string | null;
+  assignedToProfileId: number | null;
   conditionStatus: TaskStatus;
   conditionCompleted: boolean;
   milestoneAmount: number;
@@ -259,6 +295,28 @@ class JobService {
     return new Set((roles || []).map((role) => this.normalizeRoleName(role)));
   }
 
+  private isMarketingProfile(profile?: EngagementLetterUploaderProfile | null) {
+    const roleTokens = [
+      ...(profile?.user?.roles || []).map((assignment) => assignment?.role?.name || ''),
+      profile?.role?.name || '',
+      profile?.positionTitle || '',
+    ]
+      .map((value) => this.normalizeRoleName(value))
+      .filter(Boolean);
+
+    return roleTokens.some(
+      (token) => token === 'marketing' || token.includes('marketing') || token.includes('business_development')
+    );
+  }
+
+  private assertMarketingSubmittedEngagementLetter(engagementLetter: JobCreationEngagementLetter) {
+    if (!engagementLetter.uploadedByProfileId || !this.isMarketingProfile(engagementLetter.uploadedBy)) {
+      throw new Error(
+        'Engagement letter must be uploaded by marketing before HR can create the job'
+      );
+    }
+  }
+
   private withDerivedOverdueStatus<T extends { dueDate?: Date | null; status: JobStatus }>(job: T) {
     const now = new Date();
     const isOverdue =
@@ -299,6 +357,33 @@ class JobService {
           documentTypeMatchesRequirement(doc.documentType, requirement)
         )
     );
+  }
+
+  private async recordJobCostingStatusTransition(
+    tx: any,
+    input: {
+      jobCostingId: number;
+      jobId: number;
+      fromStatus: string;
+      toStatus: string;
+      changedByProfileId: number;
+      reason?: string | null;
+      metadata?: Record<string, unknown>;
+    }
+  ) {
+    await tx.statusTransition.create({
+      data: {
+        entityType: 'JobCosting',
+        entityId: input.jobCostingId,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        changedByProfileId: input.changedByProfileId,
+        reason: input.reason || null,
+        metadata: input.metadata ?? undefined,
+        jobId: input.jobId,
+        jobCostingId: input.jobCostingId,
+      },
+    });
   }
 
   private normalizeMilestonesInput(
@@ -395,6 +480,7 @@ class JobService {
     description: string | null;
     status: TaskStatus;
     dueDate: Date | null;
+    assignedToProfileId?: number | null;
   }) {
     const description = String(task.description || '');
     if (!description.startsWith(JOB_MILESTONE_META_PREFIX)) {
@@ -429,6 +515,7 @@ class JobService {
         targetPercent: roundCurrency(targetPercent),
         dueDate: task.dueDate,
         requirements,
+        assignedToProfileId: task.assignedToProfileId ?? null,
         conditionStatus: task.status,
         conditionCompleted: task.status === 'completed',
         orderIndex,
@@ -484,6 +571,116 @@ class JobService {
         dueDate: milestone.dueDate ?? null,
       })),
     });
+  }
+
+  private async syncMilestoneTasksForJob(
+    jobId: number,
+    milestones: NormalizedJobMilestone[],
+    defaultAssigneeProfileId?: number | null,
+    dbClient: any = prisma
+  ) {
+    const existingTasks = await dbClient.task.findMany({
+      where: {
+        jobId,
+        description: { startsWith: JOB_MILESTONE_META_PREFIX },
+      },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        status: true,
+        dueDate: true,
+        assignedToProfileId: true,
+      },
+    });
+
+    const existingMilestones = existingTasks
+      .map((task: any) => {
+        const parsed = this.parseMilestoneTask(task);
+        if (!parsed) return null;
+        return { task, parsed };
+      })
+      .filter((item: any): item is { task: any; parsed: ReturnType<JobService["parseMilestoneTask"]> } => Boolean(item));
+
+    const existingByPercent = new Map<number, { task: any; parsed: any }>();
+    existingMilestones.forEach((item: { task: any; parsed: any }) => {
+      if (!existingByPercent.has(item.parsed.targetPercent)) {
+        existingByPercent.set(item.parsed.targetPercent, item);
+      }
+    });
+
+    const nextPercents = new Set(milestones.map((milestone) => milestone.targetPercent));
+    const removedMilestones = existingMilestones.filter(
+      (item: { task: any; parsed: any }) => !nextPercents.has(item.parsed.targetPercent)
+    );
+
+    const blockedRemoval = removedMilestones.find(
+      (item: { task: any; parsed: any }) => item.task.status !== 'pending'
+    );
+    if (blockedRemoval) {
+      throw new Error(
+        `Cannot remove milestone "${blockedRemoval.task.title}" after execution has started on it.`
+      );
+    }
+
+    if (removedMilestones.length > 0) {
+      await dbClient.task.deleteMany({
+        where: {
+          id: { in: removedMilestones.map((item: { task: any; parsed: any }) => item.task.id) },
+        },
+      });
+    }
+
+    for (const milestone of milestones) {
+      const nextAssignee = milestone.assignedToProfileId ?? defaultAssigneeProfileId ?? null;
+      const nextDescription = this.buildMilestoneTaskDescription(milestone);
+      const existing = existingByPercent.get(milestone.targetPercent);
+
+      if (!existing) {
+        await dbClient.task.create({
+          data: {
+            jobId,
+            title: milestone.title,
+            description: nextDescription,
+            assignedToProfileId: nextAssignee,
+            estimatedHours: null,
+            billable: false,
+            status: 'pending',
+            priority: 'medium',
+            dueDate: milestone.dueDate ?? null,
+          },
+        });
+        continue;
+      }
+
+      const existingDueDate = existing.task.dueDate
+        ? new Date(existing.task.dueDate).toISOString().slice(0, 10)
+        : null;
+      const nextDueDate = milestone.dueDate
+        ? new Date(milestone.dueDate).toISOString().slice(0, 10)
+        : null;
+      const hasStructuralChange =
+        existing.task.title !== milestone.title ||
+        String(existing.task.description || '') !== nextDescription ||
+        existingDueDate !== nextDueDate ||
+        (existing.task.assignedToProfileId ?? null) !== nextAssignee;
+
+      if (existing.task.status !== 'pending' && hasStructuralChange) {
+        throw new Error(
+          `Cannot change milestone "${existing.task.title}" after work has started on it.`
+        );
+      }
+
+      await dbClient.task.update({
+        where: { id: existing.task.id },
+        data: {
+          title: milestone.title,
+          description: nextDescription,
+          assignedToProfileId: nextAssignee,
+          dueDate: milestone.dueDate ?? null,
+        },
+      });
+    }
   }
 
   private async notifyInvoiceReadyForMilestone(
@@ -681,6 +878,54 @@ class JobService {
     );
   }
 
+  private async notifyManagerSetupRequired(
+    job: {
+      id: number;
+      jobName: string;
+      clientId?: number | null;
+      managerProfileId?: number | null;
+    },
+    authContext: AuthContext
+  ) {
+    if (!job.managerProfileId) {
+      return;
+    }
+
+    const setupRoute = `/job-workflow-dashboard?jobId=${job.id}`;
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: job.managerProfileId,
+        type: 'action',
+        title: `Manager setup required: ${job.jobName}`,
+        message:
+          `HR completed the initial setup for "${job.jobName}". ` +
+          'Complete costing and milestones before the team starts work.',
+        actionRequired: true,
+        jobId: job.id,
+        clientId: job.clientId ?? undefined,
+        link: setupRoute,
+        eventType: 'job.manager_setup_required',
+        priority: 'high',
+        targetEntityType: 'Job',
+        targetEntityId: job.id,
+        canonicalRoute: setupRoute,
+        actions: [
+          {
+            id: 'complete_job_setup',
+            label: 'Complete setup',
+            endpoint: setupRoute,
+            method: 'GET',
+          },
+        ],
+        requiredPermission: 'module.jobs.read',
+        eventId: `job.manager_setup_required:${job.id}`,
+        deduplicationKey: `job.manager_setup_required:${job.id}`,
+      },
+      this.buildNotificationAuth(authContext)
+    );
+  }
+
   private async notifyJobCompletedEvent(
     job: {
       id: number;
@@ -770,6 +1015,22 @@ class JobService {
         currency: true,
         jobTitle: true,
         engagementType: true,
+        uploadedByProfileId: true,
+        uploadedBy: {
+          select: {
+            positionTitle: true,
+            role: { select: { name: true } },
+            user: {
+              select: {
+                roles: {
+                  select: {
+                    role: { select: { name: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -792,6 +1053,8 @@ class JobService {
     if (!engagementLetter.documentId) {
       throw new Error('Engagement letter must have an uploaded signed document before job creation');
     }
+
+    this.assertMarketingSubmittedEngagementLetter(engagementLetter);
 
     const onboarding = await prisma.clientOnboarding.findFirst({
       where: { engagementLetterId: engagementLetter.id },
@@ -892,6 +1155,22 @@ class JobService {
             jobTitle: true,
             startDate: true,
             endDate: true,
+            uploadedByProfileId: true,
+            uploadedBy: {
+              select: {
+                positionTitle: true,
+                role: { select: { name: true } },
+                user: {
+                  select: {
+                    roles: {
+                      select: {
+                        role: { select: { name: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         client: { select: { id: true, clientName: true } },
@@ -927,6 +1206,8 @@ class JobService {
     if (!engagementLetter.documentId) {
       throw new Error('Engagement letter must have an uploaded signed document before job creation');
     }
+
+    this.assertMarketingSubmittedEngagementLetter(engagementLetter);
 
     const jobName = input.jobName?.trim() || engagementLetter.jobTitle?.trim();
     if (!jobName) {
@@ -1209,6 +1490,7 @@ class JobService {
             id: true,
             title: true,
             description: true,
+            assignedToProfileId: true,
             status: true,
             dueDate: true,
           },
@@ -1265,6 +1547,7 @@ class JobService {
           targetPercent: milestone.targetPercent,
           dueDate: milestone.dueDate ?? null,
           requirements: milestone.requirements || null,
+          assignedToProfileId: milestone.assignedToProfileId ?? null,
           conditionStatus: milestone.conditionStatus,
           conditionCompleted: milestone.conditionCompleted,
           milestoneAmount,
@@ -1647,8 +1930,9 @@ class JobService {
   ) {
     const job = await this.getJobById(jobId);
 
-    // Authorization: job manager, partner, or admin
-    const isAdmin = authContext.roles?.includes('super_admin');
+    // HR owns intake staffing; managers/partners can still adjust staffing later.
+    const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
+    const isAdmin = roleSet.has('super_admin') || roleSet.has('hr') || roleSet.has('gmp');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
 
@@ -1760,6 +2044,10 @@ class JobService {
       }
     );
 
+    if (hasStaff > 0) {
+      await this.notifyManagerSetupRequired(job, authContext);
+    }
+
     return assignment;
   }
 
@@ -1772,16 +2060,20 @@ class JobService {
     authContext: AuthContext
   ) {
     const job = (await this.getJobById(jobId, ['costing'])) as any;
+    const normalizedMilestones = this.normalizeMilestonesInput(input.milestones);
+    const previousCostingStatus = job.jobCosting?.costingStatus
+      ? String(job.jobCosting.costingStatus)
+      : null;
 
     const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
-    const isAdmin =
-      roleSet.has('super_admin') ||
-      roleSet.has('hr') ||
-      roleSet.has('gmp');
+    const isAdmin = roleSet.has('super_admin') || roleSet.has('gmp');
     const isJobManager = job.managerProfileId === authContext.profileId;
     const isPartner = job.partnerProfileId === authContext.profileId;
+    const partnerApprove = Boolean(input.partnerApprove);
+    const canEditCosting = isAdmin || isJobManager;
+    const canPartnerApprove = isPartner || isAdmin;
 
-    if (!isAdmin && !isJobManager && !isPartner) {
+    if (!canEditCosting && !(partnerApprove && canPartnerApprove)) {
       throw new Error('Not authorized to update job costing');
     }
 
@@ -1962,9 +2254,18 @@ class JobService {
     const jobFee = baseJobFee;
     const remainingBudget = jobFee - totalEstimatedBillable;
     const submitForApproval = input.submitForApproval !== false;
-    const partnerApprove = Boolean(input.partnerApprove);
-    const canPartnerApprove = isPartner || isAdmin;
     const now = new Date();
+
+    if (submitForApproval) {
+      const missingPartnerReviewDocs = await this.getMissingStageDocuments(jobId, 'in_progress');
+      if (missingPartnerReviewDocs.length > 0) {
+        throw new Error(
+          `Upload required documents before submitting costing: ${missingPartnerReviewDocs
+            .map((item) => item.label)
+            .join(', ')}`
+        );
+      }
+    }
 
     let nextCostingStatus: 'draft' | 'submitted' | 'partner_review' | 'approved' = 'draft';
     let approvedByPartnerProfileId: number | null = null;
@@ -2016,6 +2317,22 @@ class JobService {
         },
       });
 
+      const effectivePreviousStatus = previousCostingStatus || 'draft';
+      if (!job.jobCosting || effectivePreviousStatus !== nextCostingStatus) {
+        await this.recordJobCostingStatusTransition(tx, {
+          jobCostingId: costing.id,
+          jobId,
+          fromStatus: effectivePreviousStatus,
+          toStatus: nextCostingStatus,
+          changedByProfileId: authContext.profileId,
+          metadata: {
+            totalEstimatedHours,
+            totalEstimatedCost,
+            jobFee,
+          },
+        });
+      }
+
       await tx.jobTimeAllocation.deleteMany({ where: { jobCostingId: costing.id } });
       await tx.jobTimeAllocation.createMany({
         data: allocationData.map((alloc) => ({
@@ -2040,6 +2357,15 @@ class JobService {
           maxOveragePercent,
         },
       });
+
+      if (input.milestones) {
+        await this.syncMilestoneTasksForJob(
+          jobId,
+          normalizedMilestones,
+          job.managerProfileId || authContext.profileId,
+          tx
+        );
+      }
 
       await tx.job.update({
         where: { id: jobId },
@@ -2079,10 +2405,10 @@ class JobService {
           recipientProfileId: job.partnerProfileId,
           type: 'action',
           title: `Job costing submitted for approval: ${job.jobName}`,
-          message: `Manager submitted job costing for "${job.jobName}". Partner approval is required before execution.`,
+          message: `Manager submitted job costing, work plan, and budget for "${job.jobName}". Partner approval is required before execution.`,
           actionRequired: true,
           jobId: job.id,
-          link: `/jobs/${job.id}`,
+          link: this.buildTrackingPath(job.id),
         },
         {
           userId: authContext.userId,
@@ -2101,7 +2427,7 @@ class JobService {
           message: `Partner approved costing for "${job.jobName}". The job can now move to in-progress.`,
           actionRequired: false,
           jobId: job.id,
-          link: `/jobs/${job.id}`,
+          link: this.buildTrackingPath(job.id),
         },
         {
           userId: authContext.userId,
@@ -2112,6 +2438,139 @@ class JobService {
     }
 
     return result.costingResult;
+  }
+
+  async reviewJobCosting(
+    jobId: number,
+    input: JobCostingReviewInput,
+    authContext: AuthContext
+  ) {
+    const job = (await this.getJobById(jobId, ['costing'])) as any;
+    const roleSet = new Set((authContext.roles || []).map((role) => role.toLowerCase()));
+    const isAdmin = roleSet.has('super_admin') || roleSet.has('gmp');
+    const isAssignedPartner = job.partnerProfileId === authContext.profileId;
+
+    if (!isAdmin && !isAssignedPartner) {
+      const err = new Error('Only the assigned partner can review job costing');
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const costing = await prisma.jobCosting.findUnique({
+      where: { jobId },
+      include: {
+        allocations: true,
+        budgetCap: true,
+      },
+    });
+
+    if (!costing) {
+      const err = new Error('Job costing not found');
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (String(costing.costingStatus) !== 'submitted') {
+      const err = new Error('Only submitted job costing can be reviewed by the partner');
+      (err as any).statusCode = 409;
+      throw err;
+    }
+
+    const decision = String(input.decision || '').trim().toLowerCase();
+    const reviewNotes = String(input.reviewNotes || '').trim();
+    if (decision !== 'approved' && decision !== 'rejected') {
+      const err = new Error('Review decision must be approved or rejected');
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (decision === 'rejected' && !reviewNotes) {
+      const err = new Error('A review point is required before returning costing to the manager');
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const missingPartnerReviewDocs = await this.getMissingStageDocuments(jobId, 'in_progress');
+    if (missingPartnerReviewDocs.length > 0) {
+      const err = new Error(
+        `Partner review requires uploaded documents: ${missingPartnerReviewDocs
+          .map((item) => item.label)
+          .join(', ')}`
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const nextCostingStatus = decision === 'approved' ? 'approved' : 'rejected';
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedCosting = await tx.jobCosting.update({
+        where: { id: costing.id },
+        data: {
+          costingStatus: nextCostingStatus,
+          approvedByPartnerProfileId: decision === 'approved' ? authContext.profileId : null,
+          approvedAt: decision === 'approved' ? now : null,
+        },
+        include: {
+          allocations: true,
+          budgetCap: true,
+        },
+      });
+
+      await this.recordJobCostingStatusTransition(tx, {
+        jobCostingId: costing.id,
+        jobId,
+        fromStatus: String(costing.costingStatus),
+        toStatus: nextCostingStatus,
+        changedByProfileId: authContext.profileId,
+        reason: decision === 'rejected' ? reviewNotes : null,
+        metadata: {
+          decision,
+        },
+      });
+
+      return updatedCosting;
+    });
+
+    await createAudit({
+      action: `job_costing_reviewed:job_${jobId}`,
+      entity_type: 'job',
+      entity_id: jobId,
+      user_id: authContext.userId,
+      metadata: {
+        jobId,
+        decision,
+        reviewNotes: decision === 'rejected' ? reviewNotes : null,
+      },
+    });
+
+    if (job.managerProfileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: job.managerProfileId,
+          type: decision === 'approved' ? 'info' : 'action',
+          title:
+            decision === 'approved'
+              ? `Job costing approved: ${job.jobName}`
+              : `Job costing returned for revision: ${job.jobName}`,
+          message:
+            decision === 'approved'
+              ? `Partner approved the costing package for "${job.jobName}". The job can now move to in-progress.`
+              : `Partner returned "${job.jobName}" with review points: ${reviewNotes}`,
+          actionRequired: decision === 'rejected',
+          jobId: job.id,
+          link: this.buildTrackingPath(job.id),
+        },
+        {
+          userId: authContext.userId,
+          profileId: authContext.profileId,
+          roleName: authContext.roles?.[0],
+        }
+      );
+    }
+
+    return updated;
   }
 
   /**
@@ -2165,7 +2624,7 @@ class JobService {
     }
 
     const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
-    const isAdmin = roleSet.has('super_admin');
+    const isAdmin = roleSet.has('super_admin') || roleSet.has('hr') || roleSet.has('gmp');
     const isJobManager = assignment.job.managerProfileId === authContext.profileId;
     const isPartner = assignment.job.partnerProfileId === authContext.profileId;
 
@@ -2282,7 +2741,7 @@ class JobService {
     }
 
     const roleSet = new Set((authContext.roles || []).map((role) => String(role || '').toLowerCase()));
-    const isAdmin = roleSet.has('super_admin');
+    const isAdmin = roleSet.has('super_admin') || roleSet.has('hr') || roleSet.has('gmp');
     const isJobManager = assignment.job.managerProfileId === authContext.profileId;
     const isPartner = assignment.job.partnerProfileId === authContext.profileId;
 
@@ -2575,6 +3034,25 @@ class JobService {
           include: {
             budgetCap: true,
             allocations: true,
+            statusTransitions: {
+              orderBy: { createdAt: 'desc' },
+              take: 10,
+              select: {
+                id: true,
+                fromStatus: true,
+                toStatus: true,
+                reason: true,
+                createdAt: true,
+                changedByProfileId: true,
+                changedBy: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                  },
+                },
+              },
+            },
           },
         },
         tasks: {
@@ -2830,6 +3308,12 @@ class JobService {
     const missingForInProgress = await this.getMissingStageDocuments(jobId, 'in_progress');
     const missingForCompletion = await this.getMissingStageDocuments(jobId, 'completed');
     const invoiceMilestones = await this.getJobInvoiceMilestoneTracking(jobId);
+    const latestRejectedCostingReview = job.jobCosting?.statusTransitions?.find(
+      (transition: any) => String(transition.toStatus) === 'rejected'
+    );
+    const latestSubmittedCostingReview = job.jobCosting?.statusTransitions?.find(
+      (transition: any) => String(transition.toStatus) === 'submitted'
+    );
 
     const lifecycleBlockersForInProgress: string[] = [];
     if (!job.teamAssigned) lifecycleBlockersForInProgress.push('Team assignment is incomplete');
@@ -2917,6 +3401,21 @@ class JobService {
           staffCount: job.staffing.length,
           costingCompleted: job.costingCompleted,
           costingStatus: job.jobCosting?.costingStatus || null,
+          submittedAt: latestSubmittedCostingReview?.createdAt || null,
+          approvedAt: job.jobCosting?.approvedAt || null,
+          latestReviewReason:
+            String(job.jobCosting?.costingStatus || '') === 'rejected'
+              ? latestRejectedCostingReview?.reason || null
+              : null,
+          latestReviewAt:
+            String(job.jobCosting?.costingStatus || '') === 'rejected'
+              ? latestRejectedCostingReview?.createdAt || null
+              : null,
+          latestReviewBy:
+            String(job.jobCosting?.costingStatus || '') === 'rejected' &&
+            latestRejectedCostingReview?.changedBy
+              ? latestRejectedCostingReview.changedBy
+              : null,
           budgetCapEnforced: job.jobCosting?.budgetCap?.capEnforced ?? null,
           allowOverage: job.jobCosting?.budgetCap?.allowOverage ?? null,
           maxOveragePercent: Number(job.jobCosting?.budgetCap?.maxOveragePercent || 0),

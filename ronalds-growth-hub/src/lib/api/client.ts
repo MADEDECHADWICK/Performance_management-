@@ -112,8 +112,9 @@ export async function apiFetch<T = any>(
   options?: { skipAuth?: boolean; headers?: Record<string, string> }
 ): Promise<T> {
   const normalizedPath = normalizePathQueryKeys(path);
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
   };
   
   const token = getToken();
@@ -126,7 +127,7 @@ export async function apiFetch<T = any>(
   
   const fetchOptions: RequestInit = { method, headers };
   if (body !== undefined && body !== null) {
-    fetchOptions.body = JSON.stringify(camelizeKeys(body));
+    fetchOptions.body = isFormData ? body : JSON.stringify(camelizeKeys(body));
   }
   
   try {

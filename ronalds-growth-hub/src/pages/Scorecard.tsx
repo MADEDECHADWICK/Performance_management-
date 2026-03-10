@@ -59,7 +59,7 @@ interface PerformanceData {
   };
   overall: {
     totalScore: number;
-    grade: string;
+    grade: string | null;
   };
   scoreBreakdown?: {
     role?: string;
@@ -184,7 +184,7 @@ const Scorecard = () => {
     },
     overall: {
       totalScore: 0,
-      grade: "N/A",
+      grade: null,
     },
   };
 
@@ -256,7 +256,9 @@ const Scorecard = () => {
             </CardHeader>
             <CardContent className={SUMMARY_CARD_CONTENT}>
               <div className="text-2xl font-bold">{data.overall.totalScore}</div>
-              <p className="text-xs text-muted-foreground">Grade: {data.overall.grade}</p>
+              <p className="text-xs text-muted-foreground">
+                {data.overall.grade ? `Grade: ${data.overall.grade}` : "No grade yet"}
+              </p>
             </CardContent>
           </Card>
           <Card>

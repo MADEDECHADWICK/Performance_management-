@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ExternalLink,
+  Download,
+  Eye,
   Filter,
+  Lock,
   Pencil,
   Plus,
   RefreshCw,
@@ -36,9 +38,12 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Textarea } from "@/components/ui/textarea";
 import PageLoader from "@/components/ui/page-loader";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
 const DEFAULT_META: KnowledgeHubMeta = {
-  domains: ["accounting", "tax", "audit"],
-  resourceTypes: ["guide", "template", "checklist", "policy", "article"],
+  domains: ["accounting", "tax", "audit", "compliance", "advisory", "operations"],
+  resourceTypes: ["guide", "template", "checklist", "policy", "article", "video", "tool"],
+  assetKinds: ["document", "image", "video", "link"],
   modules: [],
 };
 
@@ -47,10 +52,11 @@ type ResourceFormState = {
   summary: string;
   domain: string;
   resourceType: string;
-  submodules: string[];
+  assetKind: string;
   tagsInput: string;
   linkUrl: string;
   content: string;
+  allowDownload: boolean;
   isFeatured: boolean;
   isPublished: boolean;
 };
@@ -65,18 +71,94 @@ const parseTags = (value: string) =>
     )
   );
 
+const isLocalUploadUrl = (value: string | null | undefined) =>
+  typeof value === "string" && value.startsWith("/uploads/knowledge-hub/");
+
+const resolveAssetUrl = (value: string | null | undefined) => {
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("/")) return `${API_BASE_URL}${value}`;
+  return value;
+};
+
+const getUrlExtension = (value: string | null | undefined) => {
+  if (!value) return "";
+  const normalized = value.split("?")[0];
+  const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
+  const extensionIndex = fileName.lastIndexOf(".");
+  return extensionIndex >= 0 ? fileName.slice(extensionIndex) : "";
+};
+
+const resolveVideoEmbedUrl = (value: string | null | undefined) => {
+  const resolved = resolveAssetUrl(value);
+  if (!resolved) return null;
+
+  try {
+    const url = new URL(resolved);
+
+    if (url.hostname === "youtu.be") {
+      const videoId = url.pathname.replace(/^\/+/, "");
+      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+    }
+
+    if (url.hostname.includes("youtube.com")) {
+      const videoId = url.searchParams.get("v");
+      if (videoId) {
+        return `https://www.youtube.com/embed/${videoId}`;
+      }
+
+      const pathSegments = url.pathname.split("/").filter(Boolean);
+      if (pathSegments[0] === "shorts" && pathSegments[1]) {
+        return `https://www.youtube.com/embed/${pathSegments[1]}`;
+      }
+    }
+
+    if (url.hostname.includes("vimeo.com")) {
+      const videoId = url.pathname.split("/").filter(Boolean)[0];
+      return videoId ? `https://player.vimeo.com/video/${videoId}` : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
 const toFormState = (meta: KnowledgeHubMeta, resource?: KnowledgeHubResource | null): ResourceFormState => ({
   title: resource?.title || "",
   summary: resource?.summary || "",
   domain: resource?.domain || meta.domains[0] || "accounting",
   resourceType: resource?.resourceType || meta.resourceTypes[0] || "guide",
-  submodules: resource?.submodules || [],
+  assetKind: resource?.assetKind || meta.assetKinds[0] || "document",
   tagsInput: resource?.tags?.join(", ") || "",
-  linkUrl: resource?.linkUrl || "",
+  linkUrl: resource?.linkUrl && !isLocalUploadUrl(resource.linkUrl) ? resource.linkUrl : "",
   content: resource?.content || "",
+  allowDownload: resource?.allowDownload ?? true,
   isFeatured: resource?.isFeatured || false,
   isPublished: resource?.isPublished ?? true,
 });
+
+const createDownloadFilename = (resource: KnowledgeHubResource) => {
+  if (resource.assetFileName) return resource.assetFileName;
+
+  const baseName = resource.title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  const fallbackExtension =
+    getUrlExtension(resource.linkUrl) ||
+    (resource.assetKind === "image"
+      ? ".png"
+      : resource.assetKind === "video"
+        ? ".mp4"
+        : resource.assetKind === "document"
+          ? ".pdf"
+          : ".txt");
+
+  return `${baseName || "knowledge-resource"}${fallbackExtension}`;
+};
 
 const formatRelativeTime = (value: string | null) => {
   if (!value) return "not published";
@@ -85,6 +167,17 @@ const formatRelativeTime = (value: string | null) => {
   } catch {
     return "recently";
   }
+};
+
+const canPreviewResource = (resource: KnowledgeHubResource) =>
+  Boolean(resource.linkUrl || resource.content);
+
+const getPreviewSandbox = (resource: KnowledgeHubResource) => {
+  if (!resource.linkUrl || isLocalUploadUrl(resource.linkUrl)) {
+    return undefined;
+  }
+
+  return "allow-same-origin allow-scripts allow-forms allow-popups";
 };
 
 export default function KnowledgeHub() {
@@ -97,13 +190,14 @@ export default function KnowledgeHub() {
 
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState("all");
-  const [moduleFilter, setModuleFilter] = useState("all");
   const [resourceTypeFilter, setResourceTypeFilter] = useState("all");
   const [featuredOnly, setFeaturedOnly] = useState(false);
   const [includeDrafts, setIncludeDrafts] = useState(false);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingResource, setEditingResource] = useState<KnowledgeHubResource | null>(null);
+  const [previewResource, setPreviewResource] = useState<KnowledgeHubResource | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formState, setFormState] = useState<ResourceFormState>(toFormState(DEFAULT_META, null));
 
   const { data: metaData } = useQuery({
@@ -112,17 +206,13 @@ export default function KnowledgeHub() {
   });
 
   const meta = metaData || DEFAULT_META;
-  const moduleLabelByKey = useMemo(
-    () => Object.fromEntries((meta.modules || []).map((module) => [module.key, module.label] as const)),
-    [meta.modules]
-  );
+  const assetKinds = meta.assetKinds?.length ? meta.assetKinds : DEFAULT_META.assetKinds;
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: [
       "knowledge-hub-resources",
       search,
       domainFilter,
-      moduleFilter,
       resourceTypeFilter,
       featuredOnly,
       includeDrafts,
@@ -132,7 +222,6 @@ export default function KnowledgeHub() {
       knowledgeHubAPI.list({
         search: search || undefined,
         domain: domainFilter !== "all" ? domainFilter : undefined,
-        moduleKey: moduleFilter !== "all" ? moduleFilter : undefined,
         resourceType: resourceTypeFilter !== "all" ? resourceTypeFilter : undefined,
         featured: featuredOnly ? true : undefined,
         includeDrafts: canWrite && includeDrafts ? true : undefined,
@@ -142,12 +231,13 @@ export default function KnowledgeHub() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (payload: UpsertKnowledgeHubResourceInput) => knowledgeHubAPI.create(payload),
+    mutationFn: (payload: UpsertKnowledgeHubResourceInput | FormData) => knowledgeHubAPI.create(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge-hub-resources"] });
       toast({ title: "Resource created", description: "Knowledge resource was added." });
       setEditorOpen(false);
       setEditingResource(null);
+      setSelectedFile(null);
     },
     onError: (error: any) => {
       toast({
@@ -164,13 +254,14 @@ export default function KnowledgeHub() {
       payload,
     }: {
       resourceId: number;
-      payload: Partial<UpsertKnowledgeHubResourceInput>;
+      payload: Partial<UpsertKnowledgeHubResourceInput> | FormData;
     }) => knowledgeHubAPI.update(resourceId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge-hub-resources"] });
       toast({ title: "Resource updated", description: "Knowledge resource was updated." });
       setEditorOpen(false);
       setEditingResource(null);
+      setSelectedFile(null);
     },
     onError: (error: any) => {
       toast({
@@ -199,11 +290,16 @@ export default function KnowledgeHub() {
   const resources = data?.resources || [];
   const isMutating =
     createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
+  const usesFileUpload = formState.assetKind === "document" || formState.assetKind === "image";
+  const previewResourceUrl = previewResource ? resolveAssetUrl(previewResource.linkUrl) : null;
+  const previewVideoEmbedUrl = previewResource ? resolveVideoEmbedUrl(previewResource.linkUrl) : null;
+  const previewSandbox = previewResource ? getPreviewSandbox(previewResource) : undefined;
+  const existingStoredFileName =
+    selectedFile?.name || editingResource?.assetFileName || null;
 
   const clearFilters = () => {
     setSearch("");
     setDomainFilter("all");
-    setModuleFilter("all");
     setResourceTypeFilter("all");
     setFeaturedOnly(false);
     setIncludeDrafts(false);
@@ -212,43 +308,99 @@ export default function KnowledgeHub() {
   const openCreateDialog = () => {
     setEditingResource(null);
     setFormState(toFormState(meta, null));
+    setSelectedFile(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (resource: KnowledgeHubResource) => {
     setEditingResource(resource);
     setFormState(toFormState(meta, resource));
+    setSelectedFile(null);
     setEditorOpen(true);
-  };
-
-  const toggleFormModule = (moduleKey: string, checked: boolean) => {
-    setFormState((previous) => {
-      const nextModules = new Set(previous.submodules);
-      if (checked) nextModules.add(moduleKey);
-      else nextModules.delete(moduleKey);
-      return { ...previous, submodules: Array.from(nextModules) };
-    });
   };
 
   const handleSubmit = () => {
     const title = formState.title.trim();
+    const summary = formState.summary.trim();
+    const linkUrl = formState.linkUrl.trim();
+    const content = formState.content.trim();
+    const tags = parseTags(formState.tagsInput);
+    const requiresExternalUrl = formState.assetKind === "video" || formState.assetKind === "link";
+    const preservesExistingLocalUpload =
+      Boolean(editingResource && isLocalUploadUrl(editingResource.linkUrl)) &&
+      !selectedFile &&
+      !linkUrl;
+    const hasExistingResourceData = Boolean(editingResource?.linkUrl || editingResource?.content);
+
     if (!title) {
       toast({ title: "Title required", description: "Please enter a title.", variant: "destructive" });
       return;
     }
 
+    if (requiresExternalUrl && !linkUrl) {
+      toast({
+        title: "URL required",
+        description: "Video and link resources need a valid URL.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!selectedFile && !linkUrl && !content && !hasExistingResourceData) {
+      toast({
+        title: "Resource content required",
+        description: "Add a file, URL, or notes for this resource.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const payload: UpsertKnowledgeHubResourceInput = {
       title,
-      summary: formState.summary.trim() || null,
+      summary: summary || null,
       domain: formState.domain,
       resourceType: formState.resourceType,
-      submodules: formState.submodules,
-      tags: parseTags(formState.tagsInput),
-      linkUrl: formState.linkUrl.trim() || null,
-      content: formState.content.trim() || null,
+      assetKind: formState.assetKind,
+      submodules: [],
+      tags,
+      content: content || null,
+      allowDownload: formState.allowDownload,
       isFeatured: formState.isFeatured,
       isPublished: formState.isPublished,
     };
+
+    if (selectedFile) {
+      const formData = new FormData();
+      formData.append("title", payload.title);
+      formData.append("summary", summary);
+      formData.append("domain", payload.domain);
+      formData.append("resourceType", payload.resourceType);
+      formData.append("assetKind", payload.assetKind || "document");
+      formData.append("submodules", JSON.stringify([]));
+      formData.append("tags", JSON.stringify(payload.tags || []));
+      formData.append("content", content);
+      formData.append("allowDownload", String(payload.allowDownload ?? true));
+      formData.append("isFeatured", String(payload.isFeatured ?? false));
+      formData.append("isPublished", String(payload.isPublished ?? true));
+      formData.append("file", selectedFile);
+
+      if (linkUrl) {
+        formData.append("linkUrl", linkUrl);
+      }
+
+      if (editingResource) {
+        updateMutation.mutate({ resourceId: editingResource.id, payload: formData });
+      } else {
+        createMutation.mutate(formData);
+      }
+      return;
+    }
+
+    if (linkUrl) {
+      payload.linkUrl = linkUrl;
+    } else if (!preservesExistingLocalUpload) {
+      payload.linkUrl = null;
+    }
 
     if (editingResource) {
       updateMutation.mutate({ resourceId: editingResource.id, payload });
@@ -264,6 +416,46 @@ export default function KnowledgeHub() {
     deleteMutation.mutate(resource.id);
   };
 
+  const openPreview = (resource: KnowledgeHubResource) => {
+    setPreviewResource(resource);
+  };
+
+  const handlePreviewOpenChange = (open: boolean) => {
+    if (!open) {
+      setPreviewResource(null);
+    }
+  };
+
+  const handleDownload = (resource: KnowledgeHubResource) => {
+    if (!resource.allowDownload) return;
+
+    const resolvedLinkUrl = resolveAssetUrl(resource.linkUrl);
+
+    if (resolvedLinkUrl) {
+      const link = document.createElement("a");
+      link.href = resolvedLinkUrl;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.download = createDownloadFilename(resource);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+
+    if (!resource.content) return;
+
+    const blob = new Blob([resource.content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = createDownloadFilename(resource);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -271,7 +463,7 @@ export default function KnowledgeHub() {
           <div>
             <h1 className="text-3xl font-bold text-foreground">Knowledge Hub</h1>
             <p className="text-muted-foreground">
-              Shared accounting, tax, and audit resources for every module.
+              Shared firm-wide documents, media, and guidance in one place.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -295,11 +487,11 @@ export default function KnowledgeHub() {
               Filter Resources
             </CardTitle>
             <CardDescription>
-              Filter by domain, submodule scope, resource type, and publication state.
+              Filter by domain, resource type, and publication state.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -319,20 +511,6 @@ export default function KnowledgeHub() {
                   {meta.domains.map((domain) => (
                     <SelectItem key={domain} value={domain}>
                       {domain}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select value={moduleFilter} onValueChange={setModuleFilter}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Module scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All modules</SelectItem>
-                  {meta.modules.map((module) => (
-                    <SelectItem key={module.key} value={module.key}>
-                      {module.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -398,6 +576,7 @@ export default function KnowledgeHub() {
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">{resource.domain}</Badge>
                         <Badge variant="secondary">{resource.resourceType}</Badge>
+                        <Badge variant="outline">{resource.assetKind}</Badge>
                         {resource.isFeatured && (
                           <Badge>
                             <Star className="mr-1 h-3 w-3" />
@@ -424,23 +603,6 @@ export default function KnowledgeHub() {
                     </p>
                   )}
 
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Submodules
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {resource.submodules.length > 0 ? (
-                        resource.submodules.map((moduleKey) => (
-                          <Badge key={`${resource.id}-${moduleKey}`} variant="outline">
-                            {moduleLabelByKey[moduleKey] || moduleKey}
-                          </Badge>
-                        ))
-                      ) : (
-                        <Badge variant="outline">All modules</Badge>
-                      )}
-                    </div>
-                  </div>
-
                   {resource.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {resource.tags.map((tag) => (
@@ -456,14 +618,15 @@ export default function KnowledgeHub() {
                       Updated {formatRelativeTime(resource.updatedAt)}
                     </p>
                     <div className="flex items-center gap-2">
-                      {resource.linkUrl && (
-                        <Button variant="outline" size="sm" asChild>
-                          <a href={resource.linkUrl} target="_blank" rel="noreferrer">
-                            <ExternalLink className="mr-2 h-4 w-4" />
-                            Open
-                          </a>
-                        </Button>
-                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openPreview(resource)}
+                        disabled={!canPreviewResource(resource)}
+                      >
+                        <Eye className="mr-2 h-4 w-4" />
+                        Preview
+                      </Button>
                       {canWrite && (
                         <Button variant="outline" size="sm" onClick={() => openEditDialog(resource)}>
                           <Pencil className="mr-2 h-4 w-4" />
@@ -489,7 +652,133 @@ export default function KnowledgeHub() {
           </div>
         )}
 
-        <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <Dialog open={!!previewResource} onOpenChange={handlePreviewOpenChange}>
+          <DialogContent className="flex h-[90vh] w-[96vw] max-w-6xl flex-col overflow-hidden">
+            <DialogHeader>
+              <DialogTitle className="flex flex-wrap items-center gap-2">
+                <span>{previewResource?.title || "Resource Preview"}</span>
+                {previewResource && !previewResource.allowDownload && (
+                  <Badge variant="secondary" className="gap-1">
+                    <Lock className="h-3 w-3" />
+                    Read only
+                  </Badge>
+                )}
+              </DialogTitle>
+            </DialogHeader>
+
+            {previewResource && (
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-3">
+                  <div className="space-y-2">
+                    {previewResource.summary && (
+                      <p className="text-sm text-muted-foreground">{previewResource.summary}</p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">{previewResource.domain}</Badge>
+                      <Badge variant="secondary">{previewResource.resourceType}</Badge>
+                      <Badge variant="outline">{previewResource.assetKind}</Badge>
+                      <Badge variant="outline">
+                        Updated {formatRelativeTime(previewResource.updatedAt)}
+                      </Badge>
+                    </div>
+                  </div>
+                  {previewResource.allowDownload && (
+                    <Button
+                      variant="outline"
+                      onClick={() => handleDownload(previewResource)}
+                      disabled={!canPreviewResource(previewResource)}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  )}
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-background">
+                  {previewResource.assetKind === "image" && previewResourceUrl ? (
+                    <div className="flex h-full items-center justify-center overflow-auto bg-muted/20 p-6">
+                      <img
+                        src={previewResourceUrl}
+                        alt={previewResource.title}
+                        className="max-h-full w-auto rounded-md object-contain shadow-sm"
+                      />
+                    </div>
+                  ) : previewResource.assetKind === "video" && (previewVideoEmbedUrl || previewResourceUrl) ? (
+                    previewVideoEmbedUrl ? (
+                      <iframe
+                        key={`${previewResource.id}-${previewVideoEmbedUrl}`}
+                        src={previewVideoEmbedUrl}
+                        title={previewResource.title}
+                        className="h-full w-full border-0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-black">
+                        <video
+                          controls
+                          className="h-full w-full"
+                          src={previewResourceUrl || undefined}
+                        >
+                          Your browser does not support video playback.
+                        </video>
+                      </div>
+                    )
+                  ) : previewResourceUrl ? (
+                    <iframe
+                      key={`${previewResource.id}-${previewResourceUrl}`}
+                      src={previewResourceUrl}
+                      title={previewResource.title}
+                      className="h-full w-full border-0"
+                      sandbox={previewSandbox}
+                    />
+                  ) : previewResource.content ? (
+                    <div className="h-full overflow-y-auto p-6">
+                      <article className="whitespace-pre-wrap text-sm leading-7 text-foreground">
+                        {previewResource.content}
+                      </article>
+                    </div>
+                  ) : (
+                    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+                      No preview is available for this resource yet.
+                    </div>
+                  )}
+                </div>
+
+                {previewResource.assetFileName && (
+                  <p className="pt-3 text-xs text-muted-foreground">
+                    File: {previewResource.assetFileName}
+                  </p>
+                )}
+
+                {previewResourceUrl &&
+                  (previewResource.assetKind === "document" || previewResource.assetKind === "link") && (
+                    <p className="pt-3 text-xs text-muted-foreground">
+                      Some external URLs block embedded previews. If that happens, use Download or open the
+                      original file URL directly.
+                    </p>
+                  )}
+
+                {!previewResource.allowDownload && (
+                  <p className="pt-3 text-xs text-muted-foreground">
+                    This resource is configured as read-only. Preview is available, but download is disabled.
+                  </p>
+                )}
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={editorOpen}
+          onOpenChange={(open) => {
+            setEditorOpen(open);
+            if (!open) {
+              setEditingResource(null);
+              setSelectedFile(null);
+            }
+          }}
+        >
           <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
@@ -511,20 +800,32 @@ export default function KnowledgeHub() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="resource-link">Resource URL</Label>
-                  <Input
-                    id="resource-link"
-                    value={formState.linkUrl}
-                    onChange={(event) =>
-                      setFormState((prev) => ({ ...prev, linkUrl: event.target.value }))
-                    }
-                    placeholder="https://..."
-                  />
+                  <Label>Asset Kind</Label>
+                  <Select
+                    value={formState.assetKind}
+                    onValueChange={(value) => {
+                      setFormState((prev) => ({ ...prev, assetKind: value }));
+                      if (value !== "document" && value !== "image") {
+                        setSelectedFile(null);
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {assetKinds.map((assetKind) => (
+                        <SelectItem key={assetKind} value={assetKind}>
+                          {assetKind}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="resource-summary">Summary</Label>
+                <Label htmlFor="resource-summary">Description</Label>
                 <Textarea
                   id="resource-summary"
                   value={formState.summary}
@@ -532,7 +833,7 @@ export default function KnowledgeHub() {
                     setFormState((prev) => ({ ...prev, summary: event.target.value }))
                   }
                   rows={3}
-                  placeholder="Short summary"
+                  placeholder="Short description shown on the Knowledge Hub card."
                 />
               </div>
 
@@ -578,6 +879,62 @@ export default function KnowledgeHub() {
                 </div>
               </div>
 
+              {usesFileUpload && (
+                <div className="space-y-2">
+                  <Label htmlFor="resource-file">
+                    {formState.assetKind === "image" ? "Image file" : "Document file"}
+                  </Label>
+                  <Input
+                    id="resource-file"
+                    type="file"
+                    accept={
+                      formState.assetKind === "image"
+                        ? "image/*"
+                        : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,image/*"
+                    }
+                    onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Upload a file for in-app preview. You can also keep the existing file or point to
+                    an external file URL below.
+                  </p>
+                  {existingStoredFileName && (
+                    <p className="text-xs text-muted-foreground">
+                      Current file: {existingStoredFileName}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="resource-link">
+                  {formState.assetKind === "video"
+                    ? "Video URL"
+                    : usesFileUpload
+                      ? "External file URL (optional)"
+                      : "Resource URL"}
+                </Label>
+                <Input
+                  id="resource-link"
+                  value={formState.linkUrl}
+                  onChange={(event) =>
+                    setFormState((prev) => ({ ...prev, linkUrl: event.target.value }))
+                  }
+                  placeholder={
+                    formState.assetKind === "video"
+                      ? "https://www.youtube.com/watch?v=..."
+                      : "https://..."
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {formState.assetKind === "video"
+                    ? "Videos are stored as URLs and previewed directly inside the Knowledge Hub."
+                    : usesFileUpload
+                      ? "Leave this blank to keep the stored upload, or use it to point to an external file."
+                      : "This URL is what users will preview inside the Knowledge Hub."}
+                </p>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="resource-tags">Tags (comma-separated)</Label>
                 <Input
@@ -588,24 +945,6 @@ export default function KnowledgeHub() {
                   }
                   placeholder="tax, filing, workflow"
                 />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Module Scope</Label>
-                <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-2">
-                  {meta.modules.map((module) => (
-                    <label key={module.key} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={formState.submodules.includes(module.key)}
-                        onCheckedChange={(checked) => toggleFormModule(module.key, checked === true)}
-                      />
-                      <span>{module.label}</span>
-                    </label>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  If no module is selected, the resource is treated as organization-wide.
-                </p>
               </div>
 
               <div className="space-y-2">
@@ -622,6 +961,15 @@ export default function KnowledgeHub() {
               </div>
 
               <div className="flex flex-wrap items-center gap-6">
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={formState.allowDownload}
+                    onCheckedChange={(checked) =>
+                      setFormState((prev) => ({ ...prev, allowDownload: checked === true }))
+                    }
+                  />
+                  <span>Allow download from preview</span>
+                </label>
                 <label className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={formState.isFeatured}

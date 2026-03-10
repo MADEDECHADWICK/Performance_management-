@@ -5,6 +5,9 @@ import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { handleValidationErrors } from "../middleware/validate";
 import { ensureAuthorizationContext } from "../services/authorizationContext.service";
+import fs from "fs";
+import multer from "multer";
+import path from "path";
 import {
   SYSTEM_MODULES,
   hasModuleAccess,
@@ -33,6 +36,31 @@ const KNOWLEDGE_RESOURCE_TYPES = [
   "tool",
 ] as const;
 
+const KNOWLEDGE_ASSET_KINDS = ["document", "image", "video", "link"] as const;
+
+const uploadRoot = path.join(process.cwd(), "uploads", "knowledge-hub");
+if (!fs.existsSync(uploadRoot)) {
+  fs.mkdirSync(uploadRoot, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, uploadRoot);
+  },
+  filename: (_req, file, cb) => {
+    const timestamp = Date.now();
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${timestamp}-${safeName}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+  },
+});
+
 const excludedScopeModules = new Set(["access_control", "settings", "knowledge_hub"]);
 const moduleScopeOptions = SYSTEM_MODULES.filter(
   (item) => !excludedScopeModules.has(item.key)
@@ -47,10 +75,14 @@ type KnowledgeHubRow = {
   summary: string | null;
   domain: string;
   resource_type: string;
+  asset_kind: string;
   submodules: string[] | null;
   tags: string[] | null;
   link_url: string | null;
+  asset_file_name: string | null;
+  asset_mime_type: string | null;
   content: string | null;
+  allow_download: boolean;
   is_featured: boolean;
   is_published: boolean;
   published_at: Date | null;
@@ -137,6 +169,78 @@ const parseBooleanInput = (value: unknown, fallback = false) => {
   return fallback;
 };
 
+const toNullableTrimmedString = (value: unknown) => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const validateLinkUrlInput = (value: unknown) => {
+  const trimmed = toNullableTrimmedString(value);
+  if (!trimmed) return true;
+  if (trimmed.startsWith("/uploads/knowledge-hub/")) return true;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("linkUrl must use http or https");
+    }
+    return true;
+  } catch {
+    throw new Error("linkUrl must be a valid URL");
+  }
+};
+
+const isLocalKnowledgeHubUpload = (value: string | null) =>
+  typeof value === "string" && value.startsWith("/uploads/knowledge-hub/");
+
+const inferAssetKindFromUpload = (
+  file: Express.Multer.File | undefined
+): (typeof KNOWLEDGE_ASSET_KINDS)[number] => {
+  if (!file?.mimetype) return "document";
+  if (file.mimetype.startsWith("image/")) return "image";
+  if (file.mimetype.startsWith("video/")) return "video";
+  return "document";
+};
+
+const deleteLocalKnowledgeHubUpload = (linkUrl: string | null) => {
+  if (!isLocalKnowledgeHubUpload(linkUrl)) return;
+
+  const fileName = path.basename(linkUrl || "");
+  if (!fileName) return;
+
+  const filePath = path.join(uploadRoot, fileName);
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (error) {
+    console.warn("Failed to remove knowledge hub upload:", filePath, error);
+  }
+};
+
+const toAssetKind = (
+  value: unknown,
+  fallback: (typeof KNOWLEDGE_ASSET_KINDS)[number] = "link"
+): (typeof KNOWLEDGE_ASSET_KINDS)[number] => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (isKnownAssetKind(normalized)) {
+    return normalized as (typeof KNOWLEDGE_ASSET_KINDS)[number];
+  }
+  return fallback;
+};
+
+const buildUploadedAsset = (file: Express.Multer.File | undefined) => {
+  if (!file) return null;
+
+  return {
+    assetKind: inferAssetKindFromUpload(file),
+    linkUrl: `/uploads/knowledge-hub/${file.filename}`,
+    assetFileName: file.originalname || file.filename,
+    assetMimeType: file.mimetype || null,
+  };
+};
+
 const toSafeCount = (value: unknown) => {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
@@ -160,10 +264,14 @@ const knowledgeResourceSelectSql = Prisma.sql`
     r.summary,
     r.domain,
     r.resource_type,
+    r.asset_kind,
     r.submodules,
     r.tags,
     r.link_url,
+    r.asset_file_name,
+    r.asset_mime_type,
     r.content,
+    r.allow_download,
     r.is_featured,
     r.is_published,
     r.published_at,
@@ -192,6 +300,9 @@ const isKnownDomain = (value: string) =>
 
 const isKnownResourceType = (value: string) =>
   (KNOWLEDGE_RESOURCE_TYPES as readonly string[]).includes(value);
+
+const isKnownAssetKind = (value: string) =>
+  (KNOWLEDGE_ASSET_KINDS as readonly string[]).includes(value);
 
 const listValidators = [
   query("search").optional().isString().isLength({ max: 120 }),
@@ -241,7 +352,7 @@ const validateTagsInput = (value: unknown) => {
 
 const createValidators = [
   body("title").isString().trim().isLength({ min: 3, max: 200 }),
-  body("summary").optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  body("summary").optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 2000 }),
   body("domain")
     .isString()
     .custom((value) => isKnownDomain(String(value).toLowerCase()))
@@ -250,10 +361,18 @@ const createValidators = [
     .isString()
     .custom((value) => isKnownResourceType(String(value).toLowerCase()))
     .withMessage("resourceType must be a supported value"),
+  body("assetKind")
+    .optional()
+    .custom((value) => isKnownAssetKind(String(value).toLowerCase()))
+    .withMessage("assetKind must be a supported value"),
   body("submodules").optional().custom(validateSubmoduleInput),
   body("tags").optional().custom(validateTagsInput),
-  body("linkUrl").optional({ nullable: true }).isURL().isLength({ max: 500 }),
-  body("content").optional({ nullable: true }).isString().isLength({ max: 20000 }),
+  body("linkUrl")
+    .optional({ nullable: true, checkFalsy: true })
+    .custom(validateLinkUrlInput)
+    .isLength({ max: 500 }),
+  body("content").optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 20000 }),
+  body("allowDownload").optional().isBoolean(),
   body("isFeatured").optional().isBoolean(),
   body("isPublished").optional().isBoolean(),
 ];
@@ -261,7 +380,7 @@ const createValidators = [
 const updateValidators = [
   ...resourceIdValidators,
   body("title").optional().isString().trim().isLength({ min: 3, max: 200 }),
-  body("summary").optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  body("summary").optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 2000 }),
   body("domain")
     .optional()
     .custom((value) => isKnownDomain(String(value).toLowerCase()))
@@ -270,10 +389,18 @@ const updateValidators = [
     .optional()
     .custom((value) => isKnownResourceType(String(value).toLowerCase()))
     .withMessage("resourceType must be a supported value"),
+  body("assetKind")
+    .optional()
+    .custom((value) => isKnownAssetKind(String(value).toLowerCase()))
+    .withMessage("assetKind must be a supported value"),
   body("submodules").optional().custom(validateSubmoduleInput),
   body("tags").optional().custom(validateTagsInput),
-  body("linkUrl").optional({ nullable: true }).isURL().isLength({ max: 500 }),
-  body("content").optional({ nullable: true }).isString().isLength({ max: 20000 }),
+  body("linkUrl")
+    .optional({ nullable: true, checkFalsy: true })
+    .custom(validateLinkUrlInput)
+    .isLength({ max: 500 }),
+  body("content").optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 20000 }),
+  body("allowDownload").optional().isBoolean(),
   body("isFeatured").optional().isBoolean(),
   body("isPublished").optional().isBoolean(),
 ];
@@ -294,6 +421,7 @@ router.get("/meta", (_req, res) => {
   res.json({
     domains: KNOWLEDGE_DOMAINS,
     resourceTypes: KNOWLEDGE_RESOURCE_TYPES,
+    assetKinds: KNOWLEDGE_ASSET_KINDS,
     modules: moduleScopeOptions,
   });
 });
@@ -420,22 +548,28 @@ router.get(
 
 router.post(
   "/",
+  requireModuleAccess("knowledge_hub", "write"),
+  upload.single("file"),
   ...createValidators,
   handleValidationErrors,
   async (req: AuthRequest, res) => {
+    const uploadedAsset = buildUploadedAsset(req.file);
     try {
       const actorProfileId = req.user?.profileId ? Number(req.user.profileId) : null;
       const payload = req.body as Record<string, unknown>;
 
       const title = String(payload.title || "").trim();
-      const summary =
-        typeof payload.summary === "string" ? payload.summary.trim() : payload.summary ?? null;
+      const summary = toNullableTrimmedString(payload.summary);
       const domain = String(payload.domain || "").trim().toLowerCase();
       const resourceType = String(payload.resourceType || "").trim().toLowerCase();
+      const assetKind = toAssetKind(payload.assetKind, uploadedAsset?.assetKind ?? "link");
       const submodules = normalizeModuleScopes(payload.submodules);
       const tags = normalizeTags(payload.tags);
-      const linkUrl = typeof payload.linkUrl === "string" ? payload.linkUrl.trim() : null;
-      const content = typeof payload.content === "string" ? payload.content.trim() : null;
+      const linkUrl = uploadedAsset?.linkUrl ?? toNullableTrimmedString(payload.linkUrl);
+      const assetFileName = uploadedAsset?.assetFileName ?? null;
+      const assetMimeType = uploadedAsset?.assetMimeType ?? null;
+      const content = toNullableTrimmedString(payload.content);
+      const allowDownload = parseBooleanInput(payload.allowDownload, true);
       const isFeatured = parseBooleanInput(payload.isFeatured, false);
       const isPublished = parseBooleanInput(payload.isPublished, true);
 
@@ -445,10 +579,14 @@ router.post(
           summary,
           domain,
           resource_type,
+          asset_kind,
           submodules,
           tags,
           link_url,
+          asset_file_name,
+          asset_mime_type,
           content,
+          allow_download,
           is_featured,
           is_published,
           published_at,
@@ -460,10 +598,14 @@ router.post(
           ${summary},
           ${domain},
           ${resourceType},
+          ${assetKind},
           ${toSqlTextArray(submodules)},
           ${toSqlTextArray(tags)},
           ${linkUrl},
+          ${assetFileName},
+          ${assetMimeType},
           ${content},
+          ${allowDownload},
           ${isFeatured},
           ${isPublished},
           CASE WHEN ${isPublished} THEN NOW() ELSE NULL END,
@@ -481,6 +623,9 @@ router.post(
       const created = await getResourceById(resourceId, true);
       return res.status(201).json(created);
     } catch (error: any) {
+      if (uploadedAsset) {
+        deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+      }
       console.error("Failed to create knowledge hub resource:", error);
       return res.status(500).json({ error: "Failed to create knowledge hub resource" });
     }
@@ -489,13 +634,24 @@ router.post(
 
 router.patch(
   "/:resourceId",
+  requireModuleAccess("knowledge_hub", "write"),
+  upload.single("file"),
   ...updateValidators,
   handleValidationErrors,
   async (req: AuthRequest, res) => {
+    const uploadedAsset = buildUploadedAsset(req.file);
     try {
       const resourceId = Number(req.params.resourceId);
       const actorProfileId = req.user?.profileId ? Number(req.user.profileId) : null;
       const payload = req.body as Record<string, unknown>;
+      const existing = await getResourceById(resourceId, true);
+
+      if (!existing) {
+        if (uploadedAsset) {
+          deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+        }
+        return res.status(404).json({ error: "Knowledge resource not found" });
+      }
 
       const setClauses: Prisma.Sql[] = [
         Prisma.sql`updated_at = NOW()`,
@@ -508,7 +664,7 @@ router.patch(
       }
 
       if (hasKey(payload, "summary")) {
-        const summary = typeof payload.summary === "string" ? payload.summary.trim() : null;
+        const summary = toNullableTrimmedString(payload.summary);
         setClauses.push(Prisma.sql`summary = ${summary}`);
       }
 
@@ -522,6 +678,14 @@ router.patch(
         setClauses.push(Prisma.sql`resource_type = ${resourceType}`);
       }
 
+      if (hasKey(payload, "assetKind") || uploadedAsset) {
+        const assetKind = toAssetKind(
+          payload.assetKind,
+          uploadedAsset?.assetKind ?? toAssetKind(existing.asset_kind)
+        );
+        setClauses.push(Prisma.sql`asset_kind = ${assetKind}`);
+      }
+
       if (hasKey(payload, "submodules")) {
         setClauses.push(Prisma.sql`submodules = ${toSqlTextArray(normalizeModuleScopes(payload.submodules))}`);
       }
@@ -530,14 +694,28 @@ router.patch(
         setClauses.push(Prisma.sql`tags = ${toSqlTextArray(normalizeTags(payload.tags))}`);
       }
 
-      if (hasKey(payload, "linkUrl")) {
-        const linkUrl = typeof payload.linkUrl === "string" ? payload.linkUrl.trim() : null;
+      if (hasKey(payload, "linkUrl") && !uploadedAsset) {
+        const linkUrl = toNullableTrimmedString(payload.linkUrl);
         setClauses.push(Prisma.sql`link_url = ${linkUrl}`);
+        setClauses.push(Prisma.sql`asset_file_name = NULL`);
+        setClauses.push(Prisma.sql`asset_mime_type = NULL`);
+      }
+
+      if (uploadedAsset) {
+        setClauses.push(Prisma.sql`link_url = ${uploadedAsset.linkUrl}`);
+        setClauses.push(Prisma.sql`asset_file_name = ${uploadedAsset.assetFileName}`);
+        setClauses.push(Prisma.sql`asset_mime_type = ${uploadedAsset.assetMimeType}`);
       }
 
       if (hasKey(payload, "content")) {
-        const content = typeof payload.content === "string" ? payload.content.trim() : null;
+        const content = toNullableTrimmedString(payload.content);
         setClauses.push(Prisma.sql`content = ${content}`);
+      }
+
+      if (hasKey(payload, "allowDownload")) {
+        setClauses.push(
+          Prisma.sql`allow_download = ${parseBooleanInput(payload.allowDownload, true)}`
+        );
       }
 
       if (hasKey(payload, "isFeatured")) {
@@ -564,12 +742,25 @@ router.patch(
       `);
 
       if (!updatedRows[0]?.id) {
+        if (uploadedAsset) {
+          deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+        }
         return res.status(404).json({ error: "Knowledge resource not found" });
+      }
+
+      if (
+        isLocalKnowledgeHubUpload(existing.link_url) &&
+        ((uploadedAsset && existing.link_url !== uploadedAsset.linkUrl) || hasKey(payload, "linkUrl"))
+      ) {
+        deleteLocalKnowledgeHubUpload(existing.link_url);
       }
 
       const updated = await getResourceById(resourceId, true);
       return res.json(updated);
     } catch (error: any) {
+      if (uploadedAsset) {
+        deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+      }
       console.error("Failed to update knowledge hub resource:", error);
       return res.status(500).json({ error: "Failed to update knowledge hub resource" });
     }
@@ -584,6 +775,11 @@ router.delete(
   async (req, res) => {
     try {
       const resourceId = Number(req.params.resourceId);
+      const existing = await getResourceById(resourceId, true);
+      if (!existing) {
+        return res.status(404).json({ error: "Knowledge resource not found" });
+      }
+
       const deleted = await prisma.$executeRaw`
         DELETE FROM knowledge_hub_resources WHERE id = ${resourceId}
       `;
@@ -591,6 +787,8 @@ router.delete(
       if (!deleted) {
         return res.status(404).json({ error: "Knowledge resource not found" });
       }
+
+      deleteLocalKnowledgeHubUpload(existing.link_url);
 
       return res.json({ success: true });
     } catch (error: any) {
@@ -600,5 +798,5 @@ router.delete(
   }
 );
 
-export { KNOWLEDGE_DOMAINS, KNOWLEDGE_RESOURCE_TYPES };
+export { KNOWLEDGE_DOMAINS, KNOWLEDGE_RESOURCE_TYPES, KNOWLEDGE_ASSET_KINDS };
 export default router;

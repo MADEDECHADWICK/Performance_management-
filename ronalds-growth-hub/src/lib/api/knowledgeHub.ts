@@ -6,10 +6,14 @@ export interface KnowledgeHubResource {
   summary: string | null;
   domain: string;
   resourceType: string;
+  assetKind: string;
   submodules: string[];
   tags: string[];
   linkUrl: string | null;
+  assetFileName: string | null;
+  assetMimeType: string | null;
   content: string | null;
+  allowDownload: boolean;
   isFeatured: boolean;
   isPublished: boolean;
   publishedAt: string | null;
@@ -36,6 +40,7 @@ export interface KnowledgeHubModuleOption {
 export interface KnowledgeHubMeta {
   domains: string[];
   resourceTypes: string[];
+  assetKinds: string[];
   modules: KnowledgeHubModuleOption[];
 }
 
@@ -55,10 +60,12 @@ export interface UpsertKnowledgeHubResourceInput {
   summary?: string | null;
   domain: string;
   resourceType: string;
+  assetKind?: string;
   submodules?: string[];
   tags?: string[];
   linkUrl?: string | null;
   content?: string | null;
+  allowDownload?: boolean;
   isFeatured?: boolean;
   isPublished?: boolean;
 }
@@ -91,10 +98,10 @@ const knowledgeHubAPI = {
   get: (resourceId: number) =>
     api.get<KnowledgeHubResource>(`/knowledge-hub/${resourceId}`),
 
-  create: (payload: UpsertKnowledgeHubResourceInput) =>
+  create: (payload: UpsertKnowledgeHubResourceInput | FormData) =>
     api.post<KnowledgeHubResource>("/knowledge-hub", payload),
 
-  update: (resourceId: number, payload: Partial<UpsertKnowledgeHubResourceInput>) =>
+  update: (resourceId: number, payload: Partial<UpsertKnowledgeHubResourceInput> | FormData) =>
     api.patch<KnowledgeHubResource>(`/knowledge-hub/${resourceId}`, payload),
 
   remove: (resourceId: number) =>

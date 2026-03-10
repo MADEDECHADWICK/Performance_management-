@@ -26,6 +26,30 @@ interface CreateClientOnboardingPayload {
   clientId?: number;
 }
 
+interface ResubmitClientOnboardingPayload {
+  clientName?: string;
+  clientCode?: string;
+  industry?: string;
+  contactPerson?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  location?: string;
+  address?: string;
+  departmentId?: number;
+  partnerProfileId?: number;
+  managerProfileId?: number;
+  status?: "active" | "inactive";
+  documentId?: number;
+  engagementType?: string;
+  jobTitle?: string;
+  feeAmount?: number;
+  currency?: string;
+  startDate?: string;
+  endDate?: string;
+  scopeDescription?: string;
+  termsConditions?: string;
+}
+
 export interface ClientOnboardingChecklistItem {
   id: number;
   checklistId: number;
@@ -122,6 +146,16 @@ export const clientOnboardingsAPI = {
    */
   reject: async (id: number, reason?: string): Promise<ClientOnboarding> => {
     return api.post(`/client-onboardings/${id}/reject`, { reason });
+  },
+
+  /**
+   * Resubmit a rejected onboarding record back to HR after marketing updates the client/letter.
+   */
+  resubmit: async (
+    id: number,
+    data: ResubmitClientOnboardingPayload
+  ): Promise<ClientOnboarding> => {
+    return api.post(`/client-onboardings/${id}/resubmit`, data);
   },
 
   /**
