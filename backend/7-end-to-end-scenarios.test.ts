@@ -18,9 +18,11 @@ describe('End-to-end workflow smoke test', () => {
 
     const hrUser = seed.users.find((user) => user.email === 'hr@ronalds.local');
     const hrProfile = seed.profiles.find((profile) => profile.userId === hrUser?.id);
+    const marketingUser = seed.users.find((user) => user.email === 'marketing@ronalds.local');
+    const marketingProfile = seed.profiles.find((profile) => profile.userId === marketingUser?.id);
 
-    if (!hrUser || !hrProfile) {
-      throw new Error('Missing HR profile for test setup');
+    if (!hrUser || !hrProfile || !marketingUser || !marketingProfile) {
+      throw new Error('Missing HR or marketing profile for test setup');
     }
 
     const suffix = Date.now();
@@ -37,7 +39,7 @@ describe('End-to-end workflow smoke test', () => {
         status: 'approved',
         approvedByProfileId: hrProfile.id,
         approvedAt: new Date(),
-        uploadedByProfileId: hrProfile.id,
+        uploadedByProfileId: marketingProfile.id,
       },
     });
 
@@ -51,7 +53,7 @@ describe('End-to-end workflow smoke test', () => {
         contactEmail: seed.client.contactEmail ?? 'alice@greenwells.co.ke',
         contactPhone: seed.client.contactPhone ?? '+254700000000',
         location: seed.client.location ?? 'Nairobi, Kenya',
-        uploadedByProfileId: hrProfile.id,
+        uploadedByProfileId: marketingProfile.id,
         engagementLetterId: engagementLetter.id,
         status: 'approved',
       },
@@ -140,6 +142,39 @@ describe('End-to-end workflow smoke test', () => {
         roles: ['manager'],
       }
     );
+
+    await prisma.document.deleteMany({
+      where: {
+        entityId: job.id,
+        OR: [{ entityType: 'Job' }, { entityType: 'job' }],
+        documentType: { in: ['workplan', 'budget'] },
+      },
+    });
+
+    await prisma.document.createMany({
+      data: [
+        {
+          fileName: `workplan-${job.id}.pdf`,
+          filePath: `seed/workplan-${job.id}.pdf`,
+          documentType: 'workplan',
+          entityType: 'Job',
+          entityId: job.id,
+          accessLevel: 'admin',
+          uploadedBy: managerProfile.id,
+          description: 'Seed work plan document',
+        },
+        {
+          fileName: `budget-${job.id}.xlsx`,
+          filePath: `seed/budget-${job.id}.xlsx`,
+          documentType: 'budget',
+          entityType: 'Job',
+          entityId: job.id,
+          accessLevel: 'admin',
+          uploadedBy: managerProfile.id,
+          description: 'Seed budget document',
+        },
+      ],
+    });
 
     const costing = await jobService.upsertJobCosting(
       job.id,
