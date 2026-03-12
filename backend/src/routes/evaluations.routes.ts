@@ -1,96 +1,140 @@
-/**
- * Evaluation Routes (Schema v2.1 aligned)
- */
-
 import { Router } from "express";
-import { EvaluationController } from "../controllers/evaluation.controller";
-import { authenticated } from "../utils/middleware";
+import { body, param } from "express-validator";
+import EvaluationController from "../controllers/evaluation.controller";
 import { requireEvaluationAccess } from "../middleware/requireEvaluationAccess";
-import { requireModuleAccess } from "../middleware/requireModuleAccess";
-import { validateRequest, handleValidationErrors } from "../middleware/validate";
+import { handleValidationErrors } from "../middleware/validate";
+import { authenticated } from "../utils/middleware";
 
 const router = Router();
 
-/**
- * GET /evaluations
- * List evaluations
- */
-router.get("/", ...authenticated(), EvaluationController.listEvaluations);
+const cycleValidators = [
+  body("title").isString().trim().isLength({ min: 3, max: 120 }),
+  body("description").optional().isString().trim().isLength({ max: 500 }),
+  body("cycleType")
+    .optional()
+    .isString()
+    .isIn(["annual", "mid_year", "mid-year", "quarterly", "probation"]),
+  body("startDate").isISO8601(),
+  body("endDate").isISO8601(),
+  body("dueDate").optional({ nullable: true }).isISO8601(),
+  body("departmentId").optional({ nullable: true }).isInt({ min: 1 }),
+  body("templateId").optional({ nullable: true }).isInt({ min: 1 }),
+  body("enableSelfEvaluation").optional().isBoolean(),
+  body("enablePeerEvaluation").optional().isBoolean(),
+  body("enableUpwardEvaluation").optional().isBoolean(),
+  body("enableDownwardEvaluation").optional().isBoolean(),
+  body("processAnonymously").optional().isBoolean(),
+  body("hideFromDashboard").optional().isBoolean(),
+  body("excludeFromScore").optional().isBoolean(),
+  body("requireEvaluatorSignature").optional().isBoolean(),
+  body("requireEvaluateeSignature").optional().isBoolean(),
+  body("scoringConfig").optional().isObject(),
+  body("questions").optional().isArray({ min: 1 }),
+  body("questions.*.text").optional().isString().trim().isLength({ min: 3, max: 500 }),
+  body("questions.*.category")
+    .optional()
+    .isString()
+    .isIn(["competency", "behavior", "goal", "culture"]),
+  body("questions.*.weight").optional().isFloat({ min: 0.1, max: 10 }),
+  body("questions.*.order").optional().isInt({ min: 1, max: 500 }),
+];
 
-/**
- * POST /evaluations
- * Create evaluation
- */
-router.post(
-  "/",
-  ...authenticated(),
-  requireModuleAccess("evaluations", "approve"),
-  EvaluationController.createEvaluation
-);
+const assignValidators = [
+  param("cycleId").isInt({ min: 1 }).toInt(),
+  body("assignments").isArray({ min: 1 }),
+  body("assignments.*.evaluateeId").isInt({ min: 1 }),
+  body("assignments.*.evaluatorId").isInt({ min: 1 }),
+  body("assignments.*.relationship")
+    .isString()
+    .isIn(["self", "peer", "manager", "subordinate"]),
+  body("assignments.*.dueDate").optional({ nullable: true }).isISO8601(),
+];
 
-/**
- * GET /evaluations/:evaluationId
- * Get evaluation details
- */
+const submitValidators = [
+  param("assignmentId").isInt({ min: 1 }).toInt(),
+  body("responses").isArray({ min: 1 }),
+  body("responses.*.questionId").isInt({ min: 1 }),
+  body("responses.*.score").isInt({ min: 1, max: 5 }),
+  body("responses.*.comment").optional().isString().trim().isLength({ max: 2000 }),
+  body("evaluatorComment").optional().isString().trim().isLength({ max: 2000 }),
+  body("evaluatorSigned").optional().isBoolean(),
+];
+
 router.get(
-  "/:evaluationId",
+  "/dashboard/:userId",
   ...authenticated(),
-  requireEvaluationAccess("view"),
-  EvaluationController.getEvaluation
+  param("userId").isInt({ min: 1 }).toInt(),
+  handleValidationErrors,
+  EvaluationController.getEmployeeDashboard
 );
 
-/**
- * PATCH /evaluations/:evaluationId
- * Update evaluation
- */
-router.patch(
-  "/:evaluationId",
+router.get("/directory", ...authenticated(), EvaluationController.getDirectory);
+
+router.get("/cycles", ...authenticated(), EvaluationController.getMyCycles);
+
+router.get(
+  "/cycles/:cycleId",
   ...authenticated(),
-  requireEvaluationAccess("submit"),
-  EvaluationController.updateEvaluation
+  param("cycleId").isInt({ min: 1 }).toInt(),
+  handleValidationErrors,
+  EvaluationController.getCycleById
 );
 
-/**
- * POST /evaluations/:evaluationId/submit
- * Submit evaluation
- */
 router.post(
-  "/:evaluationId/submit",
+  "/cycles",
   ...authenticated(),
+  ...cycleValidators,
+  handleValidationErrors,
+  EvaluationController.createCycle
+);
+
+router.post(
+  "/cycles/:cycleId/assign",
+  ...authenticated(),
+  ...assignValidators,
+  handleValidationErrors,
+  EvaluationController.assignEvaluators
+);
+
+router.get(
+  "/cycles/:cycleId/results",
+  ...authenticated(),
+  param("cycleId").isInt({ min: 1 }).toInt(),
+  handleValidationErrors,
+  EvaluationController.getCycleResults
+);
+
+router.get(
+  "/assignments/mine",
+  ...authenticated(),
+  EvaluationController.getMyPendingEvaluations
+);
+
+router.get(
+  "/assignments/:assignmentId",
+  ...authenticated(),
+  param("assignmentId").isInt({ min: 1 }).toInt(),
+  handleValidationErrors,
+  requireEvaluationAccess("view"),
+  EvaluationController.getAssignmentById
+);
+
+router.post(
+  "/assignments/:assignmentId/submit",
+  ...authenticated(),
+  ...submitValidators,
+  handleValidationErrors,
   requireEvaluationAccess("submit"),
   EvaluationController.submitEvaluation
 );
 
-/**
- * POST /evaluations/:evaluationId/approve
- * Approve evaluation
- */
-router.post(
-  "/:evaluationId/approve",
+router.patch(
+  "/assignments/:assignmentId/acknowledge",
   ...authenticated(),
+  param("assignmentId").isInt({ min: 1 }).toInt(),
+  handleValidationErrors,
   requireEvaluationAccess("view"),
-  EvaluationController.approveEvaluation
-);
-
-/**
- * GET /evaluations/cycle/:cycleId
- * Get evaluations by cycle
- */
-router.get(
-  "/cycle/:cycleId",
-  ...authenticated(),
-  EvaluationController.getEvaluationsByCycle
-);
-
-/**
- * GET /evaluations/:evaluationId/scores
- * Get evaluation scores
- */
-router.get(
-  "/:evaluationId/scores",
-  ...authenticated(),
-  requireEvaluationAccess("view"),
-  EvaluationController.getEvaluationScores
+  EvaluationController.acknowledgeEvaluation
 );
 
 export default router;

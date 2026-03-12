@@ -1381,7 +1381,7 @@ const HRDashboard = () => {
                   <CardDescription>Create and manage review periods</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Link to="/evaluation-management">
+                  <Link to="/evaluations/cycles">
                     <Button className="w-full">
                       <Calendar className="h-4 w-4 mr-2" />
                       Manage Evaluations

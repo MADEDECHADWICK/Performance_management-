@@ -1,9 +1,14 @@
 {
+  "scripts": {
+    "test:frontend-smoke": "jest --config ronalds-growth-hub/jest.config.cjs --runInBand",
+    "test:frontend-ui": "playwright test"
+  },
   "dependencies": {
     "@prisma/adapter-pg": "^7.2.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.2.0",
+    "@playwright/test": "^1.58.2",
     "@types/jest": "^30.0.0",
     "axios": "^1.13.2",
     "jest": "^30.2.0",

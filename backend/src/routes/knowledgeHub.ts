@@ -6,7 +6,6 @@ import { AuthRequest } from "../middleware/auth";
 import { handleValidationErrors } from "../middleware/validate";
 import { ensureAuthorizationContext } from "../services/authorizationContext.service";
 import fs from "fs";
-import multer from "multer";
 import path from "path";
 import {
   SYSTEM_MODULES,
@@ -14,6 +13,12 @@ import {
   isModuleKey,
 } from "../services/moduleAccess.service";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
+import {
+  buildDiskUpload,
+  buildPublicUploadPath,
+  getPublicUploadPrefix,
+  resolveLocalUploadPath,
+} from "../config/uploads";
 
 const router = Router();
 
@@ -38,28 +43,8 @@ const KNOWLEDGE_RESOURCE_TYPES = [
 
 const KNOWLEDGE_ASSET_KINDS = ["document", "image", "video", "link"] as const;
 
-const uploadRoot = path.join(process.cwd(), "uploads", "knowledge-hub");
-if (!fs.existsSync(uploadRoot)) {
-  fs.mkdirSync(uploadRoot, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, uploadRoot);
-  },
-  filename: (_req, file, cb) => {
-    const timestamp = Date.now();
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-    cb(null, `${timestamp}-${safeName}`);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 25 * 1024 * 1024,
-  },
-});
+const localKnowledgeHubUploadPrefix = `${getPublicUploadPrefix("knowledge-hub")}/`;
+const upload = buildDiskUpload("knowledge-hub");
 
 const excludedScopeModules = new Set(["access_control", "settings", "knowledge_hub"]);
 const moduleScopeOptions = SYSTEM_MODULES.filter(
@@ -178,7 +163,7 @@ const toNullableTrimmedString = (value: unknown) => {
 const validateLinkUrlInput = (value: unknown) => {
   const trimmed = toNullableTrimmedString(value);
   if (!trimmed) return true;
-  if (trimmed.startsWith("/uploads/knowledge-hub/")) return true;
+  if (trimmed.startsWith(localKnowledgeHubUploadPrefix)) return true;
 
   try {
     const parsed = new URL(trimmed);
@@ -192,7 +177,7 @@ const validateLinkUrlInput = (value: unknown) => {
 };
 
 const isLocalKnowledgeHubUpload = (value: string | null) =>
-  typeof value === "string" && value.startsWith("/uploads/knowledge-hub/");
+  typeof value === "string" && value.startsWith(localKnowledgeHubUploadPrefix);
 
 const inferAssetKindFromUpload = (
   file: Express.Multer.File | undefined
@@ -209,7 +194,7 @@ const deleteLocalKnowledgeHubUpload = (linkUrl: string | null) => {
   const fileName = path.basename(linkUrl || "");
   if (!fileName) return;
 
-  const filePath = path.join(uploadRoot, fileName);
+  const filePath = resolveLocalUploadPath("knowledge-hub", fileName);
   try {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -235,7 +220,7 @@ const buildUploadedAsset = (file: Express.Multer.File | undefined) => {
 
   return {
     assetKind: inferAssetKindFromUpload(file),
-    linkUrl: `/uploads/knowledge-hub/${file.filename}`,
+    linkUrl: buildPublicUploadPath("knowledge-hub", file.filename),
     assetFileName: file.originalname || file.filename,
     assetMimeType: file.mimetype || null,
   };

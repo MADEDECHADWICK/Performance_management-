@@ -1,5 +1,7 @@
 import prisma from "../prisma";
 import { NotificationService } from "./notifications.service";
+import { logger, toLogContext } from "../lib/logger";
+import { ObservabilityService } from "./observability.service";
 
 type OverduePriority = "medium" | "high" | "critical";
 
@@ -67,6 +69,7 @@ class JobOverdueNotificationServiceClass {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private pollIntervalMs = OVERDUE_POLL_INTERVAL_MS;
+  private readonly workerName = "job_overdue_notifications";
 
   startWorker(options?: { pollIntervalMs?: number }) {
     if (this.timer) return;
@@ -76,6 +79,19 @@ class JobOverdueNotificationServiceClass {
       Number.isFinite(requestedInterval) && requestedInterval > 0
         ? requestedInterval
         : OVERDUE_POLL_INTERVAL_MS;
+
+    ObservabilityService.registerWorker(this.workerName, {
+      component: "jobs",
+      enabled: true,
+      pollIntervalMs: this.pollIntervalMs,
+      staleAfterMs: Math.max(this.pollIntervalMs * 2, 60_000),
+    });
+    ObservabilityService.markWorkerStarted(this.workerName, {
+      component: "jobs",
+      enabled: true,
+      pollIntervalMs: this.pollIntervalMs,
+      staleAfterMs: Math.max(this.pollIntervalMs * 2, 60_000),
+    });
 
     this.timer = setInterval(() => {
       void this.runSweep();
@@ -92,24 +108,45 @@ class JobOverdueNotificationServiceClass {
     if (!this.timer) return;
     clearInterval(this.timer);
     this.timer = null;
+    ObservabilityService.markWorkerStopped(this.workerName, {
+      component: "jobs",
+      enabled: true,
+    });
   }
 
   async runSweep(limit = 500) {
     if (this.running) return;
     this.running = true;
+    const startedAt = Date.now();
+    ObservabilityService.markWorkerHeartbeat(this.workerName, {
+      component: "jobs",
+      metadata: { limit },
+    });
 
     try {
-      await this.runSweepWithDistributedLock(limit);
+      const scannedJobs = await this.runSweepWithDistributedLock(limit);
+      ObservabilityService.markWorkerSuccess(this.workerName, {
+        component: "jobs",
+        durationMs: Date.now() - startedAt,
+        metadata: {
+          limit,
+          scannedJobs,
+        },
+      });
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("JobOverdueNotificationService.runSweep error:", error);
+      logger.error("job_overdue_sweep_failed", toLogContext(error));
+      ObservabilityService.markWorkerFailure(this.workerName, error, {
+        component: "jobs",
+        durationMs: Date.now() - startedAt,
+        metadata: { limit },
+      });
     } finally {
       this.running = false;
     }
   }
 
   private async runSweepWithDistributedLock(limit: number) {
-    await prisma.$transaction(
+    return prisma.$transaction(
       async (tx) => {
         const lockRows = await tx.$queryRaw<Array<{ locked: boolean }>>`
           SELECT pg_try_advisory_xact_lock(
@@ -118,11 +155,11 @@ class JobOverdueNotificationServiceClass {
           ) AS locked
         `;
         const isLeader = Boolean(lockRows?.[0]?.locked);
-        if (!isLeader) return;
+        if (!isLeader) return 0;
 
         // Keep this transaction open while the sweep runs so the advisory lock is held
         // for the entire overdue scan/dispatch window across all instances.
-        await this.runSweepUnlocked(limit);
+        return this.runSweepUnlocked(limit);
       },
       {
         maxWait: 2_000,
@@ -151,7 +188,7 @@ class JobOverdueNotificationServiceClass {
       take: limit,
     });
 
-    if (!jobs.length) return;
+    if (!jobs.length) return 0;
 
     const jobIds = jobs.map((job) => job.id);
     const assignments = await prisma.jobStaffAssignment.findMany({
@@ -180,6 +217,8 @@ class JobOverdueNotificationServiceClass {
         await this.dispatchTier(job, overdueDays, tier, staffByJob.get(job.id) || []);
       }
     }
+
+    return jobs.length;
   }
 
   private async dispatchTier(

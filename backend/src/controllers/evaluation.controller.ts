@@ -1,231 +1,164 @@
-/**
- * Evaluation Controller (Schema v2.1 aligned)
- */
-
 import { Response } from "express";
-import { EvaluationAssignmentStatus } from "@prisma/client";
 import { AuthRequest } from "../middleware/auth";
-import { EvaluationService } from "../services/evaluations.service";
-import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
+import EvaluationService from "../services/evaluation.service";
+import { errorResponse, successResponse } from "../utils/response";
+
+const authFromReq = (req: AuthRequest) => ({
+  userId: req.user?.userId || 0,
+  profileId: req.profile?.id || req.user?.profileId || 0,
+  roles: req.userRoles || req.user?.authRoles || [],
+});
 
 export class EvaluationController {
-  /**
-   * GET /evaluations
-   * List evaluations accessible to user
-   */
-  static async listEvaluations(req: AuthRequest, res: Response): Promise<void> {
+  static async getDirectory(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const page = Number(req.query.page) || 1;
-      const pageSize = Number(req.query.pageSize) || 10;
-      const status = req.query.status
-        ? (req.query.status as EvaluationAssignmentStatus)
-        : undefined;
-      const type = (req.query.type as string) || undefined;
-      const cycleId = req.query.cycleId ? Number(req.query.cycleId) : undefined;
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const result = await EvaluationService.listEvaluations(
-        { page, pageSize, status, type, cycleId },
-        auth
-      );
-
-      res.json(paginatedResponse(result.evaluations, result.total, page, pageSize));
+      const directory = await EvaluationService.getAssignmentDirectory(authFromReq(req));
+      res.json(successResponse(directory));
     } catch (error: any) {
-      res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
-      );
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load directory", error.statusCode || 500));
     }
   }
 
-  /**
-   * POST /evaluations
-   * Create new evaluation
-   */
-  static async createEvaluation(req: AuthRequest, res: Response): Promise<void> {
+  static async getMyCycles(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluation = await EvaluationService.createEvaluation(req.body, auth);
-
-      res.status(201).json(
-        successResponse(evaluation, 'Evaluation created successfully', 201)
-      );
+      const cycles = await EvaluationService.getMyCycles(authFromReq(req));
+      res.json(successResponse(cycles));
     } catch (error: any) {
-      res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
-      );
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load cycles", error.statusCode || 500));
     }
   }
 
-  /**
-   * GET /evaluations/:evaluationId
-   * Get specific evaluation
-   */
-  static async getEvaluation(req: AuthRequest, res: Response): Promise<void> {
-    try {
-      const evaluationId = Number(req.params.evaluationId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluation = await EvaluationService.getEvaluation(evaluationId, auth);
-
-      res.json(successResponse(evaluation, 'Evaluation retrieved'));
-    } catch (error: any) {
-      res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
-      );
-    }
-  }
-
-  /**
-   * PATCH /evaluations/:evaluationId
-   * Update evaluation
-   */
-  static async updateEvaluation(req: AuthRequest, res: Response): Promise<void> {
-    try {
-      const evaluationId = Number(req.params.evaluationId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluation = await EvaluationService.updateEvaluation(
-        evaluationId,
-        req.body,
-        auth
-      );
-
-      res.json(successResponse(evaluation, 'Evaluation updated successfully'));
-    } catch (error: any) {
-      res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
-      );
-    }
-  }
-
-  /**
-   * PATCH /evaluations/:evaluationId/submit
-   * Submit evaluation
-   */
-  static async submitEvaluation(req: AuthRequest, res: Response): Promise<void> {
-    try {
-      const evaluationId = Number(req.params.evaluationId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluation = await EvaluationService.submitEvaluation(
-        evaluationId,
-        auth
-      );
-
-      res.json(successResponse(evaluation, 'Evaluation submitted'));
-    } catch (error: any) {
-      res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
-      );
-    }
-  }
-
-  /**
-   * PATCH /evaluations/:evaluationId/approve
-   * Approve evaluation
-   */
-  static async approveEvaluation(req: AuthRequest, res: Response): Promise<void> {
-    try {
-      const evaluationId = Number(req.params.evaluationId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluation = await EvaluationService.approveEvaluation(
-        evaluationId,
-        auth
-      );
-
-      res.json(successResponse(evaluation, 'Evaluation approved'));
-    } catch (error: any) {
-      res.status(error.statusCode || 400).json(
-        errorResponse(error.message, error.statusCode || 400)
-      );
-    }
-  }
-
-  /**
-   * GET /evaluations/cycle/:cycleId
-   * Get evaluations for a cycle
-   */
-  static async getEvaluationsByCycle(
-    req: AuthRequest,
-    res: Response
-  ): Promise<void> {
+  static async getCycleById(req: AuthRequest, res: Response): Promise<void> {
     try {
       const cycleId = Number(req.params.cycleId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const evaluations = await EvaluationService.getEvaluationsByCycle(
-        cycleId,
-        auth
-      );
-
-      res.json(successResponse(evaluations, 'Evaluations retrieved'));
+      const cycle = await EvaluationService.getCycleById(cycleId, authFromReq(req));
+      res.json(successResponse(cycle));
     } catch (error: any) {
-      res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
-      );
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load cycle", error.statusCode || 500));
     }
   }
 
-  /**
-   * GET /evaluations/:evaluationId/scores
-   * Get evaluation scores
-   */
-  static async getEvaluationScores(req: AuthRequest, res: Response): Promise<void> {
+  static async createCycle(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const evaluationId = Number(req.params.evaluationId);
-
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
-
-      const scores = await EvaluationService.getEvaluationScores(
-        evaluationId,
-        auth
-      );
-
-      res.json(successResponse(scores, 'Evaluation scores retrieved'));
+      const cycle = await EvaluationService.createCycle(req.body, authFromReq(req));
+      res.status(201).json(successResponse(cycle, "Evaluation cycle created", 201));
     } catch (error: any) {
-      res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
+      res
+        .status(error.statusCode || 400)
+        .json(errorResponse(error.message || "Failed to create cycle", error.statusCode || 400));
+    }
+  }
+
+  static async assignEvaluators(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const cycleId = Number(req.params.cycleId);
+      const result = await EvaluationService.assignEvaluators(
+        cycleId,
+        req.body?.assignments || [],
+        authFromReq(req)
       );
+      res.status(201).json(successResponse(result, "Evaluators assigned", 201));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 400)
+        .json(errorResponse(error.message || "Failed to assign evaluators", error.statusCode || 400));
+    }
+  }
+
+  static async getAssignmentById(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const assignment = await EvaluationService.getAssignmentById(
+        assignmentId,
+        authFromReq(req)
+      );
+      res.json(successResponse(assignment));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load assignment", error.statusCode || 500));
+    }
+  }
+
+  static async submitEvaluation(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const result = await EvaluationService.submitEvaluation(
+        assignmentId,
+        req.body || {},
+        authFromReq(req)
+      );
+      res.json(successResponse(result, "Evaluation submitted"));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 400)
+        .json(errorResponse(error.message || "Failed to submit evaluation", error.statusCode || 400));
+    }
+  }
+
+  static async acknowledgeEvaluation(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const result = await EvaluationService.acknowledgeEvaluation(
+        assignmentId,
+        authFromReq(req)
+      );
+      res.json(successResponse(result, "Evaluation acknowledged"));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 400)
+        .json(errorResponse(error.message || "Failed to acknowledge evaluation", error.statusCode || 400));
+    }
+  }
+
+  static async getCycleResults(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const cycleId = Number(req.params.cycleId);
+      const results = await EvaluationService.getCycleResults(cycleId, authFromReq(req));
+      res.json(successResponse(results));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load cycle results", error.statusCode || 500));
+    }
+  }
+
+  static async getMyPendingEvaluations(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const assignments = await EvaluationService.getMyPendingEvaluations(authFromReq(req));
+      res.json(successResponse(assignments));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 500)
+        .json(
+          errorResponse(
+            error.message || "Failed to load pending evaluations",
+            error.statusCode || 500
+          )
+        );
+    }
+  }
+
+  static async getEmployeeDashboard(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = Number(req.params.userId);
+      const dashboard = await EvaluationService.getEmployeeDashboard(
+        userId,
+        authFromReq(req)
+      );
+      res.json(successResponse(dashboard));
+    } catch (error: any) {
+      res
+        .status(error.statusCode || 500)
+        .json(errorResponse(error.message || "Failed to load dashboard", error.statusCode || 500));
     }
   }
 }
+
+export default EvaluationController;

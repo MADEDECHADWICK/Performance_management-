@@ -43,16 +43,19 @@ import evaluationResultAreasRoutes from './evaluationResultAreas';
 import evaluationTemplatesRoutes from './evaluationTemplates';
 import evaluationDefinitionsRoutes from './evaluationDefinitions';
 import feedbackRoutes from './feedback';
+import checkInRoutes from './checkins';
 import financialSummaryRoutes from './financialSummary';
 import financeDashboardRoutes from './financeDashboard';
 import gmpDashboardRoutes from './gmpDashboard';
 import hrDashboardRoutes from './hrDashboard';
 import jobProfitabilityRoutes from './jobProfitability';
+import kpiRoutes from './kpis';
 import kpiCascadeV2Routes from './kpiCascadeV2';
 import managerDashboardRoutes from './managerDashboard';
 import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
 import notificationsRoutes from './notifications';
 import notificationTemplatesRoutes from './notificationTemplates';
+import observabilityRoutes from './observability.routes';
 import peerEvaluationsRoutes from './peerEvaluations';
 import performanceReviewsRoutes from './performanceReviews';
 import positionRatesRoutes from './positionRates';
@@ -155,6 +158,7 @@ router.use('/non-financial-performance', authMiddleware, requireModuleAccess('ev
 router.use('/development-recommendations', authMiddleware, requireModuleAccess('evaluations'), developmentRecommendationsRoutes);
 router.use('/v2/kpi', authMiddleware, requireModuleAccess('kpis'), kpiCascadeV2Routes);
 router.use('/kpi', authMiddleware, requireModuleAccess('kpis'), kpiCascadeV2Routes);
+router.use('/kpis', authMiddleware, requireModuleAccess('kpis'), kpiRoutes);
 router.use('/employees', authMiddleware, requireModuleAccess('users'), employeesRoutes);
 router.use('/profiles', authMiddleware, requireModuleAccess('users', 'read'), profilesRoutes);
 router.use('/employee-roles', authMiddleware, requireModuleAccess('users'), employeeRolesRoutes);
@@ -177,7 +181,18 @@ router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), c
 router.use('/proposals', authMiddleware, requireModuleAccess('proposals'), proposalsRoutes);
 router.use('/surveys', surveysRoutes);
 router.use('/feedback', authMiddleware, requireModuleAccess('evaluations'), feedbackRoutes);
+router.use('/checkins', authMiddleware, requireModuleAccess('evaluations'), checkInRoutes);
 router.use('/notifications', authMiddleware, requireModuleAccess('notifications', 'read'), notificationsRoutes);
+router.use(
+  '/ops',
+  authMiddleware,
+  requireAnyModuleAccess([
+    { moduleKey: 'dashboard', action: 'read' },
+    { moduleKey: 'reports', action: 'read' },
+    { moduleKey: 'notifications', action: 'read' },
+  ]),
+  observabilityRoutes
+);
 router.use('/notification-templates', authMiddleware, requireModuleAccess('notifications'), notificationTemplatesRoutes);
 router.use('/manager-dashboard', authMiddleware, requireModuleAccess('dashboard'), managerDashboardRoutes);
 router.use('/gmp-dashboard', authMiddleware, requireModuleAccess('dashboard'), gmpDashboardRoutes);

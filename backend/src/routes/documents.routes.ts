@@ -13,29 +13,11 @@ import {
   verifyDocumentValidators,
   listDocumentsValidators,
 } from "../validators/document.validators";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
+import { buildDiskUpload } from "../config/uploads";
 
 
 const router = Router();
-const uploadRoot = path.join(process.cwd(), "uploads", "documents");
-if (!fs.existsSync(uploadRoot)) {
-  fs.mkdirSync(uploadRoot, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, uploadRoot);
-  },
-  filename: (_req, file, cb) => {
-    const timestamp = Date.now();
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-    cb(null, `${timestamp}-${safeName}`);
-  },
-});
-
-const upload = multer({ storage });
+const upload = buildDiskUpload("documents");
 
 /**
  * GET /documents

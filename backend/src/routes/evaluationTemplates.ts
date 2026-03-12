@@ -3,6 +3,10 @@ import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { loadProfile } from '../middleware/loadProfile';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
+import {
+  normalizeEvaluationQuestions,
+  summarizeEvaluationQuestions,
+} from '../services/evaluationWorkflow.service';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
@@ -18,6 +22,20 @@ const resolveRoles = (req: AuthRequest) => {
 const isPrivileged = (roles: string[]) =>
   roles.includes('super_admin') ||
   roles.includes('hr');
+
+const normalizeTemplateResponse = (template: any) => {
+  const questions = normalizeEvaluationQuestions(template.questions, {
+    fallbackTitle: template.name,
+    competencies: template.competencies,
+    evaluatorTypes: ['self', 'manager', 'peer', 'direct_report', 'client'],
+  });
+
+  return {
+    ...template,
+    questions,
+    questionSummary: summarizeEvaluationQuestions(questions),
+  };
+};
 
 // GET /evaluation_templates?isActive=true
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
@@ -35,7 +53,7 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       orderBy: { createdAt: 'desc' },
     });
     
-    return res.json(templates);
+    return res.json(templates.map((template) => normalizeTemplateResponse(template)));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -60,7 +78,7 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
       return res.status(403).json({ error: 'Access denied' });
     }
     
-    return res.json(template);
+    return res.json(normalizeTemplateResponse(template));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -98,7 +116,11 @@ router.post(
         templateType: resolvedType,
         bscCategory: resolvedCategory,
         competencies: competencies ?? undefined,
-        questions,
+        questions: normalizeEvaluationQuestions(questions, {
+          fallbackTitle: templateName,
+          competencies,
+          evaluatorTypes: ['self', 'manager', 'peer', 'direct_report', 'client'],
+        }),
         createdBy: userId,
         isActive: true,
       },
@@ -111,7 +133,7 @@ router.post(
       ip_address: req.ip,
     });
     
-    return res.status(201).json(template);
+    return res.status(201).json(normalizeTemplateResponse(template));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -145,7 +167,13 @@ router.patch(
         ...(templateType && { templateType }),
         ...(bscCategory !== undefined && { bscCategory }),
         ...(competencies !== undefined && { competencies }),
-        ...(questions !== undefined && { questions }),
+        ...(questions !== undefined && {
+          questions: normalizeEvaluationQuestions(questions, {
+            fallbackTitle: name,
+            competencies,
+            evaluatorTypes: ['self', 'manager', 'peer', 'direct_report', 'client'],
+          }),
+        }),
         ...(isActive !== undefined && { isActive }),
       },
     });
@@ -157,7 +185,7 @@ router.patch(
       ip_address: req.ip,
     });
     
-    return res.json(template);
+    return res.json(normalizeTemplateResponse(template));
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

@@ -6,6 +6,10 @@ import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 import { NotificationService } from '../services/notifications.service';
 import { emitWebhook } from '../services/webhook.service';
+import {
+  calculateEvaluationAssignmentScore,
+  normalizeEvaluationQuestions,
+} from '../services/evaluationWorkflow.service';
 
 const router = Router();
 
@@ -261,6 +265,141 @@ const notifyEvaluationAcknowledged = async (assignment: any, req: AuthRequest) =
   });
 };
 
+const assignmentInclude = {
+  definition: {
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      dueDate: true,
+      processAnonymously: true,
+      hideFromDashboard: true,
+      questions: true,
+      cycle: { select: { id: true, cycleName: true, status: true } },
+    },
+  },
+  evaluatee: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      positionTitle: true,
+      user: { select: { email: true } },
+    },
+  },
+  evaluator: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      positionTitle: true,
+      user: { select: { email: true } },
+    },
+  },
+} as const;
+
+const normalizeAssignmentForViewer = (
+  assignment: any,
+  viewerProfileId: number | undefined,
+  privileged: boolean
+) => {
+  const viewerIsEvaluatee = viewerProfileId && assignment.evaluateeProfileId === viewerProfileId;
+  const shouldHideEvaluator =
+    assignment.definition?.processAnonymously && viewerIsEvaluatee && !privileged;
+
+  const evaluatee = assignment.evaluatee
+    ? {
+        ...assignment.evaluatee,
+        firstName: assignment.evaluatee.firstName,
+        lastName: assignment.evaluatee.lastName,
+        position: assignment.evaluatee.positionTitle ?? assignment.evaluatee.position,
+        email: assignment.evaluatee.user?.email,
+      }
+    : assignment.evaluatee;
+
+  const evaluator = assignment.evaluator
+    ? {
+        ...assignment.evaluator,
+        firstName: assignment.evaluator.firstName,
+        lastName: assignment.evaluator.lastName,
+        position: assignment.evaluator.positionTitle ?? assignment.evaluator.position,
+        email: assignment.evaluator.user?.email,
+      }
+    : assignment.evaluator;
+
+  return {
+    ...assignment,
+    evaluatee,
+    evaluator: shouldHideEvaluator
+      ? {
+          id: null,
+          firstName: "Anonymous",
+          lastName: "Evaluator",
+          position: null,
+          email: null,
+        }
+      : evaluator,
+  };
+};
+
+router.get('/my-pending', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    if (!req.profile?.id) {
+      return res.status(401).json({ error: 'Profile not found' });
+    }
+
+    const roles = resolveRoles(req);
+    const assignments = await prisma.evaluationAssignment.findMany({
+      where: {
+        evaluatorProfileId: req.profile.id,
+        status: { in: ['pending', 'in_progress'] },
+      },
+      include: assignmentInclude,
+      orderBy: [{ submittedAt: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    return res.json(
+      assignments.map((assignment) =>
+        normalizeAssignmentForViewer(assignment, req.profile?.id, isPrivileged(roles))
+      )
+    );
+  } catch (err: any) {
+    console.error('Error fetching my pending evaluations:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/about-me', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    if (!req.profile?.id) {
+      return res.status(401).json({ error: 'Profile not found' });
+    }
+
+    const roles = resolveRoles(req);
+    const assignments = await prisma.evaluationAssignment.findMany({
+      where: {
+        evaluateeProfileId: req.profile.id,
+        status: 'submitted',
+      },
+      include: assignmentInclude,
+      orderBy: [{ submittedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    const filtered = assignments.filter(
+      (assignment) => !assignment.definition?.hideFromDashboard || isPrivileged(roles)
+    );
+
+    return res.json(
+      filtered.map((assignment) =>
+        normalizeAssignmentForViewer(assignment, req.profile?.id, isPrivileged(roles))
+      )
+    );
+  } catch (err: any) {
+    console.error('Error fetching evaluations about me:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /evaluation_assignments?status=pending&evaluatorProfileId=123&include=definition,evaluatee,evaluator
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
@@ -386,46 +525,9 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
       });
     }
 
-    const normalized = (assignments as any[] || []).map((assignment: any) => {
-      const viewerProfileId = req.profile?.id;
-      const viewerIsEvaluatee = viewerProfileId && assignment.evaluateeProfileId === viewerProfileId;
-      const shouldHideEvaluator =
-        assignment.definition?.processAnonymously && viewerIsEvaluatee && !isPrivileged(roles);
-
-      const evaluatee = assignment.evaluatee
-        ? {
-            ...assignment.evaluatee,
-            firstName: assignment.evaluatee.firstName,
-            lastName: assignment.evaluatee.lastName,
-            position: assignment.evaluatee.positionTitle ?? assignment.evaluatee.position,
-            email: assignment.evaluatee.user?.email,
-          }
-        : assignment.evaluatee;
-
-      const evaluator = assignment.evaluator
-        ? {
-            ...assignment.evaluator,
-            firstName: assignment.evaluator.firstName,
-            lastName: assignment.evaluator.lastName,
-            position: assignment.evaluator.positionTitle ?? assignment.evaluator.position,
-            email: assignment.evaluator.user?.email,
-          }
-        : assignment.evaluator;
-
-      return {
-        ...assignment,
-        evaluatee,
-        evaluator: shouldHideEvaluator
-          ? {
-              id: null,
-              firstName: "Anonymous",
-              lastName: "Evaluator",
-              position: null,
-              email: null,
-            }
-          : evaluator,
-      };
-    });
+    const normalized = (assignments as any[] || []).map((assignment: any) =>
+      normalizeAssignmentForViewer(assignment, req.profile?.id, isPrivileged(roles))
+    );
 
     return res.json(normalized);
   } catch (err: any) {
@@ -696,7 +798,14 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     const existing = await prisma.evaluationAssignment.findUnique({
       where: { id: parseInt(id) },
       include: {
-        definition: { select: { status: true, cycle: { select: { status: true } } } },
+        definition: {
+          select: {
+            name: true,
+            questions: true,
+            status: true,
+            cycle: { select: { status: true } },
+          },
+        },
       },
     });
 
@@ -728,6 +837,20 @@ router.patch('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) 
     if (responses !== undefined) updateData.responses = responses;
     if (evidenceUrls !== undefined) updateData.evidenceUrls = evidenceUrls;
     if (evaluatorComments !== undefined) updateData.evaluatorComments = evaluatorComments;
+
+    const effectiveResponses = responses ?? existing.responses;
+    if (effectiveResponses !== undefined) {
+      const questions = normalizeEvaluationQuestions(existing.definition?.questions, {
+        fallbackTitle: existing.definition?.name || 'Evaluation',
+      });
+      const calculatedScore = calculateEvaluationAssignmentScore(
+        questions,
+        effectiveResponses
+      );
+      if (calculatedScore !== undefined) {
+        updateData.score = calculatedScore;
+      }
+    }
 
     const nextStatus = status ?? undefined;
     if (nextStatus !== undefined) {

@@ -30,6 +30,7 @@ export { default as notificationTemplatesAPI } from './notificationTemplates';
 export { default as performanceFrameworkAPI } from './performanceFramework';
 export { default as moduleAccessAPI } from './moduleAccess';
 export { default as knowledgeHubAPI } from './knowledgeHub';
+export { default as opsAPI } from './ops';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -53,6 +54,7 @@ import notificationTemplatesAPI from './notificationTemplates';
 import performanceFrameworkAPI from './performanceFramework';
 import moduleAccessAPI from './moduleAccess';
 import knowledgeHubAPI from './knowledgeHub';
+import opsAPI from './ops';
 
 const API = {
   auth: authAPI,
@@ -76,6 +78,7 @@ const API = {
   performanceFramework: performanceFrameworkAPI,
   moduleAccess: moduleAccessAPI,
   knowledgeHub: knowledgeHubAPI,
+  ops: opsAPI,
 };
 
 export default API;

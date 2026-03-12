@@ -24,6 +24,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ChevronDown,
+  Activity,
   BarChart3,
   DollarSign,
   TrendingUp,
@@ -429,6 +430,7 @@ function AppSidebar({
     "evaluations.calibration",
     "people.positions_rates",
     "reports.audit_logs",
+    "reports.ops_center",
   ]);
 
   const hasPartnerToolsSectionAccess = canShowAnyView([
@@ -549,17 +551,17 @@ function AppSidebar({
                     module="evaluations"
                   />
                   <NavItem
-                    path="/continuous-feedback"
-                    icon={Users}
-                    label="Feedback"
-                    viewKey="feedback.continuous"
+                    path="/evaluations/cycles"
+                    icon={Calendar}
+                    label="Create & Launch"
+                    viewKey="evaluations.management"
                     module="evaluations"
                   />
                   <NavItem
-                    path="/manager-evaluation"
-                    icon={UserCheck}
-                    label="Team Evaluations"
-                    viewKey="evaluations.manager_view"
+                    path="/evaluations/feedback"
+                    icon={Users}
+                    label="Feedback"
+                    viewKey="feedback.continuous"
                     module="evaluations"
                   />
                   <NavItem
@@ -664,11 +666,11 @@ function AppSidebar({
                     <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
                     <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
                     <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" viewKey="jobs.workflow" module="jobs" />
-                    <NavItem path="/evaluation-management" icon={Calendar} label="Evaluations" viewKey="evaluations.management" module="evaluations" />
                     <NavItem path="/kpi-management" icon={Settings} label="KPIs" viewKey="kpi.management" module="kpis" />
                     <NavItem path="/calibration" icon={Settings} label="Calibration" viewKey="evaluations.calibration" module="evaluations" />
                     <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" viewKey="people.positions_rates" module="users" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" viewKey="reports.audit_logs" module="reports" />
+                    <NavItem path="/ops-center" icon={Activity} label="Ops Center" viewKey="reports.ops_center" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>

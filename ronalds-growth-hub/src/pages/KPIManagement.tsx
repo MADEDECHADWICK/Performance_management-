@@ -232,6 +232,9 @@ const getProfileDisplayName = (profile: any): string => {
   return `Profile #${profile?.id ?? "unknown"}`;
 };
 
+const formatTypeLabel = (value?: string | null) =>
+  String(value || "framework_v2").replace(/_/g, " ");
+
 export default function KPIManagement() {
   const { toast } = useToast();
   const { isHR, isAdmin, hasModuleAccess, isLoading: authLoading } = useAuth();
@@ -662,7 +665,7 @@ export default function KPIManagement() {
                         <TableCell className="align-top">
                           <div className="font-medium">{kpi.name}</div>
                           <div className="text-xs text-muted-foreground">
-                            {(kpi.kpiType || "framework_v2").replaceAll("_", " ")}
+                            {formatTypeLabel(kpi.kpiType)}
                           </div>
                         </TableCell>
                         <TableCell className="align-top">

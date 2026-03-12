@@ -1,6 +1,7 @@
-﻿import { useState, useEffect } from "react";
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
+import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,33 +9,50 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import DashboardLayout from "@/components/DashboardLayout";
-import { Loader2, Plus, X } from "lucide-react";
+import { Loader2, Sparkles, X } from "lucide-react";
+import type { EvaluationQuestionSection, EvaluatorType } from "@/lib/api/types";
+import {
+  buildDefaultEvaluationSections,
+  summarizeEvaluationSections,
+} from "@/lib/evaluations/workflow";
 
 interface Template {
-  id: string;
+  id: number;
   name: string;
-  description: string;
-  template_type: string;
-  bsc_category: string;
-  competencies: any;
+  description?: string;
+  questions?: EvaluationQuestionSection[];
+  competencies?: any[];
 }
 
 interface Profile {
-  id: string;
-  first_name: string;
-  last_name: string;
-  position: string;
+  id: number;
+  firstName?: string;
+  first_name?: string;
+  lastName?: string;
+  last_name?: string;
+  positionTitle?: string;
+  position?: string;
+  departmentId?: number | null;
   department_id?: number | null;
+  managerId?: number | null;
   manager_id?: number | null;
 }
 
 interface KPI {
-  id: string;
+  id: number | string;
   name: string;
-  category: string;
+  category?: string | null;
 }
+
+type ToggleControl = {
+  label: string;
+  checked: boolean;
+  setter: Dispatch<SetStateAction<boolean>>;
+  description: string;
+};
 
 const extractItems = (payload: any) => {
   const data = payload?.data ?? payload;
@@ -44,138 +62,254 @@ const extractItems = (payload: any) => {
   return [];
 };
 
+const appendUnique = <T,>(items: T[], value: T) =>
+  items.includes(value) ? items : [...items, value];
+
+const getFullName = (profile: Profile | undefined) =>
+  [profile?.firstName || profile?.first_name, profile?.lastName || profile?.last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim() || "Unknown employee";
+
+const getPosition = (profile: Profile | undefined) =>
+  profile?.positionTitle || profile?.position || "No position";
+
 export default function CreateEvaluation() {
   const navigate = useNavigate();
   const { toast } = useToast();
+
   const [loading, setLoading] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [employees, setEmployees] = useState<Profile[]>([]);
-  const [kpis, setKPIs] = useState<KPI[]>([]);
-  
+  const [kpis, setKpis] = useState<KPI[]>([]);
+
   const [evaluationName, setEvaluationName] = useState("");
+  const [description, setDescription] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [dueDate, setDueDate] = useState("");
-  
-  // Evaluation types
+
   const [enableSelf, setEnableSelf] = useState(false);
   const [enablePeer, setEnablePeer] = useState(false);
   const [enableUpward, setEnableUpward] = useState(false);
   const [enableDownward, setEnableDownward] = useState(true);
   const [enableClientEvaluation, setEnableClientEvaluation] = useState(false);
-  
-  // Processing options
-  const [processAnonymously, setProcessAnonymously] = useState(false);
-  const [hideFromDashboard, setHideFromDashboard] = useState(false);
-  const [requireAllKPIs, setRequireAllKPIs] = useState(false);
-  const [excludeFromScore, setExcludeFromScore] = useState(false);
-  const [cancelIfNotProcessed, setCancelIfNotProcessed] = useState(false);
 
-  const [okrWeight, setOkrWeight] = useState(30);
-  const [evaluationWeight, setEvaluationWeight] = useState(50);
-  const [feedbackWeight, setFeedbackWeight] = useState(20);
-  const learningWeightTotal = evaluationWeight + okrWeight + feedbackWeight;
-  const learningWeightsValid = learningWeightTotal === 100;
-
-  // Signature options
-  const [requireEvaluatorSignature, setRequireEvaluatorSignature] = useState(false);
-  const [requireEvaluateeSignature, setRequireEvaluateeSignature] = useState(false);
-  const [sendToEvaluatee, setSendToEvaluatee] = useState(false);
-  const [sendToManagers, setSendToManagers] = useState(false);
-  const [sendToDownward, setSendToDownward] = useState(false);
-  
-  // Assignments (360)
-  const [selectedPeerEvaluators, setSelectedPeerEvaluators] = useState<string[]>([]);
-  const [selectedUpwardEvaluators, setSelectedUpwardEvaluators] = useState<string[]>([]);
-  const [selectedDownwardEvaluators, setSelectedDownwardEvaluators] = useState<string[]>([]);
-  const [selectedEvaluatees, setSelectedEvaluatees] = useState<string[]>([]);
+  const [selectedEvaluatees, setSelectedEvaluatees] = useState<number[]>([]);
+  const [selectedPeerEvaluators, setSelectedPeerEvaluators] = useState<number[]>([]);
+  const [selectedUpwardEvaluators, setSelectedUpwardEvaluators] = useState<number[]>([]);
+  const [selectedDownwardEvaluators, setSelectedDownwardEvaluators] = useState<number[]>([]);
 
   const [autoAssignManager, setAutoAssignManager] = useState(true);
   const [autoAssignPeers, setAutoAssignPeers] = useState(true);
   const [autoAssignDirectReports, setAutoAssignDirectReports] = useState(true);
   const [peerAssignmentMode, setPeerAssignmentMode] = useState<"manager" | "department" | "any">("department");
   const [peersPerPerson, setPeersPerPerson] = useState(2);
-  
-  // Result areas (KPIs)
+
   const [selectedKpis, setSelectedKpis] = useState<Array<{ kpi_id: string; weight: number }>>([]);
-  const employeeOptions = Array.isArray(employees) ? employees : [];
-  const templateOptions = Array.isArray(templates) ? templates : [];
-  const kpiOptions = Array.isArray(kpis) ? kpis : [];
+  const [processAnonymously, setProcessAnonymously] = useState(false);
+  const [hideFromDashboard, setHideFromDashboard] = useState(false);
+  const [requireAllKPIs, setRequireAllKPIs] = useState(false);
+  const [excludeFromScore, setExcludeFromScore] = useState(false);
+  const [requireEvaluatorSignature, setRequireEvaluatorSignature] = useState(false);
+  const [requireEvaluateeSignature, setRequireEvaluateeSignature] = useState(false);
+  const [remindersEnabled, setRemindersEnabled] = useState(true);
+  const [reminderCadence, setReminderCadence] = useState<"daily" | "weekly" | "custom">("weekly");
+
+  const [okrWeight, setOkrWeight] = useState(30);
+  const [evaluationWeight, setEvaluationWeight] = useState(50);
+  const [feedbackWeight, setFeedbackWeight] = useState(20);
 
   useEffect(() => {
-    loadTemplates();
-    loadEmployees();
-    loadKPIs();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    void loadTemplates();
+    void loadEmployees();
+    void loadKPIs();
+  }, []);
 
   const loadTemplates = async () => {
     try {
-      const data = await apiFetch('GET', '/evaluation-templates?isActive=true');
+      const data = await apiFetch("GET", "/evaluation-templates?isActive=true");
       setTemplates(extractItems(data));
     } catch (error) {
-      console.log('Templates not available:', error);
+      console.error("Failed to load templates:", error);
       setTemplates([]);
     }
   };
 
   const loadEmployees = async () => {
     try {
-      const data = await apiFetch('GET', '/profiles?status=active&page=1&pageSize=100');
-      setEmployees(extractItems(data));
-    } catch (error: any) {
-      if (error?.status === 401) {
-        navigate('/auth');
-        return;
+      const pageSize = 100;
+      const rowsById = new Map<number, Profile>();
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const data = await apiFetch<{
+          data?: Profile[];
+          hasMore?: boolean;
+          totalPages?: number;
+        }>("GET", `/employees?status=active&page=${page}&pageSize=${pageSize}`);
+        const batch = extractItems(data) as Profile[];
+
+        batch.forEach((employee) => {
+          rowsById.set(employee.id, employee);
+        });
+
+        hasMore = Boolean(data?.hasMore);
+        page += 1;
+
+        if (page > Number(data?.totalPages || page)) {
+          hasMore = false;
+        }
       }
-      if (error?.status === 403) {
-        setEmployees([]);
-        return;
-      }
-      console.error('Failed to load employees:', error);
+
+      setEmployees(Array.from(rowsById.values()));
+    } catch (error) {
+      console.error("Failed to load employees:", error);
+      toast({ title: "Error loading employees", variant: "destructive" });
     }
   };
 
   const loadKPIs = async () => {
     try {
-      const data = await apiFetch('GET', '/kpi/archive/kpis');
-      const archiveRows = extractItems(data);
-      setKPIs(
-        archiveRows
+      const data = await apiFetch("GET", "/kpi/archive/kpis");
+      const rows = extractItems(data);
+      setKpis(
+        rows
           .filter((row: any) => row?.is_active !== false)
           .map((row: any) => ({
             id: row.id,
             name: row.name,
-            description: row.description || null,
             category: row.category || null,
-            kpiType: row.kpi_type || null,
           }))
       );
-    } catch (error: any) {
-      if (error?.status === 401) {
-        navigate('/auth');
-        return;
-      }
-      if (error?.status === 403) {
-        setKPIs([]);
-        return;
-      }
-      console.error('Failed to load KPIs:', error);
+    } catch (error) {
+      console.error("Failed to load KPIs:", error);
+      toast({ title: "Error loading KPIs", variant: "destructive" });
     }
   };
 
-  const handleAddKPI = (kpiId: string) => {
-    if (!selectedKpis.find(k => k.kpi_id === kpiId)) {
-      setSelectedKpis([...selectedKpis, { kpi_id: kpiId, weight: 0 }]);
-    }
+  const enabledEvaluatorTypes = useMemo(() => {
+    const types: EvaluatorType[] = [];
+    if (enableSelf) types.push("self");
+    if (enableDownward) types.push("manager");
+    if (enablePeer) types.push("peer");
+    if (enableUpward) types.push("direct_report");
+    if (enableClientEvaluation) types.push("client");
+    return types;
+  }, [enableClientEvaluation, enableDownward, enablePeer, enableSelf, enableUpward]);
+
+  const selectedTemplateRecord = useMemo(
+    () => templates.find((template) => String(template.id) === selectedTemplate),
+    [selectedTemplate, templates]
+  );
+
+  const generatedSections = useMemo(
+    () =>
+      buildDefaultEvaluationSections({
+        template: selectedTemplateRecord,
+        selectedKpis,
+        kpis: kpis.map((kpi) => ({
+          id: String(kpi.id),
+          name: kpi.name,
+          category: kpi.category,
+        })),
+        enabledEvaluatorTypes:
+          enabledEvaluatorTypes.length > 0 ? enabledEvaluatorTypes : ["manager"],
+      }),
+    [enabledEvaluatorTypes, kpis, selectedKpis, selectedTemplateRecord]
+  );
+
+  const questionSummary = useMemo(
+    () => summarizeEvaluationSections(generatedSections),
+    [generatedSections]
+  );
+
+  const learningWeightTotal = evaluationWeight + okrWeight + feedbackWeight;
+  const learningWeightsValid = learningWeightTotal === 100;
+  const evaluatorToggles: ToggleControl[] = [
+    {
+      label: "Manager / Downward",
+      checked: enableDownward,
+      setter: setEnableDownward,
+      description: "Adds this evaluator group to the workflow mix.",
+    },
+    {
+      label: "Peer",
+      checked: enablePeer,
+      setter: setEnablePeer,
+      description: "Adds this evaluator group to the workflow mix.",
+    },
+    {
+      label: "Upward / Direct Report",
+      checked: enableUpward,
+      setter: setEnableUpward,
+      description: "Adds this evaluator group to the workflow mix.",
+    },
+    {
+      label: "Self",
+      checked: enableSelf,
+      setter: setEnableSelf,
+      description: "Adds this evaluator group to the workflow mix.",
+    },
+    {
+      label: "Client / Customer",
+      checked: enableClientEvaluation,
+      setter: setEnableClientEvaluation,
+      description: "Adds this evaluator group to the workflow mix.",
+    },
+  ];
+  const visibilityToggles: ToggleControl[] = [
+    {
+      label: "Process anonymously",
+      checked: processAnonymously,
+      setter: setProcessAnonymously,
+      description: "",
+    },
+    {
+      label: "Hide from dashboard",
+      checked: hideFromDashboard,
+      setter: setHideFromDashboard,
+      description: "",
+    },
+    {
+      label: "Require all KPI answers",
+      checked: requireAllKPIs,
+      setter: setRequireAllKPIs,
+      description: "",
+    },
+    {
+      label: "Exclude from score",
+      checked: excludeFromScore,
+      setter: setExcludeFromScore,
+      description: "",
+    },
+    {
+      label: "Require evaluator signature",
+      checked: requireEvaluatorSignature,
+      setter: setRequireEvaluatorSignature,
+      description: "",
+    },
+    {
+      label: "Require evaluatee acknowledgement",
+      checked: requireEvaluateeSignature,
+      setter: setRequireEvaluateeSignature,
+      description: "",
+    },
+  ];
+
+  const addEvaluatee = (value: string) => {
+    const profileId = Number(value);
+    if (!profileId) return;
+    setSelectedEvaluatees((current) => appendUnique(current, profileId));
   };
 
-  const handleRemoveKPI = (kpiId: string) => {
-    setSelectedKpis(selectedKpis.filter(k => k.kpi_id !== kpiId));
-  };
-
-  const handleWeightChange = (kpiId: string, weight: number) => {
-    setSelectedKpis(selectedKpis.map(k => 
-      k.kpi_id === kpiId ? { ...k, weight } : k
-    ));
+  const addEvaluator = (
+    value: string,
+    setter: Dispatch<SetStateAction<number[]>>
+  ) => {
+    const profileId = Number(value);
+    if (!profileId) return;
+    setter((current) => appendUnique(current, profileId));
   };
 
   const handlePublish = async () => {
@@ -184,15 +318,33 @@ export default function CreateEvaluation() {
       return;
     }
 
-    if (selectedEvaluatees.length === 0) {
-      toast({ title: "Please select evaluatees", variant: "destructive" });
+    if (enabledEvaluatorTypes.length === 0) {
+      toast({
+        title: "Select at least one evaluator group",
+        variant: "destructive",
+      });
       return;
     }
 
     if (!learningWeightsValid) {
       toast({
-        title: "Adjust learning weights",
-        description: "Evaluation + OKR + Feedback must total 100%.",
+        title: "Learning weights must total 100%",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedEvaluatees.length === 0) {
+      toast({
+        title: "Select at least one evaluatee",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (generatedSections.length === 0 || questionSummary.itemCount === 0) {
+      toast({
+        title: "Add at least one metric or evaluation item",
         variant: "destructive",
       });
       return;
@@ -201,150 +353,162 @@ export default function CreateEvaluation() {
     setLoading(true);
 
     try {
-      // Create evaluation
-      const evaluationResponse = await apiFetch('POST', '/evaluation-definitions', {
-        name: evaluationName,
-        description: "Ad-hoc evaluation",
-        cycleId: null,
-        departmentId: null,
+      const definition = await apiFetch("POST", "/evaluation-definitions", {
+        name: evaluationName.trim(),
+        description: description.trim() || undefined,
         enableSelfEvaluation: enableSelf,
         enablePeerEvaluation: enablePeer,
         enableUpwardEvaluation: enableUpward,
         enableDownwardEvaluation: enableDownward,
-        enableClientEvaluation: enableClientEvaluation,
-        dueDate: dueDate || null,
-        processAnonymously: processAnonymously,
-        hideFromDashboard: hideFromDashboard,
-        excludeFromScore: excludeFromScore,
-        requireEvaluatorSignature: requireEvaluatorSignature,
-        requireEvaluateeSignature: requireEvaluateeSignature,
+        enableClientEvaluation,
+        dueDate: dueDate || undefined,
+        processAnonymously,
+        hideFromDashboard,
+        excludeFromScore,
+        requireEvaluatorSignature,
+        requireEvaluateeSignature,
         status: "published",
+        questions: generatedSections,
         scoringConfig: {
-          requireAllKPIs,
-          cancelIfNotProcessed,
-          sendToEvaluatee,
-          sendToManagers,
-          sendToDownward,
+          requireAllKpis: requireAllKPIs,
           peerAssignmentMode,
           peersPerPerson,
           learningGrowthBreakdown: {
-            evaluation: evaluationWeight,
-            okr: okrWeight,
-            feedback: feedbackWeight,
+            evaluation: evaluationWeight / 100,
+            okr: okrWeight / 100,
+            feedback: feedbackWeight / 100,
+          },
+            evaluationWorkflow: {
+              remindersEnabled,
+              reminderCadence,
+              launchSummary: `${selectedEvaluatees.length} evaluatee(s), ${enabledEvaluatorTypes.length} evaluator group(s), ${questionSummary.itemCount} items`,
+              evaluatorMix: {
+                self: enableSelf,
+                manager: enableDownward,
+              peer: enablePeer,
+              direct_report: enableUpward,
+              client: enableClientEvaluation,
+            },
+            schedules: enabledEvaluatorTypes.map((evaluatorType) => ({
+              evaluatorType,
+              dueAt: dueDate || undefined,
+            })),
           },
         },
       });
-      const evaluation = (evaluationResponse as any)?.data ?? evaluationResponse;
 
-      // Create assignments
+      const definitionId = Number(definition?.id ?? definition?.data?.id ?? 0);
       const assignments: Array<{
         evaluationDefinitionId: number;
         evaluatorProfileId: number;
         evaluateeProfileId: number;
-        evaluatorType: string;
+        evaluatorType: EvaluatorType;
       }> = [];
 
-      const profileById = new Map(employeeOptions.map((emp) => [emp.id, emp]));
+      const employeesById = new Map(employees.map((employee) => [employee.id, employee]));
 
-      const addAssignment = (evaluatorId: string, evaluateeId: string, type: string) => {
-        if (!evaluatorId || evaluatorId === evaluateeId) return;
+      const addAssignment = (
+        evaluatorProfileId: number | null | undefined,
+        evaluateeProfileId: number,
+        evaluatorType: EvaluatorType
+      ) => {
+        if (!evaluatorProfileId) return;
+        if (evaluatorProfileId === evaluateeProfileId && evaluatorType !== "self") return;
         assignments.push({
-          evaluationDefinitionId: Number(evaluation.id),
-          evaluatorProfileId: parseInt(evaluatorId),
-          evaluateeProfileId: parseInt(evaluateeId),
-          evaluatorType: type,
+          evaluationDefinitionId: definitionId,
+          evaluatorProfileId,
+          evaluateeProfileId,
+          evaluatorType,
         });
       };
 
-      for (const evaluateeId of selectedEvaluatees) {
-        const evaluateeProfile = profileById.get(evaluateeId);
-        const managerId =
-          evaluateeProfile?.manager_id ?? (evaluateeProfile as any)?.managerId;
+      selectedEvaluatees.forEach((evaluateeId) => {
+        const evaluatee = employeesById.get(evaluateeId);
+        const managerId = Number(evaluatee?.managerId ?? evaluatee?.manager_id ?? 0) || undefined;
         const departmentId =
-          evaluateeProfile?.department_id ?? (evaluateeProfile as any)?.departmentId;
+          Number(evaluatee?.departmentId ?? evaluatee?.department_id ?? 0) || undefined;
 
         if (enableDownward) {
           if (autoAssignManager && managerId) {
-            addAssignment(String(managerId), evaluateeId, "manager");
+            addAssignment(managerId, evaluateeId, "manager");
           } else {
-            selectedDownwardEvaluators.forEach((evaluatorId) =>
-              addAssignment(evaluatorId, evaluateeId, "manager")
+            selectedDownwardEvaluators.forEach((profileId) =>
+              addAssignment(profileId, evaluateeId, "manager")
             );
           }
         }
 
         if (enablePeer) {
           if (!autoAssignPeers && selectedPeerEvaluators.length > 0) {
-            selectedPeerEvaluators.forEach((evaluatorId) =>
-              addAssignment(evaluatorId, evaluateeId, "peer")
+            selectedPeerEvaluators.forEach((profileId) =>
+              addAssignment(profileId, evaluateeId, "peer")
             );
           } else {
-            let peerCandidates = employeeOptions.filter((emp) => emp.id !== evaluateeId);
+            let candidates = employees.filter((employee) => employee.id !== evaluateeId);
             if (peerAssignmentMode === "manager" && managerId) {
-              peerCandidates = peerCandidates.filter(
-                (emp) =>
-                  (emp.manager_id ?? (emp as any).managerId) &&
-                  String(emp.manager_id ?? (emp as any).managerId) === String(managerId)
+              candidates = candidates.filter(
+                (employee) =>
+                  Number(employee.managerId ?? employee.manager_id ?? 0) === managerId
               );
             } else if (peerAssignmentMode === "department" && departmentId) {
-              peerCandidates = peerCandidates.filter(
-                (emp) =>
-                  (emp.department_id ?? (emp as any).departmentId) &&
-                  (emp.department_id ?? (emp as any).departmentId) === departmentId
+              candidates = candidates.filter(
+                (employee) =>
+                  Number(employee.departmentId ?? employee.department_id ?? 0) ===
+                  departmentId
               );
             }
-            peerCandidates
-              .slice(0, Math.max(1, peersPerPerson))
-              .forEach((peer) => addAssignment(peer.id, evaluateeId, "peer"));
+            candidates.slice(0, Math.max(1, peersPerPerson)).forEach((candidate) => {
+              addAssignment(candidate.id, evaluateeId, "peer");
+            });
           }
         }
 
         if (enableUpward) {
           if (!autoAssignDirectReports && selectedUpwardEvaluators.length > 0) {
-            selectedUpwardEvaluators.forEach((evaluatorId) =>
-              addAssignment(evaluatorId, evaluateeId, "direct_report")
+            selectedUpwardEvaluators.forEach((profileId) =>
+              addAssignment(profileId, evaluateeId, "direct_report")
             );
           } else {
-            const directReports = employeeOptions.filter(
-              (emp) =>
-                (emp.manager_id ?? (emp as any).managerId) &&
-                String(emp.manager_id ?? (emp as any).managerId) === evaluateeId
-            );
-            directReports.forEach((report) => addAssignment(report.id, evaluateeId, "direct_report"));
+            employees
+              .filter(
+                (employee) => Number(employee.managerId ?? employee.manager_id ?? 0) === evaluateeId
+              )
+              .forEach((report) => addAssignment(report.id, evaluateeId, "direct_report"));
           }
         }
-      }
 
-      const dedupedAssignments = Array.from(
+        if (enableSelf) {
+          addAssignment(evaluateeId, evaluateeId, "self");
+        }
+      });
+
+      const uniqueAssignments = Array.from(
         new Map(
-          assignments.map((item) => [
-            `${item.evaluationDefinitionId}-${item.evaluatorProfileId}-${item.evaluateeProfileId}-${item.evaluatorType}`,
-            item,
+          assignments.map((assignment) => [
+            `${assignment.evaluationDefinitionId}-${assignment.evaluatorProfileId}-${assignment.evaluateeProfileId}-${assignment.evaluatorType}`,
+            assignment,
           ])
         ).values()
       );
 
-      if (enableSelf) {
-        for (const evaluateeId of selectedEvaluatees) {
-          dedupedAssignments.push({
-            evaluationDefinitionId: Number(evaluation.id),
-            evaluatorProfileId: parseInt(evaluateeId),
-            evaluateeProfileId: parseInt(evaluateeId),
-            evaluatorType: "self"
-          });
-        }
+      if (uniqueAssignments.length > 0) {
+        await apiFetch("POST", "/evaluation-assignments", uniqueAssignments);
       }
 
-      if (dedupedAssignments.length > 0) {
-        await apiFetch('POST', '/evaluation-assignments', dedupedAssignments);
-      }
-
-      // KPI weighting is handled in Phase B2 via evaluation definitions.
-
-      toast({ title: "Evaluation published successfully!" });
+      toast({
+        title: "Evaluation workflow published",
+        description:
+          uniqueAssignments.length > 0
+            ? `${uniqueAssignments.length} assignments created.`
+            : "Definition published with no assignments yet.",
+      });
       navigate("/evaluations");
     } catch (error: any) {
-      toast({ title: "Error publishing evaluation", description: error.message, variant: "destructive" });
+      toast({
+        title: "Error publishing evaluation",
+        description: error.message,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -354,240 +518,104 @@ export default function CreateEvaluation() {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold">Create Evaluation</h1>
-          <p className="text-muted-foreground">Configure and publish a new evaluation</p>
+          <h1 className="text-3xl font-bold">Evaluation Workflow Builder</h1>
+          <p className="text-muted-foreground">
+            Build one canonical evaluation definition with evaluator mix, metrics, scoring, and launch rules.
+          </p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Basic Information</CardTitle>
-            <CardDescription>Enter the evaluation details</CardDescription>
+            <CardTitle>1. Evaluation Basics</CardTitle>
+            <CardDescription>Set the identity of the workflow and start from a reusable template when available.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2 md:col-span-2">
               <Label>Evaluation Name</Label>
               <Input
                 value={evaluationName}
-                onChange={(e) => setEvaluationName(e.target.value)}
-                placeholder="e.g., Q1 2025 Performance Review"
+                onChange={(event) => setEvaluationName(event.target.value)}
+                placeholder="Quarterly review, 360 feedback, probation assessment..."
               />
             </div>
-
-            <div>
-              <Label>Template (Optional)</Label>
+            <div className="space-y-2 md:col-span-2">
+              <Label>Description</Label>
+              <Textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={3}
+                placeholder="What is this workflow intended to assess?"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Template</Label>
               <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select template" />
+                  <SelectValue placeholder="Select a reusable template" />
                 </SelectTrigger>
                 <SelectContent>
-                  {templateOptions.map(template => (
-                    <SelectItem key={template.id} value={template.id}>
+                  {templates.map((template) => (
+                    <SelectItem key={template.id} value={String(template.id)}>
                       {template.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-
-            <div>
-              <Label>Due Date</Label>
-              <Input
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-              />
+            <div className="space-y-2">
+              <Label>Default Due Date</Label>
+              <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
             </div>
+            {selectedTemplateRecord && (
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 md:col-span-2">
+                <div className="flex items-center gap-2 font-medium">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  {selectedTemplateRecord.name}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {selectedTemplateRecord.description || "This template will seed the question blueprint."}
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Evaluation Types</CardTitle>
+            <CardTitle>2. Audience and Scope</CardTitle>
+            <CardDescription>Select the employees who should receive this workflow.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label>Downward (Manager â†’ Employee)</Label>
-              <Switch checked={enableDownward} onCheckedChange={setEnableDownward} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Upward (Employee â†’ Manager)</Label>
-              <Switch checked={enableUpward} onCheckedChange={setEnableUpward} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Peer (Colleague â†’ Colleague)</Label>
-              <Switch checked={enablePeer} onCheckedChange={setEnablePeer} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Self-Evaluation</Label>
-              <Switch checked={enableSelf} onCheckedChange={setEnableSelf} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Client Evaluation (Survey-based)</Label>
-              <Switch checked={enableClientEvaluation} onCheckedChange={setEnableClientEvaluation} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Assign Evaluators (360)</CardTitle>
-            <CardDescription>Auto-assign by reporting lines, or override with manual selections.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center justify-between">
-              <Label>Auto-assign managers for downward reviews</Label>
-              <Switch checked={autoAssignManager} onCheckedChange={setAutoAssignManager} />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Downward Evaluators (Override)</Label>
-              <Select onValueChange={(value) => setSelectedDownwardEvaluators([...selectedDownwardEvaluators, value])}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select managers" />
-                </SelectTrigger>
-                <SelectContent>
-                  {employeeOptions.map(emp => (
-                    <SelectItem key={emp.id} value={emp.id}>
-                      {emp.first_name} {emp.last_name} - {emp.position}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {selectedDownwardEvaluators.map(id => {
-                  const emp = employeeOptions.find(e => e.id === id);
-                  return emp ? (
-                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
-                      {emp.first_name} {emp.last_name}
-                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedDownwardEvaluators(selectedDownwardEvaluators.filter(e => e !== id))} />
-                    </span>
-                  ) : null;
-                })}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Label>Auto-assign peers from same department</Label>
-              <Switch checked={autoAssignPeers} onCheckedChange={setAutoAssignPeers} />
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Peer assignment mode</Label>
-                <Select
-                  value={peerAssignmentMode}
-                  onValueChange={(value) =>
-                    setPeerAssignmentMode(value as "manager" | "department" | "any")
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select mode" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="manager">Same manager</SelectItem>
-                    <SelectItem value="department">Same department</SelectItem>
-                    <SelectItem value="any">Any peer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Peers per person</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={peersPerPerson}
-                  onChange={(e) => setPeersPerPerson(Number(e.target.value) || 1)}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Peer Evaluators (Override)</Label>
-              <Select onValueChange={(value) => setSelectedPeerEvaluators([...selectedPeerEvaluators, value])}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select peer evaluators" />
-                </SelectTrigger>
-                <SelectContent>
-                  {employeeOptions.map(emp => (
-                    <SelectItem key={emp.id} value={emp.id}>
-                      {emp.first_name} {emp.last_name} - {emp.position}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {selectedPeerEvaluators.map(id => {
-                  const emp = employeeOptions.find(e => e.id === id);
-                  return emp ? (
-                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
-                      {emp.first_name} {emp.last_name}
-                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedPeerEvaluators(selectedPeerEvaluators.filter(e => e !== id))} />
-                    </span>
-                  ) : null;
-                })}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Label>Auto-assign direct reports for upward reviews</Label>
-              <Switch checked={autoAssignDirectReports} onCheckedChange={setAutoAssignDirectReports} />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Direct Reports (Override)</Label>
-              <Select onValueChange={(value) => setSelectedUpwardEvaluators([...selectedUpwardEvaluators, value])}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select direct reports" />
-                </SelectTrigger>
-                <SelectContent>
-                  {employeeOptions.map(emp => (
-                    <SelectItem key={emp.id} value={emp.id}>
-                      {emp.first_name} {emp.last_name} - {emp.position}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {selectedUpwardEvaluators.map(id => {
-                  const emp = employeeOptions.find(e => e.id === id);
-                  return emp ? (
-                    <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
-                      {emp.first_name} {emp.last_name}
-                      <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedUpwardEvaluators(selectedUpwardEvaluators.filter(e => e !== id))} />
-                    </span>
-                  ) : null;
-                })}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Assign Evaluatees</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Select onValueChange={(value) => setSelectedEvaluatees([...selectedEvaluatees, value])}>
+            <Select onValueChange={addEvaluatee}>
               <SelectTrigger>
-                <SelectValue placeholder="Select evaluatees" />
+                <SelectValue placeholder="Add evaluatees" />
               </SelectTrigger>
               <SelectContent>
-                {employeeOptions.map(emp => (
-                  <SelectItem key={emp.id} value={emp.id}>
-                    {emp.first_name} {emp.last_name} - {emp.position}
+                {employees.map((employee) => (
+                  <SelectItem key={employee.id} value={String(employee.id)}>
+                    {getFullName(employee)} - {getPosition(employee)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {selectedEvaluatees.map(id => {
-                const emp = employeeOptions.find(e => e.id === id);
-                return emp ? (
-                  <span key={id} className="inline-flex items-center gap-1 bg-secondary px-2 py-1 rounded">
-                    {emp.first_name} {emp.last_name}
-                    <X className="h-4 w-4 cursor-pointer" onClick={() => setSelectedEvaluatees(selectedEvaluatees.filter(e => e !== id))} />
-                  </span>
-                ) : null;
+            <div className="flex flex-wrap gap-2">
+              {selectedEvaluatees.map((profileId) => {
+                const employee = employees.find((entry) => entry.id === profileId);
+                return (
+                  <Badge key={profileId} variant="secondary" className="gap-2 px-3 py-1.5">
+                    <span>{getFullName(employee)}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedEvaluatees((current) =>
+                          current.filter((entry) => entry !== profileId)
+                        )
+                      }
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </Badge>
+                );
               })}
             </div>
           </CardContent>
@@ -595,166 +623,333 @@ export default function CreateEvaluation() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Result Areas (KPIs)</CardTitle>
+            <CardTitle>3. Evaluator Mix</CardTitle>
+            <CardDescription>Enable the rater groups that should participate in this evaluation.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              {evaluatorToggles.map(({ label, checked, setter, description }) => (
+                <div key={String(label)} className="flex items-center justify-between rounded-xl border p-4">
+                  <div>
+                    <div className="font-medium">{label}</div>
+                    <div className="text-sm text-muted-foreground">{description}</div>
+                  </div>
+                  <Switch checked={checked} onCheckedChange={setter} />
+                </div>
+              ))}
+            </div>
+
+            <Separator />
+
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Auto-assign managers</Label>
+                  <Switch checked={autoAssignManager} onCheckedChange={setAutoAssignManager} />
+                </div>
+                {!autoAssignManager && (
+                  <Select onValueChange={(value) => addEvaluator(value, setSelectedDownwardEvaluators)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Add manual manager evaluators" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={String(employee.id)}>
+                          {getFullName(employee)} - {getPosition(employee)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Auto-assign direct reports</Label>
+                  <Switch
+                    checked={autoAssignDirectReports}
+                    onCheckedChange={setAutoAssignDirectReports}
+                  />
+                </div>
+                {!autoAssignDirectReports && (
+                  <Select onValueChange={(value) => addEvaluator(value, setSelectedUpwardEvaluators)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Add manual upward evaluators" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={String(employee.id)}>
+                          {getFullName(employee)} - {getPosition(employee)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div className="space-y-3 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <Label>Auto-assign peers</Label>
+                  <Switch checked={autoAssignPeers} onCheckedChange={setAutoAssignPeers} />
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Peer selection mode</Label>
+                    <Select
+                      value={peerAssignmentMode}
+                      onValueChange={(value) =>
+                        setPeerAssignmentMode(value as "manager" | "department" | "any")
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manager">Same manager</SelectItem>
+                        <SelectItem value="department">Same department</SelectItem>
+                        <SelectItem value="any">Any active peer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Peers per person</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={peersPerPerson}
+                      onChange={(event) =>
+                        setPeersPerPerson(Math.max(1, Number(event.target.value) || 1))
+                      }
+                    />
+                  </div>
+                </div>
+                {!autoAssignPeers && (
+                  <Select onValueChange={(value) => addEvaluator(value, setSelectedPeerEvaluators)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Add manual peer evaluators" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={String(employee.id)}>
+                          {getFullName(employee)} - {getPosition(employee)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>4. Metrics / Result Areas / KPIs</CardTitle>
+            <CardDescription>Choose the measurable result areas that should drive evaluation scoring.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Select onValueChange={handleAddKPI}>
+            <Select
+              onValueChange={(value) => {
+                if (selectedKpis.some((entry) => entry.kpi_id === value)) return;
+                setSelectedKpis((current) => [...current, { kpi_id: value, weight: 0 }]);
+              }}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="Add KPI" />
+                <SelectValue placeholder="Add KPI / result area" />
               </SelectTrigger>
               <SelectContent>
-                {kpiOptions.map(kpi => (
-                  <SelectItem key={kpi.id} value={kpi.id}>
-                    {kpi.name} ({kpi.category})
+                {kpis.map((kpi) => (
+                  <SelectItem key={String(kpi.id)} value={String(kpi.id)}>
+                    {kpi.name} {kpi.category ? `(${kpi.category})` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-
             {selectedKpis.map(({ kpi_id, weight }) => {
-              const kpi = kpiOptions.find(k => k.id === kpi_id);
-              return kpi ? (
-                <div key={kpi_id} className="flex items-center gap-4 p-3 border rounded">
-                  <div className="flex-1">
-                    <p className="font-medium">{kpi.name}</p>
-                    <p className="text-sm text-muted-foreground">{kpi.category}</p>
+              const kpi = kpis.find((entry) => String(entry.id) === kpi_id);
+              return (
+                <div key={kpi_id} className="grid gap-3 rounded-xl border p-4 md:grid-cols-[1fr_140px_auto]">
+                  <div>
+                    <div className="font-medium">{kpi?.name || "Unknown KPI"}</div>
+                    <div className="text-sm text-muted-foreground">{kpi?.category || "Metric"}</div>
                   </div>
-                  <div className="w-32">
-                    <Input
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={weight}
-                      onChange={(e) => handleWeightChange(kpi_id, parseFloat(e.target.value))}
-                      placeholder="Weight %"
-                    />
-                  </div>
-                  <Button variant="ghost" size="icon" onClick={() => handleRemoveKPI(kpi_id)}>
-                    <X className="h-4 w-4" />
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={weight}
+                    onChange={(event) =>
+                      setSelectedKpis((current) =>
+                        current.map((entry) =>
+                          entry.kpi_id === kpi_id
+                            ? { ...entry, weight: Math.max(0, Number(event.target.value) || 0) }
+                            : entry
+                        )
+                      )
+                    }
+                    placeholder="Weight %"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() =>
+                      setSelectedKpis((current) =>
+                        current.filter((entry) => entry.kpi_id !== kpi_id)
+                      )
+                    }
+                  >
+                    Remove
                   </Button>
                 </div>
-              ) : null;
+              );
             })}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Processing Options</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label>Process Anonymously</Label>
-              <Switch checked={processAnonymously} onCheckedChange={setProcessAnonymously} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Hide from Dashboard</Label>
-              <Switch checked={hideFromDashboard} onCheckedChange={setHideFromDashboard} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Cancel if Not Processed</Label>
-              <Switch checked={cancelIfNotProcessed} onCheckedChange={setCancelIfNotProcessed} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Require All KPIs</Label>
-              <Switch checked={requireAllKPIs} onCheckedChange={setRequireAllKPIs} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Exclude from Score</Label>
-              <Switch checked={excludeFromScore} onCheckedChange={setExcludeFromScore} />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Learning &amp; Growth Weights</CardTitle>
-            <CardDescription>Set OKR vs evaluation vs feedback weighting</CardDescription>
+            <CardTitle>5. Rating Scales and Weights</CardTitle>
+            <CardDescription>Keep evaluation, OKR, and feedback mix aligned with performance scoring.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label>Evaluation Weight (%)</Label>
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={evaluationWeight}
-                onChange={(e) => setEvaluationWeight(Number(e.target.value))}
-              />
+              <Input type="number" value={evaluationWeight} onChange={(event) => setEvaluationWeight(Number(event.target.value) || 0)} />
             </div>
             <div className="space-y-2">
               <Label>OKR Weight (%)</Label>
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={okrWeight}
-                onChange={(e) => setOkrWeight(Number(e.target.value))}
-              />
+              <Input type="number" value={okrWeight} onChange={(event) => setOkrWeight(Number(event.target.value) || 0)} />
             </div>
             <div className="space-y-2">
               <Label>Feedback Weight (%)</Label>
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={feedbackWeight}
-                onChange={(e) => setFeedbackWeight(Number(e.target.value))}
-              />
+              <Input type="number" value={feedbackWeight} onChange={(event) => setFeedbackWeight(Number(event.target.value) || 0)} />
             </div>
-            <div className="space-y-2 md:col-span-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Total</span>
-                <span className={learningWeightsValid ? "text-success" : "text-destructive"}>
+            <div className="rounded-xl border bg-muted/30 p-4 md:col-span-3">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Learning & growth total</span>
+                <Badge variant={learningWeightsValid ? "default" : "destructive"}>
                   {learningWeightTotal}%
-                </span>
+                </Badge>
               </div>
-              {!learningWeightsValid && (
-                <p className="text-xs text-destructive">
-                  Weights must sum to 100% for scoring to be valid.
-                </p>
-              )}
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Signature Options</CardTitle>
+            <CardTitle>6. Scheduling and Reminders</CardTitle>
+            <CardDescription>Define the operational defaults for the assignment launch.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label>Require Evaluator Signature</Label>
-              <Switch checked={requireEvaluatorSignature} onCheckedChange={setRequireEvaluatorSignature} />
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="flex items-center justify-between rounded-xl border p-4">
+              <div>
+                <div className="font-medium">Enable reminders</div>
+                <div className="text-sm text-muted-foreground">Keep evaluators moving through the cycle.</div>
+              </div>
+              <Switch checked={remindersEnabled} onCheckedChange={setRemindersEnabled} />
             </div>
-            <div className="flex items-center justify-between">
-              <Label>Require Evaluatee Signature</Label>
-              <Switch checked={requireEvaluateeSignature} onCheckedChange={setRequireEvaluateeSignature} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Send to Evaluatee</Label>
-              <Switch checked={sendToEvaluatee} onCheckedChange={setSendToEvaluatee} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Send to Managers</Label>
-              <Switch checked={sendToManagers} onCheckedChange={setSendToManagers} />
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Send to Downward Evaluators</Label>
-              <Switch checked={sendToDownward} onCheckedChange={setSendToDownward} />
+            <div className="space-y-2">
+              <Label>Reminder cadence</Label>
+              <Select
+                value={reminderCadence}
+                onValueChange={(value) => setReminderCadence(value as "daily" | "weekly" | "custom")}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="custom">Manual / custom</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>
 
-        <div className="flex gap-4">
-          <Button onClick={handlePublish} disabled={loading} className="flex-1">
-            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Publish Evaluation
-          </Button>
-          <Button variant="outline" onClick={() => navigate("/evaluations")}>
-            Cancel
-          </Button>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>7. Visibility / Signatures / Anonymity</CardTitle>
+            <CardDescription>Control dashboard visibility, score inclusion, and signatures.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            {visibilityToggles.map(({ label, checked, setter }) => (
+              <div key={String(label)} className="flex items-center justify-between rounded-xl border p-4">
+                <div className="font-medium">{label}</div>
+                <Switch checked={checked} onCheckedChange={setter} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>8. Review and Launch</CardTitle>
+            <CardDescription>Preview the generated question blueprint before publishing.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-xl border bg-muted/30 p-4">
+                <div className="text-sm text-muted-foreground">Evaluator groups</div>
+                <div className="mt-1 text-2xl font-semibold">{enabledEvaluatorTypes.length}</div>
+              </div>
+              <div className="rounded-xl border bg-muted/30 p-4">
+                <div className="text-sm text-muted-foreground">Sections</div>
+                <div className="mt-1 text-2xl font-semibold">{questionSummary.sectionCount}</div>
+              </div>
+              <div className="rounded-xl border bg-muted/30 p-4">
+                <div className="text-sm text-muted-foreground">Items</div>
+                <div className="mt-1 text-2xl font-semibold">{questionSummary.itemCount}</div>
+              </div>
+              <div className="rounded-xl border bg-muted/30 p-4">
+                <div className="text-sm text-muted-foreground">Metric items</div>
+                <div className="mt-1 text-2xl font-semibold">{questionSummary.metricCount}</div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {enabledEvaluatorTypes.map((type) => (
+                <Badge key={type} variant="outline" className="capitalize">
+                  {type.replace("_", " ")}
+                </Badge>
+              ))}
+            </div>
+
+            <div className="space-y-3">
+              {generatedSections.map((section) => (
+                <div key={section.id} className="rounded-xl border p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="font-medium">{section.title}</div>
+                      {section.description && (
+                        <div className="text-sm text-muted-foreground">{section.description}</div>
+                      )}
+                    </div>
+                    <Badge variant="secondary">{section.items.length} items</Badge>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {section.items.slice(0, 6).map((item) => (
+                      <Badge key={item.id} variant="outline">
+                        {item.label}
+                      </Badge>
+                    ))}
+                    {section.items.length > 6 && <Badge variant="outline">+{section.items.length - 6} more</Badge>}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-4">
+              <Button onClick={handlePublish} disabled={loading} className="flex-1">
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Publish Evaluation Workflow
+              </Button>
+              <Button variant="outline" onClick={() => navigate("/evaluations")}>
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   );

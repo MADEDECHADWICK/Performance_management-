@@ -642,9 +642,68 @@ export interface Document {
 }
 
 // Evaluation Models
+export type EvaluationQuestionKind = 'rating' | 'metric' | 'text' | 'boolean' | 'select';
+
+export interface EvaluationRatingScale {
+  min: number;
+  max: number;
+  step?: number;
+  lowLabel?: string;
+  highLabel?: string;
+  labels?: Record<string, string>;
+}
+
+export interface EvaluationMetricSource {
+  type: 'kpi' | 'okr' | 'result_area' | 'competency' | 'question' | 'custom';
+  id?: number | string;
+  name: string;
+  category?: string;
+  unit?: string;
+  targetValue?: number;
+}
+
+export interface EvaluationQuestionItem {
+  id: string;
+  label: string;
+  description?: string;
+  kind: EvaluationQuestionKind;
+  required?: boolean;
+  weight?: number;
+  evaluatorTypes?: EvaluatorType[];
+  ratingScale?: EvaluationRatingScale;
+  options?: string[];
+  placeholder?: string;
+  allowComment?: boolean;
+  metricSource?: EvaluationMetricSource;
+}
+
+export interface EvaluationQuestionSection {
+  id: string;
+  title: string;
+  description?: string;
+  weight?: number;
+  evaluatorTypes?: EvaluatorType[];
+  items: EvaluationQuestionItem[];
+}
+
+export interface EvaluationWorkflowSchedule {
+  evaluatorType: EvaluatorType;
+  opensAt?: string;
+  dueAt?: string;
+}
+
+export interface EvaluationWorkflowConfig {
+  evaluatorMix?: Partial<Record<EvaluatorType, boolean>>;
+  remindersEnabled?: boolean;
+  reminderCadence?: 'daily' | 'weekly' | 'custom';
+  schedules?: EvaluationWorkflowSchedule[];
+  launchSummary?: string;
+}
+
 export interface EvaluationCycle {
   id: number;
-  name: string;
+  name?: string;
+  cycleName?: string;
   description?: string;
   startDate: string;
   endDate: string;
@@ -658,33 +717,65 @@ export interface EvaluationDefinition {
   cycleId?: number;
   name: string;
   description?: string;
-  evaluatorType: EvaluatorType;
-  isAnonymous: boolean;
-  hideFromEvaluatee: boolean;
-  requireSignature: boolean;
-  excludeFromScoreComputation: boolean;
-  financialWeight: number;
-  nonFinancialWeight: number;
+  evaluatorType?: EvaluatorType;
+  enabledEvaluatorTypes?: EvaluatorType[];
+  enableSelfEvaluation?: boolean;
+  enablePeerEvaluation?: boolean;
+  enableUpwardEvaluation?: boolean;
+  enableDownwardEvaluation?: boolean;
+  enableClientEvaluation?: boolean;
+  isAnonymous?: boolean;
+  processAnonymously?: boolean;
+  hideFromEvaluatee?: boolean;
+  hideFromDashboard?: boolean;
+  requireSignature?: boolean;
+  requireEvaluatorSignature?: boolean;
+  requireEvaluateeSignature?: boolean;
+  excludeFromScoreComputation?: boolean;
+  excludeFromScore?: boolean;
+  financialWeight?: number;
+  nonFinancialWeight?: number;
   status: EvaluationDefinitionStatus;
   dueDate?: string;
   departmentId?: number;
   createdByProfileId?: number;
+  publishedAt?: string;
+  questions?: EvaluationQuestionSection[];
+  questionSummary?: {
+    sectionCount: number;
+    itemCount: number;
+    metricCount: number;
+    evaluatorTypes: EvaluatorType[];
+  };
+  scoringConfig?: Record<string, any> & {
+    evaluationWorkflow?: EvaluationWorkflowConfig;
+  };
   createdAt: string;
   updatedAt: string;
 }
 
 export interface EvaluationAssignment {
   id: number;
-  definitionId: number;
+  definitionId?: number;
+  evaluationDefinitionId?: number;
   evaluatorProfileId: number;
   evaluateeProfileId: number;
+  evaluatorType?: EvaluatorType;
   status: EvaluationAssignmentStatus;
   dueDate?: string;
   submittedAt?: string;
+  score?: number;
   overallScore?: number;
   financialScore?: number;
   nonFinancialScore?: number;
   comments?: string;
+  evaluatorComments?: string;
+  evidenceUrls?: string[];
+  responses?: Record<string, any>;
+  evaluatorSigned?: boolean;
+  evaluatorSignedAt?: string;
+  evaluateeAcknowledged?: boolean;
+  evaluateeAcknowledgedAt?: string;
   createdAt: string;
   updatedAt: string;
   // Relations

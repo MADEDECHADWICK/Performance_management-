@@ -3,7 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import AppRouteGuard from "@/components/auth/AppRouteGuard";
 import PageLoader from "@/components/ui/page-loader";
@@ -39,23 +39,19 @@ const EmployeeProfile = lazy(() => import("./pages/EmployeeProfile"));
 const EmployeeManagement = lazy(() => import("./pages/EmployeeManagement"));
 
 // Evaluations
-const Evaluations = lazy(() => import("./pages/Evaluations"));
-const EvaluationManagement = lazy(() => import("./pages/EvaluationManagement"));
-const CreateEvaluation = lazy(() => import("./pages/CreateEvaluation"));
-const CompleteEvaluation = lazy(() => import("./pages/CompleteEvaluation"));
-const ManagerEvaluationPage = lazy(() => import("./pages/ManagerEvaluation"));
-const UpwardReviews = lazy(() => import("./pages/UpwardReviews"));
 const ClientEvaluation = lazy(() => import("./pages/ClientEvaluation"));
 const ProjectEvaluations = lazy(() => import("./pages/ProjectEvaluations"));
+const EvaluationDashboard = lazy(() => import("./pages/evaluations/EvaluationDashboard"));
+const EvaluationCycleManager = lazy(() => import("./pages/evaluations/EvaluationCycleManager"));
+const EvaluationForm = lazy(() => import("./pages/evaluations/EvaluationForm"));
+const EvaluationResults = lazy(() => import("./pages/evaluations/EvaluationResults"));
+const EvaluationKPIDashboard = lazy(() => import("./pages/evaluations/KPIDashboard"));
+const FeedbackHub = lazy(() => import("./pages/evaluations/FeedbackHub"));
 
 // KPIs & Goals
 const KPIManagement = lazy(() => import("./pages/KPICascadeV2Management"));
 const Goals = lazy(() => import("./pages/Goals"));
 const Scorecard = lazy(() => import("./pages/Scorecard"));
-
-// Feedback
-const Feedback = lazy(() => import("./pages/Feedback"));
-const ContinuousFeedback = lazy(() => import("./pages/ContinuousFeedback"));
 
 // Analytics & Reports
 const Reports = lazy(() => import("./pages/Reports"));
@@ -70,6 +66,7 @@ const FinanceProfitability = lazy(() => import("./pages/FinanceProfitability"));
 const FinanceAllocations = lazy(() => import("./pages/FinanceAllocations"));
 const AuditLogs = lazy(() => import("./pages/AuditLogs"));
 const Notifications = lazy(() => import("./pages/Notifications"));
+const OpsCenter = lazy(() => import("./pages/OpsCenter"));
 
 // Team & Development
 const TeamPerformance = lazy(() => import("./pages/TeamPerformance"));
@@ -106,6 +103,16 @@ const RouteFallback = () => (
     <PageLoader message="Loading page..." minHeightClassName="min-h-[50vh]" />
   </div>
 );
+
+const LegacyEvaluationAssignmentRedirect = () => {
+  const { assignmentId } = useParams();
+  return (
+    <Navigate
+      to={assignmentId ? `/evaluations/assignments/${assignmentId}` : "/evaluations"}
+      replace
+    />
+  );
+};
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -321,7 +328,47 @@ const App = () => (
               />
               
               {/* Evaluations */}
-              <Route path="/evaluations" element={<AppRouteGuard><Evaluations /></AppRouteGuard>} />
+              <Route path="/evaluations" element={<AppRouteGuard><EvaluationDashboard /></AppRouteGuard>} />
+              <Route
+                path="/evaluations/cycles"
+                element={
+                  <AppRouteGuard>
+                    <EvaluationCycleManager />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/evaluations/assignments/:assignmentId"
+                element={
+                  <AppRouteGuard>
+                    <EvaluationForm />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/evaluations/cycles/:cycleId/results"
+                element={
+                  <AppRouteGuard>
+                    <EvaluationResults />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/evaluations/kpis"
+                element={
+                  <AppRouteGuard>
+                    <EvaluationKPIDashboard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/evaluations/feedback"
+                element={
+                  <AppRouteGuard>
+                    <FeedbackHub />
+                  </AppRouteGuard>
+                }
+              />
               {/* Legacy evaluation route aliases */}
               <Route
                 path="/my-evaluations"
@@ -335,7 +382,7 @@ const App = () => (
                 path="/self-evaluation"
                 element={
                   <AppRouteGuard>
-                    <Navigate to="/evaluations?tab=performance" replace />
+                    <Navigate to="/evaluations" replace />
                   </AppRouteGuard>
                 }
               />
@@ -343,7 +390,7 @@ const App = () => (
                 path="/peer-reviews"
                 element={
                   <AppRouteGuard>
-                    <Navigate to="/evaluations?tab=performance" replace />
+                    <Navigate to="/evaluations" replace />
                   </AppRouteGuard>
                 }
               />
@@ -351,7 +398,7 @@ const App = () => (
                 path="/evaluation-management"
                 element={
                   <AppRouteGuard>
-                    <EvaluationManagement />
+                    <Navigate to="/evaluations/cycles" replace />
                   </AppRouteGuard>
                 }
               />
@@ -359,17 +406,31 @@ const App = () => (
                 path="/create-evaluation"
                 element={
                   <AppRouteGuard>
-                    <CreateEvaluation />
+                    <Navigate to="/evaluations/cycles" replace />
                   </AppRouteGuard>
                 }
               />
-              <Route path="/evaluation/:assignmentId" element={<AppRouteGuard><CompleteEvaluation /></AppRouteGuard>} />
-              <Route path="/complete-evaluation/:assignmentId" element={<AppRouteGuard><CompleteEvaluation /></AppRouteGuard>} />
+              <Route
+                path="/evaluation/:assignmentId"
+                element={
+                  <AppRouteGuard>
+                    <LegacyEvaluationAssignmentRedirect />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/complete-evaluation/:assignmentId"
+                element={
+                  <AppRouteGuard>
+                    <LegacyEvaluationAssignmentRedirect />
+                  </AppRouteGuard>
+                }
+              />
               <Route
                 path="/manager-evaluation"
                 element={
                   <AppRouteGuard>
-                    <ManagerEvaluationPage />
+                    <Navigate to="/evaluations" replace />
                   </AppRouteGuard>
                 }
               />
@@ -381,7 +442,14 @@ const App = () => (
                   </AppRouteGuard>
                 }
               />
-              <Route path="/upward-reviews" element={<AppRouteGuard><UpwardReviews /></AppRouteGuard>} />
+              <Route
+                path="/upward-reviews"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations" replace />
+                  </AppRouteGuard>
+                }
+              />
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
               <Route path="/survey/:token" element={<ClientEvaluation />} />
               
@@ -398,8 +466,22 @@ const App = () => (
               <Route path="/scorecard" element={<AppRouteGuard><Scorecard /></AppRouteGuard>} />
               
               {/* Feedback */}
-              <Route path="/feedback" element={<AppRouteGuard><Feedback /></AppRouteGuard>} />
-              <Route path="/continuous-feedback" element={<AppRouteGuard><ContinuousFeedback /></AppRouteGuard>} />
+              <Route
+                path="/feedback"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations/feedback" replace />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/continuous-feedback"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/evaluations/feedback" replace />
+                  </AppRouteGuard>
+                }
+              />
               
               {/* Analytics & Reports */}
               <Route
@@ -528,6 +610,14 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <AuditLogs />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/ops-center"
+                element={
+                  <AppRouteGuard>
+                    <OpsCenter />
                   </AppRouteGuard>
                 }
               />

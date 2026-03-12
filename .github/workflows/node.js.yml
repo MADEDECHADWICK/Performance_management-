@@ -55,17 +55,13 @@ jobs:
       - run: npx prisma generate
       - run: npx prisma migrate deploy
       - run: npm run lint --if-present
-      - run: npm run typecheck --if-present
-      - run: npm test --if-present
-      - run: npm run test:e2e --if-present
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:e2e
 
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: ronalds-growth-hub
 
     steps:
       - uses: actions/checkout@v4
@@ -75,9 +71,34 @@ jobs:
         with:
           node-version: 22.2
           cache: npm
-          cache-dependency-path: ronalds-growth-hub/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            ronalds-growth-hub/package-lock.json
 
-      - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm run typecheck --if-present
-      - run: npm run build
+      - name: Install root test runner
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ronalds-growth-hub
+
+      - name: Frontend smoke tests
+        run: npm run test:frontend-smoke
+
+      - name: Frontend UI smoke tests
+        run: npm run test:frontend-ui
+
+      - name: Frontend lint
+        run: npm run lint --if-present
+        working-directory: ronalds-growth-hub
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+        working-directory: ronalds-growth-hub
+
+      - name: Frontend build
+        run: npm run build
+        working-directory: ronalds-growth-hub

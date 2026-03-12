@@ -135,7 +135,8 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     action: "read",
     defaultPath: "/evaluations",
     patterns: [
-      /^\/evaluations(?:\/|$)/,
+      /^\/evaluations\/?$/,
+      /^\/evaluations\/assignments(?:\/[^/]+)?(?:\/|$)/,
       /^\/evaluation\/[^/]+(?:\/|$)/,
       /^\/complete-evaluation\/[^/]+(?:\/|$)/,
     ],
@@ -146,8 +147,12 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     category: "Evaluations",
     module: "evaluations",
     action: "read",
-    defaultPath: "/continuous-feedback",
-    patterns: [/^\/continuous-feedback(?:\/|$)/, /^\/feedback(?:\/|$)/],
+    defaultPath: "/evaluations/feedback",
+    patterns: [
+      /^\/continuous-feedback(?:\/|$)/,
+      /^\/feedback(?:\/|$)/,
+      /^\/evaluations\/feedback(?:\/|$)/,
+    ],
   },
   {
     key: "reviews.upward",
@@ -155,7 +160,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     category: "Evaluations",
     module: "evaluations",
     action: "read",
-    defaultPath: "/upward-reviews",
+    defaultPath: "/evaluations",
     patterns: [/^\/upward-reviews(?:\/|$)/],
   },
   {
@@ -371,17 +376,12 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     category: "Evaluations",
     module: "evaluations",
     action: "read",
-    defaultPath: "/evaluation-management",
-    patterns: [/^\/evaluation-management(?:\/|$)/],
-  },
-  {
-    key: "evaluations.create",
-    label: "Create Evaluation",
-    category: "Evaluations",
-    module: "evaluations",
-    action: "write",
-    defaultPath: "/create-evaluation",
-    patterns: [/^\/create-evaluation(?:\/|$)/],
+    defaultPath: "/evaluations/cycles",
+    patterns: [
+      /^\/evaluation-management(?:\/|$)/,
+      /^\/create-evaluation(?:\/|$)/,
+      /^\/evaluations\/cycles(?:\/|$)/,
+    ],
   },
   {
     key: "evaluations.manager_view",
@@ -389,7 +389,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     category: "Evaluations",
     module: "evaluations",
     action: "read",
-    defaultPath: "/manager-evaluation",
+    defaultPath: "/evaluations",
     patterns: [/^\/manager-evaluation(?:\/|$)/],
   },
   {
@@ -417,7 +417,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     module: "kpis",
     action: "read",
     defaultPath: "/kpi-management",
-    patterns: [/^\/kpi-management(?:\/|$)/],
+    patterns: [/^\/kpi-management(?:\/|$)/, /^\/evaluations\/kpis(?:\/|$)/],
   },
   {
     key: "finance.summary",
@@ -490,6 +490,15 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     action: "read",
     defaultPath: "/audit-logs",
     patterns: [/^\/audit-logs(?:\/|$)/],
+  },
+  {
+    key: "reports.ops_center",
+    label: "Ops Center",
+    category: "Reporting",
+    module: "reports",
+    action: "read",
+    defaultPath: "/ops-center",
+    patterns: [/^\/ops-center(?:\/|$)/],
   },
   {
     key: "analytics.employee",
@@ -661,7 +670,6 @@ const GMP_VIEW_KEYS = [
   "team.performance",
   "team.staff_development",
   "evaluations.management",
-  "evaluations.create",
   "evaluations.manager_view",
   "evaluations.project_view",
   "evaluations.calibration",
@@ -694,10 +702,10 @@ const HR_VIEW_KEYS = [
   "people.recruitment_candidates",
   "jobs.admin_create",
   "evaluations.management",
-  "evaluations.create",
   "evaluations.calibration",
   "kpi.management",
   "reports.audit_logs",
+  "reports.ops_center",
   "analytics.hr",
 ] as const;
 

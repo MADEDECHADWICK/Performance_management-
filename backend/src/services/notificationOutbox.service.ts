@@ -1,5 +1,7 @@
 import prisma from "../prisma";
 import websocketService from "./websocket.service";
+import { logger, toLogContext } from "../lib/logger";
+import { ObservabilityService } from "./observability.service";
 
 interface OutboxState {
   notificationId: number;
@@ -69,16 +71,17 @@ class NotificationOutboxServiceClass {
   private immediateProcessingQueued = false;
   private pollIntervalMs = 5000;
   private batchSize = 50;
+  private readonly workerName = "notification_outbox";
 
   private logProcessingError(error: any) {
     if (error?.code === "P2028") {
-      console.warn(
-        "Notification outbox skipped a cycle because the database was busy starting the worker transaction."
-      );
+      logger.warn("notification_outbox_cycle_skipped", {
+        reason: "database_busy_starting_worker_transaction",
+      });
       return;
     }
 
-    console.error("Notification outbox worker failed:", error);
+    logger.error("notification_outbox_worker_failed", toLogContext(error));
   }
 
   private shouldRunBackgroundProcessing() {
@@ -88,10 +91,40 @@ class NotificationOutboxServiceClass {
   }
 
   startWorker(options?: { pollIntervalMs?: number; batchSize?: number }) {
-    if (!this.shouldRunBackgroundProcessing()) return;
+    if (!this.shouldRunBackgroundProcessing()) {
+      ObservabilityService.registerWorker(this.workerName, {
+        component: "notifications",
+        enabled: false,
+        pollIntervalMs: this.pollIntervalMs,
+      });
+      ObservabilityService.markWorkerStopped(this.workerName, {
+        component: "notifications",
+        enabled: false,
+      });
+      return;
+    }
     if (this.workerTimer) return;
     this.pollIntervalMs = options?.pollIntervalMs ?? this.pollIntervalMs;
     this.batchSize = options?.batchSize ?? this.batchSize;
+
+    ObservabilityService.registerWorker(this.workerName, {
+      component: "notifications",
+      enabled: true,
+      pollIntervalMs: this.pollIntervalMs,
+      staleAfterMs: Math.max(this.pollIntervalMs * 3, 15_000),
+      metadata: {
+        batchSize: this.batchSize,
+      },
+    });
+    ObservabilityService.markWorkerStarted(this.workerName, {
+      component: "notifications",
+      enabled: true,
+      pollIntervalMs: this.pollIntervalMs,
+      staleAfterMs: Math.max(this.pollIntervalMs * 3, 15_000),
+      metadata: {
+        batchSize: this.batchSize,
+      },
+    });
 
     this.workerTimer = setInterval(() => {
       void this.processDueJobs(this.batchSize);
@@ -103,6 +136,10 @@ class NotificationOutboxServiceClass {
     if (!this.workerTimer) return;
     clearInterval(this.workerTimer);
     this.workerTimer = null;
+    ObservabilityService.markWorkerStopped(this.workerName, {
+      component: "notifications",
+      enabled: true,
+    });
   }
 
   requestImmediateProcessing() {
@@ -149,18 +186,36 @@ class NotificationOutboxServiceClass {
   async processDueJobs(limit = 50) {
     if (this.processing) return;
     this.processing = true;
+    const startedAt = Date.now();
+    ObservabilityService.markWorkerHeartbeat(this.workerName, {
+      component: "notifications",
+      metadata: { limit },
+    });
 
     try {
-      await this.processDueJobsWithDistributedLock(limit);
+      const processedCount = await this.processDueJobsWithDistributedLock(limit);
+      ObservabilityService.markWorkerSuccess(this.workerName, {
+        component: "notifications",
+        durationMs: Date.now() - startedAt,
+        metadata: {
+          limit,
+          processedCount,
+        },
+      });
     } catch (error: any) {
       this.logProcessingError(error);
+      ObservabilityService.markWorkerFailure(this.workerName, error, {
+        component: "notifications",
+        durationMs: Date.now() - startedAt,
+        metadata: { limit },
+      });
     } finally {
       this.processing = false;
     }
   }
 
   private async processDueJobsWithDistributedLock(limit: number) {
-    await prisma.$transaction(
+    return prisma.$transaction(
       async (tx) => {
         const lockRows = await tx.$queryRaw<Array<{ locked: boolean }>>`
           SELECT pg_try_advisory_xact_lock(
@@ -169,11 +224,11 @@ class NotificationOutboxServiceClass {
           ) AS locked
         `;
         const isLeader = Boolean(lockRows?.[0]?.locked);
-        if (!isLeader) return;
+        if (!isLeader) return 0;
 
         // Keep this transaction open while processing, so only one app instance
         // owns the outbox worker lease during this polling cycle.
-        await this.processDueJobsUnlocked(limit);
+        return this.processDueJobsUnlocked(limit);
       },
       {
         maxWait: 10_000,
@@ -194,6 +249,8 @@ class NotificationOutboxServiceClass {
     for (const state of due) {
       await this.processOne(state);
     }
+
+    return due.length;
   }
 
   private async processOne(state: OutboxState) {

@@ -9,15 +9,28 @@
  */
 
 import express from 'express';
-import path from 'path';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { errorHandler } from './middleware/error';
 import routes from './routes';
-
-dotenv.config();
+import {
+  buildCorsOptions,
+  getJsonBodyLimit,
+  getUrlEncodedParameterLimit,
+  securityHeadersMiddleware,
+  shouldTrustProxy,
+} from './config/httpSecurity';
+import { runtimeConfig } from './config/env';
+import { getUploadRoot } from './config/uploads';
+import { logger, requestLoggingMiddleware } from './lib/logger';
+import { requestMetricsMiddleware } from './middleware/observability';
 
 const app = express();
+app.disable('x-powered-by');
+
+if (shouldTrustProxy()) {
+  app.set('trust proxy', 1);
+}
+
 const toCamelKey = (key: string) =>
   key.replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
 
@@ -71,13 +84,20 @@ const findSnakeCaseKey = (value: unknown, prefix = ''): string | null => {
  */
 
 // CORS configuration
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  credentials: true,
-}));
+app.use(cors(buildCorsOptions()));
+app.use(securityHeadersMiddleware);
+app.use(requestLoggingMiddleware);
+app.use(requestMetricsMiddleware);
 
-// JSON body parser
-app.use(express.json());
+// Bound request payload sizes to reduce abuse and accidental oversized payloads.
+app.use(express.json({ limit: getJsonBodyLimit() }));
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: getJsonBodyLimit(),
+    parameterLimit: getUrlEncodedParameterLimit(),
+  })
+);
 
 // Enforce camelCase request keys for query/body payloads.
 app.use((req, res, next) => {
@@ -108,7 +128,22 @@ app.use((_req, res, next) => {
 });
 
 // Serve uploaded files
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+if (runtimeConfig.serveLocalUploads) {
+  app.use(
+    runtimeConfig.uploadPublicBasePath,
+    express.static(getUploadRoot(), {
+      dotfiles: 'deny',
+      fallthrough: false,
+      index: false,
+      maxAge: '1d',
+    })
+  );
+} else {
+  logger.warn('local_upload_serving_disabled', {
+    uploadRoot: runtimeConfig.uploadRoot,
+    uploadPublicBasePath: runtimeConfig.uploadPublicBasePath,
+  });
+}
 
 /**
  * ==========================================

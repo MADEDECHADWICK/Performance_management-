@@ -21,6 +21,111 @@ const computeStats = (values: number[]) => {
 };
 
 router.get(
+  "/assignments",
+  authMiddleware,
+  loadProfile,
+  requireModuleAccess("evaluations", "admin"),
+  async (req: AuthRequest, res) => {
+    try {
+      const cycleId = req.query.evaluationCycleId
+        ? Number(req.query.evaluationCycleId)
+        : undefined;
+      const departmentId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
+
+      const assignments = await prisma.evaluationAssignment.findMany({
+        where: {
+          status: "submitted",
+          score: { not: null },
+          ...(cycleId !== undefined
+            ? {
+                definition: {
+                  cycleId,
+                },
+              }
+            : {}),
+          ...(departmentId !== undefined
+            ? {
+                evaluatee: {
+                  departmentId,
+                },
+              }
+            : {}),
+        },
+        include: {
+          definition: {
+            select: {
+              id: true,
+              name: true,
+              cycleId: true,
+              dueDate: true,
+              cycle: {
+                select: {
+                  id: true,
+                  cycleName: true,
+                  status: true,
+                },
+              },
+            },
+          },
+          evaluator: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              positionTitle: true,
+            },
+          },
+          evaluatee: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              positionTitle: true,
+              department: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: [{ submittedAt: "desc" }, { updatedAt: "desc" }],
+      });
+
+      const scoreValues = assignments.map((item) => Number(item.score || 0));
+      const { mean, stdDev } = computeStats(scoreValues);
+
+      const items = assignments.map((item) => {
+        const scoreValue = Number(item.score || 0);
+        const zScore = stdDev > 0 ? (scoreValue - mean) / stdDev : 0;
+        return {
+          ...item,
+          scoreValue,
+          zScore: Math.round(zScore * 100) / 100,
+          isOutlier: Math.abs(zScore) >= 1.5,
+        };
+      });
+
+      return res.json(
+        successResponse(
+          {
+            stats: { mean, stdDev, count: items.length },
+            items,
+          },
+          "Submitted evaluation assignments loaded"
+        )
+      );
+    } catch (error: any) {
+      console.error("Error loading submitted evaluation assignments:", error);
+      return res
+        .status(500)
+        .json(errorResponse("Failed to load submitted evaluation assignments", 500));
+    }
+  }
+);
+
+router.get(
   "/scores",
   authMiddleware,
   loadProfile,

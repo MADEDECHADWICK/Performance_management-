@@ -14,6 +14,7 @@ import { Server as HTTPServer } from "http";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma";
 import { getJwtSecret } from "../config/jwt";
+import { buildCorsOptions } from "../config/httpSecurity";
 
 type NotificationPayload = Record<string, unknown>;
 
@@ -113,10 +114,7 @@ class WebSocketService {
    */
   initialize(httpServer: HTTPServer) {
     this.io = new SocketIOServer(httpServer, {
-      cors: {
-        origin: process.env.CORS_ORIGIN || "*",
-        credentials: true,
-      },
+      cors: buildCorsOptions(),
       transports: ["websocket", "polling"],
     });
 
@@ -756,6 +754,41 @@ class WebSocketService {
     }
 
     return sequenced.sequenceId;
+  }
+
+  /**
+   * Emit a namespaced domain event to a specific user room.
+   */
+  emitToUser(profileId: string, eventName: string, payload: NotificationPayload) {
+    if (!this.io) return;
+    this.io.to(`user:${profileId}`).emit(eventName, {
+      ...payload,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Emit a namespaced domain event to multiple user rooms.
+   */
+  emitToUsers(profileIds: Array<string | number>, eventName: string, payload: NotificationPayload) {
+    if (!this.io) return;
+    Array.from(new Set(profileIds.map((id) => String(id))))
+      .filter(Boolean)
+      .forEach((profileId) => {
+        this.io?.to(`user:${profileId}`).emit(eventName, {
+          ...payload,
+          timestamp: new Date().toISOString(),
+        });
+      });
+  }
+
+  emitToRole(roleName: string, eventName: string, payload: NotificationPayload) {
+    if (!this.io) return;
+    const normalizedRole = normalizeRole(roleName);
+    this.io.to(`role:${normalizedRole}`).emit(eventName, {
+      ...payload,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   /**

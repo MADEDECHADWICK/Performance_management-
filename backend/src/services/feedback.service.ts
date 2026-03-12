@@ -1,127 +1,88 @@
-/**
- * Feedback Service (Modernized - Phase 4)
- * Replaces raw SQL queries with Prisma ORM
- */
+import { FeedbackVisibility, Prisma } from "@prisma/client";
+import prisma from "../prisma";
+import { NotificationService } from "./notifications.service";
+import { createAudit } from "../utils/audit";
 
-import { prisma } from '../prisma';
-
-interface AuthContext {
+type ServiceAuthContext = {
   userId: number;
   profileId: number;
-  roleName?: string;
-}
+  roles: string[];
+};
 
-interface ListOptions {
-  page: number;
-  pageSize: number;
-  type?: string;
-  status?: string;
-  recipientId?: number;
-}
+type FeedbackInput = {
+  receiverId: number;
+  jobId?: number | null;
+  feedbackType: "praise" | "coaching" | "concern";
+  message: string;
+  isPrivate?: boolean;
+  visibility?: "self" | "manager" | "hr" | "all";
+};
 
-interface CreateFeedbackInput {
-  recipientProfileId?: number;
-  title: string;
-  content: string;
-  type?: string;
-  isAnonymous?: boolean;
-}
+const normalizeRole = (role: string) =>
+  String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+const canViewFeedbackForProfile = async (targetProfileId: number, auth: ServiceAuthContext) => {
+  if (targetProfileId === auth.profileId) return "self" as const;
+
+  const roles = new Set((auth.roles || []).map(normalizeRole));
+  if (roles.has("super_admin") || roles.has("hr")) return "hr" as const;
+  if (!roles.has("manager")) return null;
+
+  const target = await prisma.profile.findUnique({
+    where: { id: targetProfileId },
+    select: { managerId: true },
+  });
+
+  return target?.managerId === auth.profileId ? ("manager" as const) : null;
+};
 
 export class FeedbackService {
-  /**
-   * List feedback with pagination
-   */
-  static async listFeedback(options: ListOptions, auth: AuthContext) {
-    const { page, pageSize, type, status, recipientId } = options;
-    const skip = (page - 1) * pageSize;
-
-    const where: any = {};
-
-    if (type) where.type = type;
-    if (status) where.status = status;
-    if (recipientId) where.recipientProfileId = recipientId;
-
-    // ✅ ACCESS CONTROL
-    if (!['super_admin', 'manager'].includes(auth.roleName || '')) {
-      // Non-admins see only feedback for themselves or public feedback
-      where.OR = [
-        { recipientProfileId: auth.profileId },
-        { giverProfileId: auth.profileId },
-      ];
+  static async submitFeedback(input: FeedbackInput, auth: ServiceAuthContext) {
+    const receiverId = Number(input.receiverId);
+    if (!receiverId) {
+      throw { statusCode: 400, message: "receiverId is required" };
     }
 
-    const [feedback, total] = await Promise.all([
-      prisma.feedback.findMany({
-        where,
-        include: {
-          giver: {
-            select: { id: true, firstName: true, lastName: true },
-          },
-          recipient: {
-            select: { id: true, firstName: true, lastName: true },
-          },
-        },
-        skip,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
-      }),
-      prisma.feedback.count({ where }),
-    ]);
-
-    // ✅ HANDLE ANONYMOUS FEEDBACK
-    const sanitized = feedback.map(f => ({
-      ...f,
-      giver: f.isAnonymous ? { id: 0, firstName: 'Anonymous', lastName: '' } : f.giver,
-    }));
-
-    return { feedback: sanitized, total };
-  }
-
-  /**
-   * Create feedback
-   */
-  static async createFeedback(input: CreateFeedbackInput, auth: AuthContext) {
-    const recipientProfileId = input.recipientProfileId;
-    const { title, content, type } = input;
-    const isAnonymous = input.isAnonymous;
-
-    // ✅ VERIFY RECIPIENT EXISTS
-    if (!recipientProfileId) {
-      throw {
-        statusCode: 400,
-        message: 'Recipient is required',
-      };
+    if (!String(input.message || "").trim()) {
+      throw { statusCode: 400, message: "message is required" };
     }
 
-    const recipient = await prisma.profile.findUnique({
-      where: { id: recipientProfileId },
+    if (receiverId === auth.profileId) {
+      throw { statusCode: 400, message: "You cannot submit feedback to yourself" };
+    }
+
+    const receiver = await prisma.profile.findUnique({
+      where: { id: receiverId },
+      select: { id: true, firstName: true, lastName: true },
     });
 
-    if (!recipient) {
-      throw {
-        statusCode: 404,
-        message: 'Recipient not found',
-      };
+    if (!receiver) {
+      throw { statusCode: 404, message: "Receiver not found" };
     }
 
-    // ✅ PREVENT SELF-FEEDBACK
-    if (recipientProfileId === auth.profileId && !isAnonymous) {
-      throw {
-        statusCode: 400,
-        message: 'You cannot give feedback to yourself',
-      };
-    }
+    const feedbackType = String(input.feedbackType || "praise").toLowerCase() as
+      | "praise"
+      | "coaching"
+      | "concern";
+    const visibility = String(input.visibility || "all").toLowerCase() as FeedbackVisibility;
+    const title = `${feedbackType[0].toUpperCase()}${feedbackType.slice(1)} feedback`;
 
     const feedback = await prisma.feedback.create({
       data: {
         giverProfileId: auth.profileId,
-        recipientProfileId,
+        recipientProfileId: receiverId,
+        jobId: input.jobId || null,
         title,
-        content,
-        type: type || 'general',
-        isAnonymous: isAnonymous || false,
-        status: 'pending',
-        createdAt: new Date(),
+        content: input.message.trim(),
+        message: input.message.trim(),
+        type: feedbackType,
+        feedbackType,
+        isPrivate: !!input.isPrivate,
+        visibility,
+        status: "received",
       },
       include: {
         giver: {
@@ -133,185 +94,103 @@ export class FeedbackService {
       },
     });
 
+    if (!feedback.isPrivate) {
+      await NotificationService.dispatchEvent(
+        {
+          eventType: "feedback.received",
+          title: "New feedback received",
+          message: `You received ${feedbackType} feedback from ${feedback.giver.firstName} ${feedback.giver.lastName}.`,
+          canonicalRoute: "/evaluations/feedback",
+          targetEntityType: "Feedback",
+          targetEntityId: feedback.id,
+          requiredPermission: "module.evaluations.read",
+          recipientProfileIds: [receiverId],
+        },
+        auth
+      );
+    }
+
+    await createAudit({
+      action: "feedback_submitted",
+      entity_type: "Feedback",
+      entity_id: feedback.id,
+      user_id: auth.userId,
+      metadata: {
+        actorProfileId: auth.profileId,
+        receiverId,
+        visibility,
+      } as Prisma.InputJsonValue,
+    });
+
     return {
-      ...feedback,
-      giver: feedback.isAnonymous
-        ? { id: 0, firstName: 'Anonymous', lastName: '' }
-        : feedback.giver,
+      id: feedback.id,
+      giverId: feedback.giverProfileId,
+      receiverId: feedback.recipientProfileId,
+      jobId: feedback.jobId,
+      feedbackType: feedback.feedbackType,
+      message: feedback.message || feedback.content,
+      isPrivate: feedback.isPrivate,
+      visibility: feedback.visibility,
+      createdAt: feedback.createdAt,
+      giver: feedback.giver,
+      receiver: feedback.recipient,
     };
   }
 
-  /**
-   * Get single feedback
-   */
-  static async getFeedback(feedbackId: number, auth: AuthContext) {
-    const feedback = await prisma.feedback.findUnique({
-      where: { id: feedbackId },
+  static async getFeedbackForUser(userId: number, auth: ServiceAuthContext) {
+    const scope = await canViewFeedbackForProfile(userId, auth);
+    if (!scope) {
+      throw { statusCode: 403, message: "You do not have access to this feedback feed" };
+    }
+
+    const where: Prisma.FeedbackWhereInput = {
+      recipientProfileId: userId,
+    };
+
+    if (scope === "manager") {
+      where.isPrivate = false;
+      where.visibility = {
+        in: ["manager", "all"],
+      };
+    }
+
+    if (scope === "hr") {
+      where.OR = [
+        { visibility: "hr" },
+        { visibility: "all" },
+        { recipientProfileId: auth.profileId },
+      ];
+    }
+
+    const feedback = await prisma.feedback.findMany({
+      where,
       include: {
         giver: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-        recipient: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-      },
-    });
-
-    if (!feedback) {
-      throw {
-        statusCode: 404,
-        message: 'Feedback not found',
-      };
-    }
-
-    // ✅ VERIFY ACCESS
-    const canView =
-      auth.roleName === 'super_admin' ||
-      feedback.recipientProfileId === auth.profileId ||
-      feedback.giverProfileId === auth.profileId;
-
-    if (!canView) {
-      throw {
-        statusCode: 403,
-        message: 'You do not have permission to view this feedback',
-      };
-    }
-
-    return {
-      ...feedback,
-      giver: feedback.isAnonymous
-        ? { id: 0, firstName: 'Anonymous', lastName: '' }
-        : feedback.giver,
-    };
-  }
-
-  /**
-   * Update feedback status (admin only)
-   */
-  static async updateFeedbackStatus(
-    feedbackId: number,
-    status: string,
-    auth: AuthContext
-  ) {
-    // ✅ VERIFY AUTHORIZATION
-    if (auth.roleName !== 'super_admin') {
-      throw {
-        statusCode: 403,
-        message: 'Only admins can update feedback status',
-      };
-    }
-
-    const feedback = await prisma.feedback.findUnique({
-      where: { id: feedbackId },
-    });
-
-    if (!feedback) {
-      throw {
-        statusCode: 404,
-        message: 'Feedback not found',
-      };
-    }
-
-    const validStatuses = ['pending', 'reviewed', 'resolved', 'archived'];
-    if (!validStatuses.includes(status)) {
-      throw {
-        statusCode: 400,
-        message: `Status must be one of: ${validStatuses.join(', ')}`,
-      };
-    }
-
-    const updated = await prisma.feedback.update({
-      where: { id: feedbackId },
-      data: {
-        status,
-        updatedAt: new Date(),
-      },
-      include: {
-        giver: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-        recipient: {
-          select: { id: true, firstName: true, lastName: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
         },
       },
+      orderBy: { createdAt: "desc" },
     });
 
-    return updated;
-  }
-
-  /**
-   * Get feedback analytics
-   */
-  static async getFeedbackAnalytics(profileId: number, auth: AuthContext) {
-    // ✅ VERIFY ACCESS
-    if (profileId !== auth.profileId && auth.roleName !== 'super_admin') {
-      throw {
-        statusCode: 403,
-        message: 'You can only view your own feedback analytics',
-      };
-    }
-
-    const [totalFeedback, byType, byStatus] = await Promise.all([
-      prisma.feedback.count({
-        where: { recipientProfileId: profileId },
-      }),
-      prisma.feedback.groupBy({
-        by: ['type'],
-        where: { recipientProfileId: profileId },
-        _count: true,
-      }),
-      prisma.feedback.groupBy({
-        by: ['status'],
-        where: { recipientProfileId: profileId },
-        _count: true,
-      }),
-    ]);
-
-    return {
-      profileId,
-      totalFeedback,
-      byType: byType.map(item => ({
-        type: item.type,
-        count: item._count,
-      })),
-      byStatus: byStatus.map(item => ({
-        status: item.status,
-        count: item._count,
-      })),
-    };
-  }
-
-  /**
-   * Delete feedback (admin or giver only)
-   */
-  static async deleteFeedback(feedbackId: number, auth: AuthContext) {
-    const feedback = await prisma.feedback.findUnique({
-      where: { id: feedbackId },
-    });
-
-    if (!feedback) {
-      throw {
-        statusCode: 404,
-        message: 'Feedback not found',
-      };
-    }
-
-    // ✅ VERIFY ACCESS
-    const canDelete =
-      auth.roleName === 'super_admin' ||
-      feedback.giverProfileId === auth.profileId;
-
-    if (!canDelete) {
-      throw {
-        statusCode: 403,
-        message: 'You can only delete your own feedback',
-      };
-    }
-
-    await prisma.feedback.delete({
-      where: { id: feedbackId },
-    });
-
-    return true;
+    return feedback.map((item) => ({
+      id: item.id,
+      giverId: item.giverProfileId,
+      receiverId: item.recipientProfileId,
+      jobId: item.jobId,
+      feedbackType: item.feedbackType,
+      message: item.message || item.content,
+      isPrivate: item.isPrivate,
+      visibility: item.visibility,
+      createdAt: item.createdAt,
+      giver: item.isAnonymous
+        ? { id: 0, firstName: "Anonymous", lastName: "" }
+        : item.giver,
+    }));
   }
 }
+
+export default FeedbackService;

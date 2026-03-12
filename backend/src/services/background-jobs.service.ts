@@ -6,6 +6,8 @@
 
 import Bull from "bull";
 import nodemailer from "nodemailer";
+import { logger, toLogContext } from "../lib/logger";
+import { ObservabilityService } from "./observability.service";
 
 type QueueName =
   | "emails"
@@ -41,9 +43,13 @@ class BackgroundJobsService {
   private queues = new Map<QueueName, Bull.Queue<any>>();
   private emailTransporter: nodemailer.Transporter | null = null;
   private initialized = false;
+  private lastInitializedAt: string | null = null;
+  private lastInitializationError: string | null = null;
+  private readonly workerName = "background_jobs";
 
   async initialize() {
     if (this.initialized) return true;
+    const startedAt = Date.now();
 
     try {
       this.setupEmailTransporter();
@@ -54,10 +60,38 @@ class BackgroundJobsService {
       this.createQueue("notifications");
       this.startWorkers();
       this.initialized = true;
-      console.log("Background jobs service initialized");
+      this.lastInitializedAt = new Date().toISOString();
+      this.lastInitializationError = null;
+      ObservabilityService.registerWorker(this.workerName, {
+        component: "background_jobs",
+        enabled: true,
+        metadata: {
+          queueNames: Array.from(this.queues.keys()),
+        },
+      });
+      ObservabilityService.markWorkerStarted(this.workerName, {
+        component: "background_jobs",
+        enabled: true,
+        metadata: {
+          queueNames: Array.from(this.queues.keys()),
+        },
+      });
+      ObservabilityService.markWorkerSuccess(this.workerName, {
+        component: "background_jobs",
+        durationMs: Date.now() - startedAt,
+        metadata: {
+          queueNames: Array.from(this.queues.keys()),
+        },
+      });
+      logger.info("background_jobs_initialized");
       return true;
     } catch (error) {
-      console.error("Background jobs initialization failed:", error);
+      this.lastInitializationError = error instanceof Error ? error.message : String(error);
+      logger.error("background_jobs_initialization_failed", toLogContext(error));
+      ObservabilityService.markWorkerFailure(this.workerName, error, {
+        component: "background_jobs",
+        durationMs: Date.now() - startedAt,
+      });
       return false;
     }
   }
@@ -75,7 +109,14 @@ class BackgroundJobsService {
     });
 
     queue.on("error", (error) => {
-      console.error(`Queue error [${name}]:`, error);
+      logger.error("background_queue_error", {
+        queue: name,
+        ...toLogContext(error),
+      });
+      ObservabilityService.markWorkerFailure(this.workerName, error, {
+        component: "background_jobs",
+        metadata: { queue: name },
+      });
     });
 
     this.queues.set(name, queue);
@@ -166,7 +207,9 @@ class BackgroundJobsService {
 
   private async processEmailJob(data: EmailJob): Promise<void> {
     if (!this.emailTransporter) {
-      console.warn("Email transporter not configured; skipping email job");
+      logger.warn("email_job_skipped", {
+        reason: "email_transporter_not_configured",
+      });
       return;
     }
 
@@ -180,7 +223,7 @@ class BackgroundJobsService {
   }
 
   private async processReportJob(data: ReportJob): Promise<void> {
-    console.log("Processing report job", {
+    logger.info("processing_report_job", {
       reportType: data.reportType,
       recipients: data.recipients.length,
       format: data.format,
@@ -188,14 +231,16 @@ class BackgroundJobsService {
   }
 
   private async processBulkOperation(data: BulkOperationJob): Promise<void> {
-    console.log("Processing bulk operation", {
+    logger.info("processing_bulk_operation", {
       operation: data.operation,
       count: data.ids.length,
     });
   }
 
   private async processDataAggregation(data: any): Promise<void> {
-    console.log("Processing aggregation job", data?.type || "unknown");
+    logger.info("processing_aggregation_job", {
+      type: data?.type || "unknown",
+    });
   }
 
   private renderEmailTemplate(template: string, data: Record<string, unknown>): string {
@@ -246,6 +291,20 @@ class BackgroundJobsService {
     await Promise.all(closeTasks);
     this.queues.clear();
     this.initialized = false;
+    ObservabilityService.markWorkerStopped(this.workerName, {
+      component: "background_jobs",
+      enabled: true,
+    });
+  }
+
+  getRuntimeState() {
+    return {
+      initialized: this.initialized,
+      queueNames: Array.from(this.queues.keys()),
+      emailTransportConfigured: Boolean(this.emailTransporter),
+      lastInitializedAt: this.lastInitializedAt,
+      lastInitializationError: this.lastInitializationError,
+    };
   }
 }
 

@@ -9,6 +9,9 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { Prisma } from "@prisma/client";
+import multer from "multer";
+import { logger } from "../lib/logger";
+import { ObservabilityService } from "../services/observability.service";
 
 export type ErrorCode =
   | "BAD_REQUEST"
@@ -149,6 +152,21 @@ const mapJwtError = (err: any): AppError | null => {
   return null;
 };
 
+const mapUploadError = (err: unknown): AppError | null => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return createAppError(400, "VALIDATION_ERROR", "Uploaded file exceeds the allowed size limit.");
+    }
+    return createAppError(400, "VALIDATION_ERROR", err.message || "Upload validation failed.");
+  }
+
+  if (err instanceof Error && err.message.startsWith("Unsupported upload type")) {
+    return createAppError(400, "VALIDATION_ERROR", err.message);
+  }
+
+  return null;
+};
+
 /**
  * Main error handler (must be last).
  */
@@ -168,6 +186,9 @@ export const errorHandler = (
   const jwtMapped = mapJwtError(err);
   if (jwtMapped) err = jwtMapped;
 
+  const uploadMapped = mapUploadError(err);
+  if (uploadMapped) err = uploadMapped;
+
   const statusCode = err.statusCode && Number.isInteger(err.statusCode) ? err.statusCode : 500;
   const code = (err.code as string) || (statusCode === 500 ? "INTERNAL_ERROR" : "BAD_REQUEST");
 
@@ -184,24 +205,29 @@ export const errorHandler = (
     (req.headers["x-request-id"] as string | undefined) ||
     (req.headers["x-correlation-id"] as string | undefined);
 
-  // Server-side log (always log, but keep it structured)
-  console.error(
-    JSON.stringify(
-      {
-        timestamp,
-        statusCode,
-        code,
-        message: err.message,
-        path: req.originalUrl ?? req.path,
-        method: req.method,
-        requestId,
-        // Only include stack in dev to reduce log noise in prod if you prefer
-        ...(isDev ? { stack: err.stack, details: err.details } : {}),
-      },
-      null,
-      2
-    )
-  );
+  logger.error("request_failed", {
+    timestamp,
+    statusCode,
+    code,
+    message: err.message,
+    path: req.originalUrl ?? req.path,
+    method: req.method,
+    requestId,
+    ...(isDev ? { stack: err.stack, details: err.details } : {}),
+  });
+
+  ObservabilityService.recordError({
+    source: "http:request",
+    severity: statusCode >= 500 ? "error" : "warning",
+    error: err,
+    code,
+    requestId: requestId || res.locals?.requestId || null,
+    context: {
+      statusCode,
+      path: req.originalUrl ?? req.path,
+      method: req.method,
+    },
+  });
 
   const payload: ErrorResponseBody = {
     error: {

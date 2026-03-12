@@ -154,7 +154,12 @@ const Auth = () => {
                       />
                     </div>
                   </div>
-                  <Button type="submit" className="h-11 w-full text-sm" disabled={loading}>
+                  <Button
+                    type="submit"
+                    className="h-11 w-full text-sm"
+                    disabled={loading}
+                    data-testid="auth-submit"
+                  >
                     {loading ? "Loading..." : "Sign In"}
                   </Button>
                 </form>

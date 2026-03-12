@@ -126,6 +126,8 @@ const statusBadgeClass = (status: string) => {
 const formatPct = (value: number) => `${clampPct(value).toFixed(1)}%`;
 
 const formatValue = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+const normalizeStatusLabel = (value: string) => value.replace(/_/g, " ");
+
 const formatDateTime = (value: string | null) => {
   if (!value) return "No updates";
   const date = new Date(value);
@@ -283,7 +285,7 @@ export default function KpiCascadeTracker({ kpis }: KpiCascadeTrackerProps) {
 
       const statusLabel =
         String(assignment.tracking?.achievement?.status || assignment.status || "not_started")
-          .replaceAll("_", " ")
+          .replace(/_/g, " ")
           .toLowerCase();
 
       return {
@@ -503,7 +505,7 @@ export default function KpiCascadeTracker({ kpis }: KpiCascadeTrackerProps) {
                       </TableCell>
                       <TableCell className="align-top">
                         <Badge className={statusBadgeClass(row.statusLabel)}>
-                          {row.statusLabel.replaceAll("_", " ")}
+                          {normalizeStatusLabel(row.statusLabel)}
                         </Badge>
                       </TableCell>
                       <TableCell className="align-top text-xs text-muted-foreground">

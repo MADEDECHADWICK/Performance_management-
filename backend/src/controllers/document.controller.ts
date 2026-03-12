@@ -7,6 +7,8 @@ import { AuthRequest } from "../middleware/auth";
 import { DocumentService } from "../services/documents.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
+import { buildPublicUploadPath } from "../config/uploads";
+import { logger, toLogContext } from "../lib/logger";
 
 const buildAuth = (req: AuthRequest) => ({
   userId: req.user!.userId,
@@ -57,7 +59,7 @@ export class DocumentController {
 
       res.json(paginatedResponse(result.documents, result.total, page, pageSize, "Documents retrieved"));
     } catch (error: any) {
-      console.error("DocumentController.listDocuments error:", error);
+      logger.error("document_list_failed", toLogContext(error));
       res.status(500).json(errorResponse("Failed to retrieve documents", 500));
     }
   }
@@ -84,7 +86,7 @@ export class DocumentController {
 
       const fileName = bodyFileName || uploadedFile?.originalname;
       const filePath = uploadedFile
-        ? `/uploads/documents/${uploadedFile.filename}`
+        ? buildPublicUploadPath("documents", uploadedFile.filename)
         : bodyFilePath;
       const fileSize = uploadedFile?.size || bodyFileSize;
       const mimeType = uploadedFile?.mimetype || bodyMimeType;
@@ -114,7 +116,7 @@ export class DocumentController {
 
       res.status(201).json(successResponse(result, "Document uploaded", 201));
     } catch (error: any) {
-      console.error("DocumentController.uploadDocument error:", error);
+      logger.error("document_upload_failed", toLogContext(error));
       const status = error.statusCode ?? 400;
       res.status(status).json(errorResponse(error.message || "Failed to upload document", status));
     }
@@ -151,7 +153,7 @@ export class DocumentController {
 
       res.status(201).json(successResponse(result, "Document request sent", 201));
     } catch (error: any) {
-      console.error("DocumentController.requestDocument error:", error);
+      logger.error("document_request_failed", toLogContext(error));
       const status = error.statusCode ?? 400;
       res
         .status(status)
@@ -165,7 +167,7 @@ export class DocumentController {
       const result = await DocumentService.getDocumentById(documentId);
       res.json(successResponse(result, "Document retrieved"));
     } catch (error: any) {
-      console.error("DocumentController.getDocument error:", error);
+      logger.error("document_load_failed", toLogContext(error));
       const status = error.statusCode ?? 500;
       res.status(status).json(errorResponse(error.message || "Failed to retrieve document", status));
     }
@@ -179,7 +181,7 @@ export class DocumentController {
       const result = await DocumentService.deleteDocument(documentId, auth);
       res.json(successResponse(result, "Document deleted"));
     } catch (error: any) {
-      console.error("DocumentController.deleteDocument error:", error);
+      logger.error("document_delete_failed", toLogContext(error));
       const status = error.statusCode ?? 400;
       res.status(status).json(errorResponse(error.message || "Failed to delete document", status));
     }
@@ -203,7 +205,7 @@ export class DocumentController {
 
       res.json(successResponse(result, "Document verification updated"));
     } catch (error: any) {
-      console.error("DocumentController.verifyDocument error:", error);
+      logger.error("document_verify_failed", toLogContext(error));
       const status = error.statusCode ?? 400;
       res.status(status).json(errorResponse(error.message || "Failed to verify document", status));
     }
