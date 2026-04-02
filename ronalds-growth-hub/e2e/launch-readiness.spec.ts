@@ -9,6 +9,8 @@ type MockUser = {
   email: string;
   roles: Array<{ role: { name: string } }>;
   moduleAccess: Record<string, string[]>;
+  viewAccessKeys: string[];
+  homeViewKey: string;
   profile: {
     id: number;
     firstName: string;
@@ -33,6 +35,13 @@ const hrUser: MockUser = {
     dashboard: ["read"],
     evaluations: ["read", "write", "approve"],
   },
+  viewAccessKeys: [
+    "dashboard.hr",
+    "evaluations.management",
+    "evaluations.my",
+    "notifications.center",
+  ],
+  homeViewKey: "dashboard.hr",
   profile: {
     id: 701,
     firstName: "Harriet",
@@ -51,6 +60,12 @@ const managerUser: MockUser = {
     dashboard: ["read"],
     evaluations: ["read", "write"],
   },
+  viewAccessKeys: [
+    "dashboard.manager",
+    "evaluations.my",
+    "notifications.center",
+  ],
+  homeViewKey: "dashboard.manager",
   profile: {
     id: 702,
     firstName: "Moses",
@@ -69,6 +84,12 @@ const evaluatorUser: MockUser = {
     dashboard: ["read"],
     evaluations: ["read", "write"],
   },
+  viewAccessKeys: [
+    "dashboard.manager",
+    "evaluations.my",
+    "notifications.center",
+  ],
+  homeViewKey: "dashboard.manager",
   profile: {
     id: 703,
     firstName: "Grace",
