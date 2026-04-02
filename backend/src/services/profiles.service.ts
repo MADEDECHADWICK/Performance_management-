@@ -11,7 +11,6 @@ interface AuthContext {
   profileId: number;
   roleName?: string;
   roles?: string[];
-  isPartner?: boolean;
 }
 
 interface ListOptions {
@@ -38,7 +37,6 @@ export class ProfileService {
     const roles = [
       ...(auth.roles || []),
       auth.roleName || "",
-      auth.isPartner ? "partner" : "",
     ]
       .filter(Boolean)
       .map((role) => String(role).toLowerCase());
@@ -56,9 +54,7 @@ export class ProfileService {
 
   private static isManagerRole(auth: AuthContext) {
     const roles = this.resolveRoleSet(auth);
-    return Array.from(roles).some(
-      (role) => role.includes("manager") || role.includes("team lead") || role === "partner"
-    );
+    return roles.has("manager") || roles.has("partner");
   }
   /**
    * List profiles with access control
@@ -168,7 +164,7 @@ export class ProfileService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'super_admin' ||
+      this.isPrivileged(auth) ||
       profileId === auth.profileId;
 
     if (!canView && profile.status !== 'active') {
@@ -497,7 +493,7 @@ export class ProfileService {
 
     // ✅ VERIFY ACCESS
     const canView =
-      auth.roleName === 'super_admin' ||
+      this.isPrivileged(auth) ||
       profileId === auth.profileId;
 
     if (!canView) {
@@ -543,7 +539,7 @@ export class ProfileService {
    */
   static async getTeamMembers(profileId: number, auth: AuthContext) {
     // ✅ VERIFY ACCESS
-    if (profileId !== auth.profileId && auth.roleName !== 'super_admin') {
+    if (profileId !== auth.profileId && !this.isPrivileged(auth)) {
       throw {
         statusCode: 403,
         message: 'You can only view your own team',

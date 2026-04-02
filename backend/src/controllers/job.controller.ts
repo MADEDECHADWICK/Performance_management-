@@ -122,6 +122,90 @@ export class JobController {
   }
 
   /**
+   * GET /jobs/:jobId/invoices
+   * Get generated invoices for a job
+   */
+  static async getJobInvoices(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+
+      const invoices = await jobService.listJobInvoices(jobId);
+      res.json(successResponse(invoices, "Job invoices retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * POST /jobs/:jobId/invoices/from-milestone/:milestoneTaskId
+   * Generate or return draft invoice for a billing milestone
+   */
+  static async createJobInvoiceDraft(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const milestoneTaskId = Number(req.params.milestoneTaskId);
+
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      if (!Number.isFinite(milestoneTaskId) || milestoneTaskId <= 0) {
+        res.status(400).json(errorResponse("Valid milestoneTaskId is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+
+      const invoice = await jobService.createJobInvoiceDraftForMilestone(jobId, milestoneTaskId, auth);
+      res.status(201).json(successResponse(invoice, "Job invoice draft ready", 201));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
+   * PATCH /jobs/:jobId/invoices/:invoiceId/issue
+   * Issue a draft invoice and generate its document
+   */
+  static async issueJobInvoice(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const invoiceId = Number(req.params.invoiceId);
+
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        res.status(400).json(errorResponse("Valid jobId is required", 400));
+        return;
+      }
+      if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
+        res.status(400).json(errorResponse("Valid invoiceId is required", 400));
+        return;
+      }
+
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+
+      const invoice = await jobService.issueJobInvoice(jobId, invoiceId, auth);
+      res.json(successResponse(invoice, "Job invoice issued"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  /**
    * PATCH /jobs/:jobId/invoice-milestones/:milestoneTaskId/status
    * Update job invoice milestone condition status
    */
@@ -190,7 +274,7 @@ export class JobController {
 
       const newJob = await jobService.createJob(input, auth);
 
-      res.status(201).json(successResponse(newJob, "Job created successfully", 201));
+      res.status(201).json(successResponse(newJob, "Job created   successfully", 201));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));
@@ -564,7 +648,7 @@ export class JobController {
 
   /**
    * GET /jobs/:jobId/tracking
-   * Unified workflow + KPI tracking view
+   * Unified workflow tracking view
    */
   static async getJobWorkflowTracking(req: AuthRequest, res: Response): Promise<void> {
     try {

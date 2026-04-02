@@ -427,15 +427,6 @@ const Notifications = () => {
       return `/timesheets?jobId=${jobId}`;
     }
 
-    const evaluationMatch = normalized.match(/^\/evaluations\/(\d+)$/);
-    if (evaluationMatch) {
-      return `/evaluation/${evaluationMatch[1]}`;
-    }
-
-    if (normalized.startsWith("/complete-evaluation/")) {
-      return normalized.replace("/complete-evaluation/", "/evaluation/");
-    }
-
     if (normalized === "/onboarding") {
       return "/profile?tab=onboarding";
     }
@@ -474,7 +465,7 @@ const Notifications = () => {
     }
 
     if (item.evaluationDefinitionId && item.evaluationDefinitionId > 0) {
-      return "/evaluations?tab=assignments";
+      return "/evaluations";
     }
 
     if (item.workflowAssignmentId && item.workflowAssignmentId > 0) {
@@ -489,13 +480,13 @@ const Notifications = () => {
       return "/profile";
     }
     if (context.includes("evaluation")) {
-      return "/evaluations?tab=assignments";
+      return "/evaluations";
     }
     if (context.includes("timesheet") || context.includes("time entry")) {
       return "/timesheets";
     }
-    if (context.includes("kpi") || context.includes("goal")) {
-      return "/goals";
+    if (context.includes("goal")) {
+      return "/dashboard";
     }
     if (context.includes("survey")) {
       return "/client-surveys";

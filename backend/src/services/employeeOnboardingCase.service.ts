@@ -443,7 +443,7 @@ class EmployeeOnboardingCaseServiceImpl {
     return Number.isFinite(candidate) && candidate > 0 ? candidate : null;
   }
 
-  private async refreshOnboardingCompletion(caseId: number) {
+  async refreshCompletion(caseId: number) {
     const onboardingCase = await prisma.employeeOnboardingCase.findUnique({
       where: { id: caseId },
       select: {
@@ -622,7 +622,7 @@ class EmployeeOnboardingCaseServiceImpl {
     }
 
     // IMPLEMENTED: Onboarding policy acknowledgement flow - HR can assign policy documents per onboarding case.
-    const summary = await this.refreshOnboardingCompletion(caseId);
+    const summary = await this.refreshCompletion(caseId);
     await createAudit({
       action: "onboarding_policies_assigned",
       entity_type: "EmployeeOnboardingCase",
@@ -713,7 +713,7 @@ class EmployeeOnboardingCaseServiceImpl {
       };
     });
 
-    const summary = await this.refreshOnboardingCompletion(caseId);
+    const summary = await this.refreshCompletion(caseId);
     return { policies, summary };
   }
 
@@ -798,7 +798,7 @@ class EmployeeOnboardingCaseServiceImpl {
     }
 
     // IMPLEMENTED: Onboarding completion gate - onboarding now only auto-completes when checklist is done and all assigned policies are acknowledged.
-    const summary = await this.refreshOnboardingCompletion(caseId);
+    const summary = await this.refreshCompletion(caseId);
     await createAudit({
       action: "onboarding_policy_acknowledged",
       entity_type: "EmployeeOnboardingCase",

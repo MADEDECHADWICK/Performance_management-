@@ -7,9 +7,18 @@ import {
   getInductionChecklistValidators,
   completeInductionItemValidators,
   attachInductionItemDocumentValidators,
+  acknowledgeInductionChecklistValidators,
+  hrSignoffInductionChecklistValidators,
+  updateInductionItemCommentsValidators,
 } from "../validators/inductionChecklist.validators";
 
 const router = Router();
+
+router.get(
+  "/template/default",
+  authenticated(),
+  InductionChecklistController.getDefaultTemplate
+);
 
 /**
  * POST /induction-checklists (HR/Admin)
@@ -53,6 +62,30 @@ router.patch(
   validateRequest(attachInductionItemDocumentValidators),
   handleValidationErrors,
   InductionChecklistController.attachDocument
+);
+
+router.patch(
+  "/:checklistId/items/:itemId/comments",
+  authenticated(),
+  validateRequest(updateInductionItemCommentsValidators),
+  handleValidationErrors,
+  InductionChecklistController.updateItemComments
+);
+
+router.post(
+  "/:checklistId/acknowledge",
+  authenticated(),
+  validateRequest(acknowledgeInductionChecklistValidators),
+  handleValidationErrors,
+  InductionChecklistController.acknowledge
+);
+
+router.post(
+  "/:checklistId/hr-signoff",
+  withRoles("hr", "super_admin"),
+  validateRequest(hrSignoffInductionChecklistValidators),
+  handleValidationErrors,
+  InductionChecklistController.hrSignoff
 );
 
 /**

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
 import { notifyJobLossAlert } from '../services/notificationRecipients';
+import { logger, toLogContext } from '../lib/logger';
 
 const router = Router();
 
@@ -32,12 +33,23 @@ async function calculateJobProfitability(jobId: number) {
   }
 
   // Get all time entries for this job
-  const timeEntries = await prisma.timeEntry.findMany({
-    where: {
-      jobId,
-      status: 'approved', // Only count approved time entries
-    },
-  });
+  const [timeEntries, approvedRequisitions] = await Promise.all([
+    prisma.timeEntry.findMany({
+      where: {
+        jobId,
+        status: 'approved', // Only count approved time entries
+      },
+    }),
+    prisma.requisitionRequest.findMany({
+      where: {
+        jobId,
+        status: 'approved',
+      },
+      select: {
+        amount: true,
+      },
+    }),
+  ]);
 
   // Calculate totals from time entries
   let total_revenue = 0;
@@ -54,9 +66,13 @@ async function calculateJobProfitability(jobId: number) {
   }
 
   // Cost is always the sum of actual costs
-  total_cost = timeEntries.reduce((sum, entry) => {
+  const labor_cost = timeEntries.reduce((sum, entry) => {
     return sum + Number(entry.costAmount || 0);
   }, 0);
+  const approved_requisition_cost = approvedRequisitions.reduce((sum, item) => {
+    return sum + Number(item.amount || 0);
+  }, 0);
+  total_cost = labor_cost + approved_requisition_cost;
 
   const profit = total_revenue - total_cost;
   const profit_margin = total_revenue > 0 ? (profit / total_revenue) * 100 : 0;
@@ -64,6 +80,8 @@ async function calculateJobProfitability(jobId: number) {
   return {
     job_id: jobId,
     total_revenue,
+    labor_cost,
+    approved_requisition_cost,
     total_cost,
     profit,
     profit_margin,
@@ -81,8 +99,11 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
     const userRoles = req.userRoles || [];
 
-    // DEBUG: Log what we received
-    console.log('[jobProfitability GET /] User roles:', userRoles, 'req.user:', req.user);
+    logger.debug('job_profitability_list_requested', {
+      userRoles,
+      userId: req.user?.userId ?? null,
+      profileId: req.user?.profileId ?? null,
+    });
 
     // Check if user is admin (super_admin or hr)
     const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr');
@@ -112,7 +133,10 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         try {
           return await calculateJobProfitability(job.id);
         } catch (error) {
-          console.error(`Error calculating profitability for job ${job.id}:`, error);
+          logger.error('job_profitability_calculation_failed', {
+            jobId: job.id,
+            ...toLogContext(error),
+          });
           return {
             job_id: job.id,
             total_revenue: 0,
@@ -127,7 +151,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
     res.json(profitability);
   } catch (error: any) {
-    console.error('Error fetching job profitability:', error);
+    logger.error('job_profitability_list_failed', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch job profitability data' });
   }
 });
@@ -167,7 +191,10 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
       last_calculated: new Date(),
     });
   } catch (error: any) {
-    console.error('Error fetching job profitability:', error);
+    logger.error('job_profitability_detail_failed', {
+      jobId: Number(req.params.jobId),
+      ...toLogContext(error),
+    });
     res.status(500).json({ error: error.message || 'Failed to fetch job profitability data' });
   }
 });
@@ -211,7 +238,10 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
       recalculatedAt: new Date(),
     });
   } catch (error: any) {
-    console.error('Error recalculating profitability:', error);
+    logger.error('job_profitability_recalculate_failed', {
+      jobId: Number(req.params.jobId),
+      ...toLogContext(error),
+    });
     res.status(500).json({ error: error.message || 'Failed to recalculate profitability' });
   }
 });

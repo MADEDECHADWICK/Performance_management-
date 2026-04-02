@@ -1,12 +1,12 @@
 ﻿import DashboardLayout from "@/components/DashboardLayout";
 import PageLoader from '@/components/ui/page-loader';
+import JobOperationsOverview from "@/components/jobs/JobOperationsOverview";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, TrendingUp, Users, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle } from "lucide-react";
+import { BarChart3, TrendingUp, DollarSign, Target, Star, FileText, Loader2, Briefcase, AlertCircle, FileSpreadsheet } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { Bell } from "lucide-react";
@@ -27,7 +27,6 @@ interface PerformanceData {
   customerScore: number;
   internalProcessScore: number;
   learningGrowthScore: number;
-  okrScore: number;
   projectEvaluationScore: number;
   roleFormula: string;
   jobScope: string;
@@ -59,6 +58,7 @@ const Dashboard = () => {
     isManager,
     isMarketing,
     isFinance,
+    hasViewAccess,
   } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
@@ -73,6 +73,91 @@ const Dashboard = () => {
   const scopeLabel = String(performance?.jobScope || "assigned")
     .replace(/_/g, " ")
     .toLowerCase();
+
+  const employeeJobMetrics = useMemo(
+    () => [
+      {
+        label: "Revenue contribution",
+        value: `KES ${(performance?.allocatedRevenue || 0).toLocaleString("en-KE")}`,
+        hint: `From ${scopeLabel} jobs • score ${performance?.financialSignals?.revenueScore || 0}%`,
+        icon: DollarSign,
+        tone: "primary" as const,
+        graphValue: performance?.allocatedRevenue || 0,
+        graphBaseline: performance?.revenueContribution || 0,
+      },
+      {
+        label: "Billable hours",
+        value: String(performance?.billableHours || 0),
+        hint: `${performance?.utilizationRate || 0}% utilization`,
+        icon: Briefcase,
+        tone: "positive" as const,
+        graphValue: performance?.billableHours || 0,
+        graphBaseline: performance?.utilizationRate || 0,
+      },
+      {
+        label: "Performance score",
+        value: String(performance?.overallScore || 0),
+        hint: performance?.grade ? `Current grade ${performance.grade}` : `Role ${roleLabel}`,
+        icon: Star,
+        tone: "warning" as const,
+        graphValue: performance?.overallScore || 0,
+        graphBaseline: performance?.financialScore || 0,
+      },
+      {
+        label: "Client signal",
+        value: `${performance?.clientRating || 0}/5`,
+        hint: `${performance?.clientReviewCount || 0} client reviews`,
+        icon: Target,
+        tone: (performance?.clientRating || 0) > 0 ? ("positive" as const) : ("danger" as const),
+        graphValue: performance?.clientRating || 0,
+        graphBaseline: 4,
+        inverse: (performance?.clientRating || 0) <= 0,
+      },
+    ],
+    [performance, roleLabel, scopeLabel]
+  );
+
+  const partnerJobMetrics = useMemo(
+    () => [
+      {
+        label: "Portfolio jobs",
+        value: String(partnerData?.portfolio?.totalJobs || 0),
+        hint: `${partnerData?.portfolio?.activeJobs || 0} active engagements`,
+        icon: Briefcase,
+        tone: "primary" as const,
+        graphValue: partnerData?.portfolio?.totalJobs || 0,
+        graphBaseline: partnerData?.portfolio?.activeJobs || 0,
+      },
+      {
+        label: "Collected revenue",
+        value: `KES ${(partnerData?.portfolio?.totalRevenueCollected || 0).toLocaleString("en-KE")}`,
+        hint: "Cash already realized across the portfolio",
+        icon: DollarSign,
+        tone: "positive" as const,
+        graphValue: partnerData?.portfolio?.totalRevenueCollected || 0,
+      },
+      {
+        label: "Portfolio profit",
+        value: `KES ${(partnerData?.portfolio?.totalProfit || 0).toLocaleString("en-KE")}`,
+        hint: "Net portfolio contribution",
+        icon: TrendingUp,
+        tone: "warning" as const,
+        graphValue: partnerData?.portfolio?.totalProfit || 0,
+        graphBaseline: 0,
+      },
+      {
+        label: "Pending approvals",
+        value: String(partnerData?.pendingApprovalsCount || 0),
+        hint: "Time-entry approvals waiting for partner action",
+        icon: AlertCircle,
+        tone: "danger" as const,
+        graphValue: partnerData?.pendingApprovalsCount || 0,
+        graphBaseline: 0,
+        inverse: true,
+      },
+    ],
+    [partnerData]
+  );
 
   useEffect(() => {
     if (authLoading) return;
@@ -116,6 +201,9 @@ const Dashboard = () => {
         const userProfileId = Number(
           user.profileId ?? (user as any).profile_id ?? user.profile?.id ?? 0
         );
+        if (!userProfileId) {
+          throw new Error("Current user profile ID is missing.");
+        }
         await loadPersonalPerformance(userProfileId);
         await loadRecentActivity(userProfileId);
         await loadEmployeeNotifications();
@@ -231,8 +319,8 @@ const Dashboard = () => {
         if (Number(nonFinancial.customerSatisfactionScore || 0) <= 0) {
           insights.push("No client satisfaction ratings captured yet.");
         }
-        if (Number(nonFinancial.learningGrowthScore || 0) <= 0 && Number(nonFinancial.okrScore || 0) <= 0) {
-          insights.push("Learning & growth inputs are missing (OKRs/evaluations/feedback).");
+        if (Number(nonFinancial.learningGrowthScore || 0) <= 0) {
+          insights.push("Learning and development inputs are missing (evaluations/feedback).");
         }
         if (insights.length === 0) {
           insights.push("Score is healthy. Keep maintaining your financial, delivery, and feedback inputs.");
@@ -253,7 +341,6 @@ const Dashboard = () => {
           customerScore: Math.round(nonFinancial.customerSatisfactionScore || 0),
           internalProcessScore: Math.round(nonFinancial.internalProcessesScore || 0),
           learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
-          okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
           roleFormula,
           jobScope,
@@ -265,36 +352,23 @@ const Dashboard = () => {
         return;
       }
 
-      const allocations = await apiFetch("GET", `/employee-project-allocations?employee_ids=${userProfileId}`);
+      const allocations = await apiFetch("GET", `/employee-project-allocations?employeeIds=${userProfileId}`);
       const assignmentRows = Array.isArray(allocations) ? allocations : [];
       const totalRevenue = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.allocatedRevenue || a?.allocationAmount || 0), 0);
       const totalBillableHours = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.plannedHours || a?.billableHours || 0), 0);
 
       // Get client ratings
-      const clientEvals = await apiFetch("GET", `/client-evaluations?employee_ids=${userProfileId}`);
+      const clientEvals = await apiFetch("GET", `/client-evaluations?employeeIds=${userProfileId}`);
       const avgClientRating = clientEvals && clientEvals.length > 0
         ? clientEvals.reduce((sum: number, e: any) => sum + Number(e?.overallRating || e?.overall_rating || 0), 0) / clientEvals.length
         : 0;
 
-      // Get KPI scores by BSC category (Cascade V2)
-      const kpiCards = await apiFetch("GET", `/kpi/employees/${userProfileId}/kpis`);
-      const scopedAssignments = Array.isArray(kpiCards) ? kpiCards : [];
-
-      const financialKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "financial");
-      const customerKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "customer");
-      const internalKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "internal_process");
-      const learningKPIs = scopedAssignments.filter((k: any) => String(k?.bsc_tag || "").toLowerCase() === "learning_growth");
-
-      const calculateScore = (kpis: any[]) => {
-        if (kpis.length === 0) return 0;
-        const total = kpis.reduce((sum, k) => sum + Number(k?.percent_complete ?? 0), 0);
-        return Math.min(100, total / kpis.length);
-      };
-
-      const financialScore = calculateScore(financialKPIs);
-      const customerScore = calculateScore(customerKPIs);
-      const internalProcessScore = calculateScore(internalKPIs);
-      const learningGrowthScore = calculateScore(learningKPIs);
+      // Calculate utilization (assuming 160 billable hours per month target)
+      const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
+      const financialScore = Math.min(100, (totalRevenue / 1000000) * 100);
+      const customerScore = Math.min(100, (avgClientRating / 5) * 100);
+      const internalProcessScore = Math.min(100, utilizationRate);
+      const learningGrowthScore = 0;
 
       // Overall score weighted by BSC categories
       const overallScore = (
@@ -304,13 +378,26 @@ const Dashboard = () => {
         learningGrowthScore * 0.10
       );
 
-      // Calculate utilization (assuming 160 billable hours per month target)
-      const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
-
       const hasFallbackSignals =
         assignmentRows.length > 0 ||
-        (Array.isArray(clientEvals) && clientEvals.length > 0) ||
-        scopedAssignments.length > 0;
+        (Array.isArray(clientEvals) && clientEvals.length > 0);
+      const fallbackInsights: string[] = [];
+
+      if (!hasFallbackSignals) {
+        fallbackInsights.push("No approved performance inputs have been recorded for this profile yet.");
+      }
+      if (totalRevenue <= 0) {
+        fallbackInsights.push("No allocated revenue has been posted to this profile yet.");
+      }
+      if (totalBillableHours <= 0) {
+        fallbackInsights.push("No billable hours have been linked to this profile yet.");
+      }
+      if (avgClientRating <= 0) {
+        fallbackInsights.push("No client feedback has been linked to this profile yet.");
+      }
+      if (fallbackInsights.length === 0) {
+        fallbackInsights.push("Performance inputs are syncing across allocations, feedback, and evaluation activity for this profile.");
+      }
 
       setPerformance({
         overallScore: Math.round(overallScore * 10) / 10,
@@ -337,7 +424,6 @@ const Dashboard = () => {
         customerScore: Math.round(customerScore),
         internalProcessScore: Math.round(internalProcessScore),
         learningGrowthScore: Math.round(learningGrowthScore),
-        okrScore: 0,
         projectEvaluationScore: 0,
         roleFormula: String(profile?.positionTitle || "employee"),
         jobScope: "assigned",
@@ -351,9 +437,7 @@ const Dashboard = () => {
           profitScore: 0,
           bdScore: 0,
         },
-        insights: [
-          "This view is using fallback metrics because score-engine data was unavailable.",
-        ],
+        insights: fallbackInsights,
       });
     } catch (error) {
       console.error("Error loading performance:", error);
@@ -392,19 +476,6 @@ const Dashboard = () => {
           title: "Pending evaluations",
           description: `${pendingCount} evaluation(s) awaiting completion`,
           date: new Date().toISOString()
-        });
-      }
-
-      // Check KPI card updates (Cascade V2)
-      const kpiUpdates = await apiFetch("GET", `/kpi/employees/${userProfileId}/kpis`);
-      const scopedUpdates = Array.isArray(kpiUpdates) ? kpiUpdates : [];
-
-      if (scopedUpdates.length > 0) {
-        activities.push({
-          type: "info",
-          title: "KPI updated",
-          description: "Performance metrics were recently updated",
-          date: scopedUpdates[0]?.last_updated_at || scopedUpdates[0]?.updated_at
         });
       }
 
@@ -465,213 +536,52 @@ const Dashboard = () => {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">
-            {isPartnerView ? 'Partner Dashboard' : 'Welcome back!'}
-          </h2>
-          <p className="text-muted-foreground">
-            {isPartnerView 
-              ? `Here's an overview of your portfolio and projects.`
-              : "Here's an overview of your personal performance metrics and activities."
-            }
-          </p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2">
+              {isPartnerView ? 'Partner Dashboard' : 'Welcome back!'}
+            </h2>
+            <p className="text-muted-foreground">
+              {isPartnerView 
+                ? `Here's an overview of your portfolio and projects.`
+                : "Here's an overview of your personal performance metrics and activities."
+              }
+            </p>
+          </div>
+          {hasViewAccess("reports.workspace") && (
+            <Link to="/reports">
+              <Button variant="outline">
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Open Reports
+              </Button>
+            </Link>
+          )}
         </div>
 
 
         {/* Partner Dashboard View */}
         {isPartnerView && partnerData ? (
           <div className="space-y-6">
-            {/* Partner Metrics Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Jobs</CardTitle>
-                  <Briefcase className="h-4 w-4 text-accent" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{partnerData.portfolio?.totalJobs || 0}</div>
-                  <p className="text-xs text-muted-foreground">Active portfolio</p>
-                  <MiniStatGraph
-                    value={partnerData.portfolio?.totalJobs || 0}
-                    baseline={partnerData.portfolio?.activeJobs || 0}
-                  />
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                  <DollarSign className="h-4 w-4 text-success" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    KES {((partnerData.portfolio?.totalRevenueCollected || 0) / 1000000).toFixed(1)}M
-                  </div>
-                  <p className="text-xs text-muted-foreground">Collected</p>
-                  <MiniStatGraph value={partnerData.portfolio?.totalRevenueCollected || 0} />
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Profit</CardTitle>
-                  <TrendingUp className="h-4 w-4 text-info" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    KES {((partnerData.portfolio?.totalProfit || 0) / 1000000).toFixed(1)}M
-                  </div>
-                  <p className="text-xs text-muted-foreground">Net profit</p>
-                  <MiniStatGraph value={partnerData.portfolio?.totalProfit || 0} />
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
-                  <AlertCircle className="h-4 w-4 text-warning" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{partnerData.pendingApprovalsCount || 0}</div>
-                  <p className="text-xs text-muted-foreground">Time entries</p>
-                  <MiniStatGraph
-                    value={partnerData.pendingApprovalsCount || 0}
-                    baseline={0}
-                    inverse
-                  />
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Partner Top Jobs */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Top Jobs</CardTitle>
-                <CardDescription>Your most active engagements</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {partnerData.topJobs?.length > 0 ? (
-                    partnerData.topJobs.map((job: any) => (
-                      <div key={job.id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted transition-colors cursor-pointer" onClick={() => window.location.href = `/partner-jobs/${job.id}`}>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-medium">{job.job_code || 'Job'}</p>
-                            {job.clientName && (
-                              <Badge variant="outline" className="text-xs">
-                                {job.clientName}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="text-sm text-muted-foreground">{job.title}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-semibold">KES {((job.amount_collected || 0) / 1000).toFixed(0)}K</p>
-                          <Badge variant="outline">{job.status || 'active'}</Badge>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-muted-foreground text-center py-4">No jobs assigned yet</p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            <JobOperationsOverview
+              title="Portfolio command center"
+              description="Track partner-sensitive jobs, revenue, and approvals from one calmer surface before you dive into the detailed cards."
+              metrics={partnerJobMetrics}
+              showLocator={false}
+            />
           </div>
         ) : (
           /* Employee Dashboard View */
           <>
-        {/* Personal Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Overall Score</CardTitle>
-              <div className="flex items-center gap-2">
-                {performance?.lossAlert && (
-                  <Badge variant="destructive">Loss alert</Badge>
-                )}
-                <Star className="h-4 w-4 text-accent" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-primary">
-                {performance?.overallScore || 0}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {performance?.grade ? `Grade ${performance.grade}` : "No grade yet"} | {roleLabel}
-              </p>
-              <MiniStatGraph
-                value={performance?.overallScore || 0}
-                baseline={performance?.financialScore || 0}
-              />
-            </CardContent>
-          </Card>
+        <JobOperationsOverview
+          title="My job operations"
+          description="A cleaner read on the work, money signals, and delivery pressure connected to your assignments."
+          metrics={employeeJobMetrics}
+          compact
+          showLocator={false}
+          pulseTitle="Workflow pulse"
+          pulseDescription="A compact snapshot of assigned jobs, staffing progress, and delivery pressure."
+        />
 
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Cash Revenue</CardTitle>
-              <div className="flex items-center gap-2">
-                {performance?.lossAlert && (
-                  <Badge variant="destructive">Loss alert</Badge>
-                )}
-                <DollarSign className="h-4 w-4 text-success" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div
-                className="text-2xl font-bold text-foreground leading-tight break-words"
-                title={`KES ${(performance?.allocatedRevenue || 0).toLocaleString()}`}
-              >
-                KES {(performance?.allocatedRevenue || 0).toLocaleString()}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Revenue score {performance?.financialSignals?.revenueScore || 0}%
-              </p>
-              <MiniStatGraph
-                value={performance?.allocatedRevenue || 0}
-                baseline={performance?.revenueContribution || 0}
-              />
-            </CardContent>
-          </Card>
-
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Financial Score</CardTitle>
-              <TrendingUp className="h-4 w-4 text-info" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                {performance?.financialScore || 0}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Revenue {performance?.financialSignals?.revenueScore || 0}% | Profit {performance?.financialSignals?.profitScore || 0}% | BD {performance?.financialSignals?.bdScore || 0}%
-              </p>
-              <MiniStatGraph
-                value={performance?.financialScore || 0}
-                baseline={performance?.nonFinancialScore || 0}
-              />
-            </CardContent>
-          </Card>
-
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Non-Financial & Efficiency</CardTitle>
-              <Users className="h-4 w-4 text-secondary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">
-                {performance?.nonFinancialScore || 0} / {performance?.efficiencyScore || 0}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Client rating {performance?.clientRating || 0}/5 | Utilization {performance?.utilizationRate || 0}%
-              </p>
-              <MiniStatGraph
-                value={performance?.nonFinancialScore || 0}
-                baseline={performance?.efficiencyScore || 0}
-              />
-            </CardContent>
-          </Card>
-        </div>
 
         {/* Performance Scorecard & Recent Activity */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -742,7 +652,7 @@ const Dashboard = () => {
                   Customer: {performance?.customerScore || 0}% | Internal: {performance?.internalProcessScore || 0}% | Learning: {performance?.learningGrowthScore || 0}%
                 </p>
                 <p className="text-muted-foreground">
-                  OKR: {performance?.okrScore || 0}% | Project eval: {performance?.projectEvaluationScore || 0}% | Billable hours: {performance?.billableHours || 0}
+                  Project eval: {performance?.projectEvaluationScore || 0}% | Billable hours: {performance?.billableHours || 0}
                 </p>
               </div>
               <div className="mt-4 rounded-md border p-3 space-y-2">
@@ -753,12 +663,6 @@ const Dashboard = () => {
                   ))}
                 </ul>
               </div>
-              <Link to="/scorecard" className="block mt-4">
-                <Button className="w-full" variant="outline">
-                  <BarChart3 className="h-4 w-4 mr-2" />
-                  View Full Scorecard
-                </Button>
-              </Link>
             </CardContent>
           </Card>
 
@@ -798,11 +702,21 @@ const Dashboard = () => {
                   <p className="text-sm text-muted-foreground">No recent activity</p>
                 )}
               </div>
-              <Link to="/notifications" className="block mt-4">
-                <Button className="w-full" variant="outline">
-                  View All Activity
-                </Button>
-              </Link>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <Link to="/notifications" className="block">
+                  <Button className="w-full" variant="outline">
+                    View All Activity
+                  </Button>
+                </Link>
+                {hasViewAccess("reports.workspace") && (
+                  <Link to="/reports" className="block">
+                    <Button className="w-full" variant="outline">
+                      <FileSpreadsheet className="mr-2 h-4 w-4" />
+                      Open Reports
+                    </Button>
+                  </Link>
+                )}
+              </div>
               {unreadNotifications.length > 0 && (
                 <div className="mt-4 space-y-2">
                   {unreadNotifications.slice(0, 3).map((notif: any) => (

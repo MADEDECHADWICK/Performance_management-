@@ -2,6 +2,7 @@ import { Router } from "express";
 import { ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { notifyProfilesByRoles } from "../services/notificationRecipients";
 import { NotificationService } from "../services/notifications.service";
@@ -35,11 +36,7 @@ const normalizeRole = (value: string | null | undefined) =>
 
 const resolveRoleSet = (req: AuthRequest) =>
   new Set(
-    [
-      ...(req.userRoles || []),
-      ...(req.user?.authRoles || []),
-      req.profile?.role?.name || "",
-    ]
+    resolveRequestAccessRoles(req)
       .map((role) => normalizeRole(role))
       .filter(Boolean)
   );
@@ -135,7 +132,9 @@ router.post(
         {
           title: "Engagement letter approved",
           message: `Engagement letter for client #${letter.clientId} has been approved and is ready for HR job creation.`,
-          relatedEntityId: letterId,
+          link: "/client-onboarding-queue",
+          targetEntityType: "EngagementLetter",
+          targetEntityId: letterId,
         },
         req
       );
@@ -532,7 +531,8 @@ router.post("/", async (req: AuthRequest, res) => {
         title: "New client onboarding submitted",
         message: `Client "${created.client.clientName}" and engagement letter are awaiting HR review for job setup.`,
         link: `/client-onboarding-queue`,
-        relatedEntityId: created.onboarding.id,
+        targetEntityType: "ClientOnboarding",
+        targetEntityId: created.onboarding.id,
       },
       req
     );
@@ -821,7 +821,8 @@ router.post("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
         title: "Engagement letter submitted for HR review",
         message: `Client "${created.clientName}" engagement letter is awaiting HR review for job setup.`,
         link: "/client-onboarding-queue",
-        relatedEntityId: created.onboarding.id,
+        targetEntityType: "ClientOnboarding",
+        targetEntityId: created.onboarding.id,
       },
       req
     );

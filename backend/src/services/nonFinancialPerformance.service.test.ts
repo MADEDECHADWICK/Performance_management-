@@ -9,9 +9,6 @@ jest.mock("../prisma", () => {
     projectEvaluation: {
       aggregate: jest.fn(),
     },
-    okrObjective: {
-      findMany: jest.fn(),
-    },
     feedback: {
       count: jest.fn(),
     },
@@ -36,9 +33,6 @@ type PrismaMock = {
   };
   projectEvaluation: {
     aggregate: jest.Mock;
-  };
-  okrObjective: {
-    findMany: jest.Mock;
   };
   feedback: {
     count: jest.Mock;
@@ -65,7 +59,6 @@ describe("NonFinancialPerformanceService", () => {
       _avg: { overallScore: null },
       _count: { id: 0 },
     });
-    mockedPrisma.okrObjective.findMany.mockResolvedValue([]);
     mockedPrisma.feedback.count.mockResolvedValue(0);
     mockedPrisma.clientSatisfactionSurvey.findMany.mockResolvedValue([]);
     mockedPrisma.task.count.mockResolvedValue(0);
@@ -83,12 +76,10 @@ describe("NonFinancialPerformanceService", () => {
     expect(scores.customerSatisfactionScore).toBe(0);
     expect(scores.internalProcessesScore).toBe(0);
     expect(scores.overallNonFinancialScore).toBe(0);
-    expect(scores.okrScore).toBe(0);
     expect(scores.feedbackScore).toBe(0);
     expect(scores.projectEvaluationScore).toBe(0);
     expect(scores.evidence).toEqual({
       learningGrowth: false,
-      okr: false,
       feedback: false,
       customerSatisfaction: false,
       internalProcesses: false,

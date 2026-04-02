@@ -1,6 +1,9 @@
+// This file defines the routes for the manager dashboard, providing endpoints for managers to view their team overview, job portfolio, approval chains, financial summaries, and performance evaluations. The routes are protected by authentication middleware and ensure that only users with appropriate managerial roles can access the data. The endpoints aggregate data from various sources to present a comprehensive dashboard experience for managers.
+
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
@@ -9,6 +12,7 @@ const allowedManagerRoles = new Set([
   'manager',
   'super_admin',
   'hr',
+  'gmp',
 ]);
 
 const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
@@ -31,13 +35,8 @@ const getManagerContext = async (req: AuthRequest) => {
     return { error: { status: 404, message: 'User profile not found' } };
   }
 
-  const roles = user.roles.map((r) => r.role.name.toLowerCase());
-  const roleName = user.profile.role?.name?.toLowerCase();
-  const positionTitle = user.profile.positionTitle?.toLowerCase();
-  const isManager =
-    roles.some((role) => allowedManagerRoles.has(role)) ||
-    roleName === 'manager' ||
-    (positionTitle ? positionTitle.includes('manager') : false);
+  const roles = resolveRequestAccessRoles(req);
+  const isManager = roles.some((role) => allowedManagerRoles.has(role));
 
   if (!isManager) {
     return { error: { status: 403, message: 'Access denied. Manager role required.' } };

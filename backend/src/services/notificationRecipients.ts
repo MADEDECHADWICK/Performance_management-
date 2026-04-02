@@ -1,6 +1,7 @@
 import { prisma } from "../prisma";
 import { NotificationService } from "./notifications.service";
 import { AuthRequest } from "../middleware/auth";
+import { resolveRequestPrimaryAccessRole } from "../auth/accessRoles";
 
 const ROLE_GROUPS: Record<string, string[]> = {
   finance: ["finance"],
@@ -11,12 +12,65 @@ const ROLE_GROUPS: Record<string, string[]> = {
 const buildAuthContext = (req: AuthRequest) => ({
   userId: req.user?.userId ?? 0,
   profileId: req.user?.profileId ?? req.profile?.id ?? 0,
-  roleName: req.profile?.role?.name,
+  roleName: resolveRequestPrimaryAccessRole(req),
 });
+
+interface RecipientNotificationPayload {
+  title: string;
+  message: string;
+  link?: string;
+  relatedEntityId?: number;
+  actionRequired?: boolean;
+  targetEntityType?: string;
+  targetEntityId?: number;
+  jobId?: number;
+  clientId?: number;
+}
+
+const buildNotificationInput = (profileId: number, payload: RecipientNotificationPayload) => {
+  const targetEntityId = payload.targetEntityId ?? payload.relatedEntityId;
+  const normalizedTargetType = String(payload.targetEntityType || "").trim();
+  const lowerTargetType = normalizedTargetType.toLowerCase();
+  const canonicalRoute = payload.link ? String(payload.link).trim() : undefined;
+  const inferredJobId =
+    payload.jobId ??
+    (!normalizedTargetType && typeof payload.relatedEntityId === "number"
+      ? payload.relatedEntityId
+      : lowerTargetType === "job"
+        ? targetEntityId
+        : undefined);
+  const inferredClientId =
+    payload.clientId ??
+    (lowerTargetType === "client" ? targetEntityId : undefined);
+
+  return {
+    recipientProfileId: profileId,
+    type: payload.link ? "action" : "info",
+    title: payload.title,
+    message: payload.message,
+    jobId: inferredJobId,
+    clientId: inferredClientId,
+    actionRequired: payload.actionRequired ?? true,
+    link: canonicalRoute,
+    canonicalRoute,
+    actions: canonicalRoute
+      ? [
+          {
+            id: "view",
+            label: payload.actionRequired ?? true ? "Review" : "View",
+            endpoint: canonicalRoute,
+            method: "GET" as const,
+          },
+        ]
+      : undefined,
+    targetEntityType: normalizedTargetType || undefined,
+    targetEntityId,
+  } as const;
+};
 
 export const notifyProfilesByRoles = async (
   roleKeys: string[],
-  payload: { title: string; message: string; link?: string; relatedEntityId?: number; actionRequired?: boolean },
+  payload: RecipientNotificationPayload,
   auth: AuthRequest
 ) => {
   const roleNames = roleKeys.flatMap((key) => ROLE_GROUPS[key] || [key]);
@@ -40,15 +94,7 @@ export const notifyProfilesByRoles = async (
   await Promise.all(
     profiles.map((profile) =>
       NotificationService.createNotification(
-        {
-          recipientProfileId: profile.id,
-          type: payload.link ? "action" : "info",
-          title: payload.title,
-          message: payload.message,
-          jobId: payload.relatedEntityId,
-          actionRequired: payload.actionRequired ?? true,
-          link: payload.link,
-        },
+        buildNotificationInput(profile.id, payload),
         buildAuthContext(auth)
       )
     )
@@ -57,7 +103,7 @@ export const notifyProfilesByRoles = async (
 
 export const notifyProfilesByRolesWithType = async (
   roleKeys: string[],
-  payload: { title: string; message: string; link?: string; relatedEntityId?: number; actionRequired?: boolean },
+  payload: RecipientNotificationPayload,
   type: "info" | "action" | "warning" | "escalation",
   auth: AuthRequest
 ) => {
@@ -80,38 +126,26 @@ export const notifyProfilesByRolesWithType = async (
   });
 
   await Promise.all(
-    profiles.map((profile) =>
-      NotificationService.createNotification(
+    profiles.map((profile) => {
+      const notificationInput = buildNotificationInput(profile.id, payload);
+      return NotificationService.createNotification(
         {
-          recipientProfileId: profile.id,
+          ...notificationInput,
           type,
-          title: payload.title,
-          message: payload.message,
-          jobId: payload.relatedEntityId,
-          actionRequired: payload.actionRequired ?? true,
-          link: payload.link,
         },
         buildAuthContext(auth)
-      )
-    )
+      );
+    })
   );
 };
 
 export const notifyProfile = async (
   profileId: number,
-  payload: { title: string; message: string; link?: string; relatedEntityId?: number; actionRequired?: boolean },
+  payload: RecipientNotificationPayload,
   auth: AuthRequest
 ) => {
   await NotificationService.createNotification(
-    {
-      recipientProfileId: profileId,
-      type: payload.link ? "action" : "info",
-      title: payload.title,
-      message: payload.message,
-      jobId: payload.relatedEntityId,
-      actionRequired: payload.actionRequired ?? true,
-      link: payload.link,
-    },
+    buildNotificationInput(profileId, payload),
     buildAuthContext(auth)
   );
 };

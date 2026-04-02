@@ -1,16 +1,15 @@
+// This middleware verifies that the authenticated user has access to a specific time entry based on their role and relationship to the time entry. It checks if the user is an admin (super_admin or hr), the owner of the time entry (employee), a manager who supervises the employee or manages the job, or a partner associated with the job. If the user does not have access, it responds with a 403 Forbidden status code. If the time entry is not found, it responds with a 404 Not Found status code. If the user is not authenticated, it responds with a 401 Unauthorized status code. If access is granted, it attaches the time entry to the request object for downstream handlers to use. The middleware also includes error handling to catch any unexpected issues during the access check process and respond with a 500 Internal Server Error status code if necessary. By using this middleware, we can ensure that users can only access time entries that they are authorized to view or manage, enhancing the security and integrity of the application.
+
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "./auth";
 import { prisma } from "../prisma";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 
 const normalizeRole = (value?: string) => String(value || "").toLowerCase().trim();
 
 const getRoleSet = (req: AuthRequest): Set<string> => {
   const roles = new Set<string>();
-  const profileRole = normalizeRole(req.profile?.role?.name);
-  if (profileRole) {
-    roles.add(profileRole);
-  }
-  (req.userRoles || []).forEach((role) => {
+  resolveRequestAccessRoles(req).forEach((role) => {
     const normalized = normalizeRole(role);
     if (normalized) {
       roles.add(normalized);

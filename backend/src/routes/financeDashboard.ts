@@ -1,13 +1,16 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { requireAnyModuleAccess, requireModuleAccess } from '../middleware/requireModuleAccess';
 import { notifyProfile, notifyProfilesByRoles } from '../services/notificationRecipients';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 import jobService from '../services/jobs.service';
 
 const router = Router();
+const financeDashboardRoles = new Set(['finance', 'hr', 'gmp', 'super_admin']);
 const canReadFinance = requireModuleAccess('finance', 'read');
 const canWriteFinance = requireModuleAccess('finance', 'write');
 const canApproveFinance = requireModuleAccess('finance', 'approve');
@@ -72,6 +75,9 @@ const parseIsoDate = (value: unknown): Date | null => {
   return parsed;
 };
 
+const toMonthStartUtc = (date: Date) =>
+  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+
 const buildCollectionFingerprint = (input: {
   actorProfileId: number | null;
   clientId: number;
@@ -105,6 +111,13 @@ const getFinanceContext = async (req: AuthRequest) => {
   if (!userId) {
     return { error: { status: 401, message: 'Unauthorized' } };
   }
+
+  const roleNames = resolveRequestAccessRoles(req);
+  const canUseFinanceDashboard = roleNames.some((role) => financeDashboardRoles.has(role));
+  if (!canUseFinanceDashboard) {
+    return { error: { status: 403, message: 'Access denied. Finance role required.' } };
+  }
+
   return {
     userId,
     profileId: req.user?.profileId ? Number(req.user.profileId) : null,
@@ -344,6 +357,94 @@ router.get('/collections', authMiddleware, canReadCollections, async (req: AuthR
   }
 });
 
+// GET /finance-dashboard/collections/outstanding-invoices
+router.get(
+  '/collections/outstanding-invoices',
+  authMiddleware,
+  canReadCollections,
+  async (req: AuthRequest, res) => {
+    try {
+      const context = await getFinanceContext(req);
+      if (context.error) {
+        return res.status(context.error.status).json({ error: context.error.message });
+      }
+
+      const clientIdQuery = String(req.query.clientId || '').trim();
+      const jobIdQuery = String(req.query.jobId || '').trim();
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 250);
+
+      const resolvedClientId = clientIdQuery ? Number(clientIdQuery) : null;
+      if (resolvedClientId !== null && (!Number.isFinite(resolvedClientId) || resolvedClientId <= 0)) {
+        return res.status(400).json({ error: 'Invalid clientId' });
+      }
+
+      const resolvedJobId = jobIdQuery ? Number(jobIdQuery) : null;
+      if (resolvedJobId !== null && (!Number.isFinite(resolvedJobId) || resolvedJobId <= 0)) {
+        return res.status(400).json({ error: 'Invalid jobId' });
+      }
+
+      const invoices = await prisma.jobInvoice.findMany({
+        where: {
+          amountOutstanding: { gt: 0 },
+          status: {
+            in: ['draft', 'issued', 'partially_paid', 'overdue'],
+          },
+          ...(resolvedClientId ? { clientId: resolvedClientId } : {}),
+          ...(resolvedJobId ? { jobId: resolvedJobId } : {}),
+        },
+        include: {
+          client: {
+            select: {
+              id: true,
+              clientName: true,
+            },
+          },
+          job: {
+            select: {
+              id: true,
+              jobCode: true,
+              jobName: true,
+            },
+          },
+          milestoneTask: {
+            select: {
+              id: true,
+              title: true,
+            },
+          },
+        },
+        orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+        take: limit,
+      });
+
+      res.json(
+        invoices.map((invoice) => ({
+          id: invoice.id,
+          clientId: invoice.clientId,
+          clientName: invoice.client.clientName,
+          jobId: invoice.jobId,
+          jobCode: invoice.job.jobCode || null,
+          jobName: invoice.job.jobName,
+          invoiceNumber: invoice.invoiceNumber,
+          title: invoice.title,
+          status: invoice.status,
+          currency: invoice.currency,
+          totalAmount: Number(invoice.totalAmount || 0),
+          amountPaid: Number(invoice.amountPaid || 0),
+          amountOutstanding: Number(invoice.amountOutstanding || 0),
+          dueDate: invoice.dueDate,
+          issuedAt: invoice.issuedAt,
+          milestoneTaskId: invoice.milestoneTaskId,
+          milestoneTitle: invoice.milestoneTask?.title || null,
+        }))
+      );
+    } catch (error: any) {
+      console.error('Finance outstanding invoices error:', error);
+      res.status(500).json({ error: 'Failed to load outstanding invoices' });
+    }
+  }
+);
+
 // POST /finance-dashboard/collections
 router.post('/collections', authMiddleware, canWriteCollections, async (req: AuthRequest, res) => {
   let activeIdempotencyKey: string | null = null;
@@ -357,6 +458,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
     const {
       clientId,
       jobId,
+      invoiceId,
       paymentAmount,
       currency,
       paymentDate,
@@ -380,6 +482,11 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
       jobId === undefined || jobId === null || jobId === '' ? null : Number(jobId);
     if (resolvedJobId !== null && (!Number.isFinite(resolvedJobId) || resolvedJobId <= 0)) {
       return res.status(400).json({ error: 'Invalid jobId' });
+    }
+    const resolvedInvoiceId =
+      invoiceId === undefined || invoiceId === null || invoiceId === '' ? null : Number(invoiceId);
+    if (resolvedInvoiceId !== null && (!Number.isFinite(resolvedInvoiceId) || resolvedInvoiceId <= 0)) {
+      return res.status(400).json({ error: 'Invalid invoiceId' });
     }
 
     const paymentAmountNumber = Number(paymentAmount);
@@ -467,20 +574,98 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
           };
         }
 
+        let invoiceToApply: {
+          id: number;
+          jobId: number;
+          clientId: number;
+          invoiceNumber: string;
+          amountOutstanding: Prisma.Decimal;
+          status: string;
+        } | null = null;
+
+        if (resolvedInvoiceId) {
+          invoiceToApply = await tx.jobInvoice.findUnique({
+            where: { id: resolvedInvoiceId },
+            select: {
+              id: true,
+              jobId: true,
+              clientId: true,
+              invoiceNumber: true,
+              amountOutstanding: true,
+              status: true,
+            },
+          });
+
+          if (!invoiceToApply) {
+            throw new Error('Selected invoice was not found');
+          }
+          if (invoiceToApply.clientId !== resolvedClientId) {
+            throw new Error('Selected invoice does not belong to the chosen client');
+          }
+          if (resolvedJobId !== null && invoiceToApply.jobId !== resolvedJobId) {
+            throw new Error('Selected invoice does not belong to the chosen job');
+          }
+          if (['paid', 'void'].includes(String(invoiceToApply.status))) {
+            throw new Error('Selected invoice cannot receive additional payment');
+          }
+          if (paymentAmountNumber - Number(invoiceToApply.amountOutstanding || 0) > 0.0001) {
+            throw new Error('Payment amount exceeds the invoice outstanding balance');
+          }
+        } else if (normalizedInvoiceNumber) {
+          invoiceToApply = await tx.jobInvoice.findFirst({
+            where: {
+              invoiceNumber: normalizedInvoiceNumber,
+            },
+            select: {
+              id: true,
+              jobId: true,
+              clientId: true,
+              invoiceNumber: true,
+              amountOutstanding: true,
+              status: true,
+            },
+          });
+
+          if (invoiceToApply) {
+            if (invoiceToApply.clientId !== resolvedClientId) {
+              throw new Error('Invoice number does not belong to the chosen client');
+            }
+            if (resolvedJobId !== null && invoiceToApply.jobId !== resolvedJobId) {
+              throw new Error('Invoice number does not belong to the chosen job');
+            }
+            if (['paid', 'void'].includes(String(invoiceToApply.status))) {
+              throw new Error('Selected invoice cannot receive additional payment');
+            }
+            if (paymentAmountNumber - Number(invoiceToApply.amountOutstanding || 0) > 0.0001) {
+              throw new Error('Payment amount exceeds the invoice outstanding balance');
+            }
+          }
+        }
+
         const payment = await tx.clientPayment.create({
           data: {
             clientId: resolvedClientId,
-            jobId: resolvedJobId,
+            jobId: resolvedJobId ?? invoiceToApply?.jobId ?? null,
             paymentAmount: paymentAmountNumber,
             currency: normalizedCurrency,
             paymentDate: paymentDateValue,
             paymentMethod: normalizedPaymentMethod,
             referenceNumber: normalizedReferenceNumber,
             notes: normalizedNotes,
-            invoiceNumber: normalizedInvoiceNumber,
+            invoiceNumber: normalizedInvoiceNumber || invoiceToApply?.invoiceNumber || null,
             recordedByProfileId: context.profileId,
           },
         });
+
+        if (invoiceToApply) {
+          await jobService.applyClientPaymentToInvoice(tx, {
+            invoiceId: invoiceToApply.id,
+            clientPaymentId: payment.id,
+            appliedAmount: paymentAmountNumber,
+            appliedByProfileId: context.profileId ?? null,
+            notes: normalizedNotes,
+          });
+        }
 
         await tx.auditLog.create({
           data: {
@@ -498,6 +683,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
               idempotencyKey,
               referenceNumber: normalizedReferenceNumber,
               invoiceNumber: normalizedInvoiceNumber,
+              invoiceId: resolvedInvoiceId,
             },
           },
         });
@@ -963,10 +1149,11 @@ router.post('/projections', authMiddleware, canWriteProjections, async (req: Aut
 
     const resolvedClientId = clientId ? Number(clientId) : undefined;
     const resolvedDepartmentId = departmentId ? Number(departmentId) : undefined;
-    const monthYearDate = parseIsoDate(monthYear);
-    if (!monthYearDate) {
+    const parsedMonthYearDate = parseIsoDate(monthYear);
+    if (!parsedMonthYearDate) {
       return res.status(400).json({ error: 'Invalid monthYear' });
     }
+    const monthYearDate = toMonthStartUtc(parsedMonthYearDate);
     const projectedAmountNumber = Number(projectedAmount);
     if (!Number.isFinite(projectedAmountNumber) || projectedAmountNumber <= 0) {
       return res.status(400).json({ error: 'projectedAmount must be a positive number' });
@@ -982,27 +1169,32 @@ router.post('/projections', authMiddleware, canWriteProjections, async (req: Aut
     }
 
     const projection = await prisma.$transaction(async (tx) => {
-      const savedProjection = await tx.revenueProjection.upsert({
+      const existingProjection = await tx.revenueProjection.findFirst({
         where: {
-          clientId_departmentId_monthYear: {
-            clientId: (resolvedClientId ?? null) as any,
-            departmentId: (resolvedDepartmentId ?? null) as any,
-            monthYear: monthYearDate,
-          },
-        },
-        update: {
-          projectedAmount: projectedAmountNumber,
-          currency: currency || 'KES',
-        },
-        create: {
-          clientId: resolvedClientId,
-          departmentId: resolvedDepartmentId,
+          clientId: resolvedClientId ?? null,
+          departmentId: resolvedDepartmentId ?? null,
           monthYear: monthYearDate,
-          projectedAmount: projectedAmountNumber,
-          currency: currency || 'KES',
-          createdByProfileId: context.profileId,
         },
       });
+
+      const savedProjection = existingProjection
+        ? await tx.revenueProjection.update({
+            where: { id: existingProjection.id },
+            data: {
+              projectedAmount: projectedAmountNumber,
+              currency: currency || 'KES',
+            },
+          })
+        : await tx.revenueProjection.create({
+            data: {
+              clientId: resolvedClientId,
+              departmentId: resolvedDepartmentId,
+              monthYear: monthYearDate,
+              projectedAmount: projectedAmountNumber,
+              currency: currency || 'KES',
+              createdByProfileId: context.profileId,
+            },
+          });
 
       await tx.auditLog.create({
         data: {
@@ -2165,16 +2357,28 @@ router.get('/job-profitability', authMiddleware, canReadFinance, async (req: Aut
           where: { status: 'approved' },
           select: { billableAmount: true, costAmount: true },
         },
+        requisitionRequests: {
+          where: { status: 'approved' },
+          select: { amount: true, isClientRecoverable: true },
+        },
         payments: { select: { paymentAmount: true } },
       },
       orderBy: { jobName: 'asc' },
     });
 
     const profitability = jobs.map((job) => {
-      const cost = job.timeEntries.reduce(
+      const laborCost = job.timeEntries.reduce(
         (sum, entry) => sum + Number(entry.costAmount || 0),
         0
       );
+      const approvedRequisitionCost = job.requisitionRequests.reduce(
+        (sum, item) => sum + Number(item.amount || 0),
+        0
+      );
+      const recoverableRequisitionCost = job.requisitionRequests
+        .filter((item) => item.isClientRecoverable)
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const cost = laborCost + approvedRequisitionCost;
       const collected = job.payments.reduce(
         (sum, payment) => sum + Number(payment.paymentAmount || 0),
         0
@@ -2187,6 +2391,9 @@ router.get('/job-profitability', authMiddleware, canReadFinance, async (req: Aut
         jobName: job.jobName,
         clientName: job.client?.clientName ?? 'Unassigned',
         revenue,
+        laborCost,
+        approvedRequisitionCost,
+        recoverableRequisitionCost,
         cost,
         profit: revenue - cost,
         margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : 0,

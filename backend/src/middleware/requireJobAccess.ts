@@ -59,11 +59,12 @@ export function requireJobAccess(action: string = 'view') {
       const isAdmin = roleSet.has('super_admin');
       const isHr = roleSet.has('hr');
       const isGmp = roleSet.has('gmp');
+      const isFinance = roleSet.has('finance');
       const isManager = roleSet.has('manager') && job.managerProfileId === requesterProfileId;
       const isPartner = roleSet.has('partner') && job.partnerProfileId === requesterProfileId;
       const isStaffAssigned = job.staffing.length > 0;
 
-      const hasLeadershipScope = isAdmin || isHr || isGmp || isManager || isPartner;
+      const hasLeadershipScope = isAdmin || isHr || isGmp || isFinance || isManager || isPartner;
       const canView = hasLeadershipScope || isStaffAssigned;
       const canManage = hasLeadershipScope;
 

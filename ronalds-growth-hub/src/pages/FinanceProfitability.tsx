@@ -6,6 +6,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  AnalyticsChartShell,
+  AnalyticsGradientDefs,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGradientFill,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
+import {
   Bar,
   BarChart,
   CartesianGrid,
@@ -28,6 +39,9 @@ type JobProfitability = {
   jobName: string;
   clientName: string;
   revenue: number;
+  laborCost: number;
+  approvedRequisitionCost: number;
+  recoverableRequisitionCost?: number;
   cost: number;
   profit: number;
   margin: number;
@@ -92,6 +106,11 @@ export default function FinanceProfitability() {
 
   const totalCost = useMemo(
     () => filteredJobs.reduce((sum, job) => sum + (job.cost || 0), 0),
+    [filteredJobs]
+  );
+
+  const totalRequisitionSpend = useMemo(
+    () => filteredJobs.reduce((sum, job) => sum + (job.approvedRequisitionCost || 0), 0),
     [filteredJobs]
   );
 
@@ -169,7 +188,7 @@ export default function FinanceProfitability() {
           <p className="text-muted-foreground">Review profitability by job and overall margin performance.</p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Revenue</CardTitle>
@@ -199,6 +218,15 @@ export default function FinanceProfitability() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Req Spend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="metric-value">KES {totalRequisitionSpend.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground">Approved requisitions charged to jobs</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Avg Margin</CardTitle>
             </CardHeader>
             <CardContent>
@@ -220,23 +248,29 @@ export default function FinanceProfitability() {
                   No jobs to evaluate yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={profitOutcomeMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={55}
-                      outerRadius={88}
-                      paddingAngle={2}
-                    >
-                      <Cell fill="#22c55e" />
-                      <Cell fill="#ef4444" />
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={profitOutcomeMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        <Cell fill="#22c55e" />
+                        <Cell fill="#ef4444" />
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -252,24 +286,30 @@ export default function FinanceProfitability() {
                   No revenue/cost data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={revenueCostMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={55}
-                      outerRadius={88}
-                      paddingAngle={2}
-                    >
-                      {revenueCostMix.map((entry, index) => (
-                        <Cell key={`rev-cost-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={revenueCostMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        {revenueCostMix.map((entry, index) => (
+                          <Cell key={`rev-cost-${entry.name}`} fill={analyticsColorAt(index)} />
+                        ))}
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -318,6 +358,8 @@ export default function FinanceProfitability() {
                   <TableHead>Job</TableHead>
                   <TableHead>Client</TableHead>
                   <TableHead className="text-right">Revenue</TableHead>
+                  <TableHead className="text-right">Labor Cost</TableHead>
+                  <TableHead className="text-right">Req Spend</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
                   <TableHead className="text-right">Profit</TableHead>
                   <TableHead className="text-right">Margin</TableHead>
@@ -326,7 +368,7 @@ export default function FinanceProfitability() {
               <TableBody>
                 {filteredJobs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground">
                       No profitability records match the current filters.
                     </TableCell>
                   </TableRow>
@@ -336,6 +378,8 @@ export default function FinanceProfitability() {
                     <TableCell>{job.jobCode || job.jobName}</TableCell>
                     <TableCell>{job.clientName}</TableCell>
                     <TableCell className="text-right">KES {job.revenue.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">KES {job.laborCost.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">KES {job.approvedRequisitionCost.toLocaleString()}</TableCell>
                     <TableCell className="text-right">KES {job.cost.toLocaleString()}</TableCell>
                     <TableCell className="text-right">KES {job.profit.toLocaleString()}</TableCell>
                     <TableCell className="text-right">{job.margin.toFixed(1)}%</TableCell>
@@ -357,16 +401,29 @@ export default function FinanceProfitability() {
                 No profitability data to chart yet.
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={marginDistribution}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="label" fontSize={12} />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip formatter={(value: number) => [value, "Jobs"]} />
-                  <Bar dataKey="count" fill="hsl(var(--chart-2))" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-              )}
+              <AnalyticsChartShell>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={marginDistribution}>
+                    <AnalyticsGradientDefs items={[{ id: "marginDistributionCount", color: analyticsColorAt(1) }]} />
+                    <CartesianGrid {...analyticsGridProps} />
+                    <XAxis dataKey="label" {...analyticsAxisProps} />
+                    <YAxis allowDecimals={false} />
+                    <Tooltip
+                      content={
+                        <AnalyticsTooltipContent
+                          valueFormatter={(value) => [Number(value || 0).toFixed(0), "Jobs"]}
+                        />
+                      }
+                    />
+                    <Bar
+                      dataKey="count"
+                      fill={analyticsGradientFill("marginDistributionCount")}
+                      radius={[10, 10, 4, 4]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </AnalyticsChartShell>
+            )}
             </CardContent>
         </Card>
 

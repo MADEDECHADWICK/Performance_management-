@@ -1,3 +1,5 @@
+import { logger, toLogContext } from "../lib/logger";
+
 type WebhookPayload = Record<string, unknown>;
 
 const resolveWebhookUrl = () =>
@@ -8,7 +10,10 @@ export const emitWebhook = async (event: string, payload: WebhookPayload) => {
   if (!url) return;
 
   if (typeof fetch !== "function") {
-    console.warn("Webhook emit skipped: fetch is not available in this runtime.");
+    logger.warn("webhook_emit_skipped", {
+      reason: "fetch_unavailable",
+      event,
+    });
     return;
   }
 
@@ -23,6 +28,9 @@ export const emitWebhook = async (event: string, payload: WebhookPayload) => {
       }),
     });
   } catch (error) {
-    console.error("Failed to emit webhook event:", event, error);
+    logger.error("webhook_emit_failed", {
+      event,
+      ...toLogContext(error),
+    });
   }
 };

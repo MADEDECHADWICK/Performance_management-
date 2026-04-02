@@ -7,7 +7,8 @@
 // =============================
 
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  engineType = "library"
 }
 
 datasource db {
@@ -19,12 +20,6 @@ datasource db {
 // =============================
 // ENUMS
 // =============================
-enum EmployeeKpiAssignmentStatus {
-  active
-  paused
-  closed
-}
-
 enum BackgroundCheckStatus {
   pending
   cleared
@@ -55,6 +50,114 @@ enum EmployeeStatus {
   active
   inactive
   separated
+}
+
+enum LeaveUnitType {
+  day
+  hour
+}
+
+enum LeaveDayPortion {
+  full_day
+  half_day_am
+  half_day_pm
+}
+
+enum LeaveAccrualFrequency {
+  monthly
+  quarterly
+  annually
+  manual
+}
+
+enum LeaveRequestStatus {
+  pending_manager_approval
+  pending_partner_approval
+  pending_hr_approval
+  approved
+  declined
+  cancelled
+}
+
+enum LeaveApprovalDecision {
+  pending
+  approved
+  declined
+  skipped
+}
+
+enum LeaveApprovalStageType {
+  manager
+  partner
+  hr
+  admin
+  custom
+}
+
+enum LeaveNoticeUnit {
+  calendar_days
+  business_days
+}
+
+enum LeaveApproverSource {
+  employee_manager
+  department_partner
+  hr_pool
+  specific_profile
+}
+
+enum LeaveRequestSegmentSyncStatus {
+  projected
+  confirmed
+  voided
+}
+
+enum LeaveBalanceTransactionType {
+  opening_balance
+  accrual
+  carryover
+  adjustment
+  deduction
+  reversal
+  expiry
+}
+
+enum LeavePolicyAssignmentScope {
+  global
+  department
+  role
+  employee
+}
+
+enum RequisitionStatus {
+  pending_manager_approval
+  pending_partner_approval
+  pending_gmp_approval
+  pending_finance_approval
+  approved
+  declined
+  cancelled
+}
+
+enum RequisitionApprovalDecision {
+  pending
+  approved
+  declined
+  skipped
+}
+
+enum RequisitionApprovalStageType {
+  manager
+  partner
+  gmp
+  finance
+  custom
+}
+
+enum RequisitionAccountabilityStatus {
+  not_released
+  pending
+  submitted
 }
 
 enum OnboardingStatus {
@@ -126,6 +229,24 @@ enum JobCollectionStage {
   partial_collection
   fully_collected
   overdue
+}
+
+enum JobInvoiceStatus {
+  draft
+  issued
+  partially_paid
+  paid
+  overdue
+  void
+}
+
+enum JobInvoiceLineType {
+  milestone_fee
+  service_fee
+  expense
+  adjustment
+  tax
+  credit
 }
 
 enum ReceivableFollowUpActionType {
@@ -292,28 +413,7 @@ enum EvaluationRelationship {
 enum EvaluationQuestionCategory {
   competency
   behavior
-  goal
   culture
-}
-
-enum OkrStatus {
-  draft
-  active
-  completed
-  archived
-}
-
-enum OkrApprovalStatus {
-  draft
-  pending
-  approved
-  rejected
-}
-
-enum OkrChangeType {
-  progress_update
-  status_update
-  approval_update
 }
 
 enum DashboardStatus {
@@ -336,25 +436,100 @@ enum TrainingRecordStatus {
   cancelled
 }
 
-enum DevelopmentGoalStatus {
-  active
+enum TrainingRecordSourceType {
+  manual
+  learning_assignment
+}
+
+enum KnowledgeCompletionMode {
+  video_end
+  watch_percent
+  document_scroll
+  manual
+}
+
+enum LearningPointEventType {
+  knowledge_resource_completed
+  knowledge_quiz_passed
+  training_attendance_confirmed
+  training_quiz_passed
+  training_feedback_submitted
+}
+
+enum LearningPointSourceType {
+  knowledge_resource
+  knowledge_quiz
+  learning_session
+  learning_quiz
+  training_feedback
+}
+
+enum LearningProgramStatus {
+  draft
+  published
+  archived
+}
+
+enum LearningProgramVersionStatus {
+  draft
+  published
+  retired
+}
+
+enum LearningModuleContentType {
+  video
+  document
+  link
+  knowledge_resource
+  live_session
+}
+
+enum LearningAssignmentStatus {
+  assigned
+  in_progress
   completed
-  paused
+  overdue
   cancelled
 }
 
-enum DevelopmentPlanStatus {
+enum LearningProgressStatus {
   not_started
   in_progress
   completed
-  deferred
+  skipped
 }
 
-enum KpiTrackingStatus {
-  on_track
-  at_risk
-  achieved
+enum LearningAttendanceStatus {
+  invited
+  attended
   missed
+  excused
+}
+
+enum LearningQuizQuestionType {
+  single_choice
+  multiple_choice
+  true_false
+  short_text
+}
+
+enum LearningQuizAttemptStatus {
+  in_progress
+  submitted
+  passed
+  failed
+}
+
+enum CertificateStatus {
+  issued
+  revoked
+}
+
+enum ImpactAssessmentStatus {
+  pending
+  submitted
+  overdue
+  cancelled
 }
 
 enum ContinuousFeedbackType {
@@ -424,6 +599,7 @@ model AuthRole {
 
   users       UserAuthRole[]
   permissions AuthRolePermission[]
+  viewPermissions AuthRoleViewPermission[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -466,6 +642,29 @@ model AuthRolePermission {
   @@map("auth_role_permissions")
 }
 
+model ViewPermission {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roles AuthRoleViewPermission[]
+
+  @@map("view_permissions")
+}
+
+model AuthRoleViewPermission {
+  roleId           Int
+  viewPermissionId Int
+
+  role           AuthRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  viewPermission ViewPermission @relation(fields: [viewPermissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, viewPermissionId])
+  @@index([viewPermissionId])
+  @@map("auth_role_view_permissions")
+}
+
 model AuditLog {
   id         Int      @id @default(autoincrement())
   userId     Int?
@@ -503,7 +702,6 @@ model Department {
   updatedAt DateTime @updatedAt
 
   profiles              Profile[]
-  kpis                  Kpi[]
   jobs                  Job[]
   clients               Client[]
   clientOnboardings     ClientOnboarding[]
@@ -512,10 +710,11 @@ model Department {
   evaluationDefinitions EvaluationDefinition[]
   evaluationCycles      EvaluationCycle[]
   dashboardMetrics      DashboardMetric[]
-  okrObjectives         OkrObjective[]
   trainingRecords       TrainingRecord[]
   skillAssessments      SkillAssessment[]
-  developmentGoals      DevelopmentGoal[]
+  learningPrograms      LearningProgram[]
+  leavePolicyAssignments LeavePolicyAssignment[]
+  requisitionRequests   RequisitionRequest[]
 
   @@index([departmentHeadId])
   @@index([partnerProfileId])
@@ -539,7 +738,7 @@ model PositionRole {
   profiles            Profile[]
   jobStaffAssignments JobStaffAssignment[]
   jobTimeAllocations  JobTimeAllocation[]
-  kpis                Kpi[]
+  leavePolicyAssignments LeavePolicyAssignment[]
 
   @@index([name])
   @@map("position_roles")
@@ -584,8 +783,6 @@ model Profile {
 
   revenueAllocations RevenueAllocation[] @relation("RevenueAllocationEmployee")
 
-  okrObjectivesOwned OkrObjective[] @relation("OkrObjectiveOwner")
-
   onboardingStatus             OnboardingStatus @default(pending) @map("onboarding_status")
   onboardingChecklistCompleted Boolean          @default(false) @map("onboarding_checklist_completed")
   inductionCompleted           Boolean          @default(false) @map("induction_completed")
@@ -621,6 +818,11 @@ model Profile {
 
   jobsAsPartner Job[] @relation("JobsPartner")
   jobsAsManager Job[] @relation("JobsManager")
+  jobInvoicesGenerated JobInvoice[] @relation("JobInvoiceGeneratedBy")
+  jobInvoicesIssued    JobInvoice[] @relation("JobInvoiceIssuedBy")
+  jobInvoiceTemplatesCreated JobInvoiceTemplate[] @relation("JobInvoiceTemplateCreatedBy")
+  jobInvoiceStatusChanges    JobInvoiceStatusHistory[] @relation("JobInvoiceStatusChangedBy")
+  jobInvoicePaymentApplications JobInvoicePaymentApplication[] @relation("JobInvoicePaymentAppliedBy")
 
   jobStaffAssignments        JobStaffAssignment[]
   jobStaffAssignmentsCreated JobStaffAssignment[] @relation("JobStaffAssignedBy") // v2.1
@@ -632,6 +834,24 @@ model Profile {
   timeEntryApprovalRequests TimeEntryApprovalRequest[]
   timeEntryApprovalsGiven   TimeEntryApprovalRequest[] @relation("TimeEntryApprovalApprover") // v2.1
 
+  leaveRequests                    LeaveRequest[]       @relation("LeaveRequestEmployee")
+  leaveRequestsCurrentApprover     LeaveRequest[]       @relation("LeaveRequestCurrentApprover")
+  leaveApprovalStepsAssigned       LeaveApprovalStep[]  @relation("LeaveApprovalStepApprover")
+  leaveApprovalStepsDelegatedFrom  LeaveApprovalStep[]  @relation("LeaveApprovalStepDelegatedFrom")
+  leavePolicyApprovalRouteStepsAssigned LeavePolicyApprovalRouteStep[] @relation("LeavePolicyApprovalRouteStepApprover")
+  leaveBalances                    LeaveBalance[]
+  leaveLedgerEntries               LeaveLedgerEntry[]   @relation("LeaveLedgerEntryEmployee")
+  leaveLedgerEntriesCreated        LeaveLedgerEntry[]   @relation("LeaveLedgerEntryCreatedBy")
+  leavePolicyAssignments           LeavePolicyAssignment[] @relation("LeavePolicyAssignmentProfile")
+  leaveDelegationsAsApprover       LeaveDelegation[]    @relation("LeaveDelegationApprover")
+  leaveDelegationsAsDelegate       LeaveDelegation[]    @relation("LeaveDelegationDelegate")
+  leaveDelegationsCreated          LeaveDelegation[]    @relation("LeaveDelegationCreatedBy")
+  requisitionsRequested            RequisitionRequest[] @relation("RequisitionRequester")
+  requisitionsCurrentApprover      RequisitionRequest[] @relation("RequisitionCurrentApprover")
+  requisitionApprovalStepsAssigned RequisitionApprovalStep[] @relation("RequisitionApprovalStepApprover")
+  requisitionsFundsReleased        RequisitionRequest[] @relation("RequisitionReleasedBy")
+  requisitionAccountabilitiesSubmitted RequisitionRequest[] @relation("RequisitionAccountabilitySubmittedBy")
+
   evaluationAssignmentsAsEvaluator EvaluationAssignment[] @relation("EvalEvaluator")
   evaluationAssignmentsAsEvaluatee EvaluationAssignment[] @relation("EvalEvaluatee")
   evaluationDefinitionsCreated     EvaluationDefinition[] @relation("EvalCreatedBy")
@@ -639,15 +859,8 @@ model Profile {
   projectEvaluationsGiven          ProjectEvaluation[]    @relation("ProjectEvaluationEvaluator")
   projectEvaluationsReceived       ProjectEvaluation[]    @relation("ProjectEvaluationEvaluatee")
 
-  employeeKpiAssignments      EmployeeKpiAssignment[]
-  employeeKpiScores           EmployeeKpiScore[]
   performanceScores           PerformanceScore[]
   calibratedPerformanceScores PerformanceScore[]      @relation("PerformanceScoreCalibratedBy")
-  kpisReviewOwned             Kpi[]                   @relation("KpiReviewOwner")
-  ownedKpis                   Kpi[]                   @relation("KpiOwner")
-  createdKpis                 Kpi[]                   @relation("KpiCreatedBy")
-  okrs                        Okr[]                   @relation("OkrOwner")
-
   notifications Notification[]
 
   notificationTemplatesCreated NotificationTemplate[] @relation("NotificationTemplateCreatedBy")
@@ -676,9 +889,23 @@ model Profile {
   trainingRecordsCreated         TrainingRecord[]    @relation("TrainingRecordCreator")
   skillAssessmentsAsEmployee     SkillAssessment[]   @relation("SkillAssessmentEmployee")
   skillAssessmentsAsAssessor     SkillAssessment[]   @relation("SkillAssessmentAssessor")
-  developmentGoalsAsEmployee     DevelopmentGoal[]   @relation("DevelopmentGoalEmployee")
-  developmentGoalsCreated        DevelopmentGoal[]   @relation("DevelopmentGoalCreator")
-  developmentGoalsAsMentor       DevelopmentGoal[]   @relation("DevelopmentGoalMentor")
+  knowledgeHubResourceProgressEntries KnowledgeHubResourceProgress[] @relation("KnowledgeHubResourceProgressProfile")
+  knowledgeHubQuizAttempts            KnowledgeHubQuizAttempt[]      @relation("KnowledgeHubQuizAttemptProfile")
+  learningProgramsCreated             LearningProgram[]              @relation("LearningProgramCreatedBy")
+  learningProgramVersionsCreated      LearningProgramVersion[]       @relation("LearningProgramVersionCreatedBy")
+  learningProgramVersionsAsTrainer    LearningProgramVersion[]       @relation("LearningProgramVersionTrainer")
+  globalCertificateTemplatesCreated   GlobalCertificateTemplate[]    @relation("GlobalCertificateTemplateCreatedBy")
+  globalCertificateTemplatesUpdated   GlobalCertificateTemplate[]    @relation("GlobalCertificateTemplateUpdatedBy")
+  learningSessionsAsTrainer           LearningSession[]              @relation("LearningSessionTrainer")
+  learningAssignmentsAsEmployee       LearningAssignment[]           @relation("LearningAssignmentEmployee")
+  learningAssignmentsCreated          LearningAssignment[]           @relation("LearningAssignmentAssignedBy")
+  learningAssignmentsManaged          LearningAssignment[]           @relation("LearningAssignmentManager")
+  learningAttendanceMarked            LearningAttendanceRecord[]     @relation("LearningAttendanceMarkedBy")
+  trainingFeedbackReceivedAsTrainer   TrainingFeedback[]             @relation("TrainingFeedbackTrainer")
+  impactAssessmentTasksOwned          ImpactAssessmentTask[]         @relation("ImpactAssessmentManager")
+  impactAssessmentResponsesSubmitted  ImpactAssessmentResponse[]     @relation("ImpactAssessmentSubmittedBy")
+  learningPointLedgerEntries          LearningPointLedger[]          @relation("LearningPointLedgerProfile")
+  learningPointAwardsGiven            LearningPointLedger[]          @relation("LearningPointAwardedBy")
 
   dashboardMetrics DashboardMetric[] @relation("DashboardMetricPartner")
 
@@ -697,11 +924,479 @@ model Profile {
 
   engagementLettersUploaded EngagementLetter[]   @relation("EngagementLetterUploader")
   engagementLettersApproved EngagementLetter[]   @relation("EngagementLetterApprover")
-  approvedOkrs              OkrObjective[]       @relation("OkrObjectiveApprovedBy")
-  okrHistoryChanges         OkrProgressHistory[] @relation("OkrHistoryChangedBy")
-
   @@index([isPartner])
   @@map("profiles")
+}
+
+// =============================
+// LEAVE MANAGEMENT
+// =============================
+
+model LeaveType {
+  id Int @id @default(autoincrement())
+
+  code        String  @unique
+  name        String
+  description String?
+  color       String?
+
+  isActive            Boolean       @default(true) @map("is_active")
+  isPaid              Boolean       @default(true) @map("is_paid")
+  balanceTracked      Boolean       @default(true) @map("balance_tracked")
+  requiresAttachment  Boolean       @default(false) @map("requires_attachment")
+  allowsHalfDay       Boolean       @default(true) @map("allows_half_day")
+  unitType            LeaveUnitType @default(day) @map("unit_type")
+  defaultNoticeDays   Int           @default(0) @map("default_notice_days")
+  defaultMaxUnits     Decimal?      @map("default_max_units") @db.Decimal(8, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  policies      LeavePolicy[]
+  requests      LeaveRequest[]
+  balances      LeaveBalance[]
+  ledgerEntries LeaveLedgerEntry[]
+
+  @@index([isActive])
+  @@map("leave_types")
+}
+
+model LeavePolicy {
+  id Int @id @default(autoincrement())
+
+  leaveTypeId  Int     @map("leave_type_id")
+  name         String
+  description  String?
+  isActive     Boolean @default(true) @map("is_active")
+
+  effectiveFrom DateTime? @map("effective_from")
+  effectiveTo   DateTime? @map("effective_to")
+
+  annualEntitlement  Decimal @default(0) @map("annual_entitlement") @db.Decimal(8, 2)
+  carryoverCap       Decimal @default(0) @map("carryover_cap") @db.Decimal(8, 2)
+  accrualEnabled     Boolean @default(true) @map("accrual_enabled")
+  accrualFrequency   LeaveAccrualFrequency @default(monthly) @map("accrual_frequency")
+  accrualRate        Decimal @default(0) @map("accrual_rate") @db.Decimal(8, 2)
+  requiresManagerApproval Boolean @default(true) @map("requires_manager_approval")
+  requiresHrApproval      Boolean @default(false) @map("requires_hr_approval")
+  excludeWeekends         Boolean @default(true) @map("exclude_weekends")
+  excludePublicHolidays   Boolean @default(true) @map("exclude_public_holidays")
+  minNoticeDays           Int     @default(0) @map("min_notice_days")
+  hoursPerWorkday         Decimal @default(8) @map("hours_per_workday") @db.Decimal(6, 2)
+  autoProjectToTimesheet  Boolean @default(true) @map("auto_project_to_timesheet")
+  maxConsecutiveUnits     Decimal @default(0) @map("max_consecutive_units") @db.Decimal(8, 2)
+  maxUnitsPerRequest      Decimal @default(0) @map("max_units_per_request") @db.Decimal(8, 2)
+  allowNegativeBalance    Boolean @default(false) @map("allow_negative_balance")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  leaveType   LeaveType               @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  assignments LeavePolicyAssignment[]
+  requests    LeaveRequest[]
+  noticeRules LeavePolicyNoticeRule[]
+  approvalRoutes LeavePolicyApprovalRoute[]
+
+  @@index([leaveTypeId, isActive])
+  @@map("leave_policies")
+}
+
+model LeavePolicyNoticeRule {
+  id Int @id @default(autoincrement())
+
+  policyId   Int  @map("policy_id")
+  sequenceNo Int  @map("sequence_no")
+  minHours   Decimal? @map("min_hours") @db.Decimal(8, 2)
+  maxHours   Decimal? @map("max_hours") @db.Decimal(8, 2)
+  noticeValue Int @map("notice_value")
+  noticeUnit LeaveNoticeUnit @default(calendar_days) @map("notice_unit")
+  isActive   Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  policy LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([policyId, sequenceNo])
+  @@index([policyId, isActive])
+  @@map("leave_policy_notice_rules")
+}
+
+model LeavePolicyApprovalRoute {
+  id Int @id @default(autoincrement())
+
+  policyId Int @map("policy_id")
+  name     String
+  minHours Decimal? @map("min_hours") @db.Decimal(8, 2)
+  maxHours Decimal? @map("max_hours") @db.Decimal(8, 2)
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  policy LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  steps  LeavePolicyApprovalRouteStep[]
+
+  @@index([policyId, isActive])
+  @@map("leave_policy_approval_routes")
+}
+
+model LeavePolicyApprovalRouteStep {
+  id Int @id @default(autoincrement())
+
+  routeId            Int @map("route_id")
+  stepNumber         Int @map("step_number")
+  stageType          LeaveApprovalStageType @map("stage_type")
+  approverSource     LeaveApproverSource @default(employee_manager) @map("approver_source")
+  approverProfileId  Int? @map("approver_profile_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  route           LeavePolicyApprovalRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  approverProfile Profile? @relation("LeavePolicyApprovalRouteStepApprover", fields: [approverProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([routeId, stepNumber])
+  @@index([routeId, stageType])
+  @@index([approverProfileId])
+  @@map("leave_policy_approval_route_steps")
+}
+
+model LeavePolicyAssignment {
+  id Int @id @default(autoincrement())
+
+  policyId      Int                       @map("policy_id")
+  scope         LeavePolicyAssignmentScope @default(global)
+  departmentId  Int?                      @map("department_id")
+  roleId        Int?                      @map("role_id")
+  profileId     Int?                      @map("profile_id")
+  priority      Int                       @default(100)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  policy     LeavePolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  department Department?   @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  role       PositionRole? @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  profile    Profile?      @relation("LeavePolicyAssignmentProfile", fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([policyId, scope, priority])
+  @@index([departmentId])
+  @@index([roleId])
+  @@index([profileId])
+  @@map("leave_policy_assignments")
+}
+
+model PublicHoliday {
+  id Int @id @default(autoincrement())
+
+  name        String
+  holidayDate DateTime @map("holiday_date")
+  countryCode String   @default("KE") @map("country_code")
+  region      String?
+  isRecurring Boolean  @default(false) @map("is_recurring")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([holidayDate, countryCode])
+  @@map("public_holidays")
+}
+
+model LeaveDelegation {
+  id Int @id @default(autoincrement())
+
+  approverProfileId  Int  @map("approver_profile_id")
+  delegateProfileId  Int  @map("delegate_profile_id")
+  createdByProfileId Int? @map("created_by_profile_id")
+
+  startDate DateTime @map("start_date")
+  endDate   DateTime @map("end_date")
+  isActive  Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  approver  Profile  @relation("LeaveDelegationApprover", fields: [approverProfileId], references: [id], onDelete: Cascade)
+  delegate  Profile  @relation("LeaveDelegationDelegate", fields: [delegateProfileId], references: [id], onDelete: Cascade)
+  createdBy Profile? @relation("LeaveDelegationCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([approverProfileId, isActive])
+  @@index([delegateProfileId, isActive])
+  @@map("leave_delegations")
+}
+
+model LeaveRequest {
+  id Int @id @default(autoincrement())
+
+  employeeProfileId       Int  @map("employee_profile_id")
+  leaveTypeId             Int  @map("leave_type_id")
+  policyId                Int? @map("policy_id")
+  currentApproverProfileId Int? @map("current_approver_profile_id")
+
+  startDate       DateTime       @map("start_date")
+  endDate         DateTime       @map("end_date")
+  startsAt        DateTime?      @map("starts_at")
+  endsAt          DateTime?      @map("ends_at")
+  startDayPortion LeaveDayPortion @default(full_day) @map("start_day_portion")
+  endDayPortion   LeaveDayPortion @default(full_day) @map("end_day_portion")
+
+  requestedUnits Decimal @map("requested_units") @db.Decimal(8, 2)
+  deductedUnits  Decimal @default(0) @map("deducted_units") @db.Decimal(8, 2)
+  requestedHours Decimal @default(0) @map("requested_hours") @db.Decimal(8, 2)
+  deductedHours  Decimal @default(0) @map("deducted_hours") @db.Decimal(8, 2)
+
+  status             LeaveRequestStatus @default(pending_manager_approval)
+  reason             String?            @db.Text
+  declineReason      String?            @map("decline_reason") @db.Text
+  cancellationReason String?            @map("cancellation_reason") @db.Text
+  approvalRouteSnapshot Json?           @map("approval_route_snapshot")
+  validationSnapshot Json?              @map("validation_snapshot")
+
+  submittedAt DateTime  @default(now()) @map("submitted_at")
+  approvedAt  DateTime? @map("approved_at")
+  declinedAt  DateTime? @map("declined_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employee        Profile   @relation("LeaveRequestEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  leaveType       LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  policy          LeavePolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  currentApprover Profile?  @relation("LeaveRequestCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
+
+  approvalSteps LeaveApprovalStep[]
+  ledgerEntries LeaveLedgerEntry[]
+  segments      LeaveRequestSegment[]
+
+  @@index([employeeProfileId, status])
+  @@index([leaveTypeId])
+  @@index([policyId])
+  @@index([currentApproverProfileId, status])
+  @@index([startDate, endDate])
+  @@index([startsAt, endsAt])
+  @@map("leave_requests")
+}
+
+model LeaveApprovalStep {
+  id Int @id @default(autoincrement())
+
+  leaveRequestId          Int                 @map("leave_request_id")
+  stepNumber              Int                 @map("step_number")
+  stageType               LeaveApprovalStageType @map("stage_type")
+  approverProfileId       Int                 @map("approver_profile_id")
+  delegatedFromProfileId  Int?                @map("delegated_from_profile_id")
+  decision                LeaveApprovalDecision @default(pending)
+  notes                   String?             @db.Text
+  actedAt                 DateTime?           @map("acted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  leaveRequest   LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  approver       Profile      @relation("LeaveApprovalStepApprover", fields: [approverProfileId], references: [id], onDelete: Cascade)
+  delegatedFrom  Profile?     @relation("LeaveApprovalStepDelegatedFrom", fields: [delegatedFromProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([leaveRequestId, stepNumber])
+  @@index([approverProfileId, decision])
+  @@index([leaveRequestId, decision])
+  @@map("leave_approval_steps")
+}
+
+model LeaveBalance {
+  id Int @id @default(autoincrement())
+
+  employeeProfileId Int @map("employee_profile_id")
+  leaveTypeId       Int @map("leave_type_id")
+  leaveYear         Int @map("leave_year")
+
+  openingBalance  Decimal @default(0) @map("opening_balance") @db.Decimal(8, 2)
+  accruedUnits    Decimal @default(0) @map("accrued_units") @db.Decimal(8, 2)
+  carriedOverUnits Decimal @default(0) @map("carried_over_units") @db.Decimal(8, 2)
+  adjustedUnits   Decimal @default(0) @map("adjusted_units") @db.Decimal(8, 2)
+  usedUnits       Decimal @default(0) @map("used_units") @db.Decimal(8, 2)
+  pendingUnits    Decimal @default(0) @map("pending_units") @db.Decimal(8, 2)
+  availableUnits  Decimal @default(0) @map("available_units") @db.Decimal(8, 2)
+
+  lastCalculatedAt DateTime? @map("last_calculated_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  employee      Profile           @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  leaveType     LeaveType         @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  ledgerEntries LeaveLedgerEntry[]
+
+  @@unique([employeeProfileId, leaveTypeId, leaveYear])
+  @@index([leaveTypeId, leaveYear])
+  @@map("leave_balances")
+}
+
+model LeaveLedgerEntry {
+  id Int @id @default(autoincrement())
+
+  leaveBalanceId      Int?  @map("leave_balance_id")
+  employeeProfileId   Int   @map("employee_profile_id")
+  leaveTypeId         Int   @map("leave_type_id")
+  leaveRequestId      Int?  @map("leave_request_id")
+  createdByProfileId  Int?  @map("created_by_profile_id")
+  leaveYear           Int   @map("leave_year")
+  transactionType     LeaveBalanceTransactionType @map("transaction_type")
+  units               Decimal @db.Decimal(8, 2)
+  note                String? @db.Text
+  effectiveDate       DateTime @map("effective_date")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  leaveBalance LeaveBalance? @relation(fields: [leaveBalanceId], references: [id], onDelete: SetNull)
+  employee     Profile       @relation("LeaveLedgerEntryEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType     @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  leaveRequest LeaveRequest? @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
+  createdBy    Profile?      @relation("LeaveLedgerEntryCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([employeeProfileId, leaveTypeId, leaveYear, effectiveDate])
+  @@index([leaveRequestId])
+  @@map("leave_ledger_entries")
+}
+
+model LeaveRequestSegment {
+  id Int @id @default(autoincrement())
+
+  leaveRequestId     Int @map("leave_request_id")
+  leaveDate          DateTime @map("leave_date")
+  startMinuteOfDay   Int? @map("start_minute_of_day")
+  endMinuteOfDay     Int? @map("end_minute_of_day")
+  hours              Decimal @db.Decimal(8, 2)
+  timeEntryId        Int? @map("time_entry_id")
+  syncStatus         LeaveRequestSegmentSyncStatus @default(projected) @map("sync_status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  leaveRequest LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  timeEntry    TimeEntry?   @relation(fields: [timeEntryId], references: [id], onDelete: SetNull)
+
+  @@index([leaveRequestId, leaveDate])
+  @@index([leaveDate, syncStatus])
+  @@index([timeEntryId])
+  @@map("leave_request_segments")
+}
+
+model RequisitionType {
+  id Int @id @default(autoincrement())
+
+  code         String @unique
+  name         String
+  description  String?
+  sourceModule String @map("source_module")
+  isActive     Boolean @default(true) @map("is_active")
+
+  requiresJob        Boolean @default(false) @map("requires_job")
+  requiresClient     Boolean @default(false) @map("requires_client")
+  requiresVendor     Boolean @default(false) @map("requires_vendor")
+  requiresDueDate    Boolean @default(false) @map("requires_due_date")
+  requiresAttachment Boolean @default(false) @map("requires_attachment")
+
+  fieldSchema Json? @map("field_schema")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  requests RequisitionRequest[]
+
+  @@index([sourceModule, isActive])
+  @@map("requisition_types")
+}
+
+model RequisitionRequest {
+  id Int @id @default(autoincrement())
+
+  requisitionNumber        String  @unique @map("requisition_number")
+  requisitionTypeId        Int     @map("requisition_type_id")
+  requesterProfileId       Int     @map("requester_profile_id")
+  requesterDepartmentId    Int?    @map("requester_department_id")
+  currentApproverProfileId Int?    @map("current_approver_profile_id")
+
+  sourceModule String @map("source_module")
+  status       RequisitionStatus @default(pending_manager_approval)
+
+  title                String
+  justification        String?  @db.Text
+  amount               Decimal  @db.Decimal(14, 2)
+  amountBreakdown      Json?    @map("amount_breakdown")
+  currency             String   @default("KES")
+  quantity             Decimal? @db.Decimal(12, 2)
+  neededByDate         DateTime? @map("needed_by_date")
+  vendorName           String?   @map("vendor_name")
+  clientId             Int?      @map("client_id")
+  jobId                Int?      @map("job_id")
+  isClientRecoverable  Boolean   @default(false) @map("is_client_recoverable")
+  taxImpactNotes       String?   @map("tax_impact_notes") @db.Text
+  moduleData           Json?     @map("module_data")
+  approvalRouteSnapshot Json?    @map("approval_route_snapshot")
+
+  declineReason      String?  @map("decline_reason") @db.Text
+  cancellationReason String?  @map("cancellation_reason") @db.Text
+  releasedAt         DateTime? @map("released_at")
+  releasedByProfileId Int?     @map("released_by_profile_id")
+  releaseNotes       String?   @map("release_notes") @db.Text
+  accountabilityDueAt DateTime? @map("accountability_due_at")
+  accountabilityStatus RequisitionAccountabilityStatus @default(not_released) @map("accountability_status")
+  accountabilitySubmittedAt DateTime? @map("accountability_submitted_at")
+  accountabilitySubmittedByProfileId Int? @map("accountability_submitted_by_profile_id")
+  accountabilityNotes String? @map("accountability_notes") @db.Text
+
+  submittedAt DateTime  @default(now()) @map("submitted_at")
+  approvedAt  DateTime? @map("approved_at")
+  declinedAt  DateTime? @map("declined_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  requisitionType RequisitionType @relation(fields: [requisitionTypeId], references: [id], onDelete: Restrict)
+  requester       Profile         @relation("RequisitionRequester", fields: [requesterProfileId], references: [id], onDelete: Cascade)
+  requesterDepartment Department? @relation(fields: [requesterDepartmentId], references: [id], onDelete: SetNull)
+  currentApprover Profile?        @relation("RequisitionCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
+  releasedBy      Profile?        @relation("RequisitionReleasedBy", fields: [releasedByProfileId], references: [id], onDelete: SetNull)
+  accountabilitySubmittedBy Profile? @relation("RequisitionAccountabilitySubmittedBy", fields: [accountabilitySubmittedByProfileId], references: [id], onDelete: SetNull)
+  client          Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  job             Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  approvalSteps RequisitionApprovalStep[]
+
+  @@index([requisitionTypeId])
+  @@index([requesterProfileId, status])
+  @@index([currentApproverProfileId, status])
+  @@index([sourceModule, status])
+  @@index([clientId])
+  @@index([jobId])
+  @@index([releasedByProfileId])
+  @@index([accountabilityStatus, accountabilityDueAt])
+  @@map("requisition_requests")
+}
+
+model RequisitionApprovalStep {
+  id Int @id @default(autoincrement())
+
+  requisitionRequestId Int @map("requisition_request_id")
+  stepNumber           Int @map("step_number")
+  stageType            RequisitionApprovalStageType @map("stage_type")
+  approverProfileId    Int @map("approver_profile_id")
+  decision             RequisitionApprovalDecision @default(pending)
+  notes                String? @db.Text
+  actedAt              DateTime? @map("acted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  requisitionRequest RequisitionRequest @relation(fields: [requisitionRequestId], references: [id], onDelete: Cascade)
+  approver           Profile            @relation("RequisitionApprovalStepApprover", fields: [approverProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([requisitionRequestId, stepNumber])
+  @@index([approverProfileId, decision])
+  @@index([requisitionRequestId, decision])
+  @@map("requisition_approval_steps")
 }
 
 // =============================
@@ -754,13 +1449,16 @@ model TrainingRecord {
   cost                 Decimal              @default(0) @db.Decimal(14, 2)
   completionPercentage Decimal              @default(0) @map("completion_percentage") @db.Decimal(5, 2)
   certificateUrl       String?              @map("certificate_url")
+  sourceType           TrainingRecordSourceType @default(manual) @map("source_type")
+  learningAssignmentId Int?                 @unique @map("learning_assignment_id")
   notes                String?
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
 
-  employee   Profile?    @relation("TrainingRecordEmployee", fields: [employeeProfileId], references: [id], onDelete: SetNull)
-  creator    Profile     @relation("TrainingRecordCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
-  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  employee           Profile?            @relation("TrainingRecordEmployee", fields: [employeeProfileId], references: [id], onDelete: SetNull)
+  creator            Profile             @relation("TrainingRecordCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
+  department         Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  learningAssignment LearningAssignment? @relation("LearningAssignmentTrainingRecord", fields: [learningAssignmentId], references: [id], onDelete: SetNull)
 
   @@index([employeeProfileId])
   @@index([createdByProfileId])
@@ -791,37 +1489,6 @@ model SkillAssessment {
   @@index([assessorProfileId])
   @@index([departmentId])
   @@map("skill_assessments")
-}
-
-model DevelopmentGoal {
-  id                     Int                   @id @default(autoincrement())
-  employeeProfileId      Int                   @map("employee_profile_id")
-  createdByProfileId     Int                   @map("created_by_profile_id")
-  assignedMentorProfileId Int?                 @map("assigned_mentor_profile_id")
-  departmentId           Int?                  @map("department_id")
-  goalTitle              String                @map("goal_title")
-  goalDescription        String                @map("goal_description")
-  targetCompletion       DateTime              @map("target_completion")
-  currentProgress        Decimal               @default(0) @map("current_progress") @db.Decimal(5, 2)
-  status                 DevelopmentGoalStatus @default(active)
-  planStatus             DevelopmentPlanStatus @default(not_started) @map("plan_status")
-  linkedKpiId            Int?                  @map("linked_kpi_id")
-  createdAt              DateTime              @default(now()) @map("created_at")
-  updatedAt              DateTime              @updatedAt @map("updated_at")
-
-  employee       Profile    @relation("DevelopmentGoalEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  creator        Profile    @relation("DevelopmentGoalCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
-  assignedMentor Profile?   @relation("DevelopmentGoalMentor", fields: [assignedMentorProfileId], references: [id], onDelete: SetNull)
-  department     Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  linkedKpi      Kpi?        @relation("DevelopmentGoalLinkedKpi", fields: [linkedKpiId], references: [id], onDelete: SetNull)
-
-  @@index([employeeProfileId, status])
-  @@index([createdByProfileId])
-  @@index([assignedMentorProfileId])
-  @@index([departmentId])
-  @@index([linkedKpiId])
-  @@index([targetCompletion])
-  @@map("development_goals")
 }
 
 // =============================
@@ -957,6 +1624,11 @@ model InductionChecklist {
   assignedByProfileId Int?      @map("assigned_by_profile_id")
   dueDate             DateTime? @map("due_date")
   completedAt         DateTime? @map("completed_at")
+  employeeAcknowledgedAt DateTime? @map("employee_acknowledged_at")
+  employeeAcknowledgedByProfileId Int? @map("employee_acknowledged_by_profile_id")
+  hrSignedOffAt DateTime? @map("hr_signed_off_at")
+  hrSignedOffByProfileId Int? @map("hr_signed_off_by_profile_id")
+  hrSignoffNotes String? @map("hr_signoff_notes") @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -978,8 +1650,12 @@ model InductionChecklistItem {
   itemName    String  @map("item_name")
   description String?
   orderIndex  Int     @default(0) @map("order_index")
+  sectionKey  String  @default("general") @map("section_key")
+  sectionLabel String @default("General") @map("section_label")
+  ownerRole   String? @map("owner_role")
   itemType    String  @default("task") @map("item_type")
   resourceUrl String? @map("resource_url")
+  comments    String? @db.Text
 
   isCompleted          Boolean   @default(false) @map("is_completed")
   completedByProfileId Int?      @map("completed_by_profile_id")
@@ -1076,6 +1752,13 @@ model Document {
   checklistItemDocs     InductionChecklistItem[]   @relation("ChecklistItemDocument")
   clientOnboardingChecklistItemDocs ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemDocument")
   offboardingItemDocs   OffboardingChecklistItem[] @relation("OffboardingItemDocument")
+  learningModuleDocuments        LearningModule[]      @relation("LearningModuleDocument")
+  certificateTemplateBackgrounds CertificateTemplate[] @relation("CertificateTemplateBackground")
+  certificateTemplateSignatures  CertificateTemplate[] @relation("CertificateTemplateSignature")
+  globalCertificateTemplateBackgrounds GlobalCertificateTemplate[] @relation("GlobalCertificateTemplateBackground")
+  globalCertificateTemplateSignatures  GlobalCertificateTemplate[] @relation("GlobalCertificateTemplateSignature")
+  issuedLearningCertificates     IssuedCertificate[]   @relation("IssuedCertificateDocument")
+  jobInvoiceDocuments            JobInvoice[]          @relation("JobInvoiceDocument")
 
   @@index([entityType, entityId])
   @@index([documentType])
@@ -1099,17 +1782,615 @@ model KnowledgeHubResource {
   isFeatured  Boolean  @default(false) @map("is_featured")
   isPublished Boolean  @default(true) @map("is_published")
   publishedAt DateTime? @map("published_at")
+  estimatedDurationMinutes   Int?                    @map("estimated_duration_minutes")
+  completionMode             KnowledgeCompletionMode @default(manual) @map("completion_mode")
+  completionThresholdPercent Decimal?                @map("completion_threshold_percent") @db.Decimal(5, 2)
+  minReadSeconds             Int?                    @map("min_read_seconds")
+  pointsOnCompletion         Int                     @default(0) @map("points_on_completion")
 
   createdByProfileId Int? @map("created_by_profile_id")
   updatedByProfileId Int? @map("updated_by_profile_id")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  progressEntries KnowledgeHubResourceProgress[]
+  quiz            KnowledgeHubQuiz?
+  learningModules LearningModule[] @relation("LearningModuleKnowledgeResource")
+
   @@index([domain])
   @@index([resourceType])
   @@index([isPublished])
   @@index([isFeatured])
   @@map("knowledge_hub_resources")
+}
+
+model KnowledgeHubResourceProgress {
+  id               Int                    @id @default(autoincrement())
+  resourceId       Int                    @map("resource_id")
+  profileId        Int                    @map("profile_id")
+  status           LearningProgressStatus @default(not_started)
+  startedAt        DateTime?              @map("started_at")
+  lastInteractedAt DateTime?              @map("last_interacted_at")
+  timeSpentSeconds Int                    @default(0) @map("time_spent_seconds")
+  scrollPercent    Decimal                @default(0) @map("scroll_percent") @db.Decimal(5, 2)
+  watchSeconds     Int                    @default(0) @map("watch_seconds")
+  watchPercent     Decimal                @default(0) @map("watch_percent") @db.Decimal(5, 2)
+  completedAt      DateTime?              @map("completed_at")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  resource KnowledgeHubResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  profile  Profile              @relation("KnowledgeHubResourceProgressProfile", fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, profileId])
+  @@index([profileId, status])
+  @@map("knowledge_hub_resource_progress")
+}
+
+model KnowledgeHubQuiz {
+  id           Int      @id @default(autoincrement())
+  resourceId   Int      @unique @map("resource_id")
+  title        String
+  passMark     Decimal  @map("pass_mark") @db.Decimal(5, 2)
+  pointsOnPass Int      @default(0) @map("points_on_pass")
+  attemptLimit Int?     @map("attempt_limit")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  resource  KnowledgeHubResource         @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  questions KnowledgeHubQuizQuestion[]
+  attempts  KnowledgeHubQuizAttempt[]
+
+  @@index([isActive])
+  @@map("knowledge_hub_quizzes")
+}
+
+model KnowledgeHubQuizQuestion {
+  id           Int                       @id @default(autoincrement())
+  quizId       Int                       @map("quiz_id")
+  questionType LearningQuizQuestionType  @map("question_type")
+  prompt       String
+  displayOrder Int                       @map("display_order")
+  required     Boolean                   @default(true)
+  explanation  String?                   @db.Text
+  createdAt    DateTime                  @default(now()) @map("created_at")
+  updatedAt    DateTime                  @updatedAt @map("updated_at")
+
+  quiz    KnowledgeHubQuiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options KnowledgeHubQuizOption[]
+  answers KnowledgeHubQuizAnswer[]
+
+  @@index([quizId, displayOrder])
+  @@map("knowledge_hub_quiz_questions")
+}
+
+model KnowledgeHubQuizOption {
+  id           Int      @id @default(autoincrement())
+  questionId   Int      @map("question_id")
+  label        String
+  isCorrect    Boolean  @default(false) @map("is_correct")
+  displayOrder Int      @map("display_order")
+
+  question         KnowledgeHubQuizQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerSelections KnowledgeHubQuizAnswerOption[]
+
+  @@index([questionId, displayOrder])
+  @@map("knowledge_hub_quiz_options")
+}
+
+model KnowledgeHubQuizAttempt {
+  id          Int                        @id @default(autoincrement())
+  quizId      Int                        @map("quiz_id")
+  profileId   Int                        @map("profile_id")
+  attemptNo   Int                        @map("attempt_no")
+  score       Decimal                    @default(0) @db.Decimal(5, 2)
+  status      LearningQuizAttemptStatus  @default(in_progress)
+  startedAt   DateTime                   @default(now()) @map("started_at")
+  submittedAt DateTime?                  @map("submitted_at")
+  passedAt    DateTime?                  @map("passed_at")
+  createdAt   DateTime                   @default(now()) @map("created_at")
+  updatedAt   DateTime                   @updatedAt @map("updated_at")
+
+  quiz    KnowledgeHubQuiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  profile Profile                @relation("KnowledgeHubQuizAttemptProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  answers KnowledgeHubQuizAnswer[]
+
+  @@unique([quizId, profileId, attemptNo])
+  @@index([profileId, status])
+  @@map("knowledge_hub_quiz_attempts")
+}
+
+model KnowledgeHubQuizAnswer {
+  id             Int      @id @default(autoincrement())
+  attemptId      Int      @map("attempt_id")
+  questionId     Int      @map("question_id")
+  freeTextAnswer String?  @map("free_text_answer") @db.Text
+  isCorrect      Boolean? @map("is_correct")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  attempt         KnowledgeHubQuizAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question        KnowledgeHubQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOptions KnowledgeHubQuizAnswerOption[]
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+  @@map("knowledge_hub_quiz_answers")
+}
+
+model KnowledgeHubQuizAnswerOption {
+  answerId Int @map("answer_id")
+  optionId Int @map("option_id")
+
+  answer KnowledgeHubQuizAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option KnowledgeHubQuizOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([answerId, optionId])
+  @@index([optionId])
+  @@map("knowledge_hub_quiz_answer_options")
+}
+
+model LearningProgram {
+  id                 Int                   @id @default(autoincrement())
+  title              String
+  description        String?               @db.Text
+  departmentId       Int?                  @map("department_id")
+  createdByProfileId Int                   @map("created_by_profile_id")
+  status             LearningProgramStatus @default(draft)
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdBy  Profile     @relation("LearningProgramCreatedBy", fields: [createdByProfileId], references: [id], onDelete: Restrict)
+
+  versions LearningProgramVersion[]
+
+  @@index([departmentId])
+  @@index([createdByProfileId])
+  @@index([status])
+  @@map("learning_programs")
+}
+
+model LearningProgramVersion {
+  id                        Int                          @id @default(autoincrement())
+  programId                 Int                          @map("program_id")
+  versionNo                 Int                          @map("version_no")
+  title                     String
+  description               String?                      @db.Text
+  trainingType              TrainingRecordType           @default(internal) @map("training_type")
+  deliveryMode              String?                      @map("delivery_mode")
+  provider                  String?
+  cost                      Decimal                      @default(0) @db.Decimal(14, 2)
+  trainerProfileId          Int?                         @map("trainer_profile_id")
+  externalTrainerName       String?                      @map("external_trainer_name")
+  isMandatory               Boolean                      @default(true) @map("is_mandatory")
+  feedbackPoints            Int                          @default(0) @map("feedback_points")
+  impactAssessmentDelayDays Int?                         @map("impact_assessment_delay_days")
+  status                    LearningProgramVersionStatus @default(draft)
+  publishedAt               DateTime?                    @map("published_at")
+  createdByProfileId        Int                          @map("created_by_profile_id")
+  createdAt                 DateTime                     @default(now()) @map("created_at")
+  updatedAt                 DateTime                     @updatedAt @map("updated_at")
+
+  program   LearningProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  trainer   Profile?        @relation("LearningProgramVersionTrainer", fields: [trainerProfileId], references: [id], onDelete: SetNull)
+  createdBy Profile         @relation("LearningProgramVersionCreatedBy", fields: [createdByProfileId], references: [id], onDelete: Restrict)
+
+  modules              LearningModule[]
+  sessions             LearningSession[]
+  assignments          LearningAssignment[]
+  quizzes              LearningQuiz[]
+  certificateTemplates CertificateTemplate[]
+
+  @@unique([programId, versionNo])
+  @@index([trainerProfileId])
+  @@index([createdByProfileId])
+  @@index([status])
+  @@map("learning_program_versions")
+}
+
+model LearningModule {
+  id                     Int                       @id @default(autoincrement())
+  programVersionId       Int                       @map("program_version_id")
+  title                  String
+  description            String?                   @db.Text
+  contentType            LearningModuleContentType @map("content_type")
+  knowledgeHubResourceId Int?                      @map("knowledge_hub_resource_id")
+  documentId             Int?                      @map("document_id")
+  contentUrl             String?                   @map("content_url")
+  sequenceNo             Int                       @map("sequence_no")
+  required               Boolean                   @default(true)
+  estimatedMinutes       Int?                      @map("estimated_minutes")
+  createdAt              DateTime                  @default(now()) @map("created_at")
+  updatedAt              DateTime                  @updatedAt @map("updated_at")
+
+  programVersion       LearningProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Cascade)
+  knowledgeHubResource KnowledgeHubResource?  @relation("LearningModuleKnowledgeResource", fields: [knowledgeHubResourceId], references: [id], onDelete: SetNull)
+  document             Document?              @relation("LearningModuleDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  sessions        LearningSession[]
+  progressEntries LearningModuleProgress[]
+  quizzes         LearningQuiz[]
+
+  @@unique([programVersionId, sequenceNo])
+  @@index([knowledgeHubResourceId])
+  @@index([documentId])
+  @@map("learning_modules")
+}
+
+model LearningSession {
+  id                  Int      @id @default(autoincrement())
+  programVersionId    Int      @map("program_version_id")
+  moduleId            Int?     @map("module_id")
+  title               String
+  startsAt            DateTime @map("starts_at")
+  endsAt              DateTime @map("ends_at")
+  location            String?
+  trainerProfileId    Int?     @map("trainer_profile_id")
+  externalTrainerName String?  @map("external_trainer_name")
+  attendancePoints    Int      @default(0) @map("attendance_points")
+  attendanceRequired  Boolean  @default(true) @map("attendance_required")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  programVersion LearningProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Cascade)
+  module         LearningModule?        @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+  trainer        Profile?               @relation("LearningSessionTrainer", fields: [trainerProfileId], references: [id], onDelete: SetNull)
+
+  attendanceRecords LearningAttendanceRecord[]
+
+  @@index([programVersionId, startsAt])
+  @@index([moduleId])
+  @@index([trainerProfileId])
+  @@map("learning_sessions")
+}
+
+model LearningAssignment {
+  id                  Int                      @id @default(autoincrement())
+  programVersionId    Int                      @map("program_version_id")
+  employeeProfileId   Int                      @map("employee_profile_id")
+  assignedByProfileId Int                      @map("assigned_by_profile_id")
+  managerProfileId    Int?                     @map("manager_profile_id")
+  dueAt               DateTime?                @map("due_at")
+  status              LearningAssignmentStatus @default(assigned)
+  progressPercent     Decimal                  @default(0) @map("progress_percent") @db.Decimal(5, 2)
+  startedAt           DateTime?                @map("started_at")
+  completedAt         DateTime?                @map("completed_at")
+  createdAt           DateTime                 @default(now()) @map("created_at")
+  updatedAt           DateTime                 @updatedAt @map("updated_at")
+
+  programVersion LearningProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Cascade)
+  employee       Profile                @relation("LearningAssignmentEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  assignedBy     Profile                @relation("LearningAssignmentAssignedBy", fields: [assignedByProfileId], references: [id], onDelete: Restrict)
+  manager        Profile?               @relation("LearningAssignmentManager", fields: [managerProfileId], references: [id], onDelete: SetNull)
+
+  moduleProgressEntries LearningModuleProgress[]
+  attendanceRecords     LearningAttendanceRecord[]
+  quizAttempts          LearningQuizAttempt[]
+  certificate           IssuedCertificate?      @relation("LearningAssignmentCertificate")
+  trainingFeedback      TrainingFeedback?
+  impactAssessmentTask  ImpactAssessmentTask?
+  trainingRecord        TrainingRecord?         @relation("LearningAssignmentTrainingRecord")
+
+  @@unique([programVersionId, employeeProfileId])
+  @@index([employeeProfileId, status])
+  @@index([managerProfileId, status])
+  @@index([dueAt])
+  @@map("learning_assignments")
+}
+
+model LearningModuleProgress {
+  id                Int                    @id @default(autoincrement())
+  assignmentId      Int                    @map("assignment_id")
+  moduleId          Int                    @map("module_id")
+  status            LearningProgressStatus @default(not_started)
+  startedAt         DateTime?              @map("started_at")
+  lastInteractedAt  DateTime?              @map("last_interacted_at")
+  completedAt       DateTime?              @map("completed_at")
+  completionPercent Decimal                @default(0) @map("completion_percent") @db.Decimal(5, 2)
+  timeSpentSeconds  Int                    @default(0) @map("time_spent_seconds")
+  watchPercent      Decimal                @default(0) @map("watch_percent") @db.Decimal(5, 2)
+  scrollPercent     Decimal                @default(0) @map("scroll_percent") @db.Decimal(5, 2)
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  assignment LearningAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  module     LearningModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, moduleId])
+  @@index([moduleId])
+  @@index([status])
+  @@map("learning_module_progress")
+}
+
+model LearningAttendanceRecord {
+  id                Int                      @id @default(autoincrement())
+  sessionId         Int                      @map("session_id")
+  assignmentId      Int                      @map("assignment_id")
+  attendanceStatus  LearningAttendanceStatus @default(invited) @map("attendance_status")
+  attendedAt        DateTime?                @map("attended_at")
+  markedByProfileId Int?                     @map("marked_by_profile_id")
+  notes             String?                  @db.Text
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  session    LearningSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  assignment LearningAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  markedBy   Profile?           @relation("LearningAttendanceMarkedBy", fields: [markedByProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, assignmentId])
+  @@index([assignmentId, attendanceStatus])
+  @@index([markedByProfileId])
+  @@map("learning_attendance_records")
+}
+
+model LearningQuiz {
+  id               Int      @id @default(autoincrement())
+  programVersionId Int      @map("program_version_id")
+  moduleId         Int?     @map("module_id")
+  title            String
+  instructions     String?  @db.Text
+  passMark         Decimal  @map("pass_mark") @db.Decimal(5, 2)
+  pointsOnPass     Int      @default(0) @map("points_on_pass")
+  attemptLimit     Int?     @map("attempt_limit")
+  isMandatory      Boolean  @default(true) @map("is_mandatory")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  programVersion LearningProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Cascade)
+  module         LearningModule?        @relation(fields: [moduleId], references: [id], onDelete: SetNull)
+
+  questions LearningQuizQuestion[]
+  attempts  LearningQuizAttempt[]
+
+  @@index([programVersionId])
+  @@index([moduleId])
+  @@index([isActive])
+  @@map("learning_quizzes")
+}
+
+model LearningQuizQuestion {
+  id           Int                      @id @default(autoincrement())
+  quizId       Int                      @map("quiz_id")
+  questionType LearningQuizQuestionType @map("question_type")
+  prompt       String
+  displayOrder Int                      @map("display_order")
+  required     Boolean                  @default(true)
+  explanation  String?                  @db.Text
+  createdAt    DateTime                 @default(now()) @map("created_at")
+  updatedAt    DateTime                 @updatedAt @map("updated_at")
+
+  quiz    LearningQuiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options LearningQuizOption[]
+  answers LearningQuizAnswer[]
+
+  @@index([quizId, displayOrder])
+  @@map("learning_quiz_questions")
+}
+
+model LearningQuizOption {
+  id           Int      @id @default(autoincrement())
+  questionId   Int      @map("question_id")
+  label        String
+  isCorrect    Boolean  @default(false) @map("is_correct")
+  displayOrder Int      @map("display_order")
+
+  question         LearningQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerSelections LearningQuizAnswerOption[]
+
+  @@index([questionId, displayOrder])
+  @@map("learning_quiz_options")
+}
+
+model LearningQuizAttempt {
+  id           Int                        @id @default(autoincrement())
+  quizId       Int                        @map("quiz_id")
+  assignmentId Int                        @map("assignment_id")
+  attemptNo    Int                        @map("attempt_no")
+  score        Decimal                    @default(0) @db.Decimal(5, 2)
+  status       LearningQuizAttemptStatus  @default(in_progress)
+  startedAt    DateTime                   @default(now()) @map("started_at")
+  submittedAt  DateTime?                  @map("submitted_at")
+  passedAt     DateTime?                  @map("passed_at")
+  createdAt    DateTime                   @default(now()) @map("created_at")
+  updatedAt    DateTime                   @updatedAt @map("updated_at")
+
+  quiz       LearningQuiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  assignment LearningAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  answers    LearningQuizAnswer[]
+
+  @@unique([quizId, assignmentId, attemptNo])
+  @@index([assignmentId, status])
+  @@map("learning_quiz_attempts")
+}
+
+model LearningQuizAnswer {
+  id             Int      @id @default(autoincrement())
+  attemptId      Int      @map("attempt_id")
+  questionId     Int      @map("question_id")
+  freeTextAnswer String?  @map("free_text_answer") @db.Text
+  isCorrect      Boolean? @map("is_correct")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  attempt         LearningQuizAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question        LearningQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOptions LearningQuizAnswerOption[]
+
+  @@unique([attemptId, questionId])
+  @@index([questionId])
+  @@map("learning_quiz_answers")
+}
+
+model LearningQuizAnswerOption {
+  answerId Int @map("answer_id")
+  optionId Int @map("option_id")
+
+  answer LearningQuizAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option LearningQuizOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([answerId, optionId])
+  @@index([optionId])
+  @@map("learning_quiz_answer_options")
+}
+
+model CertificateTemplate {
+  id                   Int      @id @default(autoincrement())
+  programVersionId     Int      @map("program_version_id")
+  name                 String
+  templateDefinition   Json     @default(dbgenerated("'{}'::jsonb")) @map("template_definition")
+  backgroundDocumentId Int?     @map("background_document_id")
+  signatureDocumentId  Int?     @map("signature_document_id")
+  issuedByLabel        String?  @map("issued_by_label")
+  isDefault            Boolean  @default(true) @map("is_default")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  programVersion     LearningProgramVersion @relation(fields: [programVersionId], references: [id], onDelete: Cascade)
+  backgroundDocument Document?              @relation("CertificateTemplateBackground", fields: [backgroundDocumentId], references: [id], onDelete: SetNull)
+  signatureDocument  Document?              @relation("CertificateTemplateSignature", fields: [signatureDocumentId], references: [id], onDelete: SetNull)
+
+  issuedCertificates IssuedCertificate[]
+
+  @@index([programVersionId])
+  @@index([backgroundDocumentId])
+  @@index([signatureDocumentId])
+  @@map("certificate_templates")
+}
+
+model GlobalCertificateTemplate {
+  id                   Int      @id @default(autoincrement())
+  key                  String   @unique @default("default")
+  name                 String
+  templateDefinition   Json     @default(dbgenerated("'{}'::jsonb")) @map("template_definition")
+  backgroundDocumentId Int?     @map("background_document_id")
+  signatureDocumentId  Int?     @map("signature_document_id")
+  issuedByLabel        String?  @map("issued_by_label")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdByProfileId   Int?     @map("created_by_profile_id")
+  updatedByProfileId   Int?     @map("updated_by_profile_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  backgroundDocument Document? @relation("GlobalCertificateTemplateBackground", fields: [backgroundDocumentId], references: [id], onDelete: SetNull)
+  signatureDocument  Document? @relation("GlobalCertificateTemplateSignature", fields: [signatureDocumentId], references: [id], onDelete: SetNull)
+  createdBy          Profile?  @relation("GlobalCertificateTemplateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  updatedBy          Profile?  @relation("GlobalCertificateTemplateUpdatedBy", fields: [updatedByProfileId], references: [id], onDelete: SetNull)
+
+  issuedCertificates IssuedCertificate[] @relation("IssuedCertificateGlobalTemplate")
+
+  @@index([backgroundDocumentId])
+  @@index([signatureDocumentId])
+  @@index([createdByProfileId])
+  @@index([updatedByProfileId])
+  @@index([isActive])
+  @@map("global_certificate_templates")
+}
+
+model IssuedCertificate {
+  id                    Int               @id @default(autoincrement())
+  assignmentId          Int               @unique @map("assignment_id")
+  certificateTemplateId Int?              @map("certificate_template_id")
+  globalCertificateTemplateId Int?        @map("global_certificate_template_id")
+  documentId            Int?              @map("document_id")
+  certificateNumber     String            @unique @map("certificate_number")
+  verificationCode      String            @unique @map("verification_code")
+  status                CertificateStatus @default(issued)
+  issuedAt              DateTime          @default(now()) @map("issued_at")
+  revokedAt             DateTime?         @map("revoked_at")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  assignment          LearningAssignment @relation("LearningAssignmentCertificate", fields: [assignmentId], references: [id], onDelete: Cascade)
+  certificateTemplate CertificateTemplate? @relation(fields: [certificateTemplateId], references: [id], onDelete: SetNull)
+  globalCertificateTemplate GlobalCertificateTemplate? @relation("IssuedCertificateGlobalTemplate", fields: [globalCertificateTemplateId], references: [id], onDelete: SetNull)
+  document            Document?            @relation("IssuedCertificateDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([certificateTemplateId])
+  @@index([globalCertificateTemplateId])
+  @@index([documentId])
+  @@map("issued_certificates")
+}
+
+model TrainingFeedback {
+  id               Int      @id @default(autoincrement())
+  assignmentId     Int      @unique @map("assignment_id")
+  trainerProfileId Int?     @map("trainer_profile_id")
+  overallRating    Int      @map("overall_rating")
+  contentRating    Int      @map("content_rating")
+  deliveryRating   Int      @map("delivery_rating")
+  relevanceRating  Int      @map("relevance_rating")
+  comment          String?  @db.Text
+  pointsAwarded    Int      @default(0) @map("points_awarded")
+  submittedAt      DateTime @default(now()) @map("submitted_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  assignment LearningAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  trainer    Profile?           @relation("TrainingFeedbackTrainer", fields: [trainerProfileId], references: [id], onDelete: SetNull)
+
+  @@index([trainerProfileId])
+  @@map("training_feedback")
+}
+
+model ImpactAssessmentTask {
+  id               Int                    @id @default(autoincrement())
+  assignmentId     Int                    @unique @map("assignment_id")
+  managerProfileId Int                    @map("manager_profile_id")
+  dueAt            DateTime               @map("due_at")
+  status           ImpactAssessmentStatus @default(pending)
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  assignment LearningAssignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  manager    Profile                  @relation("ImpactAssessmentManager", fields: [managerProfileId], references: [id], onDelete: Restrict)
+  response   ImpactAssessmentResponse?
+
+  @@index([managerProfileId, status])
+  @@index([dueAt])
+  @@map("impact_assessment_tasks")
+}
+
+model ImpactAssessmentResponse {
+  id                      Int      @id @default(autoincrement())
+  taskId                  Int      @unique @map("task_id")
+  submittedByProfileId    Int      @map("submitted_by_profile_id")
+  behaviorChangeScore     Int?     @map("behavior_change_score")
+  productivityImpactScore Int?     @map("productivity_impact_score")
+  qualityImpactScore      Int?     @map("quality_impact_score")
+  businessImpactScore     Int?     @map("business_impact_score")
+  comment                 String?  @db.Text
+  submittedAt             DateTime @default(now()) @map("submitted_at")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  task        ImpactAssessmentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  submittedBy Profile              @relation("ImpactAssessmentSubmittedBy", fields: [submittedByProfileId], references: [id], onDelete: Restrict)
+
+  @@index([submittedByProfileId])
+  @@map("impact_assessment_responses")
+}
+
+model LearningPointLedger {
+  id                 Int                     @id @default(autoincrement())
+  profileId          Int                     @map("profile_id")
+  eventType          LearningPointEventType  @map("event_type")
+  sourceType         LearningPointSourceType @map("source_type")
+  sourceId           Int                     @map("source_id")
+  points             Int
+  awardedByProfileId Int?                    @map("awarded_by_profile_id")
+  awardedAt          DateTime                @default(now()) @map("awarded_at")
+  metadata           Json?                   @map("metadata")
+
+  profile   Profile  @relation("LearningPointLedgerProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  awardedBy Profile? @relation("LearningPointAwardedBy", fields: [awardedByProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([profileId, eventType, sourceType, sourceId])
+  @@index([profileId, awardedAt])
+  @@index([eventType, awardedAt])
+  @@map("learning_point_ledger")
 }
 
 // =============================
@@ -1232,7 +2513,9 @@ model Client {
 
   engagementLetters   EngagementLetter[]
   jobs                Job[]
+  requisitionRequests RequisitionRequest[]
   payments            ClientPayment[]
+  jobInvoices         JobInvoice[]
   receivableFollowUps ReceivableFollowUpAction[]
   statusTransitions   StatusTransition[]
   onboarding          ClientOnboarding?
@@ -1349,9 +2632,11 @@ model Job {
 
   staffing            JobStaffAssignment[]
   jobCosting          JobCosting?
+  requisitionRequests RequisitionRequest[]
   tasks               Task[]
   timeEntries         TimeEntry[]
   payments            ClientPayment[]
+  invoices            JobInvoice[]
   receivableFollowUps ReceivableFollowUpAction[]
   revenueAllocations  RevenueAllocation[]
   statusTransitions   StatusTransition[]
@@ -1420,6 +2705,7 @@ model Task {
   assignee Profile? @relation("TaskAssignee", fields: [assignedToProfileId], references: [id], onDelete: SetNull)
 
   timeEntries TimeEntry[]
+  jobInvoices JobInvoice[] @relation("JobInvoiceMilestoneTask")
 
   @@index([jobId])
   @@index([assignedToProfileId])
@@ -1557,6 +2843,7 @@ model TimeEntry {
 
   approvedByProfileId Int?      @map("approved_by_profile_id")
   approvedAt          DateTime? @map("approved_at")
+  rejectionReason     String?   @map("rejection_reason")
 
   billableAmount Decimal @default(0) @map("billable_amount") @db.Decimal(14, 2)
   costAmount     Decimal @default(0) @map("cost_amount") @db.Decimal(14, 2)
@@ -1572,6 +2859,7 @@ model TimeEntry {
 
   approvalRequests   TimeEntryApprovalRequest[]
   overBudgetRequests TimeOverBudgetRequest[]
+  leaveSegments      LeaveRequestSegment[]
 
   /// Business rule (enforced in service layer):
   /// Only allow time entry creation when a JobStaffAssignment exists for (employeeProfileId, jobId).
@@ -1718,11 +3006,136 @@ model ClientPayment {
   job    Job?   @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   revenueAllocations RevenueAllocation[]
+  invoiceApplications JobInvoicePaymentApplication[]
 
   @@index([clientId])
   @@index([jobId])
   @@index([paymentDate])
   @@map("client_payments")
+}
+
+model JobInvoiceTemplate {
+  id                 Int      @id @default(autoincrement())
+  name               String
+  description        String?  @db.Text
+  subjectLine        String?  @map("subject_line")
+  templateDefinition Json     @default(dbgenerated("'{}'::jsonb")) @map("template_definition")
+  isDefault          Boolean  @default(false) @map("is_default")
+  createdByProfileId Int?     @map("created_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  createdBy Profile? @relation("JobInvoiceTemplateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  invoices  JobInvoice[]
+
+  @@index([createdByProfileId])
+  @@index([isDefault])
+  @@map("job_invoice_templates")
+}
+
+model JobInvoice {
+  id                   Int              @id @default(autoincrement())
+  jobId                Int              @map("job_id")
+  clientId             Int              @map("client_id")
+  milestoneTaskId      Int?             @unique @map("milestone_task_id")
+  jobInvoiceTemplateId Int?             @map("job_invoice_template_id")
+  generatedByProfileId Int?             @map("generated_by_profile_id")
+  issuedByProfileId    Int?             @map("issued_by_profile_id")
+  documentId           Int?             @map("document_id")
+  invoiceNumber        String           @unique @map("invoice_number")
+  title                String
+  description          String?          @db.Text
+  status               JobInvoiceStatus @default(draft)
+  currency             String           @default("KES")
+  expectedPercent      Decimal?         @map("expected_percent") @db.Decimal(5, 2)
+  subtotalAmount       Decimal          @default(0) @map("subtotal_amount") @db.Decimal(14, 2)
+  taxAmount            Decimal          @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  totalAmount          Decimal          @default(0) @map("total_amount") @db.Decimal(14, 2)
+  amountPaid           Decimal          @default(0) @map("amount_paid") @db.Decimal(14, 2)
+  amountOutstanding    Decimal          @default(0) @map("amount_outstanding") @db.Decimal(14, 2)
+  dueDate              DateTime?        @map("due_date")
+  generatedAt          DateTime?        @map("generated_at")
+  issuedAt             DateTime?        @map("issued_at")
+  paidAt               DateTime?        @map("paid_at")
+  voidedAt             DateTime?        @map("voided_at")
+  notes                String?          @db.Text
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  job             Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  client          Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  milestoneTask   Task?               @relation("JobInvoiceMilestoneTask", fields: [milestoneTaskId], references: [id], onDelete: SetNull)
+  template        JobInvoiceTemplate? @relation(fields: [jobInvoiceTemplateId], references: [id], onDelete: SetNull)
+  generatedBy     Profile?            @relation("JobInvoiceGeneratedBy", fields: [generatedByProfileId], references: [id], onDelete: SetNull)
+  issuedBy        Profile?            @relation("JobInvoiceIssuedBy", fields: [issuedByProfileId], references: [id], onDelete: SetNull)
+  document        Document?           @relation("JobInvoiceDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  lines           JobInvoiceLine[]
+  statusHistory   JobInvoiceStatusHistory[]
+  paymentApplications JobInvoicePaymentApplication[]
+
+  @@index([jobId, status])
+  @@index([clientId, status])
+  @@index([jobInvoiceTemplateId])
+  @@index([generatedByProfileId])
+  @@index([issuedByProfileId])
+  @@index([documentId])
+  @@index([dueDate])
+  @@map("job_invoices")
+}
+
+model JobInvoiceLine {
+  id           Int                @id @default(autoincrement())
+  jobInvoiceId Int                @map("job_invoice_id")
+  lineType     JobInvoiceLineType @default(service_fee) @map("line_type")
+  description  String
+  quantity     Decimal            @default(1) @db.Decimal(10, 2)
+  unitPrice    Decimal            @default(0) @map("unit_price") @db.Decimal(14, 2)
+  lineAmount   Decimal            @default(0) @map("line_amount") @db.Decimal(14, 2)
+  sortOrder    Int                @default(0) @map("sort_order")
+  metadata     Json?              @map("metadata")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  invoice JobInvoice @relation(fields: [jobInvoiceId], references: [id], onDelete: Cascade)
+
+  @@index([jobInvoiceId, sortOrder])
+  @@map("job_invoice_lines")
+}
+
+model JobInvoiceStatusHistory {
+  id                 Int               @id @default(autoincrement())
+  jobInvoiceId       Int               @map("job_invoice_id")
+  fromStatus         JobInvoiceStatus? @map("from_status")
+  toStatus           JobInvoiceStatus  @map("to_status")
+  notes              String?           @db.Text
+  changedByProfileId Int?              @map("changed_by_profile_id")
+  changedAt          DateTime          @default(now()) @map("changed_at")
+
+  invoice   JobInvoice @relation(fields: [jobInvoiceId], references: [id], onDelete: Cascade)
+  changedBy Profile?   @relation("JobInvoiceStatusChangedBy", fields: [changedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([jobInvoiceId, changedAt])
+  @@index([changedByProfileId])
+  @@map("job_invoice_status_history")
+}
+
+model JobInvoicePaymentApplication {
+  id                 Int      @id @default(autoincrement())
+  jobInvoiceId       Int      @map("job_invoice_id")
+  clientPaymentId    Int      @map("client_payment_id")
+  appliedAmount      Decimal  @map("applied_amount") @db.Decimal(14, 2)
+  appliedByProfileId Int?     @map("applied_by_profile_id")
+  appliedAt          DateTime @default(now()) @map("applied_at")
+  notes              String?  @db.Text
+
+  invoice       JobInvoice    @relation(fields: [jobInvoiceId], references: [id], onDelete: Cascade)
+  clientPayment ClientPayment @relation(fields: [clientPaymentId], references: [id], onDelete: Cascade)
+  appliedBy     Profile?      @relation("JobInvoicePaymentAppliedBy", fields: [appliedByProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([jobInvoiceId, clientPaymentId])
+  @@index([clientPaymentId])
+  @@index([appliedByProfileId])
+  @@map("job_invoice_payment_applications")
 }
 
 model RevenueAllocation {
@@ -1868,149 +3281,6 @@ model RevenueProjection {
 }
 
 // =============================
-// KPI + TARGETS
-// =============================
-
-model Kpi {
-  id          Int     @id @default(autoincrement())
-  name        String
-  description String?
-  category    String
-  kpiType     String  @map("kpi_type")
-
-  strategicTheme         String? @map("strategic_theme")
-  strategicObjective     String? @map("strategic_objective")
-  criticalSuccessFactor  String? @map("critical_success_factor")
-  indicatorType          String? @map("indicator_type")
-  kpiCategory            String? @map("kpi_category")
-
-  measurementUnit String? @map("measurement_unit")
-  currency        String? @default("KES")
-
-  targetValue       Decimal? @map("target_value") @db.Decimal(14, 2)
-  targetFrequency   String?  @map("target_frequency")
-  targetDescription String?  @map("target_description")
-  targetType        String?  @map("target_type")
-  targetText        String?  @map("target_text")
-  baselineText      String?  @map("baseline_text")
-
-  redThreshold     Decimal? @map("red_threshold") @db.Decimal(14, 2)
-  amberThreshold   Decimal? @map("amber_threshold") @db.Decimal(14, 2)
-  greenThreshold   Decimal? @map("green_threshold") @db.Decimal(14, 2)
-
-  weight Decimal? @db.Decimal(5, 2)
-
-  departmentId Int? @map("department_id")
-  roleId       Int? @map("role_id")
-  parentKpiId  Int? @map("parent_kpi_id")
-  ownerProfileId Int? @map("owner_profile_id")
-  cycleId        Int? @map("cycle_id")
-  actualValue    Decimal @default(0) @map("actual_value") @db.Decimal(14, 2)
-  dueDate        DateTime? @map("due_date")
-  progressStatus KpiTrackingStatus @default(on_track) @map("progress_status")
-  createdByProfileId Int? @map("created_by_profile_id")
-  deletedAt DateTime? @map("deleted_at")
-
-  reviewOwnerProfileId Int?    @map("review_owner_profile_id")
-  reviewFrequency      String? @map("review_frequency")
-  approvalRequired     Boolean @default(false) @map("approval_required")
-  evidenceRequired     Boolean @default(false) @map("evidence_required")
-  commentaryRequired   Boolean @default(false) @map("commentary_required")
-
-  dataSourceType String?  @map("data_source_type")
-  sourceReference String? @map("source_reference")
-  formulaLocked  Boolean  @default(false) @map("formula_locked")
-
-  rollupMethod   String? @map("rollup_method")
-  inheritWeight  Boolean @default(true) @map("inherit_weight")
-
-
-  isActive Boolean @default(true) @map("is_active")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  department Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  role       PositionRole? @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  parentKpi  Kpi?          @relation("KpiHierarchy", fields: [parentKpiId], references: [id], onDelete: SetNull)
-  childKpis  Kpi[]         @relation("KpiHierarchy")
-  reviewOwner Profile?     @relation("KpiReviewOwner", fields: [reviewOwnerProfileId], references: [id], onDelete: SetNull)
-  owner Profile?           @relation("KpiOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
-  cycle EvaluationCycle?   @relation("KpiCycle", fields: [cycleId], references: [id], onDelete: SetNull)
-  createdBy Profile?       @relation("KpiCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
-
-  employeeAssignments EmployeeKpiAssignment[]
-  employeeScores      EmployeeKpiScore[]
-  okrObjectives       OkrObjective[]
-  developmentGoals    DevelopmentGoal[] @relation("DevelopmentGoalLinkedKpi")
-
-  @@index([category])
-  @@index([kpiType])
-  @@index([kpiCategory])
-  @@index([indicatorType])
-  @@index([parentKpiId])
-  @@index([reviewOwnerProfileId])
-  @@index([ownerProfileId])
-  @@index([cycleId])
-  @@index([progressStatus])
-  @@map("kpis")
-}
-
-model EmployeeKpiAssignment {
-  id                Int @id @default(autoincrement())
-  employeeProfileId Int @map("employee_profile_id")
-  kpiId             Int @map("kpi_id")
-
-  targetValue   Decimal? @map("target_value") @db.Decimal(14, 2)
-  achievedValue Decimal? @map("achieved_value") @db.Decimal(14, 2)
-  weight        Decimal? @db.Decimal(5, 2)
-
-  periodStart DateTime? @map("period_start")
-  periodEnd   DateTime? @map("period_end")
-
-  status EmployeeKpiAssignmentStatus @default(active)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee Profile @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  kpi      Kpi     @relation(fields: [kpiId], references: [id], onDelete: Cascade)
-
-  @@unique([employeeProfileId, kpiId, periodStart, periodEnd])
-  @@index([employeeProfileId])
-  @@map("employee_kpi_assignments")
-}
-
-model EmployeeKpiScore {
-  id                Int @id @default(autoincrement())
-  employeeProfileId Int @map("employee_profile_id")
-  kpiId             Int @map("kpi_id")
-
-  periodStart DateTime @map("period_start")
-  periodEnd   DateTime @map("period_end")
-
-  calculatedValue    Decimal @map("calculated_value") @db.Decimal(14, 2)
-  targetValue        Decimal @map("target_value") @db.Decimal(14, 2)
-  achievementPercent Decimal @map("achievement_percent") @db.Decimal(7, 2)
-
-  weightPercent Decimal @map("weight_percent") @db.Decimal(5, 2)
-  weightedScore Decimal @map("weighted_score") @db.Decimal(7, 2)
-
-  notes        String?
-  calculatedAt DateTime @default(now()) @map("calculated_at")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  employee Profile @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  kpi      Kpi     @relation(fields: [kpiId], references: [id], onDelete: Cascade)
-
-  @@unique([employeeProfileId, kpiId, periodStart, periodEnd])
-  @@index([employeeProfileId])
-  @@map("employee_kpi_scores")
-}
-
-// =============================
 // EVALUATIONS
 // =============================
 
@@ -2031,10 +3301,7 @@ model EvaluationCycle {
 
   definitions       EvaluationDefinition[]
   performanceScores PerformanceScore[]
-  okrObjectives     OkrObjective[]
-  okrs              Okr[]
   assignments       EvaluationAssignment[] @relation("EvaluationCycleAssignments")
-  kpis              Kpi[]                  @relation("KpiCycle")
 
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   createdBy  Profile?    @relation("EvaluationCycleCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
@@ -2134,110 +3401,6 @@ model EvaluationAssignment {
   @@map("evaluation_assignments")
 }
 
-// =============================
-// OKR (Objectives & Key Results)
-// =============================
-
-model OkrObjective {
-  id             Int               @id @default(autoincrement())
-  title          String
-  description    String?
-  status         OkrStatus         @default(active)
-  approvalStatus OkrApprovalStatus @default(pending) @map("approval_status")
-
-  ownerProfileId Int  @map("owner_profile_id")
-  kpiId          Int? @map("kpi_id")
-  departmentId   Int? @map("department_id")
-  cycleId        Int? @map("cycle_id")
-
-  startDate           DateTime? @map("start_date")
-  endDate             DateTime? @map("end_date")
-  submittedAt         DateTime? @map("submitted_at")
-  approvedAt          DateTime? @map("approved_at")
-  approvedByProfileId Int?      @map("approved_by_profile_id")
-  approvalNotes       String?   @map("approval_notes")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  owner      Profile          @relation("OkrObjectiveOwner", fields: [ownerProfileId], references: [id], onDelete: Cascade)
-  kpi        Kpi?             @relation(fields: [kpiId], references: [id], onDelete: SetNull)
-  department Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  cycle      EvaluationCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  approvedBy Profile?         @relation("OkrObjectiveApprovedBy", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
-
-  keyResults OkrKeyResult[]
-  history    OkrProgressHistory[]
-
-  @@index([ownerProfileId])
-  @@index([kpiId])
-  @@index([departmentId])
-  @@map("okr_objectives")
-}
-
-model OkrKeyResult {
-  id          Int     @id @default(autoincrement())
-  objectiveId Int     @map("objective_id")
-  title       String
-  unit        String? @map("unit")
-
-  targetValue  Decimal  @map("target_value") @db.Decimal(12, 2)
-  currentValue Decimal  @default(0) @map("current_value") @db.Decimal(12, 2)
-  weight       Decimal? @map("weight") @db.Decimal(5, 2)
-
-  status OkrStatus @default(active)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  objective OkrObjective         @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
-  history   OkrProgressHistory[]
-
-  @@index([objectiveId])
-  @@map("okr_key_results")
-}
-
-model OkrProgressHistory {
-  id            Int           @id @default(autoincrement())
-  objectiveId   Int           @map("objective_id")
-  keyResultId   Int?          @map("key_result_id")
-  changeType    OkrChangeType @map("change_type")
-  field         String        @map("field")
-  previousValue String?       @map("previous_value")
-  newValue      String?       @map("new_value")
-  note          String?       @map("note")
-  changedAt     DateTime      @default(now()) @map("changed_at")
-
-  changedByProfileId Int? @map("changed_by_profile_id")
-
-  objective OkrObjective  @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
-  keyResult OkrKeyResult? @relation(fields: [keyResultId], references: [id], onDelete: SetNull)
-  changedBy Profile?      @relation("OkrHistoryChangedBy", fields: [changedByProfileId], references: [id], onDelete: SetNull)
-
-  @@index([objectiveId])
-  @@index([keyResultId])
-  @@map("okr_progress_history")
-}
-
-model Okr {
-  id             Int               @id @default(autoincrement())
-  ownerProfileId Int               @map("owner_profile_id")
-  cycleId        Int?              @map("cycle_id")
-  objective      String
-  keyResults     Json              @default(dbgenerated("'[]'::jsonb")) @map("key_results")
-  progress       Decimal           @default(0) @db.Decimal(5, 2)
-  status         KpiTrackingStatus @default(on_track)
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
-
-  owner Profile          @relation("OkrOwner", fields: [ownerProfileId], references: [id], onDelete: Cascade)
-  cycle EvaluationCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-
-  @@index([ownerProfileId])
-  @@index([cycleId])
-  @@map("okrs")
-}
-
 model EvaluationTemplate {
   id          Int     @id @default(autoincrement())
   name        String
@@ -2317,7 +3480,6 @@ model PerformanceScore {
   efficiencyWeighted  Decimal @default(0) @map("efficiency_weighted") @db.Decimal(7, 2)
 
   evaluationScore      Decimal @default(0) @map("evaluation_score") @db.Decimal(7, 2)
-  kpiScore             Decimal @default(0) @map("kpi_score") @db.Decimal(7, 2)
   clientRatingScore    Decimal @default(0) @map("client_rating_score") @db.Decimal(7, 2)
   nonFinancialWeighted Decimal @default(0) @map("non_financial_weighted") @db.Decimal(7, 2)
 
@@ -2362,6 +3524,114 @@ model CheckIn {
   @@index([managerProfileId, status])
   @@index([employeeProfileId, scheduledAt])
   @@map("check_ins")
+}
+
+// =============================
+// BALANCED SCORECARD
+// =============================
+
+model BalancedScorecardPerspective {
+  id               Int      @id @default(autoincrement())
+  key              String   @unique
+  name             String
+  ownerName        String?  @map("owner_name")
+  summary          String?  @db.Text
+  sortOrder        Int      @default(0) @map("sort_order")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdByProfileId Int?   @map("created_by_profile_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  goals BalancedScorecardGoal[]
+
+  @@index([sortOrder])
+  @@index([isActive])
+  @@map("balanced_scorecard_perspectives")
+}
+
+model BalancedScorecardGoal {
+  id               Int      @id @default(autoincrement())
+  key              String   @unique
+  perspectiveId    Int      @map("perspective_id")
+  title            String
+  description      String?  @db.Text
+  ownerName        String?  @map("owner_name")
+  sortOrder        Int      @default(0) @map("sort_order")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdByProfileId Int?   @map("created_by_profile_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  perspective BalancedScorecardPerspective @relation(fields: [perspectiveId], references: [id], onDelete: Cascade)
+  kpis        BalancedScorecardKpi[]
+  initiatives BalancedScorecardInitiative[]
+
+  @@index([perspectiveId, sortOrder])
+  @@index([isActive])
+  @@map("balanced_scorecard_goals")
+}
+
+model BalancedScorecardKpi {
+  id               Int      @id @default(autoincrement())
+  key              String   @unique
+  goalId           Int      @map("goal_id")
+  metricKey        String   @map("metric_key")
+  name             String
+  description      String?  @db.Text
+  formula          String?  @db.Text
+  frequency        String
+  unit             String
+  weight           Int
+  firmTarget       String   @map("firm_target")
+  ownerName        String?  @map("owner_name")
+  statusLogic      String?  @map("status_logic") @db.Text
+  updateFrequency  String?  @map("update_frequency")
+  sortOrder        Int      @default(0) @map("sort_order")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdByProfileId Int?   @map("created_by_profile_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  goal        BalancedScorecardGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  initiatives BalancedScorecardInitiative[]
+
+  @@index([goalId, sortOrder])
+  @@index([metricKey])
+  @@index([isActive])
+  @@map("balanced_scorecard_kpis")
+}
+
+model BalancedScorecardInitiative {
+  id                 Int             @id @default(autoincrement())
+  key                String          @unique
+  goalId             Int             @map("goal_id")
+  kpiId              Int             @map("kpi_id")
+  parentInitiativeId Int?            @map("parent_initiative_id")
+  scopeRole          String          @map("scope_role")
+  title              String
+  summary            String?         @db.Text
+  ownerName          String?         @map("owner_name")
+  timeline           String?
+  dueDate            DateTime?       @map("due_date")
+  status             DashboardStatus @default(at_risk)
+  progress           Int             @default(0)
+  sortOrder          Int             @default(0) @map("sort_order")
+  isActive           Boolean         @default(true) @map("is_active")
+  createdByProfileId Int?            @map("created_by_profile_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  goal             BalancedScorecardGoal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  kpi              BalancedScorecardKpi        @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  parentInitiative BalancedScorecardInitiative? @relation("BalancedScorecardInitiativeTree", fields: [parentInitiativeId], references: [id], onDelete: SetNull)
+  childInitiatives BalancedScorecardInitiative[] @relation("BalancedScorecardInitiativeTree")
+
+  @@index([goalId, sortOrder])
+  @@index([kpiId, sortOrder])
+  @@index([parentInitiativeId])
+  @@index([scopeRole])
+  @@index([isActive])
+  @@map("balanced_scorecard_initiatives")
 }
 
 // =============================
@@ -2569,318 +3839,6 @@ model WorkflowStepEvent {
   @@index([workflowAssignmentId, actedAt])
   @@index([actedByProfileId])
   @@map("workflow_step_events")
-}
-
-// =============================
-// KPI CASCADE V2
-// =============================
-
-enum KpiCadence {
-  quarterly
-  annual
-}
-
-enum KpiCycleState {
-  draft
-  active
-  completed
-  archived
-}
-
-enum KpiCycleVersionStatus {
-  draft
-  published
-  locked
-}
-
-enum KpiEntityState {
-  draft
-  submitted
-  in_review
-  approved
-  rejected
-  active
-  completed
-  escalated
-  archived
-}
-
-enum KpiBscPerspective {
-  financial
-  customer
-  internal_process
-  learning_growth
-}
-
-enum KpiDirection {
-  higher_better
-  lower_better
-  milestone
-}
-
-enum KpiRag {
-  red
-  amber
-  green
-}
-
-enum KpiInitiativeLevel {
-  firm
-  team
-  department
-  employee
-}
-
-enum KpiUpdateFrequency {
-  weekly
-  biweekly
-  monthly
-  quarterly
-}
-
-enum KpiProgressSource {
-  web
-  mobile
-  api
-  system
-  migration
-}
-
-enum KpiSnapshotType {
-  baseline
-  periodic
-  closeout
-}
-
-model KpiCycle {
-  id                 Int           @id @default(autoincrement())
-  name               String
-  cadence            KpiCadence
-  startAt            DateTime      @map("start_at")
-  endAt              DateTime      @map("end_at")
-  state              KpiCycleState @default(draft)
-  createdByProfileId Int?          @map("created_by_profile_id")
-  rowVersion         Int           @default(1) @map("row_version")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
-
-  @@index([cadence])
-  @@index([state])
-  @@map("kpi_cycles")
-}
-
-model KpiCycleVersion {
-  id                 Int                   @id @default(autoincrement())
-  cycleId            Int                   @map("cycle_id")
-  versionNo          Int                   @map("version_no")
-  status             KpiCycleVersionStatus @default(draft)
-  publishedAt        DateTime?             @map("published_at")
-  createdByProfileId Int?                  @map("created_by_profile_id")
-  rowVersion         Int                   @default(1) @map("row_version")
-  createdAt          DateTime              @default(now()) @map("created_at")
-  updatedAt          DateTime              @updatedAt @map("updated_at")
-
-  @@unique([cycleId, versionNo])
-  @@index([cycleId])
-  @@map("kpi_cycle_versions")
-}
-
-model KpiGoal {
-  id              Int            @id @default(autoincrement())
-  cycleVersionId  Int            @map("cycle_version_id")
-  title           String
-  description     String?
-  bscTag          KpiBscPerspective? @map("bsc_tag")
-  ownerProfileId  Int            @map("owner_profile_id")
-  state           KpiEntityState @default(draft)
-  baseline        Decimal        @db.Decimal(14, 2)
-  target          Decimal        @db.Decimal(14, 2)
-  actual          Decimal        @default(0) @db.Decimal(14, 2)
-  dueDate         DateTime?      @map("due_date")
-  weight          Decimal        @db.Decimal(5, 2)
-  percentComplete Decimal        @default(0) @map("percent_complete") @db.Decimal(7, 2)
-  rag             KpiRag         @default(red)
-  lastUpdatedAt   DateTime?      @map("last_updated_at")
-  rowVersion      Int            @default(1) @map("row_version")
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
-
-  @@unique([cycleVersionId, title])
-  @@index([cycleVersionId])
-  @@index([bscTag])
-  @@index([dueDate])
-  @@index([state])
-  @@map("kpi_goals")
-}
-
-model KpiMetric {
-  id                Int                @id @default(autoincrement())
-  goalId            Int                @map("goal_id")
-  name              String
-  description       String?
-  bscTag            KpiBscPerspective? @map("bsc_tag")
-  unit              String?
-  direction         KpiDirection
-  aggregationMethod String             @map("aggregation_method")
-  redThreshold      Decimal?           @map("red_threshold") @db.Decimal(14, 2)
-  amberThreshold    Decimal?           @map("amber_threshold") @db.Decimal(14, 2)
-  greenThreshold    Decimal?           @map("green_threshold") @db.Decimal(14, 2)
-  state             KpiEntityState     @default(draft)
-  baseline          Decimal            @db.Decimal(14, 2)
-  target            Decimal            @db.Decimal(14, 2)
-  actual            Decimal            @default(0) @db.Decimal(14, 2)
-  dueDate           DateTime?          @map("due_date")
-  weight            Decimal            @db.Decimal(5, 2)
-  percentComplete   Decimal            @default(0) @map("percent_complete") @db.Decimal(7, 2)
-  rag               KpiRag             @default(red)
-  lastUpdatedAt     DateTime?          @map("last_updated_at")
-  updateFrequency   KpiUpdateFrequency @map("update_frequency")
-  rowVersion        Int                @default(1) @map("row_version")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
-
-  @@index([goalId])
-  @@index([bscTag])
-  @@index([dueDate])
-  @@index([state])
-  @@map("kpi_metrics")
-}
-
-model KpiInitiative {
-  id                 Int                @id @default(autoincrement())
-  metricId           Int                @map("metric_id")
-  level              KpiInitiativeLevel
-  parentInitiativeId Int?               @map("parent_initiative_id")
-  title              String
-  description        String?
-  bscTag             KpiBscPerspective? @map("bsc_tag")
-  ownerProfileId     Int?               @map("owner_profile_id")
-  partnerProfileId   Int?               @map("partner_profile_id")
-  managerProfileId   Int?               @map("manager_profile_id")
-  departmentId       Int?               @map("department_id")
-  employeeProfileId  Int?               @map("employee_profile_id")
-  state              KpiEntityState     @default(draft)
-  baseline           Decimal            @db.Decimal(14, 2)
-  target             Decimal            @db.Decimal(14, 2)
-  actual             Decimal            @default(0) @db.Decimal(14, 2)
-  dueDate            DateTime?          @map("due_date")
-  weight             Decimal            @db.Decimal(5, 2)
-  percentComplete    Decimal            @default(0) @map("percent_complete") @db.Decimal(7, 2)
-  rag                KpiRag             @default(red)
-  lastUpdatedAt      DateTime?          @map("last_updated_at")
-  updateFrequency    KpiUpdateFrequency @map("update_frequency")
-  ackRequired        Boolean            @default(true) @map("ack_required")
-  acknowledgedAt     DateTime?          @map("acknowledged_at")
-  effectiveFrom      DateTime?          @map("effective_from")
-  effectiveTo        DateTime?          @map("effective_to")
-  rowVersion         Int                @default(1) @map("row_version")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
-
-  @@index([metricId])
-  @@index([parentInitiativeId])
-  @@index([bscTag])
-  @@index([dueDate])
-  @@index([level, state])
-  @@index([departmentId])
-  @@index([employeeProfileId])
-  @@map("kpi_initiatives")
-}
-
-model KpiProgressUpdate {
-  id                 Int               @id @default(autoincrement())
-  initiativeId       Int               @map("initiative_id")
-  periodStart        DateTime          @map("period_start")
-  periodEnd          DateTime          @map("period_end")
-  actual             Decimal           @db.Decimal(14, 2)
-  note               String?
-  evidenceUrls       String[]          @default([]) @map("evidence_urls")
-  updatedByProfileId Int?              @map("updated_by_profile_id")
-  source             KpiProgressSource @default(api)
-  idempotencyKey     String            @unique @map("idempotency_key")
-  createdAt          DateTime          @default(now()) @map("created_at")
-
-  @@unique([initiativeId, periodStart, periodEnd])
-  @@index([initiativeId])
-  @@map("kpi_progress_updates")
-}
-
-model KpiApprovalHistory {
-  id               Int            @id @default(autoincrement())
-  entityType       String         @map("entity_type")
-  entityId         Int            @map("entity_id")
-  fromState        KpiEntityState @map("from_state")
-  toState          KpiEntityState @map("to_state")
-  actedByProfileId Int?           @map("acted_by_profile_id")
-  actedRole        String         @map("acted_role")
-  comments         String?
-  actedAt          DateTime       @default(now()) @map("acted_at")
-  sequenceNo       Int            @map("sequence_no")
-  slaBreached      Boolean        @default(false) @map("sla_breached")
-  metadata         Json?
-
-  @@unique([entityType, entityId, sequenceNo])
-  @@index([entityType, entityId, actedAt])
-  @@map("kpi_approval_history")
-}
-
-model KpiReassignment {
-  id                  Int      @id @default(autoincrement())
-  initiativeId        Int      @map("initiative_id")
-  fromProfileId       Int?     @map("from_profile_id")
-  toProfileId         Int      @map("to_profile_id")
-  reason              String
-  effectiveAt         DateTime @map("effective_at")
-  approvedByProfileId Int?     @map("approved_by_profile_id")
-  createdAt           DateTime @default(now()) @map("created_at")
-
-  @@index([initiativeId, effectiveAt])
-  @@map("kpi_reassignments")
-}
-
-model KpiSnapshot {
-  id                 Int             @id @default(autoincrement())
-  cycleId            Int             @map("cycle_id")
-  cycleVersionId     Int             @map("cycle_version_id")
-  snapshotType       KpiSnapshotType @map("snapshot_type")
-  createdByProfileId Int?            @map("created_by_profile_id")
-  createdAt          DateTime        @default(now()) @map("created_at")
-
-  @@index([cycleId, snapshotType])
-  @@map("kpi_snapshots")
-}
-
-model KpiSnapshotItem {
-  id              Int            @id @default(autoincrement())
-  snapshotId      Int            @map("snapshot_id")
-  entityType      String         @map("entity_type")
-  entityId        Int            @map("entity_id")
-  parentId        Int?           @map("parent_id")
-  state           KpiEntityState
-  target          Decimal        @db.Decimal(14, 2)
-  actual          Decimal        @db.Decimal(14, 2)
-  baseline        Decimal        @db.Decimal(14, 2)
-  weight          Decimal        @db.Decimal(5, 2)
-  percentComplete Decimal        @map("percent_complete") @db.Decimal(7, 2)
-  rag             KpiRag
-  createdAt       DateTime       @default(now()) @map("created_at")
-
-  @@unique([snapshotId, entityType, entityId])
-  @@index([snapshotId, parentId])
-  @@map("kpi_snapshot_items")
-}
-
-model KpiLegacyMap {
-  id            Int      @id @default(autoincrement())
-  legacyTable   String   @map("legacy_table")
-  legacyId      Int      @map("legacy_id")
-  newEntityType String   @map("new_entity_type")
-  newEntityId   Int      @map("new_entity_id")
-  createdAt     DateTime @default(now()) @map("created_at")
-
-  @@unique([legacyTable, legacyId])
-  @@index([newEntityType, newEntityId])
-  @@map("kpi_legacy_map")
 }
 
 model NotificationDeviceToken {

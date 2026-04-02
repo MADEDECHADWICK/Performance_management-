@@ -34,7 +34,7 @@ const cycleValidators = [
   body("questions.*.category")
     .optional()
     .isString()
-    .isIn(["competency", "behavior", "goal", "culture"]),
+    .isIn(["competency", "behavior", "culture"]),
   body("questions.*.weight").optional().isFloat({ min: 0.1, max: 10 }),
   body("questions.*.order").optional().isInt({ min: 1, max: 500 }),
 ];

@@ -32,7 +32,7 @@ Use this checklist for manual role-by-role validation in staging/UAT.
 - Confirm fallback performance data loads from:
   - `GET /api/employee-project-allocations?employeeIds=...`
   - `GET /api/client-evaluations?employeeIds=...`
-  - `GET /api/employee-kpi-assignments?employeeProfileId=...&includeTracking=true`
+  - `GET /api/performance-scores/me`
 - Confirm subordinates list loads from `GET /api/subordinates?profileId=...`.
 
 ## GMP
@@ -59,4 +59,3 @@ Use this checklist for manual role-by-role validation in staging/UAT.
 - All dashboards show real API data.
 - All approval actions enforce manager-first then partner for staged requests.
 - All job links route to `/jobs/:jobId/tracking` and render without contract errors.
-

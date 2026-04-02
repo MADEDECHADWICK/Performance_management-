@@ -7,7 +7,7 @@ Full-stack system for audit and tax firms covering employee lifecycle, performan
 - Client intake with engagement letters
 - Job creation, staffing, costing, and budget caps
 - Timesheets and time-entry approvals
-- KPI tracking and evaluation cycles (manager, peer, direct report)
+- Performance evaluations and feedback cycles (manager, peer, direct report)
 - Dashboards for HR, managers, partners, and employees
 
 ## Tech Stack

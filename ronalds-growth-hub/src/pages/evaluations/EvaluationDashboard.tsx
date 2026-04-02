@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -24,12 +23,6 @@ export default function EvaluationDashboard() {
     enabled: !!profileId,
   });
 
-  const kpiQuery = useQuery({
-    queryKey: ["evaluation-dashboard", "kpis", profileId],
-    queryFn: () => evaluationsAPI.getEmployeeKpiDashboard(profileId!),
-    enabled: !!profileId,
-  });
-
   const feedbackQuery = useQuery({
     queryKey: ["evaluation-dashboard", "feedback", profileId],
     queryFn: () => evaluationsAPI.getReceivedFeedback(profileId!),
@@ -44,18 +37,8 @@ export default function EvaluationDashboard() {
 
   const isLoading =
     pendingQuery.isLoading ||
-    kpiQuery.isLoading ||
     feedbackQuery.isLoading ||
     dashboardQuery.isLoading;
-
-  const kpiStatusSummary = useMemo(() => {
-    const grouped = kpiQuery.data?.kpis || {};
-    return Object.entries(grouped).map(([status, items]) => ({
-      status,
-      count: items.length,
-    }));
-  }, [kpiQuery.data]);
-
   if (!profileId) {
     return (
       <DashboardLayout>
@@ -80,7 +63,7 @@ export default function EvaluationDashboard() {
             <div className="space-y-1">
               <h1 className="text-3xl font-semibold tracking-tight">Evaluation Dashboard</h1>
               <p className="text-sm text-muted-foreground">
-                Pending reviews, KPI health, feedback, and scheduled check-ins in one place.
+                Pending reviews, development progress, feedback, and scheduled check-ins in one place.
               </p>
             </div>
             {canLaunchCycles && (
@@ -98,16 +81,6 @@ export default function EvaluationDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-semibold">{pendingQuery.data?.length || 0}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">KPI Completion</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-semibold">
-                {Math.round(kpiQuery.data?.completionPercentages.kpis || 0)}%
-              </div>
             </CardContent>
           </Card>
           <Card>
@@ -170,23 +143,21 @@ export default function EvaluationDashboard() {
 
           <Card>
             <CardHeader>
-              <CardTitle>KPI Summary</CardTitle>
+              <CardTitle>Evaluation Activity</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {kpiStatusSummary.length ? (
-                kpiStatusSummary.map((item) => (
+              {pendingQuery.data?.length ? (
+                pendingQuery.data.slice(0, 5).map((assignment) => (
                   <div
-                    key={item.status}
+                    key={assignment.id}
                     className="flex items-center justify-between rounded-lg border border-border/70 px-4 py-3"
                   >
-                    <span className="font-medium capitalize">
-                      {item.status.replace(/_/g, " ")}
-                    </span>
-                    <Badge>{item.count}</Badge>
+                    <span className="font-medium capitalize">{assignment.relationship}</span>
+                    <Badge>{assignment.status}</Badge>
                   </div>
                 ))
               ) : (
-                <div className="text-sm text-muted-foreground">No KPIs assigned yet.</div>
+                <div className="text-sm text-muted-foreground">No evaluation activity recorded yet.</div>
               )}
             </CardContent>
           </Card>

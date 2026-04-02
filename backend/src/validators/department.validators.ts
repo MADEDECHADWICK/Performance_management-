@@ -147,30 +147,6 @@ export const getDepartmentEmployeesValidators = [
 ];
 
 /**
- * Validators for GET /departments/:departmentId/kpis - List department KPIs
- */
-export const getDepartmentKpisValidators = [
-  param("departmentId")
-    .isInt({ min: 1 })
-    .withMessage("Valid departmentId (integer) required"),
-
-  query("page")
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage("Page must be >= 1"),
-
-  query("pageSize")
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage("Page size must be between 1-100"),
-
-  query("category")
-    .optional()
-    .isString()
-    .trim(),
-];
-
-/**
  * Validators for GET /departments/:departmentId/dashboard - Department dashboard
  */
 export const getDepartmentDashboardValidator = [
@@ -182,53 +158,6 @@ export const getDepartmentDashboardValidator = [
     .optional()
     .isISO8601()
     .withMessage("Valid period (ISO8601) required if provided"),
-];
-
-/**
- * Validators for POST /departments/:departmentId/kpis - Create department KPI
- */
-export const createDepartmentKpiValidators = [
-  param("departmentId")
-    .isInt({ min: 1 })
-    .withMessage("Valid departmentId (integer) required"),
-
-  body("name")
-    .isString()
-    .trim()
-    .isLength({ min: 3, max: 255 })
-    .withMessage("KPI name required (3-255 characters)"),
-
-  body("description")
-    .optional()
-    .isString()
-    .trim(),
-
-  body("category")
-    .isString()
-    .trim()
-    .isLength({ min: 1 })
-    .withMessage("Category required"),
-
-  body("kpiType")
-    .isString()
-    .trim()
-    .isLength({ min: 1 })
-    .withMessage("KPI type required"),
-
-  body("targetValue")
-    .optional()
-    .isFloat({ min: 0 })
-    .withMessage("Target value must be >= 0 if provided"),
-
-  body("weight")
-    .optional()
-    .isFloat({ min: 0, max: 100 })
-    .withMessage("Weight must be between 0 and 100 if provided"),
-
-  body("targetFrequency")
-    .optional()
-    .isIn(["daily", "weekly", "monthly", "quarterly", "annual"])
-    .withMessage("Target frequency must be one of: daily, weekly, monthly, quarterly, annual"),
 ];
 
 /**

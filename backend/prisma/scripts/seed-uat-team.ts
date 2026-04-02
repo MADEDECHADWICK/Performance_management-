@@ -6,14 +6,25 @@ import {
   type ModuleAction,
 } from "../../src/services/moduleAccess.service";
 
-type CanonicalAuthRole = "hr" | "partner" | "manager" | "employee";
+const UAT_AUTH_ROLES = [
+  "hr",
+  "gmp",
+  "partner",
+  "manager",
+  "finance",
+  "marketing",
+  "employee",
+] as const;
+
+type CanonicalAuthRole = (typeof UAT_AUTH_ROLES)[number];
+type UatDepartmentCode = "TAX" | "ADV" | "FIN" | "MKT";
 
 type UatUserBlueprint = {
   email: string;
   firstName: string;
   lastName: string;
   authRole: CanonicalAuthRole;
-  departmentCode: "TAX" | "ADV" | null;
+  departmentCode: UatDepartmentCode | null;
   positionTitle: string;
   positionRoleName: string | null;
   isPartner: boolean;
@@ -53,8 +64,11 @@ const ONBOARDING_ITEM_TEMPLATES = [
 
 const DEFAULT_MODULE_ACTIONS_BY_ROLE: Record<CanonicalAuthRole, ModuleAction[]> = {
   hr: ["admin"],
+  gmp: ["admin"],
   partner: ["read"],
   manager: ["read"],
+  finance: ["admin"],
+  marketing: ["read"],
   employee: ["read"],
 };
 
@@ -68,6 +82,18 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionTitle: "HR Admin",
     positionRoleName: null,
     isPartner: false,
+    reportsToEmail: "grace.gmp@testfirm.co",
+    onboardingRequired: false,
+  },
+  {
+    email: "grace.gmp@testfirm.co",
+    firstName: "Grace",
+    lastName: "Kariuki",
+    authRole: "gmp",
+    departmentCode: null,
+    positionTitle: "Group Managing Partner",
+    positionRoleName: "Partner",
+    isPartner: true,
     onboardingRequired: false,
   },
   {
@@ -79,6 +105,7 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionTitle: "Partner - Tax & Audit",
     positionRoleName: "Partner",
     isPartner: true,
+    reportsToEmail: "grace.gmp@testfirm.co",
     onboardingRequired: false,
   },
   {
@@ -90,6 +117,7 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionTitle: "Partner - Advisory",
     positionRoleName: "Partner",
     isPartner: true,
+    reportsToEmail: "grace.gmp@testfirm.co",
     onboardingRequired: false,
   },
   {
@@ -102,7 +130,7 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionRoleName: "Tax Manager",
     isPartner: false,
     reportsToEmail: "james.partner@testfirm.co",
-    onboardingRequired: true,
+    onboardingRequired: false,
   },
   {
     email: "agnes.mgr@testfirm.co",
@@ -114,7 +142,43 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionRoleName: "Advisory Manager",
     isPartner: false,
     reportsToEmail: "linda.partner@testfirm.co",
-    onboardingRequired: true,
+    onboardingRequired: false,
+  },
+  {
+    email: "diana.finance@testfirm.co",
+    firstName: "Diana",
+    lastName: "Muthoni",
+    authRole: "finance",
+    departmentCode: "FIN",
+    positionTitle: "Finance Manager",
+    positionRoleName: "Finance Manager",
+    isPartner: false,
+    reportsToEmail: "grace.gmp@testfirm.co",
+    onboardingRequired: false,
+  },
+  {
+    email: "victor.finance@testfirm.co",
+    firstName: "Victor",
+    lastName: "Maina",
+    authRole: "finance",
+    departmentCode: "FIN",
+    positionTitle: "Finance Analyst",
+    positionRoleName: "Finance Analyst",
+    isPartner: false,
+    reportsToEmail: "diana.finance@testfirm.co",
+    onboardingRequired: false,
+  },
+  {
+    email: "pauline.marketing@testfirm.co",
+    firstName: "Pauline",
+    lastName: "Atieno",
+    authRole: "marketing",
+    departmentCode: "MKT",
+    positionTitle: "Marketing Lead",
+    positionRoleName: "Marketing Lead",
+    isPartner: false,
+    reportsToEmail: "grace.gmp@testfirm.co",
+    onboardingRequired: false,
   },
   {
     email: "kevin.emp@testfirm.co",
@@ -126,11 +190,11 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionRoleName: "Tax Consultant",
     isPartner: false,
     reportsToEmail: "brian.mgr@testfirm.co",
-    onboardingRequired: true,
+    onboardingRequired: false,
   },
   {
-    email: "grace.emp@testfirm.co",
-    firstName: "Grace",
+    email: "ruth.emp@testfirm.co",
+    firstName: "Ruth",
     lastName: "Achieng",
     authRole: "employee",
     departmentCode: "TAX",
@@ -138,7 +202,19 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionRoleName: "Senior Associate",
     isPartner: false,
     reportsToEmail: "brian.mgr@testfirm.co",
-    onboardingRequired: true,
+    onboardingRequired: false,
+  },
+  {
+    email: "samuel.emp@testfirm.co",
+    firstName: "Samuel",
+    lastName: "Mwangi",
+    authRole: "employee",
+    departmentCode: "TAX",
+    positionTitle: "Associate",
+    positionRoleName: "Associate",
+    isPartner: false,
+    reportsToEmail: "brian.mgr@testfirm.co",
+    onboardingRequired: false,
   },
   {
     email: "peter.emp@testfirm.co",
@@ -150,13 +226,37 @@ const UAT_USERS: UatUserBlueprint[] = [
     positionRoleName: "Senior Associate",
     isPartner: false,
     reportsToEmail: "agnes.mgr@testfirm.co",
-    onboardingRequired: true,
+    onboardingRequired: false,
+  },
+  {
+    email: "esther.emp@testfirm.co",
+    firstName: "Esther",
+    lastName: "Wanjiru",
+    authRole: "employee",
+    departmentCode: "ADV",
+    positionTitle: "Advisory Consultant",
+    positionRoleName: "Advisory Consultant",
+    isPartner: false,
+    reportsToEmail: "agnes.mgr@testfirm.co",
+    onboardingRequired: false,
+  },
+  {
+    email: "nicholas.emp@testfirm.co",
+    firstName: "Nicholas",
+    lastName: "Otieno",
+    authRole: "employee",
+    departmentCode: "ADV",
+    positionTitle: "Associate",
+    positionRoleName: "Associate",
+    isPartner: false,
+    reportsToEmail: "agnes.mgr@testfirm.co",
+    onboardingRequired: false,
   },
 ];
 
 const ensureAuthRoles = async () => {
   const roles = await Promise.all(
-    (["hr", "partner", "manager", "employee"] as const).map((name) =>
+    UAT_AUTH_ROLES.map((name) =>
       prisma.authRole.upsert({
         where: { name },
         update: { isActive: true },
@@ -222,8 +322,13 @@ const ensurePositionRoles = async () => {
       { name: "Partner", billingRate: 10000, costRate: 7500 },
       { name: "Tax Manager", billingRate: 7000, costRate: 5200 },
       { name: "Advisory Manager", billingRate: 7000, costRate: 5200 },
+      { name: "Finance Manager", billingRate: 6800, costRate: 5000 },
+      { name: "Finance Analyst", billingRate: 4300, costRate: 3000 },
+      { name: "Marketing Lead", billingRate: 5000, costRate: 3400 },
       { name: "Senior Associate", billingRate: 4500, costRate: 3200 },
+      { name: "Advisory Consultant", billingRate: 4000, costRate: 2800 },
       { name: "Tax Consultant", billingRate: 4000, costRate: 2800 },
+      { name: "Associate", billingRate: 3200, costRate: 2200 },
     ].map((position) =>
       prisma.positionRole.upsert({
         where: { name: position.name },
@@ -272,9 +377,37 @@ const ensureDepartments = async () => {
     },
   });
 
+  const finance = await prisma.department.upsert({
+    where: { departmentCode: "FIN" },
+    update: {
+      name: "Finance Department",
+      description: "Finance operations, collections, and reporting",
+    },
+    create: {
+      departmentCode: "FIN",
+      name: "Finance Department",
+      description: "Finance operations, collections, and reporting",
+    },
+  });
+
+  const marketing = await prisma.department.upsert({
+    where: { departmentCode: "MKT" },
+    update: {
+      name: "Marketing Department",
+      description: "Marketing, campaigns, and business development support",
+    },
+    create: {
+      departmentCode: "MKT",
+      name: "Marketing Department",
+      description: "Marketing, campaigns, and business development support",
+    },
+  });
+
   return new Map([
     ["TAX", tax],
     ["ADV", advisory],
+    ["FIN", finance],
+    ["MKT", marketing],
   ]);
 };
 
@@ -317,7 +450,7 @@ export async function seedUatTeam() {
     ensureDepartments(),
   ]);
 
-  for (const roleName of ["hr", "partner", "manager", "employee"] as const) {
+  for (const roleName of UAT_AUTH_ROLES) {
     const role = authRoleMap.get(roleName);
     if (!role) {
       throw new Error(`Missing auth role: ${roleName}`);
@@ -418,47 +551,65 @@ export async function seedUatTeam() {
     });
   }
 
-  const jamesProfile = profileByEmail.get("james.partner@testfirm.co");
-  const lindaProfile = profileByEmail.get("linda.partner@testfirm.co");
-  const brianProfile = profileByEmail.get("brian.mgr@testfirm.co");
-  const agnesProfile = profileByEmail.get("agnes.mgr@testfirm.co");
   const sarahProfile = profileByEmail.get("sarah.hr@testfirm.co");
-
-  if (!jamesProfile || !lindaProfile || !brianProfile || !agnesProfile || !sarahProfile) {
+  if (!sarahProfile) {
     throw new Error("Missing one or more core UAT profiles");
   }
 
-  await prisma.partner.upsert({
-    where: { profileId: jamesProfile.id },
-    update: {},
-    create: { profileId: jamesProfile.id },
-  });
-  await prisma.partner.upsert({
-    where: { profileId: lindaProfile.id },
-    update: {},
-    create: { profileId: lindaProfile.id },
-  });
-
-  const taxDepartment = departmentMap.get("TAX");
-  const advisoryDepartment = departmentMap.get("ADV");
-  if (!taxDepartment || !advisoryDepartment) {
-    throw new Error("Department setup failed");
+  for (const blueprint of UAT_USERS.filter((user) => user.isPartner)) {
+    const partnerProfile = profileByEmail.get(blueprint.email);
+    if (!partnerProfile) continue;
+    await prisma.partner.upsert({
+      where: { profileId: partnerProfile.id },
+      update: {},
+      create: { profileId: partnerProfile.id },
+    });
   }
 
-  await prisma.department.update({
-    where: { id: taxDepartment.id },
-    data: {
-      partnerProfileId: jamesProfile.id,
-      departmentHeadId: brianProfile.id,
+  const departmentAssignments: Array<{
+    code: UatDepartmentCode;
+    partnerEmail?: string;
+    headEmail: string;
+  }> = [
+    {
+      code: "TAX",
+      partnerEmail: "james.partner@testfirm.co",
+      headEmail: "brian.mgr@testfirm.co",
     },
-  });
-  await prisma.department.update({
-    where: { id: advisoryDepartment.id },
-    data: {
-      partnerProfileId: lindaProfile.id,
-      departmentHeadId: agnesProfile.id,
+    {
+      code: "ADV",
+      partnerEmail: "linda.partner@testfirm.co",
+      headEmail: "agnes.mgr@testfirm.co",
     },
-  });
+    {
+      code: "FIN",
+      headEmail: "diana.finance@testfirm.co",
+    },
+    {
+      code: "MKT",
+      headEmail: "pauline.marketing@testfirm.co",
+    },
+  ];
+
+  for (const assignment of departmentAssignments) {
+    const department = departmentMap.get(assignment.code);
+    const headProfile = profileByEmail.get(assignment.headEmail);
+    const partnerProfile = assignment.partnerEmail
+      ? profileByEmail.get(assignment.partnerEmail)
+      : null;
+
+    if (!department || !headProfile) {
+      throw new Error(`Department assignment failed for ${assignment.code}`);
+    }
+
+    await prisma.department.update({
+      where: { id: department.id },
+      data: {
+        partnerProfileId: partnerProfile?.id ?? null,
+        departmentHeadId: headProfile.id,
+      },
+    });
+  }
 
   const onboardingTargets = UAT_USERS.filter((user) => user.onboardingRequired);
   for (const target of onboardingTargets) {
@@ -550,18 +701,29 @@ export async function seedUatTeam() {
     users: UAT_USERS.map((user) => ({
       email: user.email,
       role: user.authRole,
+      departmentCode: user.departmentCode,
       onboardingRequired: user.onboardingRequired,
     })),
     departments: [
       {
         code: "TAX",
         partnerEmail: "james.partner@testfirm.co",
-        managerEmail: "brian.mgr@testfirm.co",
+        headEmail: "brian.mgr@testfirm.co",
       },
       {
         code: "ADV",
         partnerEmail: "linda.partner@testfirm.co",
-        managerEmail: "agnes.mgr@testfirm.co",
+        headEmail: "agnes.mgr@testfirm.co",
+      },
+      {
+        code: "FIN",
+        partnerEmail: null,
+        headEmail: "diana.finance@testfirm.co",
+      },
+      {
+        code: "MKT",
+        partnerEmail: null,
+        headEmail: "pauline.marketing@testfirm.co",
       },
     ],
   };
@@ -586,4 +748,3 @@ if (require.main === module) {
       await prisma.$disconnect();
     });
 }
-

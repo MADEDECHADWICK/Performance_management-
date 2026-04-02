@@ -1,7 +1,10 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
+import { buildPrimaryRoleAuthContext } from '../auth/accessRoles';
 import { TimeEntryService } from '../services/time-entry.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
+
+const buildAuthContext = (req: AuthRequest) => buildPrimaryRoleAuthContext(req);
 
 export class TimeEntryController {
   /**
@@ -21,11 +24,7 @@ export class TimeEntryController {
       const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
       const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await TimeEntryService.listTimeEntries(
         {
@@ -60,11 +59,7 @@ export class TimeEntryController {
       const employeeProfileId = req.query.employeeProfileId ? Number(req.query.employeeProfileId) : undefined;
       const status = (req.query.status as string) || undefined;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const requests = await TimeEntryService.listApprovalRequests(
         { jobId, employeeProfileId, status },
@@ -106,12 +101,10 @@ export class TimeEntryController {
           dateTo,
           billableOnly,
         },
-        {
-          userId: req.user!.userId,
-          profileId: req.profile!.id,
+        buildPrimaryRoleAuthContext(req, {
           // Force employee-level scoping even for managers/partners/admins.
           roleName: 'employee',
-        }
+        })
       );
 
       res.json(paginatedResponse(result.timeEntries, result.total, page, pageSize));
@@ -128,11 +121,7 @@ export class TimeEntryController {
    */
   static async createApprovalRequest(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const request = await TimeEntryService.createApprovalRequest(req.body, auth);
 
@@ -152,11 +141,7 @@ export class TimeEntryController {
       const requestId = Number(req.params.requestId);
       const { approvalNotes } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const request = await TimeEntryService.approveApprovalRequest(
         requestId,
@@ -180,11 +165,7 @@ export class TimeEntryController {
       const requestId = Number(req.params.requestId);
       const { approvalNotes } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const request = await TimeEntryService.rejectApprovalRequest(
         requestId,
@@ -208,11 +189,7 @@ export class TimeEntryController {
       const requestId = Number(req.params.requestId);
       const { approvalNotes } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const request = await TimeEntryService.approveOverBudgetRequest(
         requestId,
@@ -236,11 +213,7 @@ export class TimeEntryController {
       const requestId = Number(req.params.requestId);
       const { approvalNotes } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const request = await TimeEntryService.rejectOverBudgetRequest(
         requestId,
@@ -262,11 +235,7 @@ export class TimeEntryController {
    */
   static async createTimeEntry(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.createTimeEntry(req.body, auth);
 
@@ -288,11 +257,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.getTimeEntry(timeEntryId, auth);
 
@@ -312,11 +277,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.updateTimeEntry(
         timeEntryId,
@@ -342,11 +303,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       await TimeEntryService.deleteTimeEntry(timeEntryId, auth);
 
@@ -366,11 +323,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.submitTimeEntry(
         timeEntryId,
@@ -396,11 +349,7 @@ export class TimeEntryController {
       const timeEntryId = Number(req.params.timeEntryId);
       const { approvalNotes } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.approveTimeEntry(
         timeEntryId,
@@ -427,11 +376,7 @@ export class TimeEntryController {
       const timeEntryId = Number(req.params.timeEntryId);
       const { rejectionReason } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.rejectTimeEntry(
         timeEntryId,
@@ -455,11 +400,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.startTimer(timeEntryId, auth);
 
@@ -479,11 +420,7 @@ export class TimeEntryController {
     try {
       const timeEntryId = Number(req.params.timeEntryId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const timeEntry = await TimeEntryService.stopTimer(timeEntryId, auth);
 
@@ -505,11 +442,7 @@ export class TimeEntryController {
     try {
       const { timeEntryIds } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await TimeEntryService.batchSubmitTimeEntries(
         timeEntryIds,
@@ -534,11 +467,7 @@ export class TimeEntryController {
     try {
       const { timeEntryIds } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await TimeEntryService.batchApproveTimeEntries(
         timeEntryIds,
@@ -574,11 +503,7 @@ export class TimeEntryController {
       weekEnd.setDate(weekEnd.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await TimeEntryService.listTimeEntries(
         {
@@ -651,11 +576,7 @@ export class TimeEntryController {
     try {
       const jobId = Number(req.params.jobId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const summary = await TimeEntryService.getJobTimeSummary(jobId, auth);
 
@@ -675,11 +596,7 @@ export class TimeEntryController {
     try {
       const jobId = Number(req.params.jobId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const summary = await TimeEntryService.getJobAllocationSummary(jobId, auth);
 
@@ -691,4 +608,3 @@ export class TimeEntryController {
     }
   }
 }
-

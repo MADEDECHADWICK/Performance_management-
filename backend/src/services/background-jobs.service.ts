@@ -5,6 +5,7 @@
  */
 
 import Bull from "bull";
+import net from "net";
 import nodemailer from "nodemailer";
 import { logger, toLogContext } from "../lib/logger";
 import { ObservabilityService } from "./observability.service";
@@ -43,21 +44,100 @@ class BackgroundJobsService {
   private queues = new Map<QueueName, Bull.Queue<any>>();
   private emailTransporter: nodemailer.Transporter | null = null;
   private initialized = false;
+  private initializing = false;
   private lastInitializedAt: string | null = null;
   private lastInitializationError: string | null = null;
   private readonly workerName = "background_jobs";
+  private readonly startupTimeoutMs = 1500;
+
+  private shouldRunBackgroundProcessing() {
+    if (process.env.DISABLE_BACKGROUND_JOBS_WORKER === "true") return false;
+    if (process.env.NODE_ENV === "test") return false;
+    return true;
+  }
+
+  private getRedisConfig() {
+    return {
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: Number(process.env.REDIS_PORT || 6379),
+    };
+  }
+
+  private async ensureRedisReachable() {
+    const { host, port } = this.getRedisConfig();
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.createConnection({ host, port });
+      let settled = false;
+
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      };
+
+      socket.setTimeout(this.startupTimeoutMs);
+      socket.once("connect", () => finish());
+      socket.once("timeout", () => {
+        finish(new Error(`Redis connection timed out at ${host}:${port}`));
+      });
+      socket.once("error", (error) => {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  private async closeQueues() {
+    const closeTasks = Array.from(this.queues.values()).map(async (queue) => {
+      try {
+        await queue.close();
+      } catch (error) {
+        logger.warn("background_queue_close_failed", toLogContext(error));
+      }
+    });
+    await Promise.all(closeTasks);
+    this.queues.clear();
+  }
 
   async initialize() {
     if (this.initialized) return true;
+    if (this.initializing) return false;
     const startedAt = Date.now();
+    this.initializing = true;
 
     try {
+      if (!this.shouldRunBackgroundProcessing()) {
+        this.lastInitializationError = "background_jobs_disabled";
+        ObservabilityService.registerWorker(this.workerName, {
+          component: "background_jobs",
+          enabled: false,
+          metadata: {
+            reason: "disabled_by_environment",
+          },
+        });
+        ObservabilityService.markWorkerStopped(this.workerName, {
+          component: "background_jobs",
+          enabled: false,
+          metadata: {
+            reason: "disabled_by_environment",
+          },
+        });
+        return false;
+      }
+
       this.setupEmailTransporter();
+      await this.ensureRedisReachable();
       this.createQueue("emails");
       this.createQueue("reports");
       this.createQueue("bulk-operations");
       this.createQueue("data-aggregation");
       this.createQueue("notifications");
+      await Promise.all(Array.from(this.queues.values()).map((queue) => queue.isReady()));
       this.startWorkers();
       this.initialized = true;
       this.lastInitializedAt = new Date().toISOString();
@@ -87,21 +167,38 @@ class BackgroundJobsService {
       return true;
     } catch (error) {
       this.lastInitializationError = error instanceof Error ? error.message : String(error);
-      logger.error("background_jobs_initialization_failed", toLogContext(error));
-      ObservabilityService.markWorkerFailure(this.workerName, error, {
+      await this.closeQueues();
+      logger.warn("background_jobs_initialization_skipped", {
+        ...toLogContext(error),
         component: "background_jobs",
-        durationMs: Date.now() - startedAt,
+        redis: this.getRedisConfig(),
+      });
+      ObservabilityService.registerWorker(this.workerName, {
+        component: "background_jobs",
+        enabled: false,
+        metadata: {
+          reason: "redis_unavailable",
+          redis: this.getRedisConfig(),
+        },
+      });
+      ObservabilityService.markWorkerStopped(this.workerName, {
+        component: "background_jobs",
+        enabled: false,
+        metadata: {
+          reason: "redis_unavailable",
+          redis: this.getRedisConfig(),
+          startupDurationMs: Date.now() - startedAt,
+        },
       });
       return false;
+    } finally {
+      this.initializing = false;
     }
   }
 
   private createQueue(name: QueueName) {
     const queue = new Bull(name, {
-      redis: {
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: Number(process.env.REDIS_PORT || 6379),
-      },
+      redis: this.getRedisConfig(),
       defaultJobOptions: {
         removeOnComplete: true,
         attempts: 3,
@@ -113,6 +210,7 @@ class BackgroundJobsService {
         queue: name,
         ...toLogContext(error),
       });
+      if (!this.initialized) return;
       ObservabilityService.markWorkerFailure(this.workerName, error, {
         component: "background_jobs",
         metadata: { queue: name },
@@ -287,10 +385,9 @@ class BackgroundJobsService {
   }
 
   async shutdown() {
-    const closeTasks = Array.from(this.queues.values()).map((queue) => queue.close());
-    await Promise.all(closeTasks);
-    this.queues.clear();
+    await this.closeQueues();
     this.initialized = false;
+    this.initializing = false;
     ObservabilityService.markWorkerStopped(this.workerName, {
       component: "background_jobs",
       enabled: true,

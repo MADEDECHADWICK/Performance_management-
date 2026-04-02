@@ -333,9 +333,18 @@ export class NotificationService {
 
     const byNotificationId = new Map<number, NotificationContractMetadata>();
     for (const row of dispatchRows) {
-      if (byNotificationId.has(row.entityId)) continue;
       const metadata = row.metadata;
       if (!isObject(metadata)) continue;
+
+      const hasContractMetadata =
+        Boolean(metadata.eventType) ||
+        Boolean(metadata.canonicalRoute) ||
+        Boolean(metadata.targetEntityType) ||
+        Boolean(metadata.targetEntityId) ||
+        Boolean(metadata.requiredPermission) ||
+        Array.isArray(metadata.actions);
+      if (!hasContractMetadata) continue;
+      if (byNotificationId.has(row.entityId)) continue;
 
       const metadataActions: NotificationAction[] = [];
       if (Array.isArray(metadata.actions)) {

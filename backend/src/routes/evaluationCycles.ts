@@ -1,5 +1,8 @@
+// This file defines the API routes for managing evaluation cycles. It includes endpoints for listing, retrieving, creating, updating, and deleting evaluation cycles. The routes are protected with authentication and role-based access control middleware to ensure that only authorized users can perform certain actions. The implementation also includes utility functions for parsing input values, resolving user roles, and determining access permissions based on those roles. By organizing these routes in a dedicated file, we can maintain a clear structure for our API and facilitate the management of evaluation cycles within the application.
+
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { loadProfile } from '../middleware/loadProfile';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { EvaluationCycleStatus } from '@prisma/client';
@@ -19,11 +22,7 @@ const parseCycleStatus = (value: unknown): EvaluationCycleStatus | null => {
 };
 
 const resolveRoles = (req: AuthRequest) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => role.toLowerCase());
 };
 
 const isPrivileged = (roles: string[]) =>

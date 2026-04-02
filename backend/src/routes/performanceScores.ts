@@ -414,15 +414,11 @@ const calculateAndStoreScore = async (
     ),
     evaluationWeight: normalizeWeightValue(
       scoringConfig?.learningGrowthBreakdown?.evaluation,
-      0.5
-    ),
-    okrWeight: normalizeWeightValue(
-      scoringConfig?.learningGrowthBreakdown?.okr,
-      0.3
+      0.7
     ),
     feedbackWeight: normalizeWeightValue(
       scoringConfig?.learningGrowthBreakdown?.feedback,
-      0.2
+      0.3
     ),
   };
 
@@ -570,7 +566,6 @@ const calculateAndStoreScore = async (
     financialWeighted,
     efficiencyWeighted,
     evaluationScore: 0,
-    kpiScore: 0,
     clientRatingScore: nonFinancialScores.customerSatisfactionScore,
     nonFinancialWeighted,
     totalScore,
@@ -605,7 +600,6 @@ const calculateAndStoreScore = async (
       financialWeights,
       efficiencyWeights,
       roleFormula,
-      okrScore: nonFinancialScores.okrScore,
       evaluationDefinitionId: definition?.id ?? null,
       scoringConfig,
       performanceMix,
@@ -681,7 +675,6 @@ const calculateAndStoreScore = async (
       learningGrowthScore: nonFinancialScores.learningGrowthScore,
       customerSatisfactionScore: nonFinancialScores.customerSatisfactionScore,
       internalProcessesScore: nonFinancialScores.internalProcessesScore,
-      okrScore: nonFinancialScores.okrScore,
       feedbackScore: nonFinancialScores.feedbackScore,
       coreNonFinancialScore,
       operationalEfficiencyScore,
@@ -691,7 +684,6 @@ const calculateAndStoreScore = async (
         customerWeight: weightConfig.customerWeight,
         internalWeight: weightConfig.internalWeight,
         evaluationWeight: weightConfig.evaluationWeight,
-        okrWeight: weightConfig.okrWeight,
         feedbackWeight: weightConfig.feedbackWeight,
         operationalBlend,
       },

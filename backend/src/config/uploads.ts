@@ -1,3 +1,5 @@
+// This module defines the configuration and utilities for handling file uploads in the application. It specifies different upload buckets (e.g., "documents" and "knowledge-hub") with their respective subdirectories, maximum file size limits, and allowed MIME types. The module provides functions to get the upload directory, build public URLs for uploaded files, resolve local file paths, and create multer disk storage configurations for handling file uploads. By centralizing this logic, we can ensure consistent handling of file uploads across the application and enforce security and validation rules for uploaded content.
+
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -68,11 +70,10 @@ export const resolveLocalUploadPath = (bucket: UploadBucket, fileName: string) =
 
 export const buildDiskUpload = (bucket: UploadBucket) => {
   const bucketConfig = BUCKET_CONFIG[bucket];
-  const destination = getUploadDirectory(bucket);
 
   return multer({
     storage: multer.diskStorage({
-      destination: (_req, _file, cb) => cb(null, destination),
+      destination: (_req, _file, cb) => cb(null, getUploadDirectory(bucket)),
       filename: (_req, file, cb) => {
         cb(null, `${Date.now()}-${sanitizeFileName(file.originalname)}`);
       },

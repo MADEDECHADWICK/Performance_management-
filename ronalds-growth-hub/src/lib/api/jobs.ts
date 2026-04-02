@@ -8,6 +8,7 @@ import type {
   JobCosting,
   TaskStatus,
   JobInvoiceMilestoneTracking,
+  JobInvoiceSummary,
   JobWorkflowTrackingResponse,
   PaginatedResponse,
   JobStatus,
@@ -169,10 +170,34 @@ export const jobsAPI = {
   },
 
   /**
-   * Get unified workflow + KPI tracking payload for a job
+   * Get unified workflow tracking payload for a job
    */
   getTracking: async (jobId: number): Promise<JobWorkflowTrackingResponse> => {
     return api.get(`/jobs/${jobId}/tracking`);
+  },
+
+  /**
+   * Get invoice records generated for a job
+   */
+  getInvoices: async (jobId: number): Promise<JobInvoiceSummary[]> => {
+    return api.get(`/jobs/${jobId}/invoices`);
+  },
+
+  /**
+   * Create or return a draft invoice from a completed billing milestone
+   */
+  createInvoiceDraft: async (
+    jobId: number,
+    milestoneTaskId: number
+  ): Promise<JobInvoiceSummary> => {
+    return api.post(`/jobs/${jobId}/invoices/from-milestone/${milestoneTaskId}`);
+  },
+
+  /**
+   * Issue a draft invoice and generate its document
+   */
+  issueInvoice: async (jobId: number, invoiceId: number): Promise<JobInvoiceSummary> => {
+    return api.patch(`/jobs/${jobId}/invoices/${invoiceId}/issue`, {});
   },
 
   /**

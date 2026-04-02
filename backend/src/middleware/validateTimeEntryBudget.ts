@@ -1,30 +1,10 @@
-/**
- * validateTimeEntryBudget middleware
- *
- * Enforces:
- * 1) Only assigned employees can log time for a job (JobStaffAssignment must exist)
- * 2) BudgetCap enforcement (capEnforced, allowOverage, maxOveragePercent)
- *
- * Attaches:
- * (req as any).budgetCheck = {
- *   capEnforced,
- *   allowOverage,
- *   maxOveragePercent,
- *   totalAllocatedHours,
- *   loggedHoursBefore,
- *   incomingHours,
- *   totalAfter,
- *   remainingBefore,
- *   wouldExceed,
- *   overageHours,
- *   overagePercent
- * }
- */
+// This middleware validates that a time entry being created or updated does not exceed the allocated budget hours for the associated job. It checks if the user is assigned to the job, retrieves the job's costing and budget cap information, and calculates the total logged hours for the job (excluding cancelled/rejected entries). If the incoming time entry would cause the total hours to exceed the budget cap, it either blocks the request or allows it with a flag for requiring approval, depending on the budget cap settings. The middleware attaches relevant budget information to the request object for use in downstream handlers, enabling informed decision-making about how to proceed with the time entry creation or update. It also includes error handling to ensure that any issues during the validation process are properly logged and result in an appropriate HTTP response. By enforcing this validation, we can help maintain budget integrity and encourage proper time management within the application.
+
 import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
 
-const STATUSES_TO_COUNT = ["submitted", "approved", "pending"]; // adjust if needed
+//const STATUSES_TO_COUNT = ["submitted", "approved", "pending"]; // adjust if needed
 const STATUSES_TO_EXCLUDE = ["cancelled", "rejected"]; // safe baseline
 
 export const validateTimeEntryBudget = async (

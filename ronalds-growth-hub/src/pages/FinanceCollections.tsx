@@ -11,11 +11,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
 import {
+  AnalyticsChartShell,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
+import {
   LineChart,
   Line,
   ResponsiveContainer,
   XAxis,
   YAxis,
+  CartesianGrid,
   Tooltip,
   PieChart,
   Pie,
@@ -37,11 +47,31 @@ type Collection = {
   paymentDate: string;
   paymentMethod?: string | null;
   referenceNumber?: string | null;
+  invoiceNumber?: string | null;
   notes?: string | null;
 };
 
 type ClientOption = { id: number; clientName: string };
 type JobOption = { id: number; jobCode: string | null; jobName: string | null; clientId?: number | null };
+type OutstandingInvoiceOption = {
+  id: number;
+  clientId: number;
+  clientName: string;
+  jobId: number;
+  jobCode: string | null;
+  jobName: string | null;
+  invoiceNumber: string;
+  title: string;
+  status: string;
+  currency: string;
+  totalAmount: number;
+  amountPaid: number;
+  amountOutstanding: number;
+  dueDate?: string | null;
+  issuedAt?: string | null;
+  milestoneTaskId?: number | null;
+  milestoneTitle?: string | null;
+};
 
 export default function FinanceCollections() {
   const { toast } = useToast();
@@ -53,18 +83,28 @@ export default function FinanceCollections() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [jobs, setJobs] = useState<JobOption[]>([]);
+  const [outstandingInvoices, setOutstandingInvoices] = useState<OutstandingInvoiceOption[]>([]);
+  const [loadingOutstandingInvoices, setLoadingOutstandingInvoices] = useState(false);
 
   const [paymentForm, setPaymentForm] = useState({
     clientId: "",
     jobId: "",
+    invoiceId: "",
     paymentAmount: "",
     currency: "KES",
     paymentDate: "",
     paymentMethod: "",
     referenceNumber: "",
-    invoiceNumber: "",
     notes: "",
   });
+
+  const formatCurrency = (amount: number, currency = "KES") =>
+    new Intl.NumberFormat("en-KE", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(Number.isFinite(amount) ? amount : 0);
 
   const loadCollections = async () => {
     try {
@@ -122,15 +162,55 @@ export default function FinanceCollections() {
     }
   };
 
+  const loadOutstandingInvoices = async (clientId?: string, jobId?: string) => {
+    try {
+      setLoadingOutstandingInvoices(true);
+      const params = new URLSearchParams({ limit: "150" });
+      if (clientId) params.set("clientId", clientId);
+      if (jobId) params.set("jobId", jobId);
+
+      const invoices = await apiFetch<OutstandingInvoiceOption[]>(
+        "GET",
+        `/finance-dashboard/collections/outstanding-invoices?${params.toString()}`
+      );
+      setOutstandingInvoices(invoices);
+    } catch (error: any) {
+      console.error("Outstanding invoices error:", error);
+      if (error?.status === 401) {
+        navigate("/auth");
+        return;
+      }
+      setOutstandingInvoices([]);
+      if (error?.status !== 403 && error?.status !== 404) {
+        toast({
+          title: "Invoice load failed",
+          description: error.message || "Unable to load outstanding invoices.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setLoadingOutstandingInvoices(false);
+    }
+  };
+
   useEffect(() => {
     loadCollections();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    loadOutstandingInvoices(paymentForm.clientId, paymentForm.jobId);
+  }, [paymentForm.clientId, paymentForm.jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredJobs = useMemo(() => {
     if (!paymentForm.clientId) return jobs;
     const clientId = Number(paymentForm.clientId);
     return jobs.filter((job) => !job.clientId || job.clientId === clientId);
   }, [jobs, paymentForm.clientId]);
+
+  const selectedInvoice = useMemo(
+    () => outstandingInvoices.find((invoice) => String(invoice.id) === paymentForm.invoiceId) || null,
+    [outstandingInvoices, paymentForm.invoiceId]
+  );
 
   const totalCollected = useMemo(
     () => collections.reduce((sum, payment) => sum + (payment.paymentAmount || 0), 0),
@@ -182,6 +262,52 @@ export default function FinanceCollections() {
   const chartPalette = ["#0ea5e9", "#22c55e", "#f97316", "#ef4444", "#6366f1", "#14b8a6"];
   const hasPaymentMethodMix = paymentMethodMix.some((item) => item.value > 0);
 
+  const handleClientChange = (value: string) => {
+    setPaymentForm((prev) => ({
+      ...prev,
+      clientId: value,
+      jobId: "",
+      invoiceId: "",
+    }));
+  };
+
+  const handleJobChange = (value: string) => {
+    setPaymentForm((prev) => ({
+      ...prev,
+      jobId: value,
+      invoiceId: "",
+    }));
+  };
+
+  const handleInvoiceChange = (value: string) => {
+    if (!value) {
+      setPaymentForm((prev) => ({
+        ...prev,
+        invoiceId: "",
+      }));
+      return;
+    }
+
+    const invoice = outstandingInvoices.find((item) => String(item.id) === value);
+    if (!invoice) {
+      setPaymentForm((prev) => ({
+        ...prev,
+        invoiceId: "",
+      }));
+      return;
+    }
+
+    setPaymentForm((prev) => ({
+      ...prev,
+      clientId: String(invoice.clientId),
+      jobId: String(invoice.jobId),
+      invoiceId: String(invoice.id),
+      currency: invoice.currency || prev.currency,
+      paymentAmount:
+        invoice.amountOutstanding > 0 ? invoice.amountOutstanding.toFixed(2) : prev.paymentAmount,
+    }));
+  };
+
   const handlePaymentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canWriteCollections) {
@@ -197,12 +323,13 @@ export default function FinanceCollections() {
       await apiFetch("POST", "/finance-dashboard/collections", {
         clientId: paymentForm.clientId,
         jobId: paymentForm.jobId || null,
+        invoiceId: paymentForm.invoiceId || null,
         paymentAmount: Number(paymentForm.paymentAmount),
         currency: paymentForm.currency || "KES",
         paymentDate: paymentForm.paymentDate,
         paymentMethod: paymentForm.paymentMethod || null,
         referenceNumber: paymentForm.referenceNumber || null,
-        invoiceNumber: paymentForm.invoiceNumber || null,
+        invoiceNumber: selectedInvoice?.invoiceNumber || null,
         notes: paymentForm.notes || null,
       });
 
@@ -210,12 +337,12 @@ export default function FinanceCollections() {
       setPaymentForm({
         clientId: "",
         jobId: "",
+        invoiceId: "",
         paymentAmount: "",
         currency: "KES",
         paymentDate: "",
         paymentMethod: "",
         referenceNumber: "",
-        invoiceNumber: "",
         notes: "",
       });
       await loadCollections();
@@ -286,24 +413,30 @@ export default function FinanceCollections() {
             </CardHeader>
             <CardContent className="h-56">
               {hasPaymentMethodMix ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={paymentMethodMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={48}
-                      outerRadius={82}
-                      paddingAngle={2}
-                    >
-                      {paymentMethodMix.map((item, index) => (
-                        <Cell key={`method-${item.name}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={paymentMethodMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        {paymentMethodMix.map((item, index) => (
+                          <Cell key={`method-${item.name}`} fill={analyticsColorAt(index)} />
+                        ))}
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   No method distribution data yet.
@@ -323,23 +456,29 @@ export default function FinanceCollections() {
                   No linkage data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={linkageMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={48}
-                      outerRadius={82}
-                      paddingAngle={2}
-                    >
-                      <Cell fill="#22c55e" />
-                      <Cell fill="#94a3b8" />
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={linkageMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        <Cell fill="#22c55e" />
+                        <Cell fill="#94a3b8" />
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -355,23 +494,32 @@ export default function FinanceCollections() {
                   No recent collections yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={recentCollections}>
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={12} />
-                    <YAxis hide />
-                    <Tooltip
-                      formatter={(value: number) => [`KES ${value.toLocaleString()}`, "Collected"]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="amount"
-                      stroke="#0ea5e9"
-                      strokeWidth={2.5}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={recentCollections} margin={{ top: 12, right: 12, left: 0, bottom: 4 }}>
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="label" {...analyticsAxisProps} />
+                      <YAxis hide />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value, name) => [`KES ${Number(value || 0).toLocaleString()}`, name]}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
+                        }
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="amount"
+                        name="Collected"
+                        stroke={analyticsColorAt(0)}
+                        strokeWidth={3}
+                        dot={{ r: 0 }}
+                        activeDot={{ r: 5, strokeWidth: 0, fill: analyticsColorAt(0) }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -397,9 +545,7 @@ export default function FinanceCollections() {
                       id="clientId"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                       value={paymentForm.clientId}
-                      onChange={(event) =>
-                        setPaymentForm((prev) => ({ ...prev, clientId: event.target.value }))
-                      }
+                      onChange={(event) => handleClientChange(event.target.value)}
                       required
                     >
                       <option value="">Select client</option>
@@ -416,9 +562,7 @@ export default function FinanceCollections() {
                       id="jobId"
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                       value={paymentForm.jobId}
-                      onChange={(event) =>
-                        setPaymentForm((prev) => ({ ...prev, jobId: event.target.value }))
-                      }
+                      onChange={(event) => handleJobChange(event.target.value)}
                     >
                       <option value="">Select job</option>
                       {filteredJobs.map((job) => (
@@ -433,6 +577,97 @@ export default function FinanceCollections() {
                       </p>
                     )}
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invoiceId">Outstanding Invoice (optional)</Label>
+                  <select
+                    id="invoiceId"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={paymentForm.invoiceId}
+                    onChange={(event) => handleInvoiceChange(event.target.value)}
+                  >
+                    <option value="">Apply as client-level payment / no specific invoice</option>
+                    {outstandingInvoices.map((invoice) => (
+                      <option key={invoice.id} value={invoice.id}>
+                        {invoice.invoiceNumber} • {invoice.jobCode || invoice.jobName || "Job"} •{" "}
+                        {formatCurrency(invoice.amountOutstanding, invoice.currency)} outstanding
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>
+                      {loadingOutstandingInvoices
+                        ? "Loading outstanding invoices..."
+                        : `${outstandingInvoices.length} collectible invoice${outstandingInvoices.length === 1 ? "" : "s"} available${
+                            paymentForm.clientId || paymentForm.jobId ? " for the current filter" : ""
+                          }.`}
+                    </span>
+                    {selectedInvoice ? (
+                      <span>
+                        Selected {selectedInvoice.invoiceNumber} •{" "}
+                        {selectedInvoice.status.replace(/_/g, " ")}
+                      </span>
+                    ) : null}
+                  </div>
+                  {selectedInvoice ? (
+                    <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold">{selectedInvoice.invoiceNumber}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {selectedInvoice.clientName}
+                            {selectedInvoice.jobCode || selectedInvoice.jobName
+                              ? ` • ${selectedInvoice.jobCode || selectedInvoice.jobName}`
+                              : ""}
+                          </p>
+                          {selectedInvoice.milestoneTitle ? (
+                            <p className="text-xs text-muted-foreground">
+                              Milestone: {selectedInvoice.milestoneTitle}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Outstanding
+                          </p>
+                          <p className="text-lg font-semibold">
+                            {formatCurrency(
+                              selectedInvoice.amountOutstanding,
+                              selectedInvoice.currency
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Total invoice
+                          </p>
+                          <p className="font-medium">
+                            {formatCurrency(selectedInvoice.totalAmount, selectedInvoice.currency)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Paid so far
+                          </p>
+                          <p className="font-medium">
+                            {formatCurrency(selectedInvoice.amountPaid, selectedInvoice.currency)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Due date
+                          </p>
+                          <p className="font-medium">
+                            {selectedInvoice.dueDate
+                              ? new Date(selectedInvoice.dueDate).toLocaleDateString()
+                              : "Not set"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
@@ -498,16 +733,6 @@ export default function FinanceCollections() {
                       placeholder="Receipt / Ref No"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="invoiceNumber">Invoice Number</Label>
-                    <Input
-                      id="invoiceNumber"
-                      value={paymentForm.invoiceNumber}
-                      onChange={(event) =>
-                        setPaymentForm((prev) => ({ ...prev, invoiceNumber: event.target.value }))
-                      }
-                    />
-                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -539,6 +764,7 @@ export default function FinanceCollections() {
                     <TableHead>Date</TableHead>
                     <TableHead>Client</TableHead>
                     <TableHead>Job</TableHead>
+                    <TableHead>Invoice</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead>Reference</TableHead>
                   </TableRow>
@@ -546,7 +772,7 @@ export default function FinanceCollections() {
                 <TableBody>
                   {collections.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">
                         No collections yet.
                       </TableCell>
                     </TableRow>
@@ -556,6 +782,7 @@ export default function FinanceCollections() {
                       <TableCell>{new Date(payment.paymentDate).toLocaleDateString()}</TableCell>
                       <TableCell>{payment.clientName}</TableCell>
                       <TableCell>{payment.jobCode || payment.jobName || "N/A"}</TableCell>
+                      <TableCell>{payment.invoiceNumber || "-"}</TableCell>
                       <TableCell className="text-right">
                         {(payment.currency || "KES")} {payment.paymentAmount.toLocaleString()}
                       </TableCell>

@@ -16,6 +16,7 @@
 import { Response, NextFunction } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "./auth";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 
 const isAdmin = (roles: string[]) => roles.includes("super_admin");
 
@@ -31,7 +32,7 @@ export const requirePartnerAccess = async (
       return;
     }
 
-    const roles: string[] = req.userRoles || [];
+    const roles = resolveRequestAccessRoles(req);
 
     // Admin can access any partner data
     if (isAdmin(roles)) {
@@ -40,7 +41,7 @@ export const requirePartnerAccess = async (
     }
 
     // Must be partner to proceed
-    const isPartner = roles.includes("partner") || req.profile?.isPartner === true;
+    const isPartner = roles.includes("partner");
     if (!isPartner) {
       res.status(403).json({ error: "Forbidden. Partner access only." });
       return;

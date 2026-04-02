@@ -444,6 +444,13 @@ router.post(
           title: "New onboarding from won proposal",
           body: `Client onboarding for "${onboardingToNotify.clientName}" is awaiting HR review.`,
           relatedEntityId: onboardingToNotify.id,
+          link: "/client-onboarding-queue",
+          canonicalRoute: "/client-onboarding-queue",
+          eventType: "client_onboarding.submitted",
+          targetEntityType: "ClientOnboarding",
+          targetEntityId: onboardingToNotify.id,
+          priority: "medium",
+          templateLabel: "client_onboarding.submitted",
         },
         req
       );
@@ -453,6 +460,13 @@ router.post(
           title: "Proposal marked as won",
           body: `Proposal "${created.proposalTitle}" was marked as won and requires HR review.`,
           relatedEntityId: created.id,
+          link: "/business-development",
+          canonicalRoute: "/business-development",
+          eventType: "proposal.won",
+          targetEntityType: "Proposal",
+          targetEntityId: created.id,
+          priority: "medium",
+          templateLabel: "proposal.won",
         },
         req
       );
@@ -620,6 +634,13 @@ router.patch(
           title: "New onboarding from won proposal",
           body: `Client onboarding for "${onboardingToNotify.clientName}" is awaiting HR review.`,
           relatedEntityId: onboardingToNotify.id,
+          link: "/client-onboarding-queue",
+          canonicalRoute: "/client-onboarding-queue",
+          eventType: "client_onboarding.submitted",
+          targetEntityType: "ClientOnboarding",
+          targetEntityId: onboardingToNotify.id,
+          priority: "medium",
+          templateLabel: "client_onboarding.submitted",
         },
         req
       );
@@ -629,6 +650,13 @@ router.patch(
           title: "Proposal marked as won",
           body: `Proposal "${updated.proposalTitle}" was marked as won and requires HR review.`,
           relatedEntityId: updated.id,
+          link: "/business-development",
+          canonicalRoute: "/business-development",
+          eventType: "proposal.won",
+          targetEntityType: "Proposal",
+          targetEntityId: updated.id,
+          priority: "medium",
+          templateLabel: "proposal.won",
         },
         req
       );

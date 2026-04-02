@@ -242,12 +242,12 @@ export const submitTimeEntryValidators = [
 export const approveTimeEntryValidators = [
   ...timeEntryIdParamValidator,
 
-  body("notes")
+  body("approvalNotes")
     .optional({ nullable: true })
     .isString()
     .trim()
     .isLength({ min: 1, max: 2000 })
-    .withMessage("Notes must be 1-2000 characters if provided"),
+    .withMessage("approvalNotes must be 1-2000 characters if provided"),
 ];
 
 /**
@@ -257,12 +257,12 @@ export const approveTimeEntryValidators = [
 export const rejectTimeEntryValidators = [
   ...timeEntryIdParamValidator,
 
-  body("reason")
+  body("rejectionReason")
     .optional({ nullable: true })
     .isString()
     .trim()
     .isLength({ min: 1, max: 2000 })
-    .withMessage("Reason must be 1-2000 characters if provided"),
+    .withMessage("rejectionReason must be 1-2000 characters if provided"),
 ];
 
 /**

@@ -8,6 +8,8 @@ const CHECKLIST_ITEM_TYPES = [
   "external_link",
 ];
 
+const CHECKLIST_OWNER_ROLES = ["employee", "hr"];
+
 export const createInductionChecklistValidators = [
   body("onboardingCaseId").optional().isInt({ min: 1 }),
   body("employeeProfileId").isInt({ min: 1 }),
@@ -23,6 +25,10 @@ export const createInductionChecklistValidators = [
 
   body("items.*.description").optional().isString(),
   body("items.*.orderIndex").optional().isInt({ min: 0 }),
+  body("items.*.sectionKey").optional().isString().trim().isLength({ min: 1, max: 64 }),
+  body("items.*.sectionLabel").optional().isString().trim().isLength({ min: 1, max: 120 }),
+  body("items.*.ownerRole").optional().isIn(CHECKLIST_OWNER_ROLES),
+  body("items.*.comments").optional().isString(),
   body("items.*.requiresDocument").optional().isBoolean(),
   body("items.*.documentId").optional().isInt({ min: 1 }),
   body("items.*.itemType").optional().isIn(CHECKLIST_ITEM_TYPES),
@@ -59,4 +65,19 @@ export const attachInductionItemDocumentValidators = [
   param("checklistId").isInt({ min: 1 }),
   param("itemId").isInt({ min: 1 }),
   body("documentId").isInt({ min: 1 }),
+];
+
+export const acknowledgeInductionChecklistValidators = [
+  param("checklistId").isInt({ min: 1 }),
+];
+
+export const hrSignoffInductionChecklistValidators = [
+  param("checklistId").isInt({ min: 1 }),
+  body("notes").optional().isString(),
+];
+
+export const updateInductionItemCommentsValidators = [
+  param("checklistId").isInt({ min: 1 }),
+  param("itemId").isInt({ min: 1 }),
+  body("comments").optional().isString(),
 ];

@@ -38,7 +38,7 @@ router.get("/", withRoles("super_admin"), PartnerController.listPartners);
  */
 router.get(
   "/dashboard-summary",
-  withStrictRoles("partner", "manager", "super_admin", "hr"),
+  withStrictRoles("partner", "gmp", "super_admin", "hr"),
   PartnerController.getPartnerDashboardSummary
 );
 
@@ -48,7 +48,7 @@ router.get(
  */
 router.get(
   "/approval-chain",
-  withStrictRoles("partner", "manager", "super_admin", "hr"),
+  withStrictRoles("partner", "gmp", "super_admin", "hr"),
   PartnerController.getPartnerApprovalChain
 );
 
@@ -58,7 +58,7 @@ router.get(
  */
 router.get(
   "/allocations",
-  withStrictRoles("partner", "manager", "super_admin", "hr"),
+  withStrictRoles("partner", "gmp", "super_admin", "hr"),
   validateRequest(getPartnerAllocationsValidators),
   handleValidationErrors,
   PartnerController.getPartnerAllocations

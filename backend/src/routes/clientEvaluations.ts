@@ -2,16 +2,13 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { loadProfile } from '../middleware/loadProfile';
 
 const router = Router();
 
 const resolveRoles = (req: AuthRequest) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => role.toLowerCase());
 };
 
 const isPrivileged = (roles: string[]) =>
@@ -20,7 +17,7 @@ const isPrivileged = (roles: string[]) =>
   roles.includes('partner') ||
   roles.includes('manager');
 
-// GET /client_evaluations?employeeIds=1,2&fields=overallRating,submittedAt,wouldRecommend
+// GET /client-evaluations?employeeIds=1,2&fields=overallRating,submittedAt,wouldRecommend
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     if (!req.profile?.id) {
@@ -32,9 +29,7 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
 
     const rawEmployeeIds =
       req.query.employeeIds ??
-      req.query.employeeId ??
-      req.query.employee_id ??
-      req.query.employee_ids;
+      req.query.employeeId;
 
     let ids =
       (rawEmployeeIds as string | undefined)

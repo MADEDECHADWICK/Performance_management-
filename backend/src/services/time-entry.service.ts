@@ -66,9 +66,11 @@ export class TimeEntryService {
     job:
       | {
           budgetHours?: any;
+          costingCompleted?: boolean | null;
           jobCosting?:
             | {
                 budgetCap?: { totalAllocatedHours?: any } | null;
+                costingStatus?: string | null;
                 totalEstimatedHours?: any;
               }
             | null;
@@ -84,6 +86,31 @@ export class TimeEntryService {
     );
     if (fromBudgetCap > 0) return fromBudgetCap;
     return Number(job.budgetHours || 0);
+  }
+
+  private static ensureJobReadyForTimeLogging(
+    job:
+      | {
+          costingCompleted?: boolean | null;
+          jobCosting?:
+            | {
+                costingStatus?: string | null;
+              }
+            | null;
+        }
+      | null
+      | undefined,
+    isAdmin: boolean
+  ) {
+    if (isAdmin) return;
+
+    const costingStatus = String(job?.jobCosting?.costingStatus || '').trim().toLowerCase();
+    if (!job?.jobCosting || !job.costingCompleted || costingStatus !== 'approved') {
+      throw {
+        statusCode: 400,
+        message: 'Job costing must be partner-approved before logging time',
+      };
+    }
   }
 
   private static async runSerializable<T>(
@@ -703,12 +730,7 @@ export class TimeEntryService {
       };
     }
 
-    if (!job.jobCosting && !isAdmin) {
-      throw {
-        statusCode: 400,
-        message: 'Job costing must be completed before logging time',
-      };
-    }
+    TimeEntryService.ensureJobReadyForTimeLogging(job, isAdmin);
 
     // CHECK ALLOCATION LIMITS
     const allocationSummary = await TimeEntryService.getAllocationSummary(
@@ -1890,9 +1912,10 @@ export class TimeEntryService {
         data: {
           status: 'rejected',
           approvedByProfileId: auth.profileId,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      },
+          rejectionReason: rejectionReason || null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        },
       include: {
         job: {
           select: { id: true, jobName: true },
@@ -2044,12 +2067,7 @@ export class TimeEntryService {
 
     const roleName = TimeEntryService.normalizeRole(auth.roleName);
     const isAdmin = TimeEntryService.isAdminRole(roleName);
-    if (!job?.jobCosting && !isAdmin) {
-      throw {
-        statusCode: 400,
-        message: 'Job costing must be completed before logging time',
-      };
-    }
+    TimeEntryService.ensureJobReadyForTimeLogging(job, isAdmin);
 
     const allocationSummary = await TimeEntryService.getAllocationSummary(
       timeEntry.jobId,
@@ -3449,6 +3467,3 @@ export class TimeEntryService {
     return summary;
   }
 }
-
-
-

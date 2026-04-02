@@ -314,7 +314,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     unit: "%",
     frequency: "monthly",
     direction: "higher_better",
-    dataSignals: ["evaluation_assignments", "feedback", "okr_objectives"],
+    dataSignals: ["evaluation_assignments", "feedback", "training_records", "learning_assignments"],
   },
   {
     key: "review_completion_rate",
@@ -424,7 +424,7 @@ export const PERFORMANCE_FRAMEWORK_METRICS: FrameworkMetricDefinition[] = [
     unit: "score",
     frequency: "quarterly",
     direction: "higher_better",
-    dataSignals: ["evaluation_assignments", "okr_key_results"],
+    dataSignals: ["evaluation_assignments", "skill_assessments"],
   },
   {
     key: "brand_awareness_index",
@@ -746,9 +746,8 @@ export const buildDefaultScoringConfig = (profile?: RoleProfileShape): ScoringCo
       internal: 0.3,
     },
     learningGrowthBreakdown: {
-      evaluation: 0.5,
-      okr: 0.3,
-      feedback: 0.2,
+      evaluation: 0.7,
+      feedback: 0.3,
     },
     // This blend keeps operational efficiency visible but inside the non-financial block.
     operationalBlend: {

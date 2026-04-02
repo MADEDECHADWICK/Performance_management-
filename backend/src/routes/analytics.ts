@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import prisma from '../prisma';
 import RoleAwareAnalyticsService, { AnalyticsContext } from '../services/roleAwareAnalytics.service';
 import {
@@ -12,42 +13,25 @@ const router = Router();
 /**
  * Helper function to build analytics context from authenticated user
  */
-const buildAnalyticsContext = async (userId: number): Promise<AnalyticsContext> => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      roles: { include: { role: true } },
-      profile: true,
-    },
-  });
-
-  const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
-  const positionTitle = user?.profile?.positionTitle?.toLowerCase() || "";
+const buildAnalyticsContext = async (req: AuthRequest): Promise<AnalyticsContext> => {
+  const userId = req.user?.userId ? Number(req.user.userId) : 0;
+  const profileId = req.user?.profileId ? Number(req.user.profileId) : undefined;
+  const roleNames = resolveRequestAccessRoles(req);
 
   const isAdmin = roleNames.includes("super_admin");
-  const isPartner = roleNames.includes("partner") || Boolean(user?.profile?.isPartner);
-  const isManager =
-    roleNames.includes("manager") ||
-    positionTitle.includes("manager") ||
-    positionTitle.includes("team lead");
-  const isHr =
-    roleNames.includes("hr") ||
-    positionTitle.includes("hr") ||
-    positionTitle.includes("human resource");
-  const isFinance = roleNames.includes("finance") || positionTitle.includes("finance");
-  const isMarketing = roleNames.includes("marketing") || positionTitle.includes("marketing");
-  const isGmp =
-    roleNames.includes("gmp") ||
-    positionTitle.includes("group managing partner");
-
+  const isPartner = roleNames.includes("partner");
+  const isManager = roleNames.includes("manager");
+  const isHr = roleNames.includes("hr");
+  const isFinance = roleNames.includes("finance");
+  const isMarketing = roleNames.includes("marketing");
+  const isGmp = roleNames.includes("gmp");
   const isEmployee =
-    roleNames.includes("associate") ||
-    roleNames.includes("intern") ||
+    roleNames.includes("employee") ||
     (!isAdmin && !isPartner && !isManager && !isHr && !isFinance && !isMarketing && !isGmp);
 
   return {
     userId,
-    profileId: user?.profile?.id,
+    profileId,
     roles: roleNames,
     isAdmin,
     isPartner,
@@ -80,7 +64,7 @@ router.get('/non-financial', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const context = await buildAnalyticsContext(userId);
+    const context = await buildAnalyticsContext(req);
     const analytics = await RoleAwareAnalyticsService.getNonFinancialAnalytics(context);
 
     return res.json(
@@ -119,7 +103,7 @@ router.get('/financial', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const context = await buildAnalyticsContext(userId);
+    const context = await buildAnalyticsContext(req);
     const analytics = await RoleAwareAnalyticsService.getFinancialAnalytics(context);
 
     return res.json(
@@ -151,7 +135,7 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const context = await buildAnalyticsContext(userId);
+    const context = await buildAnalyticsContext(req);
 
     // Get both non-financial and financial analytics
     const [nonFinancial, financial] = await Promise.all([
@@ -166,7 +150,6 @@ router.get('/dashboard', authMiddleware, async (req: AuthRequest, res) => {
 
     const frameworkModule = resolveDashboardModuleForContext({
       roles: context.roles,
-      positionTitle: profile?.positionTitle,
     });
     const frameworkCoverage = getDashboardModuleCoverageSummary(frameworkModule);
 
@@ -230,13 +213,7 @@ router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Check admin authorization
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { roles: { include: { role: true } } },
-    });
-
-    const roleNames = (user?.roles || []).map((r) => r.role.name.toLowerCase());
+    const roleNames = resolveRequestAccessRoles(req);
     const isAdmin = roleNames.includes("super_admin");
     if (!isAdmin) {
       return res.status(403).json({
@@ -244,7 +221,7 @@ router.get('/company', authMiddleware, async (req: AuthRequest, res) => {
       });
     }
 
-    const context = await buildAnalyticsContext(userId);
+    const context = await buildAnalyticsContext(req);
     const nonFinancial = await RoleAwareAnalyticsService.getCompanyNonFinancialMetrics();
     const financial = await RoleAwareAnalyticsService.getCompanyFinancialMetrics();
 

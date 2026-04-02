@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { loadProfile } from "../middleware/loadProfile";
 import prisma from "../prisma";
 import { errorResponse, successResponse } from "../utils/response";
@@ -7,11 +8,7 @@ import { errorResponse, successResponse } from "../utils/response";
 const router = Router();
 
 const resolveRoles = (req: AuthRequest) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => role.toLowerCase());
 };
 
 const isPrivileged = (roles: string[]) =>

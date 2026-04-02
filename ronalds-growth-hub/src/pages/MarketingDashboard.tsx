@@ -1,83 +1,388 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DashboardLayout from "@/components/DashboardLayout";
+import JobOperationsOverview from "@/components/jobs/JobOperationsOverview";
+import PageLoader from "@/components/ui/page-loader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 import { clientsAPI, clientOnboardingsAPI, proposalsAPI, surveysAPI } from "@/lib/api";
-import { Building2, FileText, Briefcase, TrendingUp, Star, ArrowUpRight, MailCheck, MailWarning } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import type { Proposal } from "@/lib/api/proposals";
+import type { ClientSatisfactionSurvey } from "@/lib/api/surveys";
+import { AlertCircle, Building2, FileText, Briefcase, TrendingUp, Star, ArrowUpRight, MailCheck, MailWarning } from "lucide-react";
+
+type MarketingProposal = Proposal & {
+  createdByProfileId?: number | null;
+  wonAt?: string | null;
+  updatedAt?: string;
+};
+
+const OPEN_PROPOSAL_STATUSES = new Set(["draft", "sent"]);
+const APPROVED_ONBOARDING_STATUSES = new Set(["approved", "client_created"]);
+
+const monthLabel = (date: Date) =>
+  date.toLocaleString("en-US", { month: "short", year: "2-digit" });
+
+const monthKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}`;
+
+const toNumber = (value: unknown) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function MarketingDashboard() {
-  const { data: clientsData } = useQuery({
-    queryKey: ["marketing-clients"],
+  const { profile, isLoading: authLoading } = useAuth();
+  const currentProfileId = profile?.id ?? null;
+
+  const { data: clientsData, error: clientsError, isLoading: clientsLoading } = useQuery({
+    queryKey: ["marketing-clients", currentProfileId],
     queryFn: () => clientsAPI.list({ page: 1, pageSize: 200 }),
+    enabled: !authLoading && !!currentProfileId,
   });
 
-  const { data: onboardingData } = useQuery({
-    queryKey: ["marketing-onboarding"],
-    queryFn: () => clientOnboardingsAPI.list({ page: 1, pageSize: 50 }),
+  const {
+    data: onboardingData,
+    error: onboardingError,
+    isLoading: onboardingLoading,
+  } = useQuery({
+    queryKey: ["marketing-onboarding", currentProfileId],
+    queryFn: () => clientOnboardingsAPI.list({ page: 1, pageSize: 200 }),
+    enabled: !authLoading && !!currentProfileId,
   });
 
-  const { data: upcomingData } = useQuery({
-    queryKey: ["marketing-upcoming"],
-    queryFn: () => clientOnboardingsAPI.getUpcomingJobs({ page: 1, pageSize: 20 }),
+  const {
+    data: proposalsData,
+    error: proposalsError,
+    isLoading: proposalsLoading,
+  } = useQuery({
+    queryKey: ["marketing-proposals", currentProfileId],
+    queryFn: () => proposalsAPI.list({ page: 1, pageSize: 200 }),
+    enabled: !authLoading && !!currentProfileId,
   });
 
-  const { data: proposalMetrics } = useQuery({
-    queryKey: ["proposal-metrics"],
-    queryFn: () => proposalsAPI.metrics(),
-  });
-
-  const { data: surveyAnalytics } = useQuery({
-    queryKey: ["survey-analytics"],
-    queryFn: () => surveysAPI.getAnalytics(),
-  });
-
-  const { data: pendingSurveys } = useQuery({
-    queryKey: ["survey-pending"],
-    queryFn: () => surveysAPI.getPending(),
-  });
-
-  const { data: completedSurveys } = useQuery({
-    queryKey: ["survey-completed"],
-    queryFn: () => surveysAPI.getCompleted(),
-  });
-
-  const { data: recentSurveys } = useQuery({
-    queryKey: ["survey-recent"],
-    queryFn: () => surveysAPI.list({ page: 1, pageSize: 5 }),
+  const {
+    data: surveysData,
+    error: surveysError,
+    isLoading: surveysLoading,
+  } = useQuery({
+    queryKey: ["marketing-surveys", currentProfileId],
+    queryFn: () => surveysAPI.list({ page: 1, pageSize: 200 }),
+    enabled: !authLoading && !!currentProfileId,
   });
 
   const clients = useMemo(() => clientsData?.data ?? [], [clientsData]);
   const onboardings = useMemo(() => onboardingData?.data ?? [], [onboardingData]);
-  const upcomingJobs = useMemo(() => upcomingData?.data ?? [], [upcomingData]);
-  const pipelineTrend = useMemo(() => proposalMetrics?.pipelineTrend ?? [], [proposalMetrics]);
-  const surveyTrends = useMemo(() => surveyAnalytics?.trends ?? [], [surveyAnalytics]);
-  const surveyList = useMemo(() => recentSurveys?.surveys ?? [], [recentSurveys]);
-  const leadToCash = proposalMetrics?.leadToCash;
+  const proposals = useMemo<MarketingProposal[]>(
+    () => (proposalsData?.data ?? []) as MarketingProposal[],
+    [proposalsData]
+  );
+  const surveys = useMemo<ClientSatisfactionSurvey[]>(
+    () => surveysData?.surveys ?? [],
+    [surveysData]
+  );
+
+  const scopedOnboardings = useMemo(() => {
+    if (!currentProfileId) return [];
+    return onboardings.filter(
+      (onboarding: any) => Number(onboarding.uploadedByProfileId || 0) === currentProfileId
+    );
+  }, [currentProfileId, onboardings]);
+
+  const scopedProposals = useMemo(() => {
+    if (!currentProfileId) return [];
+    return proposals.filter(
+      (proposal) => Number(proposal.createdByProfileId || 0) === currentProfileId
+    );
+  }, [currentProfileId, proposals]);
+
+  const scopedClientIds = useMemo(() => {
+    const ids = new Set<number>();
+    scopedOnboardings.forEach((onboarding: any) => {
+      const clientId = Number(onboarding.clientId || onboarding.client?.id || 0);
+      if (clientId > 0) ids.add(clientId);
+    });
+    scopedProposals.forEach((proposal) => {
+      const clientId = Number(proposal.clientId || proposal.client?.id || 0);
+      if (clientId > 0) ids.add(clientId);
+    });
+    return ids;
+  }, [scopedOnboardings, scopedProposals]);
+
+  const scopedJobIds = useMemo(() => {
+    const ids = new Set<number>();
+    scopedOnboardings.forEach((onboarding: any) => {
+      const jobId = Number(onboarding.jobId || onboarding.job?.id || 0);
+      if (jobId > 0) ids.add(jobId);
+    });
+    return ids;
+  }, [scopedOnboardings]);
+
+  const scopedClients = useMemo(
+    () => clients.filter((client: any) => scopedClientIds.has(Number(client.id || 0))),
+    [clients, scopedClientIds]
+  );
+
+  const pendingHR = useMemo(
+    () => scopedOnboardings.filter((o: any) => o.status === "pending_hr_review"),
+    [scopedOnboardings]
+  );
+
+  const upcomingJobs = useMemo(
+    () =>
+      scopedOnboardings.filter(
+        (o: any) =>
+          APPROVED_ONBOARDING_STATUSES.has(String(o.status || "").toLowerCase()) &&
+          !o.jobId &&
+          String(o.engagementLetter?.status || "").toLowerCase() === "approved"
+      ),
+    [scopedOnboardings]
+  );
+
+  const pipelineMetrics = useMemo(() => {
+    const totalOpportunities = scopedProposals.length;
+    const pipelineValue = scopedProposals
+      .filter((proposal) => OPEN_PROPOSAL_STATUSES.has(String(proposal.status || "").toLowerCase()))
+      .reduce((sum, proposal) => sum + toNumber(proposal.proposedFee), 0);
+    const weightedPipelineValue = scopedProposals
+      .filter((proposal) => OPEN_PROPOSAL_STATUSES.has(String(proposal.status || "").toLowerCase()))
+      .reduce(
+        (sum, proposal) => sum + toNumber(proposal.proposedFee) * (toNumber(proposal.probability) / 100),
+        0
+      );
+    const wonCount = scopedProposals.filter((proposal) => proposal.status === "won").length;
+    const lostCount = scopedProposals.filter((proposal) => proposal.status === "lost").length;
+    const conversionRate = wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : 0;
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const wonThisMonth = scopedProposals.filter((proposal) => {
+      if (proposal.status !== "won" || !proposal.wonAt) return false;
+      const wonAt = new Date(proposal.wonAt);
+      return !Number.isNaN(wonAt.getTime()) && wonAt >= monthStart;
+    }).length;
+    const lostThisMonth = scopedProposals.filter((proposal) => {
+      if (proposal.status !== "lost" || !proposal.updatedAt) return false;
+      const updatedAt = new Date(proposal.updatedAt);
+      return !Number.isNaN(updatedAt.getTime()) && updatedAt >= monthStart;
+    }).length;
+    const hotLeads = scopedProposals.filter(
+      (proposal) =>
+        OPEN_PROPOSAL_STATUSES.has(String(proposal.status || "").toLowerCase()) &&
+        toNumber(proposal.probability) >= 70
+    ).length;
+
+    const monthsBack = 6;
+    const monthKeys = Array.from({ length: monthsBack }).map((_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1 - index), 1);
+      return { key: monthKey(date), month: monthLabel(date) };
+    });
+    const trendMap = new Map(
+      monthKeys.map((item) => [item.key, { month: item.month, won: 0, lost: 0, created: 0 }])
+    );
+
+    scopedProposals.forEach((proposal) => {
+      const createdAt = proposal.proposalDate ? new Date(proposal.proposalDate) : null;
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        const entry = trendMap.get(monthKey(createdAt));
+        if (entry) entry.created += 1;
+      }
+
+      if (proposal.status === "won" && proposal.wonAt) {
+        const wonAt = new Date(proposal.wonAt);
+        if (!Number.isNaN(wonAt.getTime())) {
+          const entry = trendMap.get(monthKey(wonAt));
+          if (entry) entry.won += 1;
+        }
+      }
+
+      if (proposal.status === "lost" && proposal.updatedAt) {
+        const updatedAt = new Date(proposal.updatedAt);
+        if (!Number.isNaN(updatedAt.getTime())) {
+          const entry = trendMap.get(monthKey(updatedAt));
+          if (entry) entry.lost += 1;
+        }
+      }
+    });
+
+    const wonProposalValue = scopedProposals
+      .filter((proposal) => proposal.status === "won")
+      .reduce((sum, proposal) => sum + toNumber(proposal.proposedFee), 0);
+
+    return {
+      totalOpportunities,
+      pipelineValue,
+      weightedPipelineValue,
+      conversionRate,
+      wonThisMonth,
+      lostThisMonth,
+      hotLeads,
+      wonProposalValue,
+      pipelineTrend: monthKeys.map(
+        (item) => trendMap.get(item.key) || { month: item.month, won: 0, lost: 0, created: 0 }
+      ),
+    };
+  }, [scopedProposals]);
+
+  const scopedSurveys = useMemo(() => {
+    if (scopedClientIds.size === 0 && scopedJobIds.size === 0) return [];
+    return surveys.filter((survey) => {
+      const clientId = Number(survey.clientId || survey.client?.id || 0);
+      const jobId = Number(survey.jobId || survey.job?.id || 0);
+      return scopedClientIds.has(clientId) || scopedJobIds.has(jobId);
+    });
+  }, [scopedClientIds, scopedJobIds, surveys]);
+
+  const surveyAnalytics = useMemo(() => {
+    const completed = scopedSurveys.filter((survey) => !!survey.completedAt);
+    const averageRatings = {
+      overall:
+        completed.length > 0
+          ? completed.reduce((sum, survey) => sum + toNumber(survey.overallSatisfaction), 0) /
+            completed.length
+          : 0,
+    };
+
+    const now = new Date();
+    const monthsBack = 6;
+    const monthKeys = Array.from({ length: monthsBack }).map((_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1 - index), 1);
+      return { key: monthKey(date), month: monthLabel(date) };
+    });
+    const trendMap = new Map(
+      monthKeys.map((item) => [item.key, { month: item.month, avgSatisfaction: 0, responseCount: 0 }])
+    );
+    const scoreMap = new Map<string, { total: number; count: number }>();
+
+    completed.forEach((survey) => {
+      const completedAt = survey.completedAt ? new Date(survey.completedAt) : null;
+      if (!completedAt || Number.isNaN(completedAt.getTime())) return;
+      const key = monthKey(completedAt);
+      const entry = trendMap.get(key);
+      if (!entry) return;
+      entry.responseCount += 1;
+
+      const score = toNumber(survey.overallSatisfaction);
+      if (score > 0) {
+        const current = scoreMap.get(key) || { total: 0, count: 0 };
+        current.total += score;
+        current.count += 1;
+        scoreMap.set(key, current);
+      }
+    });
+
+    trendMap.forEach((entry, key) => {
+      const scoreEntry = scoreMap.get(key);
+      if (scoreEntry && scoreEntry.count > 0) {
+        entry.avgSatisfaction = scoreEntry.total / scoreEntry.count;
+      }
+    });
+
+    return {
+      totalSurveys: scopedSurveys.length,
+      completedSurveys: completed.length,
+      responseRate: scopedSurveys.length > 0 ? completed.length / scopedSurveys.length : 0,
+      averageRatings,
+      trends: monthKeys.map(
+        (item) =>
+          trendMap.get(item.key) || { month: item.month, avgSatisfaction: 0, responseCount: 0 }
+      ),
+    };
+  }, [scopedSurveys]);
+
+  const surveyList = useMemo(
+    () =>
+      [...scopedSurveys]
+        .sort((a, b) => {
+          const aTs = new Date(a.completedAt || a.createdAt).getTime();
+          const bTs = new Date(b.completedAt || b.createdAt).getTime();
+          return bTs - aTs;
+        })
+        .slice(0, 5),
+    [scopedSurveys]
+  );
+
+  const pipelineTrend = pipelineMetrics.pipelineTrend;
+  const surveyTrends = surveyAnalytics.trends;
   const pipelineMax = Math.max(
     1,
     ...pipelineTrend.flatMap((item: any) => [item.created || 0, item.won || 0, item.lost || 0])
   );
   const hasSurveyAnalytics =
-    (surveyAnalytics?.averageRatings?.overall ?? null) !== null &&
-    (surveyAnalytics?.totalSurveys ?? 0) > 0;
-  const pendingSurveyCount = pendingSurveys?.total ?? 0;
-  const completedSurveyCount = completedSurveys?.total ?? 0;
+    surveyAnalytics.averageRatings.overall > 0 &&
+    surveyAnalytics.totalSurveys > 0;
+  const pendingSurveyCount = Math.max(0, surveyAnalytics.totalSurveys - surveyAnalytics.completedSurveys);
+  const completedSurveyCount = surveyAnalytics.completedSurveys;
   const routedSurveyCount = pendingSurveyCount + completedSurveyCount;
 
-  const pendingHR = useMemo(
-    () => onboardings.filter((o: any) => o.status === "pending_hr_review"),
-    [onboardings]
-  );
+  const loading =
+    authLoading ||
+    clientsLoading ||
+    onboardingLoading ||
+    proposalsLoading ||
+    surveysLoading;
+  const queryError = clientsError || onboardingError || proposalsError || surveysError;
+  const marketingJobMetrics = [
+    {
+      label: "Open opportunities",
+      value: String(pipelineMetrics.totalOpportunities),
+      hint: `${scopedClients.length} clients in your active intake scope`,
+      icon: Building2,
+      tone: "primary" as const,
+      graphValue: pipelineMetrics.totalOpportunities,
+      graphBaseline: scopedClients.length,
+    },
+    {
+      label: "Pipeline value",
+      value: `KES ${pipelineMetrics.pipelineValue.toLocaleString("en-KE")}`,
+      hint: `Weighted ${pipelineMetrics.weightedPipelineValue.toLocaleString("en-KE")}`,
+      icon: TrendingUp,
+      tone: "positive" as const,
+      graphValue: pipelineMetrics.pipelineValue,
+      graphBaseline: pipelineMetrics.weightedPipelineValue,
+    },
+    {
+      label: "Upcoming jobs",
+      value: String(upcomingJobs.length),
+      hint: `${pendingHR.length} still waiting on HR review`,
+      icon: Briefcase,
+      tone: "warning" as const,
+      graphValue: upcomingJobs.length,
+      graphBaseline: pendingHR.length,
+    },
+    {
+      label: "Conversion rate",
+      value: `${pipelineMetrics.conversionRate.toFixed(1)}%`,
+      hint: `${pipelineMetrics.hotLeads} hot leads above 70% probability`,
+      icon: Star,
+      tone: "danger" as const,
+      graphValue: pipelineMetrics.conversionRate,
+      graphBaseline: 50,
+    },
+  ];
 
-  const approvedOnboardings = useMemo(
-    () => onboardings.filter((o: any) => o.status === "approved"),
-    [onboardings]
-  );
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <PageLoader message="Loading marketing dashboard..." minHeightClassName="min-h-[420px]" />
+      </DashboardLayout>
+    );
+  }
+
+  if (!currentProfileId) {
+    return (
+      <DashboardLayout>
+        <Card>
+          <CardHeader>
+            <CardTitle>Marketing profile unavailable</CardTitle>
+            <CardDescription>Sign in again to load profile-specific marketing data.</CardDescription>
+          </CardHeader>
+        </Card>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -88,7 +393,9 @@ export default function MarketingDashboard() {
               <Building2 className="h-7 w-7 text-primary" />
               Marketing Overview
             </h1>
-            <p className="text-muted-foreground">Manage client intake, engagement letters, and pipeline status.</p>
+            <p className="text-muted-foreground">
+              Profile-scoped marketing activity for intake, onboarding, pipeline, and client feedback.
+            </p>
           </div>
           <div className="flex gap-2">
             <Button asChild>
@@ -100,96 +407,26 @@ export default function MarketingDashboard() {
           </div>
         </div>
 
+        <JobOperationsOverview
+          title="Lead-to-job command"
+          description="Keep client intake, HR handoff, upcoming jobs, and pipeline quality visible in one simpler marketing flow."
+          metrics={marketingJobMetrics}
+          showLocator={false}
+        />
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Total Clients</CardTitle>
+        {queryError && (
+          <Card className="border-dashed bg-muted/30">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <AlertCircle className="h-5 w-5" />
+                Some marketing records could not be loaded
+              </CardTitle>
+              <CardDescription>
+                The dashboard only shows records tied to profile #{currentProfileId}. Refresh if recent entries are missing.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{clients.length}</div>
-              <p className="text-xs text-muted-foreground">Active records</p>
-              <MiniStatGraph value={clients.length} />
-            </CardContent>
           </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Pending HR Review</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-amber-600">{pendingHR.length}</div>
-              <p className="text-xs text-muted-foreground">Engagements awaiting HR</p>
-              <MiniStatGraph value={pendingHR.length} baseline={0} inverse />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Upcoming Jobs</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{upcomingJobs.length}</div>
-              <p className="text-xs text-muted-foreground">Approved & ready for HR</p>
-              <MiniStatGraph
-                value={upcomingJobs.length}
-                baseline={pendingHR.length}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Pipeline Value</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">KES {(proposalMetrics?.pipelineValue || 0).toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">Open proposals</p>
-              <MiniStatGraph
-                value={proposalMetrics?.pipelineValue || 0}
-                baseline={Number(leadToCash?.wonProposalValue || 0)}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Client Satisfaction</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {surveyAnalytics?.averageRatings?.overall?.toFixed(1) || "--"}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {hasSurveyAnalytics ? "Avg rating" : "No survey data yet"}
-              </p>
-              <MiniStatGraph
-                value={Number(surveyAnalytics?.averageRatings?.overall || 0)}
-                baseline={4}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm text-muted-foreground">Lead-to-Cash</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Conversion</span>
-                <span className="font-medium">{Number(leadToCash?.conversionRate || 0).toFixed(1)}%</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Won Value</span>
-                <span className="font-medium">KES {Number(leadToCash?.wonProposalValue || 0).toLocaleString()}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Collected</span>
-                <span className="font-medium">KES {Number(leadToCash?.collectedFromWonClients || 0).toLocaleString()}</span>
-              </div>
-              <MiniStatGraph
-                value={Number(leadToCash?.conversionRate || 0)}
-                baseline={Number(proposalMetrics?.conversionRate || 0)}
-                className="pt-1"
-              />
-            </CardContent>
-          </Card>
-        </div>
+        )}
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
@@ -299,15 +536,15 @@ export default function MarketingDashboard() {
             <CardContent className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Conversion rate</span>
-                <span className="font-medium">{proposalMetrics?.conversionRate?.toFixed(1) || "0"}%</span>
+                <span className="font-medium">{pipelineMetrics.conversionRate.toFixed(1)}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Hot leads</span>
-                <span className="font-medium">{proposalMetrics?.hotLeads || 0}</span>
+                <span className="font-medium">{pipelineMetrics.hotLeads}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Won this month</span>
-                <span className="font-medium">{proposalMetrics?.wonThisMonth || 0}</span>
+                <span className="font-medium">{pipelineMetrics.wonThisMonth}</span>
               </div>
               {pipelineTrend.length > 0 && (
                 <div className="pt-2 border-t space-y-2">
@@ -393,15 +630,17 @@ export default function MarketingDashboard() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Response rate</span>
-                <span className="font-medium">{surveyAnalytics?.responseRate ? `${(surveyAnalytics.responseRate * 100).toFixed(0)}%` : "0%"}</span>
+                <span className="font-medium">
+                  {surveyAnalytics.responseRate ? `${(surveyAnalytics.responseRate * 100).toFixed(0)}%` : "0%"}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Total surveys</span>
-                <span className="font-medium">{surveyAnalytics?.totalSurveys || 0}</span>
+                <span className="font-medium">{surveyAnalytics.totalSurveys}</span>
               </div>
               {surveyList.length === 0 && (
                 <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                  No survey responses yet. Send surveys after job completion to populate insights.
+                  No survey responses yet for your client/job portfolio.
                 </div>
               )}
               {surveyList.length > 0 && (

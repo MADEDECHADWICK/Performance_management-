@@ -4,8 +4,30 @@
 
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
+import { buildPrimaryRoleAuthContext } from '../auth/accessRoles';
 import { NotificationService } from '../services/notifications.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
+
+const canonicalizeNotificationLink = (link?: string | null) => {
+  const normalized = String(link || '').trim();
+  if (!normalized) return null;
+
+  const assignmentMatch = normalized.match(
+    /^\/(?:evaluation|complete-evaluation|evaluations)\/(\d+)$/
+  );
+  if (assignmentMatch) {
+    return `/evaluations/assignments/${assignmentMatch[1]}`;
+  }
+
+  return normalized;
+};
+
+const canonicalizeNotification = <T extends { link?: string | null }>(notification: T): T => ({
+  ...notification,
+  link: canonicalizeNotificationLink(notification.link),
+});
+
+const buildAuthContext = (req: AuthRequest) => buildPrimaryRoleAuthContext(req);
 
 export class NotificationController {
   /**
@@ -22,11 +44,7 @@ export class NotificationController {
         rawStatus === 'read' || rawStatus === 'unread' ? rawStatus : undefined;
       const scope = (req.query.scope as string) || 'mine';
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const roleName = auth.roleName?.toLowerCase() || '';
       const canViewAll = ['super_admin', 'hr'].includes(roleName);
@@ -36,7 +54,14 @@ export class NotificationController {
           ? await NotificationService.listAllNotifications({ page, pageSize, type, status })
           : await NotificationService.listNotifications({ page, pageSize, type, status }, auth);
 
-      res.json(paginatedResponse(result.notifications, result.total, page, pageSize));
+      res.json(
+        paginatedResponse(
+          result.notifications.map((notification) => canonicalizeNotification(notification)),
+          result.total,
+          page,
+          pageSize
+        )
+      );
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
         errorResponse(error.message, error.statusCode || 500)
@@ -50,11 +75,7 @@ export class NotificationController {
    */
   static async createNotification(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const {
         recipientProfileId,
@@ -136,11 +157,7 @@ export class NotificationController {
     try {
       const notificationId = Number(req.params.notificationId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const notification = await NotificationService.markAsRead(
         notificationId,
@@ -161,11 +178,7 @@ export class NotificationController {
    */
   static async markAllAsRead(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await NotificationService.markAllAsRead(auth);
 
@@ -185,11 +198,7 @@ export class NotificationController {
     try {
       const notificationId = Number(req.params.notificationId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       await NotificationService.deleteNotification(notificationId, auth);
 
@@ -207,11 +216,7 @@ export class NotificationController {
    */
   static async getUnreadCount(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await NotificationService.getUnreadCount(auth);
 
@@ -236,11 +241,7 @@ export class NotificationController {
           ? req.body.payload
           : undefined;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await NotificationService.executeAction(
         notificationId,
@@ -279,11 +280,7 @@ export class NotificationController {
    */
   static async getPreferences(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
       const result = await NotificationService.getPreferences(auth);
       res.json(successResponse(result, "Notification preferences retrieved"));
     } catch (error: any) {
@@ -299,11 +296,7 @@ export class NotificationController {
    */
   static async updatePreferences(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
       const result = await NotificationService.updatePreferences(req.body || {}, auth);
       res.json(successResponse(result, "Notification preferences updated"));
     } catch (error: any) {
@@ -335,11 +328,7 @@ export class NotificationController {
   static async replayDeadLetter(req: AuthRequest, res: Response): Promise<void> {
     try {
       const notificationId = Number(req.params.notificationId);
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
       const result = await NotificationService.replayDeadLetter(notificationId, auth);
       res.json(successResponse(result, "Dead-letter notification replay queued"));
     } catch (error: any) {
@@ -355,11 +344,7 @@ export class NotificationController {
    */
   static async deleteAllNotifications(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await NotificationService.deleteAllNotifications(auth);
 
@@ -406,11 +391,7 @@ export class NotificationController {
         deduplicationKey,
       } = req.body;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const recipients = recipientProfileIds ?? [];
 

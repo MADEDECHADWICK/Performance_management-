@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
@@ -30,13 +31,8 @@ const resolveGmpContext = async (
     return null;
   }
 
-  const roles = (req.userRoles || []).map((role) => role.toLowerCase());
-  const positionTitle = user.profile.positionTitle?.toLowerCase() || '';
-  const hasGmpAccess =
-    roles.includes('super_admin') ||
-    roles.includes('gmp') ||
-    positionTitle.includes('group managing partner') ||
-    positionTitle.includes('gmp');
+  const roles = resolveRequestAccessRoles(req);
+  const hasGmpAccess = roles.includes('super_admin') || roles.includes('gmp');
 
   if (!hasGmpAccess) {
     res.status(403).json({ error: 'Access denied. Group Managing Partner privileges required.' });

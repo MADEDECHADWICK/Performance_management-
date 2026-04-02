@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ListChecks, ShieldCheck, Sparkles, Target, Users, X } from "lucide-react";
+import { Sparkles, Target, Users, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import PageLoader from "@/components/ui/page-loader";
@@ -19,12 +18,9 @@ import { useToast } from "@/hooks/use-toast";
 import evaluationsAPI, {
   type AssignEvaluatorsPayload,
   type EvaluationRelationship,
-  type EvaluationTemplate,
-  type KpiLibraryItem,
   type TeamDirectoryPerson,
 } from "@/lib/api/evaluations";
 import {
-  buildQuestionsFromKpis,
   buildTemplateSections,
   summarizeEvaluationSections,
 } from "@/lib/evaluations/workflow";
@@ -33,7 +29,6 @@ import {
   appendUniqueText,
   buildLaunchAssignments,
   cloneQuestions,
-  emptyQuestion,
   formatPersonLabel,
   formatPersonName,
   normalizeText,
@@ -45,100 +40,37 @@ import {
   type ManualEvaluatorMap,
   type PeerAssignmentMode,
 } from "./evaluation-cycle-manager.helpers";
-
-type SelectedKpi = { kpiId: number; weight: number };
-
-const today = new Date().toISOString().slice(0, 10);
-const BUILT_IN_TEMPLATE_KEY = "builtin";
-
-const addDaysToIso = (baseIso: string, days: number) => {
-  const base = new Date(`${baseIso}T00:00:00`);
-  if (Number.isNaN(base.getTime())) return baseIso;
-  base.setDate(base.getDate() + Math.max(0, days));
-  return base.toISOString().slice(0, 10);
-};
-
-const defaultEndDate = addDaysToIso(today, 90);
-const defaultDueDate = addDaysToIso(today, 14);
-
-const BUILT_IN_TEMPLATE: EvaluationTemplate = {
-  id: 0,
-  name: "Built-in Streamlined 360",
-  description: "Default AssessTeam-style questionnaire used when no saved template is selected.",
-  isDefault: true,
-  templateType: "streamlined_360",
-  questions: [
-    {
-      id: 1,
-      text: "Demonstrates strong technical competence in current responsibilities.",
-      category: "competency",
-      weight: 1.2,
-      order: 1,
-    },
-    {
-      id: 2,
-      text: "Collaborates effectively with colleagues and stakeholders.",
-      category: "behavior",
-      weight: 1.1,
-      order: 2,
-    },
-    {
-      id: 3,
-      text: "Consistently delivers against agreed goals and commitments.",
-      category: "goal",
-      weight: 1.3,
-      order: 3,
-    },
-    {
-      id: 4,
-      text: "Reflects the firm's values and professional culture.",
-      category: "culture",
-      weight: 1,
-      order: 4,
-    },
-    {
-      id: 5,
-      text: "Shows initiative and ownership when challenges arise.",
-      category: "behavior",
-      weight: 1,
-      order: 5,
-    },
-  ],
-};
+import EvaluationCycleLaunchSidebar from "./EvaluationCycleLaunchSidebar";
+import EvaluationCycleQuestionnaireCard from "./EvaluationCycleQuestionnaireCard";
+import {
+  addDaysToIso,
+  BUILT_IN_TEMPLATE,
+  BUILT_IN_TEMPLATE_KEY,
+  defaultCycleFormState,
+  defaultLaunchOptionsState,
+  today,
+  type EvaluationCycleFormState,
+} from "./evaluation-cycle-manager.config";
 
 export default function EvaluationCycleManager() {
-  const { hasModuleAccess, hasRole } = useAuth();
+  const { hasRole } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const canManageCycles = hasRole("hr") || hasRole("manager") || hasRole("super_admin");
-  const canAccessKpiLibrary = hasModuleAccess("kpis");
 
-  const [cycleForm, setCycleForm] = useState({
-    title: "",
-    description: "",
-    cycleType: "annual",
-    startDate: today,
-    endDate: defaultEndDate,
-    dueMode: "days",
-    dueDate: defaultDueDate,
-    dueInDays: "14",
-    departmentId: "",
-  });
+  const [cycleForm, setCycleForm] = useState(defaultCycleFormState);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>(BUILT_IN_TEMPLATE_KEY);
   const [customizeQuestions, setCustomizeQuestions] = useState(false);
   const [questionDrafts, setQuestionDrafts] = useState<DraftQuestion[]>(
     cloneQuestions(BUILT_IN_TEMPLATE.questions)
   );
-  const [includeKpiResultAreas, setIncludeKpiResultAreas] = useState(false);
-  const [selectedKpis, setSelectedKpis] = useState<SelectedKpi[]>([]);
   const [selectedEvaluateeIds, setSelectedEvaluateeIds] = useState<number[]>([]);
   const [selectedTargetDepartmentIds, setSelectedTargetDepartmentIds] = useState<number[]>([]);
   const [selectedJobTitles, setSelectedJobTitles] = useState<string[]>([]);
   const [pendingEvaluateeId, setPendingEvaluateeId] = useState("");
   const [pendingDepartmentId, setPendingDepartmentId] = useState("");
   const [pendingJobTitle, setPendingJobTitle] = useState("");
-  const [pendingKpiId, setPendingKpiId] = useState("");
   const [selectedCycleId, setSelectedCycleId] = useState<string>("");
   const [stagedAssignments, setStagedAssignments] = useState<DraftAssignment[]>([]);
   const [manualEvaluators, setManualEvaluators] = useState<ManualEvaluatorMap>({
@@ -157,25 +89,7 @@ export default function EvaluationCycleManager() {
   });
   const [specificSignatureIds, setSpecificSignatureIds] = useState<number[]>([]);
   const [pendingSignatureProfileId, setPendingSignatureProfileId] = useState("");
-  const [launchOptions, setLaunchOptions] = useState({
-    enableSelfEvaluation: false,
-    enablePeerEvaluation: false,
-    enableUpwardEvaluation: false,
-    enableDownwardEvaluation: true,
-    peerAssignmentMode: "department" as PeerAssignmentMode,
-    peersPerPerson: "2",
-    processAnonymously: false,
-    hideFromDashboard: false,
-    cancelIfPastDue: true,
-    remindersEnabled: true,
-    reminderCadence: "weekly",
-    requireAllKpiAnswers: false,
-    excludeFromScore: false,
-    requireEvaluatorSignature: false,
-    requireEvaluateeSignature: false,
-    sendSignatureRequestToManagers: false,
-    sendSignatureRequestToDownwardEvaluators: false,
-  });
+  const [launchOptions, setLaunchOptions] = useState(defaultLaunchOptionsState);
 
   const cyclesQuery = useQuery({
     queryKey: ["evaluation-cycles"],
@@ -199,12 +113,6 @@ export default function EvaluationCycleManager() {
     queryKey: ["evaluation-templates"],
     queryFn: evaluationsAPI.getTemplates,
     enabled: canManageCycles,
-  });
-
-  const kpiLibraryQuery = useQuery({
-    queryKey: ["evaluation-kpi-library"],
-    queryFn: evaluationsAPI.getKpiLibrary,
-    enabled: canManageCycles && canAccessKpiLibrary,
   });
 
   const selectedTemplate = useMemo(() => {
@@ -320,29 +228,13 @@ export default function EvaluationCycleManager() {
     [enabledWorkflowTypes, questionTemplateSource]
   );
 
-  const kpiSections = useMemo(() => {
-    if (!includeKpiResultAreas || !canAccessKpiLibrary) return [];
-    return buildQuestionsFromKpis(
-      selectedKpis.map((selection) => ({
-        kpi_id: String(selection.kpiId),
-        weight: selection.weight,
-      })),
-      (kpiLibraryQuery.data || []).map((kpi) => ({
-        id: String(kpi.id),
-        name: kpi.name,
-        category: kpi.category || null,
-      }))
-    );
-  }, [canAccessKpiLibrary, includeKpiResultAreas, kpiLibraryQuery.data, selectedKpis]);
-
   const generatedSections = useMemo(() => {
-    const sections = [...templateSections, ...kpiSections];
-    if (sections.length > 0) return sections;
+    if (templateSections.length > 0) return templateSections;
     return buildTemplateSections(
       BUILT_IN_TEMPLATE,
       enabledWorkflowTypes.length > 0 ? enabledWorkflowTypes : ["manager"]
     );
-  }, [enabledWorkflowTypes, kpiSections, templateSections]);
+  }, [enabledWorkflowTypes, templateSections]);
 
   const questionSummary = useMemo(
     () => summarizeEvaluationSections(generatedSections),
@@ -447,8 +339,7 @@ export default function EvaluationCycleManager() {
     cyclesQuery.isLoading ||
     peopleQuery.isLoading ||
     departmentsQuery.isLoading ||
-    templatesQuery.isLoading ||
-    (canAccessKpiLibrary && kpiLibraryQuery.isLoading)
+    templatesQuery.isLoading
   ) {
     return (
       <DashboardLayout>
@@ -507,17 +398,6 @@ export default function EvaluationCycleManager() {
     }));
   };
 
-  const addSelectedKpi = () => {
-    const kpiId = Number(pendingKpiId);
-    if (!kpiId) return;
-    setSelectedKpis((current) =>
-      current.some((entry) => entry.kpiId === kpiId)
-        ? current
-        : [...current, { kpiId, weight: 1 }]
-    );
-    setPendingKpiId("");
-  };
-
   const addSignatureRecipient = () => {
     const profileId = Number(pendingSignatureProfileId);
     if (!profileId) return;
@@ -537,7 +417,7 @@ export default function EvaluationCycleManager() {
     }
 
     const customQuestionCount = questionDrafts.filter((question) => question.text.trim()).length;
-    if (customizeQuestions && customQuestionCount === 0 && !includeKpiResultAreas) {
+    if (customizeQuestions && customQuestionCount === 0) {
       toast({ title: "Add at least one custom result area", variant: "destructive" });
       return;
     }
@@ -557,10 +437,9 @@ export default function EvaluationCycleManager() {
       departmentId: cycleForm.departmentId ? Number(cycleForm.departmentId) : undefined,
       templateId:
         selectedTemplateKey !== BUILT_IN_TEMPLATE_KEY ? Number(selectedTemplateKey) : undefined,
-      questions:
-        customizeQuestions || includeKpiResultAreas
-          ? (generatedSections as unknown as Array<Record<string, unknown>>)
-          : undefined,
+      questions: customizeQuestions
+        ? (generatedSections as unknown as Array<Record<string, unknown>>)
+        : undefined,
       enableSelfEvaluation: launchOptions.enableSelfEvaluation,
       enablePeerEvaluation: launchOptions.enablePeerEvaluation,
       enableUpwardEvaluation: launchOptions.enableUpwardEvaluation,
@@ -572,7 +451,6 @@ export default function EvaluationCycleManager() {
       requireEvaluateeSignature: launchOptions.requireEvaluateeSignature,
       scoringConfig: {
         cancelIfPastDue: launchOptions.cancelIfPastDue,
-        requireAllKpis: launchOptions.requireAllKpiAnswers,
         peerAssignmentMode: launchOptions.peerAssignmentMode,
         peersPerPerson: Math.max(1, Number(launchOptions.peersPerPerson || 0) || 2),
         audience: {
@@ -581,8 +459,9 @@ export default function EvaluationCycleManager() {
           jobTitles: selectedJobTitles,
         },
         resultAreas: {
-          includeKpis: includeKpiResultAreas,
-          selectedKpiIds: selectedKpis.map((selection) => selection.kpiId),
+          sectionCount: questionSummary.sectionCount,
+          itemCount: questionSummary.itemCount,
+          metricCount: questionSummary.metricCount,
         },
         manualEvaluatorProfileIds: manualEvaluators,
         signatureRequests: {
@@ -797,10 +676,13 @@ export default function EvaluationCycleManager() {
                 <div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/30 p-4 md:grid-cols-[170px_1fr]">
                   <div className="space-y-2">
                     <Label>Due Setup</Label>
-                    <Select
+                      <Select
                       value={cycleForm.dueMode}
                       onValueChange={(value) =>
-                        setCycleForm((current) => ({ ...current, dueMode: value }))
+                        setCycleForm((current) => ({
+                          ...current,
+                          dueMode: value as EvaluationCycleFormState["dueMode"],
+                        }))
                       }
                     >
                       <SelectTrigger>
@@ -1213,625 +1095,49 @@ export default function EvaluationCycleManager() {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <ListChecks className="h-5 w-5 text-primary" />
-                  <CardTitle>4. Result Areas and Questionnaire</CardTitle>
-                </div>
-                <CardDescription>
-                  Start from a template, optionally customize the prompts, and include KPI result areas.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-                  <div className="space-y-2">
-                    <Label>Template</Label>
-                    <Select value={selectedTemplateKey} onValueChange={setSelectedTemplateKey}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={BUILT_IN_TEMPLATE_KEY}>
-                          {BUILT_IN_TEMPLATE.name}
-                        </SelectItem>
-                        {templatesQuery.data?.map((template) => (
-                          <SelectItem key={template.id} value={String(template.id)}>
-                            {template.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex items-end justify-end gap-3">
-                    <Label htmlFor="customize-questions" className="text-sm">
-                      Customize questions
-                    </Label>
-                    <Switch
-                      id="customize-questions"
-                      checked={customizeQuestions}
-                      onCheckedChange={setCustomizeQuestions}
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-xl border bg-muted/40 p-4">
-                  <div className="font-medium">{selectedTemplate.name}</div>
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    {selectedTemplate.description || "No description provided."}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">
-                      {selectedTemplate.questions.length} template questions
-                    </Badge>
-                    <Badge variant="outline">{questionSummary.itemCount} launch items</Badge>
-                    <Badge variant="outline">{totalQuestionWeight.toFixed(1)} total weight</Badge>
-                  </div>
-                </div>
-
-                {customizeQuestions ? (
-                  <div className="space-y-3">
-                    {questionDrafts.map((question, index) => (
-                      <div key={`${index}-${question.order}`} className="rounded-xl border p-4">
-                        <div className="grid gap-3 md:grid-cols-[1fr_180px_120px_auto]">
-                          <div className="space-y-2">
-                            <Label>Result area {index + 1}</Label>
-                            <Input
-                              value={question.text}
-                              onChange={(event) =>
-                                handleQuestionChange(index, "text", event.target.value)
-                              }
-                              placeholder="Enter the result area or competency"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Category</Label>
-                            <Select
-                              value={question.category}
-                              onValueChange={(value) =>
-                                handleQuestionChange(index, "category", value)
-                              }
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="competency">Competency</SelectItem>
-                                <SelectItem value="behavior">Behavior</SelectItem>
-                                <SelectItem value="goal">Goal</SelectItem>
-                                <SelectItem value="culture">Culture</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Weight</Label>
-                            <Input
-                              type="number"
-                              min="0.1"
-                              step="0.1"
-                              value={question.weight}
-                              onChange={(event) =>
-                                handleQuestionChange(index, "weight", event.target.value)
-                              }
-                            />
-                          </div>
-                          <div className="flex items-end">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() =>
-                                setQuestionDrafts((current) =>
-                                  current.length === 1
-                                    ? current
-                                    : current
-                                        .filter((_, currentIndex) => currentIndex !== index)
-                                        .map((item, itemIndex) => ({
-                                          ...item,
-                                          order: itemIndex + 1,
-                                        }))
-                                )
-                              }
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        setQuestionDrafts((current) => [...current, emptyQuestion(current.length + 1)])
-                      }
-                    >
-                      Add Result Area
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {selectedTemplate.questions.map((question) => (
-                      <div
-                        key={`${selectedTemplate.id}-${question.order}`}
-                        className="flex flex-col gap-2 rounded-xl border px-4 py-3 md:flex-row md:items-center md:justify-between"
-                      >
-                        <div>
-                          <div className="font-medium">{question.text}</div>
-                          <div className="text-sm text-muted-foreground capitalize">
-                            {question.category} question
-                          </div>
-                        </div>
-                        <Badge variant="outline">Weight {question.weight}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <Separator />
-
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="font-medium">Include KPI / result areas</div>
-                      <div className="text-sm text-muted-foreground">
-                        Pull KPI result areas into the evaluation launch plan.
-                      </div>
-                    </div>
-                    <Switch
-                      checked={includeKpiResultAreas}
-                      disabled={!canAccessKpiLibrary}
-                      onCheckedChange={setIncludeKpiResultAreas}
-                    />
-                  </div>
-
-                  {includeKpiResultAreas ? (
-                    canAccessKpiLibrary ? (
-                      <div className="space-y-4 rounded-xl border bg-background p-4">
-                        <div className="flex gap-2">
-                          <Select value={pendingKpiId || undefined} onValueChange={setPendingKpiId}>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Choose KPI / result area" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {(kpiLibraryQuery.data || []).map((kpi: KpiLibraryItem) => (
-                                <SelectItem key={kpi.id} value={String(kpi.id)}>
-                                  {kpi.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Button type="button" variant="outline" onClick={addSelectedKpi}>
-                            Include
-                          </Button>
-                        </div>
-
-                        {selectedKpis.length > 0 ? (
-                          <div className="space-y-3">
-                            {selectedKpis.map((selection) => {
-                              const kpi = (kpiLibraryQuery.data || []).find(
-                                (item) => item.id === selection.kpiId
-                              );
-                              return (
-                                <div
-                                  key={selection.kpiId}
-                                  className="grid gap-3 rounded-lg border p-3 md:grid-cols-[1fr_120px_auto]"
-                                >
-                                  <div>
-                                    <div className="font-medium">{kpi?.name || `KPI ${selection.kpiId}`}</div>
-                                    <div className="text-sm text-muted-foreground">
-                                      {kpi?.category || "Result area"}
-                                    </div>
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label>Weight</Label>
-                                    <Input
-                                      type="number"
-                                      min="0.1"
-                                      step="0.1"
-                                      value={selection.weight}
-                                      onChange={(event) =>
-                                        setSelectedKpis((current) =>
-                                          current.map((item) =>
-                                            item.kpiId === selection.kpiId
-                                              ? {
-                                                  ...item,
-                                                  weight: Number(event.target.value) || 1,
-                                                }
-                                              : item
-                                          )
-                                        )
-                                      }
-                                    />
-                                  </div>
-                                  <div className="flex items-end">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      onClick={() =>
-                                        setSelectedKpis((current) =>
-                                          current.filter((item) => item.kpiId !== selection.kpiId)
-                                        )
-                                      }
-                                    >
-                                      Remove
-                                    </Button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="text-sm text-muted-foreground">
-                            No KPI result areas selected yet.
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                        KPI result areas are unavailable for this account because the KPI module is
-                        not accessible.
-                      </div>
-                    )
-                  ) : null}
-                </div>
-
-                <div className="space-y-3 rounded-xl border bg-muted/20 p-4">
-                  <div className="font-medium">Launch questionnaire preview</div>
-                  {generatedSections.map((section) => (
-                    <div key={section.id} className="rounded-lg border bg-background p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <div className="font-medium">{section.title}</div>
-                          {section.description && (
-                            <div className="text-sm text-muted-foreground">{section.description}</div>
-                          )}
-                        </div>
-                        <Badge variant="outline">{section.items.length} items</Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <EvaluationCycleQuestionnaireCard
+              selectedTemplateKey={selectedTemplateKey}
+              setSelectedTemplateKey={setSelectedTemplateKey}
+              templates={templatesQuery.data || []}
+              selectedTemplate={selectedTemplate}
+              questionSummary={questionSummary}
+              totalQuestionWeight={totalQuestionWeight}
+              customizeQuestions={customizeQuestions}
+              setCustomizeQuestions={setCustomizeQuestions}
+              questionDrafts={questionDrafts}
+              handleQuestionChange={handleQuestionChange}
+              setQuestionDrafts={setQuestionDrafts}
+              generatedSections={generatedSections}
+            />
           </div>
 
-          <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <CalendarDays className="h-5 w-5 text-primary" />
-                  <CardTitle>5. Rollout Rules</CardTitle>
-                </div>
-                <CardDescription>
-                  Configure privacy, reminders, due-date handling, and signatures.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  {[
-                    {
-                      key: "processAnonymously",
-                      label: "Process evaluations anonymously",
-                    },
-                    {
-                      key: "hideFromDashboard",
-                      label: "Hide this evaluation from the evaluated person's dashboard",
-                    },
-                    {
-                      key: "cancelIfPastDue",
-                      label: "Cancel evaluations if not processed by the due date",
-                    },
-                    {
-                      key: "requireAllKpiAnswers",
-                      label: "Require answers on all KPI result areas",
-                    },
-                    {
-                      key: "excludeFromScore",
-                      label: "Exclude this evaluation from score computation",
-                    },
-                  ].map((option) => (
-                    <div key={option.key} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                      <div className="text-sm">{option.label}</div>
-                      <Switch
-                        checked={Boolean(launchOptions[option.key as keyof typeof launchOptions])}
-                        onCheckedChange={(value) =>
-                          setLaunchOptions((current) => ({
-                            ...current,
-                            [option.key]: value,
-                          }))
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <Separator />
-
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-                  <div className="space-y-2">
-                    <Label>Reminder cadence</Label>
-                    <Select
-                      value={launchOptions.reminderCadence}
-                      onValueChange={(value) =>
-                        setLaunchOptions((current) => ({
-                          ...current,
-                          reminderCadence: value,
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="daily">Daily</SelectItem>
-                        <SelectItem value="weekly">Weekly</SelectItem>
-                        <SelectItem value="custom">Custom</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-lg border p-3">
-                    <div>
-                      <div className="text-sm font-medium">Reminder emails enabled</div>
-                      <div className="text-xs text-muted-foreground">
-                        Applies to the evaluation workflow schedule.
-                      </div>
-                    </div>
-                    <Switch
-                      checked={launchOptions.remindersEnabled}
-                      onCheckedChange={(value) =>
-                        setLaunchOptions((current) => ({
-                          ...current,
-                          remindersEnabled: value,
-                        }))
-                      }
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-amber-200/70 bg-amber-50/30">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 text-amber-600" />
-                  <CardTitle>6. Signature Options</CardTitle>
-                </div>
-                <CardDescription>
-                  Decide whether signatures or acknowledgements are required at completion.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  {[
-                    {
-                      key: "requireEvaluatorSignature",
-                      label: "Make evaluator signature mandatory",
-                    },
-                    {
-                      key: "requireEvaluateeSignature",
-                      label: "Request acknowledgement from the person being evaluated",
-                    },
-                    {
-                      key: "sendSignatureRequestToManagers",
-                      label: "Send a signature request to team managers",
-                    },
-                    {
-                      key: "sendSignatureRequestToDownwardEvaluators",
-                      label: "Send a signature request to downward evaluators",
-                    },
-                  ].map((option) => (
-                    <div key={option.key} className="flex items-center justify-between gap-3 rounded-lg border bg-background p-3">
-                      <div className="text-sm">{option.label}</div>
-                      <Switch
-                        checked={Boolean(launchOptions[option.key as keyof typeof launchOptions])}
-                        onCheckedChange={(value) =>
-                          setLaunchOptions((current) => ({
-                            ...current,
-                            [option.key]: value,
-                          }))
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <Separator />
-
-                <div className="space-y-2">
-                  <Label>Specific signature recipients</Label>
-                  <div className="flex gap-2">
-                    <Select
-                      value={pendingSignatureProfileId || undefined}
-                      onValueChange={setPendingSignatureProfileId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose person" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {people.map((person) => (
-                          <SelectItem key={person.id} value={String(person.id)}>
-                            {formatPersonLabel(person)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button type="button" variant="outline" onClick={addSignatureRecipient}>
-                      Add
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {specificSignatureIds.length > 0 ? (
-                      specificSignatureIds.map((profileId) => (
-                        <Badge key={profileId} variant="secondary" className="gap-1">
-                          {formatPersonName(peopleById.get(profileId))}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setSpecificSignatureIds((current) => removeNumber(current, profileId))
-                            }
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </Badge>
-                      ))
-                    ) : (
-                      <div className="text-sm text-muted-foreground">
-                        No specific recipients selected.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-primary/30">
-              <CardHeader>
-                <CardTitle>7. Launch Preview</CardTitle>
-                <CardDescription>
-                  Review the rollout before you create the cycle draft and publish assignments.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
-                  <div className="rounded-xl border p-3">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      People evaluated
-                    </div>
-                    <div className="mt-1 text-2xl font-semibold">{targetEvaluatees.length}</div>
-                  </div>
-                  <div className="rounded-xl border p-3">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Result areas
-                    </div>
-                    <div className="mt-1 text-2xl font-semibold">{questionSummary.itemCount}</div>
-                  </div>
-                  <div className="rounded-xl border p-3">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Suggested assignments
-                    </div>
-                    <div className="mt-1 text-2xl font-semibold">{suggestedAssignments.length}</div>
-                  </div>
-                  <div className="rounded-xl border p-3">
-                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Due date
-                    </div>
-                    <div className="mt-1 text-base font-semibold">{computedDueDate}</div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {enabledRelationships.length > 0 ? (
-                    enabledRelationships.map((relationship) => (
-                      <Badge key={relationship} variant="outline">
-                        {relationship}
-                      </Badge>
-                    ))
-                  ) : (
-                    <Badge variant="outline">No evaluator group selected</Badge>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className="space-y-2">
-                    <Label>Select cycle draft</Label>
-                    <Select value={selectedCycleId || undefined} onValueChange={setSelectedCycleId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select cycle" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {cyclesQuery.data?.map((cycle) => (
-                          <SelectItem key={cycle.id} value={String(cycle.id)}>
-                            {cycle.title}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleBuildLaunchPlan}
-                    disabled={suggestedAssignments.length === 0}
-                    className="w-full"
-                    data-testid="evaluation-build-launch-plan"
-                  >
-                    Build Launch Plan
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handleCreateCycle}
-                    disabled={createCycleMutation.isPending}
-                    className="w-full"
-                    data-testid="evaluation-save-cycle-draft"
-                  >
-                    Save Cycle Draft
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handlePublish}
-                    disabled={assignMutation.isPending}
-                    className="w-full"
-                    data-testid="evaluation-publish-assignments"
-                  >
-                    Publish Assignments
-                  </Button>
-                </div>
-
-                <div className="rounded-xl border bg-muted/20 p-4">
-                  <div className="text-sm font-medium">Staged assignments</div>
-                  <div className="mt-3 space-y-3">
-                    {stagedAssignments.length > 0 ? (
-                      stagedAssignments.map((assignment, index) => (
-                        <div key={`${assignment.evaluateeId}-${assignment.evaluatorId}-${index}`} className="rounded-lg border bg-background p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="font-medium">
-                                {formatPersonName(peopleById.get(assignment.evaluateeId))} to{" "}
-                                {formatPersonName(peopleById.get(assignment.evaluatorId))}
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                <Badge variant="outline">{assignment.relationship}</Badge>
-                                <span>Due {assignment.dueDate || computedDueDate}</span>
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() =>
-                                setStagedAssignments((current) =>
-                                  current.filter((_, currentIndex) => currentIndex !== index)
-                                )
-                              }
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-muted-foreground">
-                        No staged assignments yet. Build the launch plan to review the rollout.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {Object.keys(assignmentBreakdown).length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(assignmentBreakdown).map(([relationship, count]) => (
-                      <Badge key={relationship} variant="secondary">
-                        {relationship}: {count}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <EvaluationCycleLaunchSidebar
+            launchOptions={launchOptions}
+            setLaunchOptions={setLaunchOptions}
+            people={people}
+            peopleById={peopleById}
+            specificSignatureIds={specificSignatureIds}
+            pendingSignatureProfileId={pendingSignatureProfileId}
+            setPendingSignatureProfileId={setPendingSignatureProfileId}
+            addSignatureRecipient={addSignatureRecipient}
+            setSpecificSignatureIds={setSpecificSignatureIds}
+            targetEvaluateeCount={targetEvaluatees.length}
+            questionSummary={questionSummary}
+            suggestedAssignments={suggestedAssignments}
+            computedDueDate={computedDueDate}
+            enabledRelationships={enabledRelationships}
+            selectedCycleId={selectedCycleId}
+            setSelectedCycleId={setSelectedCycleId}
+            cycles={cyclesQuery.data || []}
+            handleBuildLaunchPlan={handleBuildLaunchPlan}
+            handleCreateCycle={handleCreateCycle}
+            handlePublish={handlePublish}
+            isCreatingCycle={createCycleMutation.isPending}
+            isPublishing={assignMutation.isPending}
+            stagedAssignments={stagedAssignments}
+            setStagedAssignments={setStagedAssignments}
+            assignmentBreakdown={assignmentBreakdown}
+          />
         </div>
 
         <Card>

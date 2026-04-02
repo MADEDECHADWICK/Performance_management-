@@ -27,11 +27,11 @@ jest.mock('../middleware/auth', () => ({
 const createApp = () => {
   const app = express();
   app.use(express.json());
-  app.use('/api/manager', teamManagementRoutes);
+  app.use('/api/team-management', teamManagementRoutes);
   return app;
 };
 
-describe('teamManagement performance + development integration', () => {
+describe('teamManagement performance integration', () => {
   let dbReachable = false;
   let assignmentRoleId: number | null = null;
   let createdRoleId: number | null = null;
@@ -44,7 +44,6 @@ describe('teamManagement performance + development integration', () => {
   const createdEvaluationDefinitionIds: number[] = [];
   const createdEvaluationAssignmentIds: number[] = [];
   const createdSkillAssessmentIds: number[] = [];
-  const createdDevelopmentGoalIds: number[] = [];
 
   beforeAll(async () => {
     try {
@@ -112,12 +111,6 @@ describe('teamManagement performance + development integration', () => {
       if (createdTimeEntryIds.length > 0) {
         await prisma.timeEntry.deleteMany({
           where: { id: { in: createdTimeEntryIds } },
-        });
-      }
-
-      if (createdDevelopmentGoalIds.length > 0) {
-        await prisma.developmentGoal.deleteMany({
-          where: { id: { in: createdDevelopmentGoalIds } },
         });
       }
 
@@ -267,7 +260,7 @@ describe('teamManagement performance + development integration', () => {
     createdEvaluationAssignmentIds.push(completedEval.id);
 
     const createSkillResponse = await request(app)
-      .post('/api/manager/skill-assessments')
+      .post('/api/team-management/skill-assessments')
       .send({
         employeeId: member.id,
         skillCategory: 'Audit',
@@ -282,51 +275,19 @@ describe('teamManagement performance + development integration', () => {
     const skillAssessmentId = Number(createSkillResponse.body.id);
     createdSkillAssessmentIds.push(skillAssessmentId);
 
-    const createGoalResponse = await request(app)
-      .post('/api/manager/development-goals')
-      .send({
-        employeeId: member.id,
-        goalTitle: 'Lead one external audit engagement',
-        goalDescription: 'Own planning, execution, and reporting for one medium complexity engagement.',
-        targetCompletion: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-        currentProgress: 35,
-        status: 'active',
-      });
-
-    expect(createGoalResponse.status).toBe(201);
-    expect(createGoalResponse.body?.id).toBeTruthy();
-    const goalId = Number(createGoalResponse.body.id);
-    createdDevelopmentGoalIds.push(goalId);
-
-    const updateGoalResponse = await request(app)
-      .patch(`/api/manager/development-goals/${goalId}`)
-      .send({ status: 'completed', currentProgress: 100 });
-
-    expect(updateGoalResponse.status).toBe(200);
-    expect(String(updateGoalResponse.body?.status)).toBe('completed');
-
     const skillListResponse = await request(app)
-      .get(`/api/manager/skill-assessments?employee=${member.id}`);
+      .get(`/api/team-management/skill-assessments?employee=${member.id}`);
     expect(skillListResponse.status).toBe(200);
     expect(Array.isArray(skillListResponse.body)).toBe(true);
     expect(
       skillListResponse.body.some((row: any) => Number(row.id) === skillAssessmentId)
     ).toBe(true);
 
-    const goalListResponse = await request(app)
-      .get(`/api/manager/development-goals?employee=${member.id}`);
-    expect(goalListResponse.status).toBe(200);
-    expect(Array.isArray(goalListResponse.body)).toBe(true);
-    expect(
-      goalListResponse.body.some((row: any) => Number(row.id) === goalId)
-    ).toBe(true);
-
-    const metricsResponse = await request(app).get('/api/manager/development-metrics');
+    const metricsResponse = await request(app).get('/api/team-management/development-metrics');
     expect(metricsResponse.status).toBe(200);
     expect(Number(metricsResponse.body?.avg_skill_level || 0)).toBeGreaterThan(0);
-    expect(Number(metricsResponse.body?.development_goals_completed || 0)).toBeGreaterThanOrEqual(1);
 
-    const performanceResponse = await request(app).get('/api/manager/team-performance');
+    const performanceResponse = await request(app).get('/api/team-management/team-performance');
     expect(performanceResponse.status).toBe(200);
     expect(Array.isArray(performanceResponse.body?.team_members)).toBe(true);
 

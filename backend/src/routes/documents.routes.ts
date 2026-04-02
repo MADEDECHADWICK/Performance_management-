@@ -14,6 +14,7 @@ import {
   listDocumentsValidators,
 } from "../validators/document.validators";
 import { buildDiskUpload } from "../config/uploads";
+import { rejectMultipartDiskUploadsDisabled } from "../middleware/rejectMultipartDiskUploads";
 
 
 const router = Router();
@@ -48,6 +49,7 @@ router.post(
 router.post(
   "/upload",
   authenticated(),
+  rejectMultipartDiskUploadsDisabled("documents"),
   upload.single("file"),
   validateRequest(uploadDocumentFileValidators),
   handleValidationErrors,

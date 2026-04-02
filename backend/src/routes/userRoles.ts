@@ -4,6 +4,8 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
 import { canonicalizeRoleName } from '../auth/canonicalRoles';
+import { ensureAuthorizationContext } from '../services/authorizationContext.service';
+import { hasModuleAccess } from '../services/moduleAccess.service';
 
 const router = Router();
 
@@ -87,12 +89,30 @@ const isPrimaryAssignableAccessRole = (roleName: unknown) =>
 
 // GET /user_roles?userId=123
 // Retrieve all roles for a specific user
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   const userIdRaw = req.query.userId as string | undefined;
   if (!userIdRaw) return res.json([]);
   const userId = Number(userIdRaw);
   if (Number.isNaN(userId)) return res.status(400).json({ error: 'Invalid userId' });
   try {
+    const currentUserId = req.user?.userId ? Number(req.user.userId) : undefined;
+    if (!currentUserId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const isSelf = currentUserId === userId;
+    let canManageUsers = false;
+    if (!isSelf) {
+      const authz = await ensureAuthorizationContext(req);
+      canManageUsers = hasModuleAccess({
+        moduleKey: 'users',
+        action: 'admin',
+        rolePolicies: authz.moduleRolePolicies,
+      });
+    }
+
+    if (!isSelf && !canManageUsers) {
+      return res.status(403).json({ error: 'You can only view your own access role assignments' });
+    }
+
     const roles = await prisma.userAuthRole.findMany({
       where: { userId },
       include: { role: true },

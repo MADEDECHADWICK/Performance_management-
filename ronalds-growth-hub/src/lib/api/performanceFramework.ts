@@ -68,6 +68,246 @@ export interface FrameworkCoverageSummary {
   topSignals: Array<{ signal: string; count: number }>;
 }
 
+export type WorkspaceRole =
+  | 'hr'
+  | 'gmp'
+  | 'partner'
+  | 'manager'
+  | 'finance'
+  | 'marketing'
+  | 'employee';
+
+export type WorkspaceStatusTone = 'on_track' | 'at_risk' | 'off_track';
+
+export interface BalancedScorecardWorkspace {
+  generatedAt: string;
+  effectiveRole: WorkspaceRole;
+  perspectiveCards: Array<{
+    id: 'financial' | 'customer' | 'internal' | 'people';
+    name: string;
+    score: number;
+    owner: string;
+    status: WorkspaceStatusTone;
+    summary: string;
+    goals: number;
+    kpis: number;
+    initiatives: number;
+    cascadeProgress: number;
+  }>;
+  goals: Array<{
+    id: string;
+    perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+    title: string;
+    owner: string;
+    description: string;
+    linkedKpis: string[];
+    initiativeCount: number;
+    status: WorkspaceStatusTone;
+  }>;
+  kpis: Array<{
+    id: string;
+    name: string;
+    perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+    goalId: string;
+    description: string;
+    formula: string;
+    frequency: string;
+    unit: string;
+    weight: number;
+    firmTarget: string;
+    actual: string;
+    weightedScore: number;
+    owner: string;
+    status: WorkspaceStatusTone;
+    statusLogic: string;
+    updateFrequency: string;
+    initiativeProgress: number;
+    trend: number[];
+    ownerUpdate: string;
+  }>;
+  initiatives: Array<{
+    id: string;
+    title: string;
+    goalId: string;
+    kpiId: string;
+    perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+    owner: string;
+    timeline: string;
+    dueDate: string;
+    status: WorkspaceStatusTone;
+    progress: number;
+    drilldownCount: number;
+    scopeRole: WorkspaceRole;
+    parentInitiativeId: string | null;
+    summary: string;
+  }>;
+  cascadeInitiatives: Array<{
+    id: string;
+    title: string;
+    goalId: string;
+    kpiId: string;
+    perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+    owner: string;
+    timeline: string;
+    dueDate: string;
+    status: WorkspaceStatusTone;
+    progress: number;
+    drilldownCount: number;
+    scopeRole: WorkspaceRole;
+    parentInitiativeId: string | null;
+    summary: string;
+  }>;
+  featuredCascade: Array<{
+    level: 'HR' | 'GMP' | 'Partner' | 'Manager' | 'Employee';
+    owner: string;
+    initiative: string;
+    target: string;
+    progress: number;
+    dueDate: string;
+    status: WorkspaceStatusTone;
+    note: string;
+  }>;
+  employeeContributions: Array<{
+    id: string;
+    title: string;
+    kpiId: string;
+    initiative: string;
+    dueDate: string;
+    progress: number;
+    score: number;
+    status: WorkspaceStatusTone;
+    acknowledged: boolean;
+    managerComment: string;
+    rollup: string;
+  }>;
+  evaluationSummary: {
+    cycleId: number | null;
+    cycleTitle: string | null;
+    cycleStatus: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    totalAssignments: number;
+    submittedAssignments: number;
+    pendingAssignments: number;
+    acknowledgedAssignments: number;
+    overdueAssignments: number;
+    completionPercent: number;
+    acknowledgementPercent: number;
+    averageScore: number;
+    departmentCount: number;
+    managerCount: number;
+    resultCount: number;
+  };
+  reportBlocks: Array<{
+    label: string;
+    value: string;
+    hint: string;
+  }>;
+  departmentPerformance: Array<{
+    name: string;
+    score: number;
+    status: WorkspaceStatusTone;
+  }>;
+  managerPerformance: Array<{
+    name: string;
+    score: number;
+    team: string;
+  }>;
+  employeePerformance: Array<{
+    name: string;
+    score: number;
+    ack: string;
+  }>;
+}
+
+export type WorkspacePerspectiveCard = BalancedScorecardWorkspace['perspectiveCards'][number];
+export type WorkspaceGoal = BalancedScorecardWorkspace['goals'][number];
+export type WorkspaceKpi = BalancedScorecardWorkspace['kpis'][number];
+export type WorkspaceInitiative = BalancedScorecardWorkspace['initiatives'][number];
+export type WorkspaceCascadeInitiative = BalancedScorecardWorkspace['cascadeInitiatives'][number];
+export type WorkspaceCascadeLevel = BalancedScorecardWorkspace['featuredCascade'][number];
+export type WorkspaceEmployeeContribution = BalancedScorecardWorkspace['employeeContributions'][number];
+export type WorkspaceEvaluationSummary = BalancedScorecardWorkspace['evaluationSummary'];
+export type WorkspaceReportBlock = BalancedScorecardWorkspace['reportBlocks'][number];
+export type WorkspaceDepartmentRow = BalancedScorecardWorkspace['departmentPerformance'][number];
+export type WorkspaceManagerRow = BalancedScorecardWorkspace['managerPerformance'][number];
+export type WorkspaceEmployeeRow = BalancedScorecardWorkspace['employeePerformance'][number];
+
+export interface BalancedScorecardPerspectiveRecord {
+  id: number;
+  key: string;
+  name: string;
+  ownerName: string | null;
+  summary: string | null;
+  sortOrder: number;
+}
+
+export interface BalancedScorecardGoalRecord {
+  id: number;
+  key: string;
+  perspectiveId: number;
+  title: string;
+  description: string | null;
+  ownerName: string | null;
+  sortOrder: number;
+}
+
+export interface BalancedScorecardKpiRecord {
+  id: number;
+  key: string;
+  goalId: number;
+  metricKey: string;
+  name: string;
+  description: string | null;
+  formula: string | null;
+  frequency: string;
+  unit: string;
+  weight: number;
+  firmTarget: string;
+  ownerName: string | null;
+  statusLogic: string | null;
+  updateFrequency: string | null;
+  sortOrder: number;
+}
+
+export interface BalancedScorecardInitiativeRecord {
+  id: number;
+  key: string;
+  goalId: number;
+  kpiId: number;
+  parentInitiativeId: number | null;
+  scopeRole: string;
+  title: string;
+  summary: string | null;
+  ownerName: string | null;
+  timeline: string | null;
+  dueDate: string | null;
+  status: WorkspaceStatusTone;
+  progress: number;
+  sortOrder: number;
+}
+
+export interface BalancedScorecardStructure {
+  perspectives: BalancedScorecardPerspectiveRecord[];
+  goals: BalancedScorecardGoalRecord[];
+  kpis: BalancedScorecardKpiRecord[];
+  initiatives: BalancedScorecardInitiativeRecord[];
+}
+
+export interface BalancedScorecardMetricTemplate {
+  metricKey: string;
+  name: string;
+  perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+  defaultFormula: string;
+  defaultFrequency: string;
+  defaultUnit: string;
+  defaultWeight: number;
+  defaultTarget: string;
+  defaultOwnerName: string;
+  defaultStatusLogic: string;
+  defaultUpdateFrequency: string;
+}
+
 const buildQuery = (params: Record<string, string | number | undefined>) => {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -137,6 +377,63 @@ export const performanceFrameworkAPI = {
       definitionDepartmentId: number | null;
       scoringConfig: Record<string, unknown>;
     }>(`/performance-framework/resolved-scoring${buildQuery(params || {})}`),
+
+  getWorkspace: (params?: {
+    role?: WorkspaceRole;
+    profileId?: number;
+    evaluationCycleId?: number;
+  }) => api.get<BalancedScorecardWorkspace>(`/performance-framework/workspace${buildQuery(params || {})}`),
+
+  getScorecardStructure: () =>
+    api.get<BalancedScorecardStructure>('/performance-framework/scorecard-structure'),
+
+  getKpiTemplates: () =>
+    api.get<BalancedScorecardMetricTemplate[]>('/performance-framework/kpi-templates'),
+
+  bootstrapScorecardStructure: () =>
+    api.post<BalancedScorecardStructure>('/performance-framework/scorecard-structure/bootstrap'),
+
+  createPerspective: (payload: {
+    name: string;
+    ownerName?: string;
+    summary?: string;
+  }) => api.post<BalancedScorecardPerspectiveRecord>('/performance-framework/perspectives', payload),
+
+  createGoal: (payload: {
+    perspectiveId: number;
+    title: string;
+    description?: string;
+    ownerName?: string;
+  }) => api.post<BalancedScorecardGoalRecord>('/performance-framework/goals', payload),
+
+  createKpi: (payload: {
+    goalId: number;
+    metricKey: string;
+    name: string;
+    description?: string;
+    formula?: string;
+    frequency: string;
+    unit: string;
+    weight: number;
+    firmTarget: string;
+    ownerName?: string;
+    statusLogic?: string;
+    updateFrequency?: string;
+  }) => api.post<BalancedScorecardKpiRecord>('/performance-framework/kpis', payload),
+
+  createInitiative: (payload: {
+    goalId: number;
+    kpiId: number;
+    parentInitiativeId?: number | null;
+    scopeRole: string;
+    title: string;
+    summary?: string;
+    ownerName?: string;
+    timeline?: string;
+    dueDate?: string;
+    status?: WorkspaceStatusTone;
+    progress?: number;
+  }) => api.post<BalancedScorecardInitiativeRecord>('/performance-framework/initiatives', payload),
 };
 
 export default performanceFrameworkAPI;

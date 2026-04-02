@@ -15,6 +15,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../prisma";
 import { getJwtSecret } from "../config/jwt";
 import { buildCorsOptions } from "../config/httpSecurity";
+import { logger, toLogContext } from "../lib/logger";
 
 type NotificationPayload = Record<string, unknown>;
 
@@ -42,8 +43,8 @@ interface StaffingChange {
 }
 
 interface AccessTokenPayload {
-  userId?: number;
-  sub?: number;
+  userId?: number | string;
+  sub?: number | string;
   email?: string;
   authRoles?: string[];
   sessionToken?: string;
@@ -119,7 +120,7 @@ class WebSocketService {
     });
 
     this.tryEnableRedisAdapter().catch((error) => {
-      console.error("Socket.IO Redis adapter disabled:", error);
+      logger.error("socketio_redis_adapter_init_failed", toLogContext(error));
     });
     this.setupMiddleware();
     this.setupConnectionHandlers();
@@ -140,9 +141,12 @@ class WebSocketService {
       const subClient = pubClient.duplicate();
       await Promise.all([pubClient.connect(), subClient.connect()]);
       this.io.adapter(createAdapter(pubClient, subClient));
-      console.log("Socket.IO Redis adapter enabled");
+      logger.info("socketio_redis_adapter_enabled");
     } catch (error) {
-      console.error("Failed to enable Socket.IO Redis adapter:", error);
+      logger.warn("socketio_redis_adapter_disabled", {
+        redisUrlConfigured: true,
+        ...toLogContext(error),
+      });
     }
   }
 
@@ -193,8 +197,13 @@ class WebSocketService {
       throw new Error("Authentication failed: missing token");
     }
 
-    const decoded = jwt.verify(token, getJwtSecret()) as AccessTokenPayload;
-    const userId = decoded.userId ?? decoded.sub;
+    const verifiedPayload = jwt.verify(token, getJwtSecret());
+    if (!verifiedPayload || typeof verifiedPayload === "string") {
+      throw new Error("Authentication failed: invalid token payload");
+    }
+
+    const decoded = verifiedPayload as AccessTokenPayload;
+    const userId = toPositiveInt(decoded.userId ?? decoded.sub);
     if (!userId) {
       throw new Error("Authentication failed: invalid token payload");
     }
@@ -692,26 +701,6 @@ class WebSocketService {
       jobId,
       revenue,
       timestamp: new Date(),
-    });
-  }
-
-  /**
-   * Broadcast KPI update
-   */
-  broadcastKPIUpdate(employeeId: string, kpiId: string, achievement: number) {
-    if (!this.io) return;
-
-    this.io.to(`user:${employeeId}`).emit("kpi-update", {
-      kpiId,
-      achievement,
-      message: `Your KPI ${kpiId} achievement has been updated to ${achievement}%`,
-      timestamp: new Date(),
-    });
-
-    this.io.to("role:manager").emit("kpi-achievement", {
-      employeeId,
-      kpiId,
-      achievement,
     });
   }
 

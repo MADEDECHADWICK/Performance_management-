@@ -1,8 +1,11 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
+import { buildPrimaryRoleAuthContext } from "../auth/accessRoles";
 import { PartnerService } from '../services/partners.service';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
+
+const buildAuthContext = (req: AuthRequest) => buildPrimaryRoleAuthContext(req);
 
 export class PartnerController {
   /**
@@ -15,11 +18,7 @@ export class PartnerController {
       const pageSize = Number(req.query.pageSize) || 10;
       const status = (req.query.status as string) || undefined;
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const result = await PartnerService.listPartners(
         { page, pageSize, status },
@@ -40,11 +39,7 @@ export class PartnerController {
    */
   static async createPartner(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const partner = await PartnerService.createPartner(req.body, auth);
 
@@ -66,11 +61,7 @@ export class PartnerController {
     try {
       const partnerId = Number(req.params.partnerId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const partner = await PartnerService.getPartner(partnerId, auth);
 
@@ -90,11 +81,7 @@ export class PartnerController {
     try {
       const partnerId = Number(req.params.partnerId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const partner = await PartnerService.updatePartner(partnerId, req.body, auth);
 
@@ -114,11 +101,7 @@ export class PartnerController {
     try {
       const partnerId = Number(req.params.partnerId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const jobs = await PartnerService.getPartnerJobs(partnerId, auth);
 
@@ -138,11 +121,7 @@ export class PartnerController {
     try {
       const partnerId = Number(req.params.partnerId);
 
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const revenue = await PartnerService.getPartnerRevenue(partnerId, auth);
 
@@ -198,11 +177,7 @@ export class PartnerController {
     res: Response
   ): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const partnerId =
         auth.roleName === 'partner' ? auth.profileId : Number(req.query.partnerId) || auth.profileId;
@@ -231,11 +206,7 @@ export class PartnerController {
     res: Response
   ): Promise<void> {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildAuthContext(req);
 
       const partnerId =
         auth.roleName === 'partner' ? auth.profileId : Number(req.query.partnerId) || auth.profileId;

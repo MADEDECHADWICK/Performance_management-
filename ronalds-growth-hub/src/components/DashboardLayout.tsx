@@ -65,19 +65,21 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     user,
     profile: userProfile,
     roles,
+    homeViewKey,
     isLoading: authLoading,
     hasModuleAccess,
     hasViewAccess,
     logout,
   } = useAuth();
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) =>
+    location.pathname === path || location.pathname.startsWith(`${path}/`);
 
   // Auto-redirect to appropriate dashboard based on role
   useEffect(() => {
     if (authLoading) return;
     if (user && location.pathname === '/dashboard') {
-      const preferredRoute = getPreferredHomeRoute(roles, hasViewAccess);
+      const preferredRoute = getPreferredHomeRoute(roles, hasViewAccess, homeViewKey);
       if (preferredRoute !== "/dashboard") {
         navigate(preferredRoute, { replace: true });
       }
@@ -85,6 +87,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   }, [
     authLoading,
     hasViewAccess,
+    homeViewKey,
     user,
     roles,
     location.pathname,
@@ -422,11 +425,12 @@ function AppSidebar({
 
   const hasManagementSectionAccess = canShowAnyView([
     "people.employee_management",
+    "leave.admin",
+    "requisitions.admin",
     "people.recruitment_candidates",
     "jobs.admin_create",
     "jobs.workflow",
     "evaluations.management",
-    "kpi.management",
     "evaluations.calibration",
     "people.positions_rates",
     "reports.audit_logs",
@@ -441,6 +445,8 @@ function AppSidebar({
   ]);
 
   const hasTeamManagementSectionAccess = canShowAnyView([
+    "leave.approvals",
+    "requisitions.approvals",
     "team.performance",
     "dashboard.department",
     "team.staff_development",
@@ -482,10 +488,15 @@ function AppSidebar({
                 action={analyticsNav.action}
               />
               <NavItem
+                path="/bsc-management"
+                icon={Target}
+                label="BSC & KPIs"
+              />
+              <NavItem
                 path="/reports"
-                icon={FileText}
+                icon={FileSpreadsheet}
                 label="Reports"
-                viewKey="reports.core"
+                viewKey="reports.workspace"
                 module="reports"
               />
               <NavItem
@@ -520,12 +531,12 @@ function AppSidebar({
                 <SidebarGroupContent>
                   <SidebarMenu>
                     <NavItem path="/profile" icon={UserIcon} label="Profile" viewKey="profile.my" module="users" />
-                    <NavItem path="/scorecard" icon={Target} label="Scorecard" viewKey="scorecard.my" module="kpis" />
-                    <NavItem path="/goals" icon={Target} label="Goals" viewKey="goals.my" module="kpis" />
-                    <NavItem path="/todos" icon={CheckSquare} label="My To-Dos" viewKey="todos.my" />
-                    <NavItem path="/timesheets" icon={Clock} label="Timesheets" viewKey="timesheets.my" module="time_entries" />
-                    <NavItem path="/development-plan" icon={FileText} label="Development Plan" viewKey="development.plan" module="evaluations" />
-                  </SidebarMenu>
+		                    <NavItem path="/todos" icon={CheckSquare} label="My To-Dos" viewKey="todos.my" />
+		                    <NavItem path="/timesheets" icon={Clock} label="Timesheets" viewKey="timesheets.my" module="time_entries" />
+			                    <NavItem path="/leave" icon={Calendar} label="My Leave" viewKey="leave.my" module="leave" />
+		                    <NavItem path="/requisitions" icon={FileText} label="Requisitions" viewKey="requisitions.my" module="requisitions" />
+		                    <NavItem path="/development-plan" icon={FileText} label="Development Plan" viewKey="development.plan" module="evaluations" />
+	                  </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
           </SidebarGroup>
@@ -640,7 +651,6 @@ function AppSidebar({
                     <NavItem path="/finance-balances" icon={BarChart3} label="Balances" viewKey="finance.balances" module="finance" />
                     <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" viewKey="finance.profitability" module="finance" />
                     <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" viewKey="finance.allocations" module="finance" />
-                    <NavItem path="/reports" icon={FileSpreadsheet} label="Reports" viewKey="reports.core" module="reports" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
@@ -661,13 +671,13 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/employee-management" icon={Users} label="Employee Management" viewKey="people.employee_management" module="users" />
-
-                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
-                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
-                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Workflow" viewKey="jobs.workflow" module="jobs" />
-                    <NavItem path="/kpi-management" icon={Settings} label="KPIs" viewKey="kpi.management" module="kpis" />
-                    <NavItem path="/calibration" icon={Settings} label="Calibration" viewKey="evaluations.calibration" module="evaluations" />
+	                    <NavItem path="/employee-management" icon={Users} label="Employee Management" viewKey="people.employee_management" module="users" action="approve" />
+		                    <NavItem path="/leave/admin" icon={Calendar} label="Leave Admin" viewKey="leave.admin" module="leave" action="admin" />
+		                    <NavItem path="/requisitions/admin" icon={FileText} label="Requisition Admin" viewKey="requisitions.admin" module="requisitions" action="admin" />
+		                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
+	                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
+                    <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Operations" viewKey="jobs.workflow" module="jobs" />
+	                    <NavItem path="/calibration" icon={Settings} label="Calibration" viewKey="evaluations.calibration" module="evaluations" />
                     <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" viewKey="people.positions_rates" module="users" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" viewKey="reports.audit_logs" module="reports" />
                     <NavItem path="/ops-center" icon={Activity} label="Ops Center" viewKey="reports.ops_center" module="reports" />
@@ -715,11 +725,13 @@ function AppSidebar({
               <CollapsibleContent>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    <NavItem path="/team-performance" icon={Users} label="Team Performance" viewKey="team.performance" module="reports" />
-                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" viewKey="dashboard.department" module="dashboard" />
-                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" viewKey="team.staff_development" module="evaluations" />
-                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" viewKey="jobs.workload_management" module="jobs" />
-                  </SidebarMenu>
+	                    <NavItem path="/team-performance" icon={Users} label="Team Performance" viewKey="team.performance" module="reports" />
+	                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" viewKey="dashboard.department" module="dashboard" />
+		                    <NavItem path="/leave/approvals" icon={Calendar} label="Leave Approvals" viewKey="leave.approvals" module="leave" action="approve" />
+		                    <NavItem path="/requisitions/approvals" icon={FileText} label="Requisition Approvals" viewKey="requisitions.approvals" module="requisitions" action="approve" />
+		                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" viewKey="team.staff_development" module="evaluations" />
+	                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" viewKey="jobs.workload_management" module="jobs" />
+	                  </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>
             </SidebarGroup>

@@ -1,13 +1,11 @@
 import { OnboardingStatus, Prisma, PrismaClient } from "@prisma/client";
 import prisma from "../prisma";
+import {
+  DEFAULT_INDUCTION_CHECKLIST_NAME,
+  getDefaultInductionTemplate,
+} from "./inductionTemplateCatalog";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
-
-type DefaultChecklistItem = {
-  itemName: string;
-  description: string;
-  requiresDocument?: boolean;
-};
 
 type EnsureOnboardingProvisioningInput = {
   profileId: number;
@@ -19,33 +17,10 @@ type EnsureOnboardingProvisioningInput = {
   notes?: string | null;
 };
 
-const DEFAULT_CHECKLIST_NAME = "Standard Employee Induction";
+const DEFAULT_CHECKLIST_NAME = DEFAULT_INDUCTION_CHECKLIST_NAME;
 const DEFAULT_ONBOARDING_DUE_DAYS = 14;
 const CHECKLIST_ASSIGNMENT_NOTIFICATION_TITLE = "Onboarding checklist assigned";
-
-const DEFAULT_CHECKLIST_ITEMS: DefaultChecklistItem[] = [
-  {
-    itemName: "Upload ID",
-    description: "Upload national ID or passport copy.",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Sign contract",
-    description: "Confirm employment contract has been signed.",
-  },
-  {
-    itemName: "Complete profile",
-    description: "Fill all required personal and employment profile fields.",
-  },
-  {
-    itemName: "Watch orientation video",
-    description: "Watch mandatory onboarding orientation video.",
-  },
-  {
-    itemName: "Confirm department",
-    description: "Confirm your assigned department and reporting line.",
-  },
-];
+const DEFAULT_CHECKLIST_ITEMS = getDefaultInductionTemplate().items;
 
 const onboardingDueDate = (baseDate?: Date | null) => {
   if (baseDate) return baseDate;
@@ -69,7 +44,13 @@ const createDefaultChecklistItems = async (db: DbClient, checklistId: number) =>
       itemName: item.itemName,
       description: item.description,
       orderIndex: index + 1,
+      sectionKey: item.sectionKey,
+      sectionLabel: item.sectionLabel,
+      ownerRole: item.ownerRole ?? null,
       requiresDocument: item.requiresDocument ?? false,
+      itemType: item.itemType ?? "task",
+      resourceUrl: item.resourceUrl ?? null,
+      comments: item.comments ?? null,
       isCompleted: false,
       completedByProfileId: null,
       completedAt: null,

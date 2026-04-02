@@ -319,46 +319,6 @@ export const summarizeEvaluationSections = (sections: EvaluationQuestionSection[
   };
 };
 
-export const buildQuestionsFromKpis = (
-  selectedKpis: Array<{ kpi_id: string; weight: number }>,
-  kpis: Array<{ id: string; name: string; category?: string | null }>
-): EvaluationQuestionSection[] => {
-  if (selectedKpis.length === 0) return [];
-
-  return [
-    {
-      id: "performance_metrics",
-      title: "Metrics / Result Areas / KPIs",
-      description: "Score each KPI or result area against its expected delivery level.",
-      weight: 60,
-      evaluatorTypes: ["self", "manager", "peer", "direct_report"],
-      items: selectedKpis
-        .map(({ kpi_id, weight }) => {
-          const kpi = kpis.find((entry) => String(entry.id) === String(kpi_id));
-          if (!kpi) return null;
-          return {
-            id: `kpi_${kpi.id}`,
-            label: kpi.name,
-            description: kpi.category ? `Category: ${kpi.category}` : undefined,
-            kind: "metric" as const,
-            required: true,
-            weight: weight || undefined,
-            evaluatorTypes: ["self", "manager", "peer", "direct_report"],
-            allowComment: true,
-            ratingScale: DEFAULT_RATING_SCALE,
-            metricSource: {
-              type: "kpi" as const,
-              id: kpi.id,
-              name: kpi.name,
-              category: kpi.category || undefined,
-            },
-          };
-        })
-        .filter(Boolean) as EvaluationQuestionItem[],
-    },
-  ];
-};
-
 export const buildTemplateSections = (
   template: any,
   fallbackEvaluatorTypes: EvaluatorType[]
@@ -403,18 +363,13 @@ export const buildTemplateSections = (
 
 export const buildDefaultEvaluationSections = ({
   template,
-  selectedKpis,
-  kpis,
   enabledEvaluatorTypes,
 }: {
   template?: any;
-  selectedKpis: Array<{ kpi_id: string; weight: number }>;
-  kpis: Array<{ id: string; name: string; category?: string | null }>;
   enabledEvaluatorTypes: EvaluatorType[];
 }): EvaluationQuestionSection[] => {
   const sections: EvaluationQuestionSection[] = [];
   sections.push(...buildTemplateSections(template, enabledEvaluatorTypes));
-  sections.push(...buildQuestionsFromKpis(selectedKpis, kpis));
 
   if (sections.length === 0) {
     sections.push({

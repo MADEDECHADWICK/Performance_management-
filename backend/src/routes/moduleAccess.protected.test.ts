@@ -18,6 +18,9 @@ jest.mock("../prisma", () => {
     userAuthRole: {
       findMany: jest.fn(),
     },
+    authRole: {
+      findMany: jest.fn(),
+    },
   };
 
   return {
@@ -35,6 +38,9 @@ type PrismaMock = {
     findUnique: jest.Mock;
   };
   userAuthRole: {
+    findMany: jest.Mock;
+  };
+  authRole: {
     findMany: jest.Mock;
   };
 };
@@ -199,5 +205,44 @@ describe("module-access protected route pipeline", () => {
     );
     expect(response.body).not.toHaveProperty("roleAliasMigrationMap");
     expect(response.body.roleModulePermissionMatrix).toHaveProperty("hr");
+  });
+
+  it("returns persisted role view policies for access-control admins", async () => {
+    const app = createApp();
+    const token = createToken();
+    mockActiveUser();
+    mockedPrisma.userAuthRole.findMany.mockResolvedValue([
+      roleRow("hr", true, ["module.access_control.admin"]),
+    ]);
+    mockedPrisma.authRole.findMany.mockResolvedValue([
+      {
+        id: 7,
+        name: "manager",
+        isActive: true,
+        viewPermissions: [
+          {
+            viewPermission: { key: "dashboard.manager" },
+          },
+        ],
+      },
+    ]);
+
+    const response = await request(app)
+      .get("/api/module-access/view-roles")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      roles: [
+        {
+          id: 7,
+          name: "manager",
+          isActive: true,
+          hasExplicitConfiguration: true,
+          explicitViewKeys: ["dashboard.manager"],
+          effectiveViewKeys: ["dashboard.manager"],
+        },
+      ],
+    });
   });
 });

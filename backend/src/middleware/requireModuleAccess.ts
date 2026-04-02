@@ -1,3 +1,5 @@
+// This middleware provides functions to enforce module-based access control on API routes. It checks whether the authenticated user has the necessary permissions to access a specific module and perform a certain action (e.g., read, write, delete). The middleware retrieves the user's role policies from the database, applies any user-specific overrides, and determines if the user has sufficient access based on the defined module access rules. If the user does not have the required access, it responds with appropriate HTTP status codes (401 for unauthenticated, 403 for forbidden). By using this middleware, we can ensure that users can only access modules and perform actions that they are authorized for, enhancing the security and integrity of the application.
+
 import { NextFunction, Response } from "express";
 import { AuthRequest } from "./auth";
 import {

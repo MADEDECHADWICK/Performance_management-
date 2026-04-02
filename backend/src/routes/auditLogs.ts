@@ -1,13 +1,22 @@
 import { Router } from 'express';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
+import { AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
 
 const router = Router();
+const AUDIT_LOG_ROLES = new Set(['super_admin', 'hr', 'gmp']);
 
-// GET /audit_logs?limit=100
-router.get('/', async (req, res) => {
+// GET /audit-logs?limit=100
+router.get('/', async (req: AuthRequest, res) => {
   const limitRaw = req.query.limit as string | undefined;
   const limit = limitRaw ? Math.min(1000, Number(limitRaw) || 100) : 100;
   try {
+    const roleNames = resolveRequestAccessRoles(req);
+    const canReadAuditLogs = roleNames.some((role) => AUDIT_LOG_ROLES.has(role));
+    if (!canReadAuditLogs) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const logs = await prisma.auditLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -116,8 +125,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /audit_logs
-router.post('/', async (req, res) => {
+// POST /audit-logs
+router.post('/', async (_req: AuthRequest, res) => {
   return res.status(405).json({
     error: "Direct audit log writes are disabled. Use audited domain endpoints.",
   });

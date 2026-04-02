@@ -103,6 +103,12 @@ interface TimeEntry {
   task?: Task;
   startTime?: string;
   endTime?: string;
+  sourceType?: 'manual' | 'leave_request';
+  nonBillableCategory?: string | null;
+  leaveRequestId?: number | null;
+  leaveStatus?: string | null;
+  isProjectedLeave?: boolean;
+  leaveType?: { id: number; name: string } | null;
 }
 
 interface TimerState {
@@ -254,6 +260,14 @@ export default function TimesheetsNew() {
     };
   };
 
+  const isProjectedLeaveEntry = (entry: TimeEntry) =>
+    Boolean(entry.isProjectedLeave || entry.sourceType === 'leave_request');
+
+  const formatEntryTypeLabel = (entry: TimeEntry) => {
+    if (isProjectedLeaveEntry(entry)) return 'Leave';
+    return entry.billable ? 'Billable' : 'Non-Billable';
+  };
+
   const formatDateSafe = (value?: string, pattern = 'MMM d') => {
     if (!value) return '-';
     const parsed = parseISO(value);
@@ -266,6 +280,7 @@ export default function TimesheetsNew() {
     budgetHours: toNumber(job?.budgetHours),
   })) as Job[];
   const timeEntries = ((timeEntriesData?.data || []) as any[]).map(normalizeTimeEntry);
+  const selectableEntries = timeEntries.filter((entry) => entry.status === 'pending' && !isProjectedLeaveEntry(entry));
   const requestedTab = String(searchParams.get('tab') || '').trim().toLowerCase();
   const requestedJobId = Number(searchParams.get('jobId'));
   const requestedApprovalRequestId = Number(searchParams.get('approvalRequestId'));
@@ -1100,10 +1115,13 @@ export default function TimesheetsNew() {
                       <TableRow>
                         <TableHead className="w-12">
                           <Checkbox
-                            checked={selectedEntries.length === timeEntries.filter(e => e.status === 'pending').length}
+                            checked={
+                              selectableEntries.length > 0 &&
+                              selectedEntries.length === selectableEntries.length
+                            }
                             onCheckedChange={(checked) => {
                               if (checked) {
-                                setSelectedEntries(timeEntries.filter(e => e.status === 'pending').map(e => e.id));
+                                setSelectedEntries(selectableEntries.map(e => e.id));
                               } else {
                                 setSelectedEntries([]);
                               }
@@ -1124,7 +1142,7 @@ export default function TimesheetsNew() {
                         return (
                           <TableRow key={entry.id}>
                             <TableCell>
-                              {entry.status === 'pending' && (
+                              {entry.status === 'pending' && !isProjectedLeaveEntry(entry) && (
                                 <Checkbox
                                   checked={selectedEntries.includes(entry.id)}
                                   onCheckedChange={(checked) => {
@@ -1142,14 +1160,20 @@ export default function TimesheetsNew() {
                             </TableCell>
                             <TableCell>
                               <div>
-                                <p className="font-medium">{entry.job?.jobName}</p>
+                                <p className="font-medium">
+                                  {isProjectedLeaveEntry(entry)
+                                    ? entry.leaveType?.name || 'Leave'
+                                    : entry.job?.jobName || 'Unassigned'}
+                                </p>
                                 <p className="text-sm text-muted-foreground">
-                                  {entry.job?.client?.clientName}
+                                  {isProjectedLeaveEntry(entry)
+                                    ? 'Auto-projected from approved/pending leave'
+                                    : entry.job?.client?.clientName}
                                 </p>
                               </div>
                             </TableCell>
                             <TableCell className="max-w-xs truncate">
-                              {entry.description || '-'}
+                              {entry.description || (isProjectedLeaveEntry(entry) ? 'Leave entry' : '-')}
                             </TableCell>
                             <TableCell className="text-right font-medium">
                               {entry.hours?.toFixed(1)}h
@@ -1372,7 +1396,7 @@ export default function TimesheetsNew() {
                             </TableCell>
                             <TableCell>
                               <Badge variant={entry.billable ? 'default' : 'secondary'}>
-                                {entry.billable ? 'Billable' : 'Non-Billable'}
+                                {formatEntryTypeLabel(entry)}
                               </Badge>
                             </TableCell>
                             <TableCell>

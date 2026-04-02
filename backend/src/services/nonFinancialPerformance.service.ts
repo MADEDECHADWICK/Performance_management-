@@ -5,12 +5,10 @@ export interface BSCScores {
   customerSatisfactionScore: number;
   internalProcessesScore: number;
   overallNonFinancialScore: number;
-  okrScore: number;
   feedbackScore: number;
   projectEvaluationScore: number;
   evidence: {
     learningGrowth: boolean;
-    okr: boolean;
     feedback: boolean;
     customerSatisfaction: boolean;
     internalProcesses: boolean;
@@ -23,12 +21,11 @@ export interface NonFinancialWeightConfig {
   customerWeight?: number;
   internalWeight?: number;
   evaluationWeight?: number;
-  okrWeight?: number;
   feedbackWeight?: number;
 }
 
-export interface KPIResult {
-  kpiName: string;
+export interface ScoreBreakdownItem {
+  label: string;
   calculatedValue: number;
   targetValue: number;
   achievementPercentage: number;
@@ -39,15 +36,15 @@ export interface KPIResult {
 export interface BSCBreakdown {
   learningGrowth: {
     score: number;
-    kpis: KPIResult[];
+    items: ScoreBreakdownItem[];
   };
   customerSatisfaction: {
     score: number;
-    kpis: KPIResult[];
+    items: ScoreBreakdownItem[];
   };
   internalProcesses: {
     score: number;
-    kpis: KPIResult[];
+    items: ScoreBreakdownItem[];
   };
 }
 
@@ -82,7 +79,6 @@ export class NonFinancialPerformanceService {
 
     const [
       learningGrowthSignal,
-      okrSignal,
       feedbackSignal,
       customerSatisfactionSignal,
       internalProcessesSignal,
@@ -90,7 +86,6 @@ export class NonFinancialPerformanceService {
     ] =
       await Promise.all([
         this.calculateLearningGrowthScore(employeeId, start, end),
-        this.calculateOkrScore(employeeId, start, end),
         this.calculateContinuousFeedbackScore(employeeId, start, end),
         this.calculateCustomerSatisfactionScore(employeeId, start, end),
         this.calculateInternalProcessesScore(employeeId, start, end),
@@ -98,28 +93,21 @@ export class NonFinancialPerformanceService {
       ]);
 
     const evaluationScore = learningGrowthSignal.score;
-    const okrScore = okrSignal.score;
     const feedbackScore = feedbackSignal.score;
     const customerSatisfactionScore = customerSatisfactionSignal.score;
     const internalProcessesScore = internalProcessesSignal.score;
     const projectEvaluationScore = projectEvaluationSignal.score;
 
-    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
-    const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
-    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.2);
-    const learningTotal = evalWeight + okrWeight + feedbackWeight;
-    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.5;
-    const okrFactor = learningTotal > 0 ? okrWeight / learningTotal : 0.3;
-    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.2;
+    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.7);
+    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.3);
+    const learningTotal = evalWeight + feedbackWeight;
+    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.7;
+    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.3;
 
-    const hasEvalOrOkr = evaluationScore > 0 || okrScore > 0;
-    const learningGrowthScore = hasEvalOrOkr
-      ? clamp(
-          evaluationScore * evalFactor +
-            okrScore * okrFactor +
-            feedbackScore * feedbackFactor
-        )
-      : feedbackScore || evaluationScore || okrScore;
+    const learningGrowthScore =
+      evaluationScore > 0 && feedbackScore > 0
+        ? clamp(evaluationScore * evalFactor + feedbackScore * feedbackFactor)
+        : evaluationScore || feedbackScore || 0;
 
     const learningWeight = normalizeWeightValue(weights?.learningGrowthWeight, 0.35);
     const customerWeight = normalizeWeightValue(weights?.customerWeight, 0.35);
@@ -140,12 +128,10 @@ export class NonFinancialPerformanceService {
       customerSatisfactionScore: Math.round(customerSatisfactionScore * 100) / 100,
       internalProcessesScore: Math.round(internalProcessesScore * 100) / 100,
       overallNonFinancialScore: Math.round(overallNonFinancialScore * 100) / 100,
-      okrScore: Math.round(okrScore * 100) / 100,
       feedbackScore: Math.round(feedbackScore * 100) / 100,
       projectEvaluationScore: Math.round(projectEvaluationScore * 100) / 100,
       evidence: {
         learningGrowth: learningGrowthSignal.hasData,
-        okr: okrSignal.hasData,
         feedback: feedbackSignal.hasData,
         customerSatisfaction: customerSatisfactionSignal.hasData,
         internalProcesses: internalProcessesSignal.hasData,
@@ -162,54 +148,45 @@ export class NonFinancialPerformanceService {
   ): Promise<BSCBreakdown> {
     const [
       learningGrowthSignal,
-      okrSignal,
       feedbackSignal,
       customerSatisfactionSignal,
       internalProcessesSignal,
     ] =
       await Promise.all([
         this.calculateLearningGrowthScore(employeeId, periodStart, periodEnd),
-        this.calculateOkrScore(employeeId, periodStart, periodEnd),
         this.calculateContinuousFeedbackScore(employeeId, periodStart, periodEnd),
         this.calculateCustomerSatisfactionScore(employeeId, periodStart, periodEnd),
         this.calculateInternalProcessesScore(employeeId, periodStart, periodEnd),
       ]);
 
     const evaluationScore = learningGrowthSignal.score;
-    const okrScore = okrSignal.score;
     const feedbackScore = feedbackSignal.score;
     const customerSatisfactionScore = customerSatisfactionSignal.score;
     const internalProcessesScore = internalProcessesSignal.score;
 
-    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.5);
-    const okrWeight = normalizeWeightValue(weights?.okrWeight, 0.3);
-    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.2);
-    const learningTotal = evalWeight + okrWeight + feedbackWeight;
-    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.5;
-    const okrFactor = learningTotal > 0 ? okrWeight / learningTotal : 0.3;
-    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.2;
+    const evalWeight = normalizeWeightValue(weights?.evaluationWeight, 0.7);
+    const feedbackWeight = normalizeWeightValue(weights?.feedbackWeight, 0.3);
+    const learningTotal = evalWeight + feedbackWeight;
+    const evalFactor = learningTotal > 0 ? evalWeight / learningTotal : 0.7;
+    const feedbackFactor = learningTotal > 0 ? feedbackWeight / learningTotal : 0.3;
 
-    const hasEvalOrOkr = evaluationScore > 0 || okrScore > 0;
-    const learningGrowthScore = hasEvalOrOkr
-      ? clamp(
-          evaluationScore * evalFactor +
-            okrScore * okrFactor +
-            feedbackScore * feedbackFactor
-        )
-      : feedbackScore || evaluationScore || okrScore;
+    const learningGrowthScore =
+      evaluationScore > 0 && feedbackScore > 0
+        ? clamp(evaluationScore * evalFactor + feedbackScore * feedbackFactor)
+        : evaluationScore || feedbackScore || 0;
 
     return {
       learningGrowth: {
         score: learningGrowthScore,
-        kpis: [],
+        items: [],
       },
       customerSatisfaction: {
         score: customerSatisfactionScore,
-        kpis: [],
+        items: [],
       },
       internalProcesses: {
         score: internalProcessesScore,
-        kpis: [],
+        items: [],
       },
     };
   }
@@ -280,60 +257,6 @@ export class NonFinancialPerformanceService {
         ? normalizeUnknownScale(Number(result._avg.overallScore || 0))
         : 0,
       hasData: result._count.id > 0,
-    };
-  }
-
-  private async calculateOkrScore(
-    employeeId: number,
-    periodStart: Date,
-    periodEnd: Date
-  ): Promise<ScoreSignal> {
-    const objectives = await prisma.okrObjective.findMany({
-      where: {
-        ownerProfileId: employeeId,
-        approvalStatus: "approved",
-        OR: [
-          { startDate: null, endDate: null },
-          {
-            startDate: { lte: periodEnd },
-            endDate: { gte: periodStart },
-          },
-        ],
-      },
-      include: { keyResults: true },
-    });
-
-    if (objectives.length === 0) {
-      return { score: 0, hasData: false };
-    }
-
-    const objectiveScores = objectives.map((objective) => {
-      const keyResults = objective.keyResults || [];
-      if (keyResults.length === 0) return 0;
-
-      const totalWeight = keyResults.reduce(
-        (sum, kr) => sum + Number(kr.weight || 0),
-        0
-      );
-      const normalizedTotalWeight = totalWeight > 0 ? totalWeight : keyResults.length;
-
-      const weightedProgress = keyResults.reduce((sum, kr) => {
-        const target = Number(kr.targetValue || 0);
-        if (target <= 0) return sum;
-        const current = Number(kr.currentValue || 0);
-        const progress = clamp((current / target) * 100);
-        const weight = totalWeight > 0 ? Number(kr.weight || 0) : 1;
-        return sum + progress * weight;
-      }, 0);
-
-      return clamp(weightedProgress / normalizedTotalWeight);
-    });
-
-    const avgObjectiveScore =
-      objectiveScores.reduce((sum, score) => sum + score, 0) / objectiveScores.length;
-    return {
-      score: clamp(avgObjectiveScore),
-      hasData: true,
     };
   }
 

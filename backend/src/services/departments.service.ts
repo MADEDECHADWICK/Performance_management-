@@ -11,7 +11,6 @@
  * Relations:
  * - profiles (employees)
  * - jobs
- * - kpis
  */
 
 import { Prisma } from '@prisma/client';
@@ -48,12 +47,6 @@ export interface ListDepartmentEmployeesOptions {
   sortOrder?: "asc" | "desc";
 }
 
-export interface ListDepartmentKpisOptions {
-  page?: number;
-  pageSize?: number;
-  category?: string;
-}
-
 export interface RevenueOptions {
   dateFrom?: Date;
   dateTo?: Date;
@@ -71,10 +64,6 @@ export interface UtilizationOptions {
   expectedWeeklyHours?: number;
   // optionally tune lookback window
   weeks?: number;
-}
-
-export interface TeamKpiOptions {
-  status?: "active" | "inactive" | "all";
 }
 
 export interface AuthContext {
@@ -234,7 +223,7 @@ export class DepartmentService {
           select: { id: true, firstName: true, lastName: true },
         },
         _count: {
-          select: { profiles: true, jobs: true, kpis: true },
+          select: { profiles: true, jobs: true },
         },
       },
     }).then(async (created) => {
@@ -270,7 +259,7 @@ export class DepartmentService {
         departmentHead: {
           select: { id: true, firstName: true, lastName: true },
         },
-        _count: { select: { profiles: true, jobs: true, kpis: true } },
+        _count: { select: { profiles: true, jobs: true } },
       },
     });
 
@@ -326,7 +315,7 @@ export class DepartmentService {
             : { createdAt: sortOrder },
         include: {
           departmentHead: { select: { id: true, firstName: true, lastName: true } },
-          _count: { select: { profiles: true, jobs: true, kpis: true } },
+          _count: { select: { profiles: true, jobs: true } },
         },
       }),
       prisma.department.count({ where }),
@@ -524,7 +513,7 @@ export class DepartmentService {
         },
         include: {
           departmentHead: { select: { id: true, firstName: true, lastName: true } },
-          _count: { select: { profiles: true, jobs: true, kpis: true } },
+          _count: { select: { profiles: true, jobs: true } },
         },
       });
 
@@ -606,65 +595,6 @@ export class DepartmentService {
     ]);
 
     return { employees, total };
-  }
-
-  /**
-   * List department KPIs (Kpi model)
-   */
-  async listDepartmentKPIs(departmentId: number, options: ListDepartmentKpisOptions = {}) {
-    await this.getDepartmentById(departmentId);
-
-    const { page = 1, pageSize = 10, category } = options;
-    const skip = (page - 1) * pageSize;
-
-    const where: any = { departmentId };
-    if (category) where.category = category;
-
-    const [kpis, total] = await Promise.all([
-      prisma.kpi.findMany({
-        where,
-        skip,
-        take: pageSize,
-        orderBy: { createdAt: "desc" },
-      }),
-      prisma.kpi.count({ where }),
-    ]);
-
-    return { kpis, total };
-  }
-
-  /**
-   * Create a KPI for department
-   * Access: Admin/HR (kept consistent with department creation)
-   */
-  async createDepartmentKPI(
-    departmentId: number,
-    input: {
-      name: string;
-      description?: string;
-      category: string;
-      kpiType: string;
-      targetValue?: number;
-      weight?: number;
-      targetFrequency?: string;
-    },
-    auth: AuthContext
-  ) {
-    this.requireAdminOrHr(auth);
-    await this.getDepartmentById(departmentId);
-
-    return prisma.kpi.create({
-      data: {
-        name: input.name,
-        description: input.description,
-        category: input.category,
-        kpiType: input.kpiType,
-        targetValue: input.targetValue,
-        weight: input.weight,
-        targetFrequency: input.targetFrequency,
-        departmentId,
-      },
-    });
   }
 
   /**
@@ -958,158 +888,6 @@ export class DepartmentService {
     };
   }
 
-  /**
-   * Team KPI breakdown by evaluation team
-   * Uses latest performance score per employee (if available).
-   */
-  async getDepartmentTeamKpis(
-    departmentId: number,
-    opts: TeamKpiOptions = {},
-    auth?: AuthContext
-  ) {
-    await this.getDepartmentById(departmentId, auth);
-
-    const statusFilter = opts.status && opts.status !== "all" ? opts.status : undefined;
-
-    const teams = await prisma.$queryRaw<
-      { id: number; teamName: string; description: string | null }[]
-    >`SELECT id, team_name AS "teamName", description FROM evaluation_teams WHERE department_id = ${departmentId}`;
-
-    if (!teams.length) return [];
-
-    const teamIds = teams.map((team) => team.id);
-    const members = await prisma.$queryRaw<
-      { teamId: number; employeeId: number }[]
-    >`SELECT team_id AS "teamId", employee_id AS "employeeId" FROM evaluation_team_members WHERE team_id IN (${Prisma.join(
-      teamIds
-    )})`;
-
-    const membersByTeam = members.reduce((map, row) => {
-      const key = row.teamId;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(row.employeeId);
-      return map;
-    }, new Map<number, number[]>());
-
-    const results = [];
-
-    for (const team of teams) {
-      const memberIds = membersByTeam.get(team.id) ?? [];
-      if (memberIds.length === 0) {
-        results.push({
-          teamId: team.id,
-          teamName: team.teamName,
-          description: team.description,
-          memberCount: 0,
-          activeCount: 0,
-          inactiveCount: 0,
-          financialScore: 0,
-          nonFinancialScore: 0,
-          overallScore: 0,
-        });
-        continue;
-      }
-
-      const profiles = await prisma.profile.findMany({
-        where: {
-          id: { in: memberIds },
-          ...(statusFilter ? { status: statusFilter } : {}),
-        },
-        select: { id: true, status: true },
-      });
-
-      const filteredIds = profiles.map((profile) => profile.id);
-      const activeCount = profiles.filter((profile) => profile.status === "active").length;
-      const inactiveCount = profiles.filter((profile) => profile.status === "inactive").length;
-
-      if (filteredIds.length === 0) {
-        results.push({
-          teamId: team.id,
-          teamName: team.teamName,
-          description: team.description,
-          memberCount: profiles.length,
-          activeCount,
-          inactiveCount,
-          financialScore: 0,
-          nonFinancialScore: 0,
-          overallScore: 0,
-        });
-        continue;
-      }
-
-      const scores = await prisma.performanceScore.findMany({
-        where: { employeeProfileId: { in: filteredIds } },
-        orderBy: { period: "desc" },
-        select: {
-          employeeProfileId: true,
-          financialWeighted: true,
-          nonFinancialWeighted: true,
-          totalScore: true,
-          period: true,
-        },
-      });
-
-      const latestByEmployee = new Map<number, typeof scores[number]>();
-      for (const score of scores) {
-        if (!latestByEmployee.has(score.employeeProfileId)) {
-          latestByEmployee.set(score.employeeProfileId, score);
-        }
-      }
-
-      const latestScores = Array.from(latestByEmployee.values());
-      const count = latestScores.length || 1;
-      const financialScore =
-        latestScores.reduce((sum, item) => sum + Number(item.financialWeighted || 0), 0) / count;
-      const nonFinancialScore =
-        latestScores.reduce((sum, item) => sum + Number(item.nonFinancialWeighted || 0), 0) /
-        count;
-      const overallScore =
-        latestScores.reduce((sum, item) => sum + Number(item.totalScore || 0), 0) / count;
-
-      const uniquePeriods = Array.from(
-        new Set(scores.map((score) => score.period.toISOString()))
-      )
-        .map((period) => new Date(period))
-        .sort((a, b) => b.getTime() - a.getTime());
-
-      const latestPeriod = uniquePeriods[0];
-      const previousPeriod = uniquePeriods[1];
-
-      const avgForPeriod = (period?: Date) => {
-        if (!period) return 0;
-        const periodScores = scores.filter(
-          (score) => score.period.toISOString() === period.toISOString()
-        );
-        if (periodScores.length === 0) return 0;
-        return (
-          periodScores.reduce((sum, item) => sum + Number(item.totalScore || 0), 0) /
-          periodScores.length
-        );
-      };
-
-      const previousOverall = avgForPeriod(previousPeriod);
-      const deltaOverall = Number((overallScore - previousOverall).toFixed(1));
-      const trendDirection =
-        deltaOverall > 0.1 ? "up" : deltaOverall < -0.1 ? "down" : "flat";
-
-      results.push({
-        teamId: team.id,
-        teamName: team.teamName,
-        description: team.description,
-        memberCount: profiles.length,
-        activeCount,
-        inactiveCount,
-        financialScore: Number(financialScore.toFixed(1)),
-        nonFinancialScore: Number(nonFinancialScore.toFixed(1)),
-        overallScore: Number(overallScore.toFixed(1)),
-        previousOverallScore: Number(previousOverall.toFixed(1)),
-        deltaOverall,
-        trendDirection,
-      });
-    }
-
-    return results;
-  }
 }
 
 export const departmentService = new DepartmentService();

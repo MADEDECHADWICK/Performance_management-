@@ -25,7 +25,6 @@ type DraftState = {
 const CATEGORY_LABELS: Record<string, string> = {
   competency: "Competency",
   behavior: "Behavior",
-  goal: "Goal",
   culture: "Culture",
 };
 
@@ -378,13 +377,6 @@ export default function EvaluationForm() {
                 <div className="text-sm text-muted-foreground">Total Score</div>
                 <div className="mt-2 text-3xl font-semibold">{assignment.scoreReport.totalScore.toFixed(1)}</div>
                 <div className="text-sm text-muted-foreground">Composite performance score</div>
-              </div>
-              <div className="rounded-xl border bg-background p-4">
-                <div className="text-sm text-muted-foreground">KPI Completion</div>
-                <div className="mt-2 text-3xl font-semibold">
-                  {Math.round(assignment.scoreReport.kpiCompletionPercent)}%
-                </div>
-                <Progress className="mt-3 h-2" value={Math.min(assignment.scoreReport.kpiCompletionPercent, 100)} />
               </div>
               <div className="rounded-xl border bg-background p-4">
                 <div className="text-sm text-muted-foreground">Peer vs Manager Variance</div>

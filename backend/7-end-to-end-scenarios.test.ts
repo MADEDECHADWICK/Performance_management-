@@ -106,10 +106,12 @@ describe('End-to-end workflow smoke test', () => {
   it('assigns staff, allocates hours, and allows time logging', async () => {
     const managerUser = seed.users.find((user) => user.email === 'manager@ronalds.local');
     const managerProfile = seed.profiles.find((profile) => profile.userId === managerUser?.id);
+    const partnerUser = seed.users.find((user) => user.email === 'partner@ronalds.local');
+    const partnerProfile = seed.profiles.find((profile) => profile.userId === partnerUser?.id);
     const employeeUser = seed.users.find((user) => user.email === 'employee@ronalds.local');
     const employeeProfile = seed.profiles.find((profile) => profile.userId === employeeUser?.id);
 
-    if (!managerUser || !managerProfile || !employeeUser || !employeeProfile) {
+    if (!managerUser || !managerProfile || !partnerUser || !partnerProfile || !employeeUser || !employeeProfile) {
       throw new Error('Missing seed users for assignment');
     }
 
@@ -203,6 +205,18 @@ describe('End-to-end workflow smoke test', () => {
     );
 
     expect(costing?.allocations?.length).toBeGreaterThan(0);
+
+    await jobService.reviewJobCosting(
+      job.id,
+      {
+        decision: 'approved',
+      },
+      {
+        userId: partnerUser.id,
+        profileId: partnerProfile.id,
+        roles: ['partner'],
+      }
+    );
 
     const timeEntry = await TimeEntryService.createTimeEntry(
       {

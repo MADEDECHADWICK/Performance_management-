@@ -1,7 +1,10 @@
+// This file defines the API routes for managing employee profiles. It includes endpoints for listing employees with optional filters, retrieving individual employee profiles, and fetching lists of partners and managers. The routes are protected with authentication and profile loading middleware to ensure that only authorized users can access the data. The implementation also includes utility functions for checking user roles and permissions to control access to certain endpoints. By organizing these routes in a dedicated file, we can maintain a clear structure for our API and facilitate the management of employee data within the application.
+
 import { Router } from "express";
 import prisma from "../prisma";
 import { authMiddleware } from "../middleware/auth";
 import { loadProfile } from "../middleware/loadProfile";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { hrOrAdmin } from "../utils/middleware";
 
@@ -13,14 +16,7 @@ const privilegedRoles = new Set([
 ]);
 
 const getRoleNames = (req: any) => {
-  const roles = [
-    ...(req.userRoles || []),
-    ...(req.userRoles || []),
-    req.profile?.role?.name,
-  ]
-    .filter(Boolean)
-    .map((role: string) => String(role).toLowerCase());
-  return Array.from(new Set(roles));
+  return resolveRequestAccessRoles(req).map((role) => String(role).toLowerCase());
 };
 
 const isPrivileged = (req: any) =>
@@ -28,7 +24,7 @@ const isPrivileged = (req: any) =>
 
 const isManagerRole = (req: any) =>
   getRoleNames(req).some(
-    (role: string) => role.includes("manager") || role.includes("team lead") || role === "partner"
+    (role: string) => role === "manager" || role === "partner"
   );
 
 const hasMarketingRole = (req: any) =>

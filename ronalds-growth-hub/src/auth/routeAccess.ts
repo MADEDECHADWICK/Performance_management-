@@ -1,5 +1,6 @@
 import type { CanonicalRole } from "./canonicalRoles";
 import {
+  getViewPermissionDefinition,
   resolvePreferredHomeRouteByViewAccess,
   resolveViewPermissionByPath,
   type ModuleAction,
@@ -23,5 +24,18 @@ export const getRouteAccessRule = (pathname: string): RouteAccessRule | null => 
 
 export const getPreferredHomeRoute = (
   roles: CanonicalRole[],
-  hasViewAccess: (viewKey: string) => boolean
-) => resolvePreferredHomeRouteByViewAccess(roles, hasViewAccess);
+  hasViewAccess: (viewKey: string) => boolean,
+  preferredHomeViewKey?: string | null
+) => {
+  const normalizedPreferredHomeViewKey = String(preferredHomeViewKey || "")
+    .toLowerCase()
+    .trim();
+
+  if (normalizedPreferredHomeViewKey && hasViewAccess(normalizedPreferredHomeViewKey)) {
+    return (
+      getViewPermissionDefinition(normalizedPreferredHomeViewKey)?.defaultPath || "/dashboard"
+    );
+  }
+
+  return resolvePreferredHomeRouteByViewAccess(roles, hasViewAccess);
+};

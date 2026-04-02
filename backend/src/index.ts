@@ -1,6 +1,7 @@
 import http from "http";
 import app from "./app";
 import websocketService from "./services/websocket.service";
+import backgroundJobsService from "./services/background-jobs.service";
 import { NotificationOutboxService } from "./services/notificationOutbox.service";
 import { JobOverdueNotificationService } from "./services/jobOverdueNotifications.service";
 import { assertRuntimeConfig, runtimeConfig } from "./config/env";
@@ -15,13 +16,20 @@ const server = http.createServer(app);
 
 websocketService.initialize(server);
 ObservabilityService.startMonitoring();
+void backgroundJobsService.initialize();
 NotificationOutboxService.startWorker();
 JobOverdueNotificationService.startWorker();
 
-if (runtimeConfig.nodeEnv === "production" && runtimeConfig.serveLocalUploads) {
-  logger.warn("production_local_uploads_enabled", {
+if (
+  runtimeConfig.nodeEnv === "production" &&
+  (runtimeConfig.serveLocalUploads || runtimeConfig.diskUploadsEnabled)
+) {
+  logger.warn("production_local_disk_uploads_enabled", {
     uploadRoot: runtimeConfig.uploadRoot,
-    recommendation: "Move uploads to managed object storage before wider production rollout.",
+    serveLocalUploads: runtimeConfig.serveLocalUploads,
+    diskUploadsEnabled: runtimeConfig.diskUploadsEnabled,
+    recommendation:
+      "Move uploads to managed object storage before wider production rollout.",
   });
 }
 
@@ -31,6 +39,7 @@ server.listen(PORT, "0.0.0.0", () => {
     wsUrl: `ws://localhost:${PORT}`,
     nodeEnv: runtimeConfig.nodeEnv,
     serveLocalUploads: runtimeConfig.serveLocalUploads,
+    diskUploadsEnabled: runtimeConfig.diskUploadsEnabled,
     uploadRoot: runtimeConfig.uploadRoot,
   });
 });
@@ -60,6 +69,9 @@ process.on("uncaughtException", (error: unknown) => {
 
 const shutdown = () => {
   ObservabilityService.stopMonitoring();
+  void backgroundJobsService.shutdown().catch((error) => {
+    logger.error("background_jobs_shutdown_failed", toLogContext(error));
+  });
   NotificationOutboxService.stopWorker();
   JobOverdueNotificationService.stopWorker();
 };

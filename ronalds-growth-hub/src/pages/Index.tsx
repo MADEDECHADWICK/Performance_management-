@@ -17,7 +17,7 @@ const featureCards = [
   {
     icon: Target,
     title: "Competency Tracking",
-    description: "Track growth plans, scorecards, and goals against role expectations.",
+    description: "Track development, review outcomes, and role expectations in one place.",
   },
   {
     icon: TrendingUp,
@@ -73,7 +73,7 @@ const Index = () => {
                 </span>
               </h2>
               <p className="max-w-2xl text-base text-muted-foreground sm:text-lg">
-                Ronalds LLP combines 360-degree evaluations, goal tracking, and financial impact into one operational command center.
+                Ronalds LLP combines 360-degree evaluations, workforce analytics, and financial impact into one operational command center.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">

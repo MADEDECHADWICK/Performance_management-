@@ -2,6 +2,7 @@ import { Router } from "express";
 import { ChecklistStatus, ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
 import prisma from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { notifyHrGroup } from "../services/hrNotifications";
@@ -41,11 +42,7 @@ const normalizeRole = (value: string | null | undefined) =>
 
 const resolveRoleSet = (req: AuthRequest) =>
   new Set(
-    [
-      ...(req.userRoles || []),
-      ...(req.user?.authRoles || []),
-      req.profile?.role?.name || "",
-    ]
+    resolveRequestAccessRoles(req)
       .map((role) => normalizeRole(role))
       .filter(Boolean)
   );
@@ -829,6 +826,13 @@ router.post(
       title: "New onboarding requires HR review",
       body: `Client onboarding for "${onboarding.clientName}" is awaiting HR review.`,
       relatedEntityId: onboarding.id,
+      eventType: "client_onboarding.submitted",
+      targetEntityType: "ClientOnboarding",
+      targetEntityId: onboarding.id,
+      canonicalRoute: "/client-onboarding-queue",
+      priority: "medium",
+      requiredPermission: "module.clients.read",
+      templateLabel: "client_onboarding.submitted",
     },
     req
   );
@@ -901,6 +905,13 @@ router.post(
               actionRequired: true,
               link: `/hr-queue?onboardingId=${updated.id}`,
               clientId: updated.clientId ?? undefined,
+              eventType: "client_onboarding.approved_for_manager_review",
+              priority: "medium",
+              targetEntityType: "ClientOnboarding",
+              targetEntityId: updated.id,
+              canonicalRoute: `/hr-queue?onboardingId=${updated.id}`,
+              requiredPermission: "module.clients.read",
+              templateLabel: "client_onboarding.approved_for_manager_review",
             },
             { userId: req.user?.userId ?? 0, profileId: req.user?.profileId ?? 0, roleName: "system" }
           )
@@ -978,6 +989,15 @@ router.post(
             ? `/clients/${onboarding.clientId}/edit?onboardingId=${onboarding.id}&resubmit=1`
             : `/client-onboarding-queue`,
           clientId: onboarding.clientId ?? undefined,
+          eventType: "client_onboarding.rejected",
+          priority: "high",
+          targetEntityType: "ClientOnboarding",
+          targetEntityId: onboarding.id,
+          canonicalRoute: onboarding.clientId
+            ? `/clients/${onboarding.clientId}/edit?onboardingId=${onboarding.id}&resubmit=1`
+            : "/client-onboarding-queue",
+          requiredPermission: "module.clients.read",
+          templateLabel: "client_onboarding.rejected",
         },
         {
           userId: req.user?.userId ?? 0,
@@ -1327,6 +1347,13 @@ router.post(
           title: "Client onboarding resubmitted",
           body: `Marketing resubmitted "${updatedOnboarding?.clientName || onboarding.clientName}" for HR review.`,
           relatedEntityId: onboarding.id,
+          eventType: "client_onboarding.resubmitted",
+          targetEntityType: "ClientOnboarding",
+          targetEntityId: onboarding.id,
+          canonicalRoute: "/client-onboarding-queue",
+          priority: "medium",
+          requiredPermission: "module.clients.read",
+          templateLabel: "client_onboarding.resubmitted",
         },
         req
       );

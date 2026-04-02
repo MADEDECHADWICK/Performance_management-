@@ -15,6 +15,14 @@ export type JobStatus = 'planned' | 'in_progress' | 'on_hold' | 'completed' | 'c
 export type BillingType = 'hourly' | 'fixed_fee';
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+export type JobInvoiceStatus = 'draft' | 'issued' | 'partially_paid' | 'paid' | 'overdue' | 'void';
+export type JobInvoiceLineType =
+  | 'milestone_fee'
+  | 'service_fee'
+  | 'expense'
+  | 'adjustment'
+  | 'tax'
+  | 'credit';
 export type TimeEntryStatus = 'pending' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
 export type OverBudgetRequestStatus = 'pending' | 'manager_approved' | 'manager_rejected' | 'partner_approved' | 'partner_rejected' | 'auto_rejected';
 export type TimeEntryApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
@@ -40,8 +48,11 @@ export interface User {
   isPartner?: boolean;
   is_partner?: boolean;
   moduleAccess?: Record<string, string[]>;
+  viewAccessKeys?: string[];
+  homeViewKey?: string | null;
   profile?: Profile;
-  roles?: UserAuthRole[];
+  roles?: Array<string | UserAuthRole>;
+  authRoles?: string[];
 }
 
 export interface Profile {
@@ -250,6 +261,17 @@ export interface Job {
   timeEntries?: TimeEntry[];
   jobCosting?: JobCosting;
   invoiceTracking?: JobInvoiceMilestoneTracking;
+  operationsMetrics?: {
+    billableHours: number;
+    approvedBilledAmount: number;
+    collectedAmount: number;
+    outstandingAmount: number;
+    costToDate: number;
+    profitToDate: number;
+    marginPercent: number;
+    nextInvoiceAmount: number;
+    overdueInvoiceCount: number;
+  };
 }
 
 export interface JobStaffAssignment {
@@ -351,6 +373,7 @@ export interface JobInvoiceMilestoneTrackingItem {
   milestonePaid: boolean;
   readyForInvoice: boolean;
   invoiceNumberSuggestion: string;
+  linkedInvoice?: JobInvoiceSummary | null;
 }
 
 export interface JobInvoiceMilestoneTracking {
@@ -364,6 +387,43 @@ export interface JobInvoiceMilestoneTracking {
   completedConditionCount: number;
   nextReadyMilestone?: JobInvoiceMilestoneTrackingItem | null;
   milestones: JobInvoiceMilestoneTrackingItem[];
+}
+
+export interface JobInvoiceSummary {
+  id: number;
+  invoiceNumber: string;
+  title: string;
+  status: JobInvoiceStatus;
+  currency: string;
+  expectedPercent?: number | null;
+  totalAmount: number;
+  amountPaid: number;
+  amountOutstanding: number;
+  dueDate?: string | null;
+  issuedAt?: string | null;
+  generatedAt?: string | null;
+  milestoneTaskId?: number | null;
+  milestoneTitle?: string | null;
+  document?: {
+    id: number;
+    fileName: string;
+    filePath: string;
+  } | null;
+  paymentApplications: Array<{
+    clientPaymentId: number;
+    appliedAmount: number;
+    appliedAt: string;
+    paymentDate?: string | null;
+    referenceNumber?: string | null;
+  }>;
+  lines: Array<{
+    id: number;
+    description: string;
+    lineType: JobInvoiceLineType | string;
+    quantity: number;
+    unitPrice: number;
+    lineAmount: number;
+  }>;
 }
 
 export interface JobWorkflowOwnership {
@@ -455,7 +515,12 @@ export interface JobWorkflowTrackingPayload {
     expectedFeeAmount: number;
     billedAmount: number;
     approvedBilledAmount: number;
+    laborCostToDate: number;
+    approvedRequisitionCost: number;
+    committedRequisitionCost: number;
+    recoverableRequisitionCost: number;
     costToDate: number;
+    totalCommittedCost: number;
     profitToDate: number;
     marginPercent: number;
     billedVsExpectedPercent: number;
@@ -475,10 +540,42 @@ export interface JobWorkflowTrackingPayload {
     employeeProfitAmount: number;
     employeeLossAmount: number;
   };
+  invoices: {
+    total: number;
+    draftCount: number;
+    issuedCount: number;
+    partiallyPaidCount: number;
+    paidCount: number;
+    overdueCount: number;
+    nextDueDate?: string | null;
+    items: JobInvoiceSummary[];
+  };
   milestones?: JobInvoiceMilestoneTracking;
   documentReadiness: {
     missingForInProgress: string[];
     missingForCompletion: string[];
+  };
+  requisitions: {
+    totalRequests: number;
+    approvedCount: number;
+    pendingCount: number;
+    approvedSpend: number;
+    committedSpend: number;
+    recoverableApprovedSpend: number;
+    recent: Array<{
+      id: number;
+      requisitionNumber: string;
+      title: string;
+      status: string;
+      amount: number;
+      currency: string;
+      submittedAt?: string | null;
+      approvedAt?: string | null;
+      isClientRecoverable: boolean;
+      requesterName?: string | null;
+      requisitionTypeName?: string | null;
+      sourceModule?: string | null;
+    }>;
   };
 }
 
@@ -580,6 +677,12 @@ export interface TimeEntry {
   employee?: Profile;
   task?: Task;
   approvedBy?: Profile;
+  sourceType?: "manual" | "leave_request";
+  nonBillableCategory?: string | null;
+  leaveRequestId?: number | null;
+  leaveStatus?: string | null;
+  isProjectedLeave?: boolean;
+  leaveType?: { id: number; name: string } | null;
 }
 
 export interface TimeEntryApprovalRequest {
@@ -654,7 +757,7 @@ export interface EvaluationRatingScale {
 }
 
 export interface EvaluationMetricSource {
-  type: 'kpi' | 'okr' | 'result_area' | 'competency' | 'question' | 'custom';
+  type: 'result_area' | 'competency' | 'question' | 'custom';
   id?: number | string;
   name: string;
   category?: string;
@@ -784,77 +887,6 @@ export interface EvaluationAssignment {
   evaluatee?: Profile;
 }
 
-// KPI Models
-export interface Kpi {
-  id: number;
-  name: string;
-  description?: string;
-  category?: string;
-  kpiType?: string;
-  departmentId?: number;
-  roleId?: number;
-  measurementUnit?: string;
-  targetValue?: number;
-  targetFrequency?: string;
-  targetType?: string;
-  targetText?: string;
-  weight?: number;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-  department?: Department;
-  role?: PositionRole;
-}
-
-export interface EmployeeKpiAssignment {
-  id: number;
-  employeeProfileId: number;
-  kpiId: number;
-  targetValue?: number;
-  achievedValue?: number;
-  weight?: number;
-  status: string;
-  periodStart?: string;
-  periodEnd?: string;
-  createdAt: string;
-  updatedAt: string;
-  employee?: Profile;
-  kpi?: Kpi;
-  tracking?: {
-    targetValue?: number | null;
-    achievedValue?: number | null;
-    resolvedAchievedValue?: number | null;
-    derivedAchievedValueFromOkrs?: number | null;
-    progressPercent?: number;
-    achievement?: {
-      status: "not_started" | "behind" | "on_track" | "met" | "exceeded";
-      achievedFrom: "manual" | "okr_derived" | "none";
-      varianceToTarget?: number | null;
-      remainingToTarget?: number | null;
-      formula?: string | null;
-      asOf?: string | null;
-    };
-    history?: Array<{
-      id: number;
-      at: string;
-      action: string;
-      source: "manual_progress_update" | "assignment_update" | "assignment_closed";
-      actorProfileId?: number | null;
-      previousAchievedValue?: number | null;
-      newAchievedValue?: number | null;
-      note?: string | null;
-    }>;
-    okr?: {
-      objectiveCount: number;
-      approvedObjectiveCount: number;
-      completedObjectiveCount: number;
-      keyResultCount: number;
-      overallCompletionPercent: number;
-      lastUpdatedAt?: string | null;
-    };
-  };
-}
-
 // Notification
 export interface Notification {
   id: number;
@@ -880,6 +912,11 @@ export interface InductionChecklist {
   assignedByProfileId?: number;
   dueDate?: string;
   completedAt?: string;
+  employeeAcknowledgedAt?: string;
+  employeeAcknowledgedByProfileId?: number;
+  hrSignedOffAt?: string;
+  hrSignedOffByProfileId?: number;
+  hrSignoffNotes?: string;
   createdAt: string;
   updatedAt: string;
   items?: InductionChecklistItem[];
@@ -891,11 +928,27 @@ export interface InductionChecklistItem {
   itemName: string;
   description?: string;
   orderIndex: number;
+  sectionKey?: string;
+  sectionLabel?: string;
+  ownerRole?: string;
+  itemType?: string;
+  resourceUrl?: string;
+  comments?: string;
   isCompleted: boolean;
   completedByProfileId?: number;
   completedAt?: string;
   requiresDocument: boolean;
   documentId?: number;
+  document?: Pick<
+    Document,
+    | "id"
+    | "fileName"
+    | "filePath"
+    | "verificationStatus"
+    | "rejectionReason"
+    | "verifiedAt"
+    | "verifiedBy"
+  > | null;
   createdAt: string;
   updatedAt: string;
 }

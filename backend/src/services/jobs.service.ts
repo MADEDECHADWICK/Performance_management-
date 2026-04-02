@@ -11,11 +11,15 @@
  * - Job status workflows
  */
 
+import fs from 'fs';
+import path from 'path';
+import PDFDocument from 'pdfkit';
 import prisma from '../prisma';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
-import { JobStatus, TaskStatus } from '@prisma/client';
+import { JobInvoiceStatus, JobStatus, Prisma, TaskStatus } from '@prisma/client';
 import { createClientSurveyForJobCompletion } from './surveyRouting.service';
+import { buildPublicUploadPath, getUploadDirectory } from '../config/uploads';
 
 export interface JobMilestoneInput {
   title: string;
@@ -162,6 +166,7 @@ export interface JobInvoiceMilestoneTrackingItem {
   milestonePaid: boolean;
   readyForInvoice: boolean;
   invoiceNumberSuggestion: string;
+  linkedInvoice: JobInvoiceSummaryItem | null;
 }
 
 export interface JobInvoiceMilestoneTrackingSummary {
@@ -177,6 +182,58 @@ export interface JobInvoiceMilestoneTrackingSummary {
   milestones: JobInvoiceMilestoneTrackingItem[];
 }
 
+export interface JobInvoiceSummaryItem {
+  id: number;
+  invoiceNumber: string;
+  title: string;
+  status: JobInvoiceStatus;
+  currency: string;
+  expectedPercent: number | null;
+  totalAmount: number;
+  amountPaid: number;
+  amountOutstanding: number;
+  dueDate: Date | null;
+  issuedAt: Date | null;
+  generatedAt: Date | null;
+  milestoneTaskId: number | null;
+  milestoneTitle: string | null;
+  document: {
+    id: number;
+    fileName: string;
+    filePath: string;
+  } | null;
+  paymentApplications: Array<{
+    clientPaymentId: number;
+    appliedAmount: number;
+    appliedAt: Date;
+    paymentDate: Date | null;
+    referenceNumber: string | null;
+  }>;
+  lines: Array<{
+    id: number;
+    description: string;
+    lineType: string;
+    quantity: number;
+    unitPrice: number;
+    lineAmount: number;
+  }>;
+}
+
+export interface JobCommercialSummary {
+  totals: {
+    expectedFeeAmount: number;
+    approvedBilledAmount: number;
+    collectedAmount: number;
+    outstandingAmount: number;
+    costToDate: number;
+    profitToDate: number;
+    marginPercent: number;
+    invoiceCount: number;
+    overdueInvoiceCount: number;
+  };
+  invoices: JobInvoiceSummaryItem[];
+}
+
 const coerceDate = (value?: unknown): Date | undefined => {
   if (!value) return undefined;
   if (value instanceof Date) return value;
@@ -188,6 +245,38 @@ const JOB_MILESTONE_META_PREFIX = '[[RG_JOB_MILESTONE]]';
 
 const roundCurrency = (value: number) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const sanitizeGeneratedFileName = (value: string) =>
+  String(value || 'document')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_');
+
+const createPdfBuffer = async (
+  draw: (doc: PDFKit.PDFDocument) => void
+): Promise<Buffer> =>
+  new Promise<Buffer>((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks: Buffer[] = [];
+
+    doc.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    draw(doc as unknown as PDFKit.PDFDocument);
+    doc.end();
+  });
+
+const writeGeneratedDocumentFile = async (fileName: string, buffer: Buffer) => {
+  const directory = getUploadDirectory('documents');
+  const storedName = `${Date.now()}-${sanitizeGeneratedFileName(fileName)}`;
+  const absolutePath = path.join(directory, storedName);
+  await fs.promises.writeFile(absolutePath, buffer);
+  return {
+    absolutePath,
+    publicPath: buildPublicUploadPath('documents', storedName),
+    storedName,
+  };
+};
 
 const normalizeDocumentType = (value: unknown) =>
   String(value || '')
@@ -550,6 +639,336 @@ class JobService {
     return 0;
   }
 
+  private async ensureDefaultJobInvoiceTemplate(
+    tx: Prisma.TransactionClient,
+    createdByProfileId?: number | null
+  ) {
+    const existing = await tx.jobInvoiceTemplate.findFirst({
+      where: { isDefault: true },
+      orderBy: { id: 'asc' },
+    });
+
+    if (existing) {
+      return existing;
+    }
+
+    return tx.jobInvoiceTemplate.create({
+      data: {
+        name: 'Standard Job Invoice',
+        description: 'Default milestone billing template',
+        subjectLine: 'Invoice {{invoiceNumber}} - {{jobName}}',
+        isDefault: true,
+        createdByProfileId: createdByProfileId ?? null,
+        templateDefinition: {
+          heading: 'RONALDS LLP',
+          title: 'Tax Invoice',
+          subtitle: 'Professional services milestone billing',
+          footer: 'Please remit payment to Ronalds LLP using the invoice number as reference.',
+        },
+      },
+    });
+  }
+
+  private resolveJobInvoiceStatus(input: {
+    currentStatus?: JobInvoiceStatus;
+    totalAmount: number;
+    amountPaid: number;
+    dueDate?: Date | null;
+    issuedAt?: Date | null;
+  }): JobInvoiceStatus {
+    if (input.currentStatus === 'void') return 'void';
+    if (input.totalAmount > 0 && input.amountPaid + 0.0001 >= input.totalAmount) return 'paid';
+    if (input.amountPaid > 0) return 'partially_paid';
+    if (input.issuedAt) {
+      if (input.dueDate && input.dueDate.getTime() < Date.now()) {
+        return 'overdue';
+      }
+      return 'issued';
+    }
+    return 'draft';
+  }
+
+  private serializeJobInvoice(invoice: any): JobInvoiceSummaryItem {
+    return {
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      title: invoice.title,
+      status: invoice.status,
+      currency: invoice.currency || 'KES',
+      expectedPercent:
+        invoice.expectedPercent === null || invoice.expectedPercent === undefined
+          ? null
+          : Number(invoice.expectedPercent),
+      totalAmount: roundCurrency(Number(invoice.totalAmount || 0)),
+      amountPaid: roundCurrency(Number(invoice.amountPaid || 0)),
+      amountOutstanding: roundCurrency(Number(invoice.amountOutstanding || 0)),
+      dueDate: invoice.dueDate ?? null,
+      issuedAt: invoice.issuedAt ?? null,
+      generatedAt: invoice.generatedAt ?? null,
+      milestoneTaskId: invoice.milestoneTaskId ?? null,
+      milestoneTitle: invoice.milestoneTask?.title || null,
+      document: invoice.document
+        ? {
+            id: invoice.document.id,
+            fileName: invoice.document.fileName,
+            filePath: invoice.document.filePath,
+          }
+        : null,
+      paymentApplications: Array.isArray(invoice.paymentApplications)
+        ? invoice.paymentApplications.map((application: any) => ({
+            clientPaymentId: application.clientPaymentId,
+            appliedAmount: roundCurrency(Number(application.appliedAmount || 0)),
+            appliedAt: application.appliedAt,
+            paymentDate: application.clientPayment?.paymentDate ?? null,
+            referenceNumber: application.clientPayment?.referenceNumber ?? null,
+          }))
+        : [],
+      lines: Array.isArray(invoice.lines)
+        ? invoice.lines.map((line: any) => ({
+            id: line.id,
+            description: line.description,
+            lineType: String(line.lineType || 'service_fee'),
+            quantity: Number(line.quantity || 0),
+            unitPrice: roundCurrency(Number(line.unitPrice || 0)),
+            lineAmount: roundCurrency(Number(line.lineAmount || 0)),
+          }))
+        : [],
+    };
+  }
+
+  private async syncJobInvoicePaymentState(
+    tx: Prisma.TransactionClient,
+    jobInvoiceId: number
+  ) {
+    const invoice = await tx.jobInvoice.findUnique({
+      where: { id: jobInvoiceId },
+      include: {
+        paymentApplications: {
+          select: { appliedAmount: true, appliedAt: true },
+        },
+      },
+    });
+
+    if (!invoice) {
+      throw new Error('Invoice not found');
+    }
+
+    const amountPaid = roundCurrency(
+      invoice.paymentApplications.reduce(
+        (sum, application) => sum + Number(application.appliedAmount || 0),
+        0
+      )
+    );
+    const totalAmount = roundCurrency(Number(invoice.totalAmount || 0));
+    const amountOutstanding = roundCurrency(Math.max(0, totalAmount - amountPaid));
+    const nextStatus = this.resolveJobInvoiceStatus({
+      currentStatus: invoice.status,
+      totalAmount,
+      amountPaid,
+      dueDate: invoice.dueDate,
+      issuedAt: invoice.issuedAt,
+    });
+
+    const updated = await tx.jobInvoice.update({
+      where: { id: jobInvoiceId },
+      data: {
+        amountPaid,
+        amountOutstanding,
+        status: nextStatus,
+        paidAt: nextStatus === 'paid' ? new Date() : null,
+      },
+      include: {
+        milestoneTask: { select: { id: true, title: true } },
+        document: { select: { id: true, fileName: true, filePath: true } },
+        lines: {
+          orderBy: { sortOrder: 'asc' },
+        },
+        paymentApplications: {
+          include: {
+            clientPayment: {
+              select: {
+                id: true,
+                paymentDate: true,
+                referenceNumber: true,
+              },
+            },
+          },
+          orderBy: { appliedAt: 'asc' },
+        },
+      },
+    });
+
+    if (invoice.status !== nextStatus) {
+      await tx.jobInvoiceStatusHistory.create({
+        data: {
+          jobInvoiceId,
+          fromStatus: invoice.status,
+          toStatus: nextStatus,
+          notes:
+            nextStatus === 'paid'
+              ? 'Invoice fully settled by applied payment(s).'
+              : nextStatus === 'partially_paid'
+                ? 'Invoice partially settled by applied payment(s).'
+                : nextStatus === 'overdue'
+                  ? 'Invoice is overdue based on due date.'
+                  : 'Invoice payment state recalculated.',
+        },
+      });
+    }
+
+    return updated;
+  }
+
+  private async generateJobInvoiceDocument(
+    tx: Prisma.TransactionClient,
+    jobInvoiceId: number
+  ) {
+    const invoice = await tx.jobInvoice.findUnique({
+      where: { id: jobInvoiceId },
+      include: {
+        job: {
+          select: {
+            id: true,
+            jobName: true,
+            jobCode: true,
+          },
+        },
+        client: {
+          select: {
+            id: true,
+            clientName: true,
+          },
+        },
+        template: true,
+        lines: {
+          orderBy: { sortOrder: 'asc' },
+        },
+        document: {
+          select: {
+            id: true,
+            fileName: true,
+            filePath: true,
+          },
+        },
+      },
+    });
+
+    if (!invoice) {
+      throw new Error('Invoice not found');
+    }
+
+    const templateDefinition =
+      invoice.template?.templateDefinition &&
+      typeof invoice.template.templateDefinition === 'object' &&
+      !Array.isArray(invoice.template.templateDefinition)
+        ? (invoice.template.templateDefinition as Record<string, unknown>)
+        : {};
+
+    const heading = String(templateDefinition.heading || 'RONALDS LLP');
+    const title = String(templateDefinition.title || 'Tax Invoice');
+    const subtitle = String(
+      templateDefinition.subtitle || 'Professional services milestone billing'
+    );
+    const footer = String(
+      templateDefinition.footer ||
+        'Please remit payment using the invoice number as the payment reference.'
+    );
+
+    const pdfBuffer = await createPdfBuffer((doc) => {
+      doc.fontSize(20).fillColor('#0f172a').text(heading, { align: 'left' });
+      doc.moveDown(0.5);
+      doc.fontSize(16).fillColor('#2563eb').text(title, { align: 'left' });
+      doc.moveDown(0.25);
+      doc.fontSize(10).fillColor('#475569').text(subtitle);
+      doc.moveDown(1.5);
+
+      doc.fontSize(10).fillColor('#0f172a');
+      doc.text(`Invoice Number: ${invoice.invoiceNumber}`);
+      doc.text(`Client: ${invoice.client.clientName}`);
+      doc.text(`Job: ${invoice.job.jobName}${invoice.job.jobCode ? ` (${invoice.job.jobCode})` : ''}`);
+      doc.text(`Status: ${String(invoice.status).replace(/_/g, ' ')}`);
+      doc.text(
+        `Issued: ${invoice.issuedAt ? invoice.issuedAt.toLocaleDateString() : 'Draft pending issue'}`
+      );
+      doc.text(`Due: ${invoice.dueDate ? invoice.dueDate.toLocaleDateString() : 'On receipt'}`);
+      doc.moveDown(1);
+
+      doc.fontSize(11).fillColor('#0f172a').text('Invoice lines', { underline: true });
+      doc.moveDown(0.5);
+
+      invoice.lines.forEach((line) => {
+        doc
+          .fontSize(10)
+          .fillColor('#0f172a')
+          .text(
+            `${line.description}  x${Number(line.quantity || 0).toFixed(2)} @ ${roundCurrency(
+              Number(line.unitPrice || 0)
+            ).toLocaleString()}`
+          );
+        doc
+          .fontSize(10)
+          .fillColor('#475569')
+          .text(`${invoice.currency} ${roundCurrency(Number(line.lineAmount || 0)).toLocaleString()}`, {
+            align: 'right',
+          });
+        doc.moveDown(0.35);
+      });
+
+      doc.moveDown(1);
+      doc.fontSize(11).fillColor('#0f172a').text(`Subtotal: ${invoice.currency} ${roundCurrency(Number(invoice.subtotalAmount || 0)).toLocaleString()}`, { align: 'right' });
+      doc.fontSize(11).fillColor('#0f172a').text(`Tax: ${invoice.currency} ${roundCurrency(Number(invoice.taxAmount || 0)).toLocaleString()}`, { align: 'right' });
+      doc.fontSize(13).fillColor('#0f172a').text(`Total: ${invoice.currency} ${roundCurrency(Number(invoice.totalAmount || 0)).toLocaleString()}`, { align: 'right' });
+      doc.moveDown(1.5);
+      doc.fontSize(9).fillColor('#64748b').text(footer, {
+        align: 'left',
+      });
+    });
+
+    const fileName = `${invoice.invoiceNumber}.pdf`;
+    const stored = await writeGeneratedDocumentFile(fileName, pdfBuffer);
+
+    let documentId = invoice.document?.id ?? null;
+    if (documentId) {
+      await tx.document.update({
+        where: { id: documentId },
+        data: {
+          fileName: stored.storedName,
+          filePath: stored.publicPath,
+          fileSize: pdfBuffer.length,
+          mimeType: 'application/pdf',
+          documentType: 'job_invoice',
+          entityType: 'job_invoice',
+          entityId: invoice.id,
+          description: `Generated invoice ${invoice.invoiceNumber}`,
+        },
+      });
+    } else {
+      const createdDocument = await tx.document.create({
+        data: {
+          fileName: stored.storedName,
+          filePath: stored.publicPath,
+          fileSize: pdfBuffer.length,
+          mimeType: 'application/pdf',
+          documentType: 'job_invoice',
+          entityType: 'job_invoice',
+          entityId: invoice.id,
+          description: `Generated invoice ${invoice.invoiceNumber}`,
+        },
+      });
+      documentId = createdDocument.id;
+    }
+
+    await tx.jobInvoice.update({
+      where: { id: invoice.id },
+      data: {
+        documentId,
+        generatedAt: new Date(),
+      },
+    });
+
+    return documentId;
+  }
+
   private async createMilestoneTasksForJob(
     jobId: number,
     milestones: NormalizedJobMilestone[],
@@ -891,7 +1310,7 @@ class JobService {
       return;
     }
 
-    const setupRoute = `/job-workflow-dashboard?jobId=${job.id}`;
+    const setupRoute = this.buildTrackingPath(job.id);
 
     await NotificationService.createNotification(
       {
@@ -1291,7 +1710,8 @@ class JobService {
     const isAdmin =
       roleSet.has('super_admin') ||
       roleSet.has('hr') ||
-      roleSet.has('gmp');
+      roleSet.has('gmp') ||
+      roleSet.has('finance');
 
     // Build where clause based on access control
     let whereClause: any = {};
@@ -1401,10 +1821,39 @@ class JobService {
           jobCosting: {
             select: {
               id: true,
+              jobFee: true,
               budgetCap: true,
               totalEstimatedCost: true,
               allocatedCost: true,
               remainingBudget: true,
+            },
+          },
+          timeEntries: {
+            select: {
+              status: true,
+              hours: true,
+              billable: true,
+              billableAmount: true,
+              costAmount: true,
+            },
+          },
+          payments: {
+            select: {
+              paymentAmount: true,
+            },
+          },
+          requisitionRequests: {
+            select: {
+              status: true,
+              amount: true,
+            },
+          },
+          invoices: {
+            select: {
+              status: true,
+              totalAmount: true,
+              amountOutstanding: true,
+              dueDate: true,
             },
           },
         },
@@ -1413,10 +1862,69 @@ class JobService {
     ]);
 
     return {
-      jobs: jobs.map((job) => ({
-        ...this.withDerivedOverdueStatus(job as any),
-        trackingPath: this.buildTrackingPath(job.id),
-      })),
+      jobs: jobs.map((job) => {
+        const activeTimeEntries = job.timeEntries.filter((entry) =>
+          ['pending', 'submitted', 'approved'].includes(String(entry.status))
+        );
+        const approvedTimeEntries = job.timeEntries.filter(
+          (entry) => String(entry.status) === 'approved'
+        );
+        const totalBillableHours = roundCurrency(
+          activeTimeEntries
+            .filter((entry) => entry.billable)
+            .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+        );
+        const approvedBilledAmount = roundCurrency(
+          approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
+        );
+        const laborCostToDate = roundCurrency(
+          activeTimeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0)
+        );
+        const approvedRequisitionCost = roundCurrency(
+          job.requisitionRequests
+            .filter((item) => String(item.status) === 'approved')
+            .reduce((sum, item) => sum + Number(item.amount || 0), 0)
+        );
+        const costToDate = roundCurrency(laborCostToDate + approvedRequisitionCost);
+        const expectedFeeAmount = this.resolveJobFeeForTracking(job as any);
+        const collectedAmount = roundCurrency(
+          job.payments.reduce((sum, payment) => sum + Number(payment.paymentAmount || 0), 0)
+        );
+        const outstandingAmount = roundCurrency(Math.max(0, expectedFeeAmount - collectedAmount));
+        const profitToDate = roundCurrency(approvedBilledAmount - costToDate);
+        const marginPercent =
+          approvedBilledAmount > 0
+            ? Number(((profitToDate / approvedBilledAmount) * 100).toFixed(2))
+            : 0;
+        const openInvoices = job.invoices.filter(
+          (invoice) => invoice.status !== 'paid' && invoice.status !== 'void'
+        );
+        const nextInvoiceAmount = roundCurrency(
+          Number(
+            [...openInvoices].sort((left, right) => {
+              const leftTime = left.dueDate ? new Date(left.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+              const rightTime = right.dueDate ? new Date(right.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+              return leftTime - rightTime;
+            })[0]?.amountOutstanding || 0
+          )
+        );
+
+        return {
+          ...this.withDerivedOverdueStatus(job as any),
+          trackingPath: this.buildTrackingPath(job.id),
+          operationsMetrics: {
+            billableHours: totalBillableHours,
+            approvedBilledAmount,
+            collectedAmount,
+            outstandingAmount,
+            costToDate,
+            profitToDate,
+            marginPercent,
+            nextInvoiceAmount,
+            overdueInvoiceCount: job.invoices.filter((invoice) => invoice.status === 'overdue').length,
+          },
+        };
+      }),
       total,
     };
   }
@@ -1502,6 +2010,42 @@ class JobService {
       throw new Error('Job not found');
     }
 
+    const linkedInvoices = (
+      await prisma.jobInvoice.findMany({
+        where: {
+          jobId,
+          status: { not: 'void' },
+        },
+        include: {
+          milestoneTask: { select: { id: true, title: true } },
+          document: { select: { id: true, fileName: true, filePath: true } },
+          lines: {
+            orderBy: { sortOrder: 'asc' },
+          },
+          paymentApplications: {
+            include: {
+              clientPayment: {
+                select: {
+                  id: true,
+                  paymentDate: true,
+                  referenceNumber: true,
+                },
+              },
+            },
+            orderBy: { appliedAt: 'asc' },
+          },
+        },
+        orderBy: [{ createdAt: 'desc' }],
+      })
+    ).map((invoice) => this.serializeJobInvoice(invoice));
+
+    const invoiceByMilestone = new Map<number, JobInvoiceSummaryItem>();
+    linkedInvoices.forEach((invoice) => {
+      if (invoice.milestoneTaskId) {
+        invoiceByMilestone.set(invoice.milestoneTaskId, invoice);
+      }
+    });
+
     const parsedMilestones = job.tasks
       .map((task) => this.parseMilestoneTask(task as any))
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -1526,6 +2070,7 @@ class JobService {
     let previousExpected = 0;
     const milestones: JobInvoiceMilestoneTrackingItem[] = parsedMilestones.map(
       (milestone, index) => {
+        const linkedInvoice = invoiceByMilestone.get(milestone.taskId) || null;
         const expectedCumulativeAmount = roundCurrency(
           (feeAmount * milestone.targetPercent) / 100
         );
@@ -1536,7 +2081,10 @@ class JobService {
         const previousMilestonesPaid =
           index === 0 || collectedAmount + 0.0001 >= previousExpected;
         const readyForInvoice =
-          milestone.conditionCompleted && !milestonePaid && previousMilestonesPaid;
+          milestone.conditionCompleted &&
+          !milestonePaid &&
+          !linkedInvoice &&
+          previousMilestonesPaid;
         const amountRemainingToMilestone = roundCurrency(
           Math.max(0, expectedCumulativeAmount - collectedAmount)
         );
@@ -1560,6 +2108,7 @@ class JobService {
             job.id,
             milestone.targetPercent
           ),
+          linkedInvoice,
         };
 
         previousExpected = expectedCumulativeAmount;
@@ -1588,9 +2137,355 @@ class JobService {
     };
   }
 
+  async getJobCommercialSummary(jobId: number): Promise<JobCommercialSummary> {
+    const [tracking, invoices] = await Promise.all([
+      this.getJobInvoiceMilestoneTracking(jobId),
+      this.listJobInvoices(jobId),
+    ]);
+
+    return {
+      totals: {
+        expectedFeeAmount: tracking.feeAmount,
+        approvedBilledAmount: 0,
+        collectedAmount: tracking.collectedAmount,
+        outstandingAmount: tracking.outstandingAmount,
+        costToDate: 0,
+        profitToDate: 0,
+        marginPercent: 0,
+        invoiceCount: invoices.length,
+        overdueInvoiceCount: invoices.filter((invoice) => invoice.status === 'overdue').length,
+      },
+      invoices,
+    };
+  }
+
+  async listJobInvoices(jobId: number): Promise<JobInvoiceSummaryItem[]> {
+    const invoices = await prisma.jobInvoice.findMany({
+      where: { jobId },
+      include: {
+        milestoneTask: { select: { id: true, title: true } },
+        document: { select: { id: true, fileName: true, filePath: true } },
+        lines: {
+          orderBy: { sortOrder: 'asc' },
+        },
+        paymentApplications: {
+          include: {
+            clientPayment: {
+              select: {
+                id: true,
+                paymentDate: true,
+                referenceNumber: true,
+              },
+            },
+          },
+          orderBy: { appliedAt: 'asc' },
+        },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+    });
+
+    return invoices.map((invoice) => this.serializeJobInvoice(invoice));
+  }
+
+  async createJobInvoiceDraftForMilestone(
+    jobId: number,
+    milestoneTaskId: number,
+    authContext?: AuthContext
+  ): Promise<JobInvoiceSummaryItem> {
+    if (authContext) {
+      const roleSet = this.roleSet(authContext.roles);
+      const accessJob = await prisma.job.findUnique({
+        where: { id: jobId },
+        select: {
+          managerProfileId: true,
+          partnerProfileId: true,
+        },
+      });
+
+      const isAuthorized =
+        roleSet.has('super_admin') ||
+        roleSet.has('hr') ||
+        roleSet.has('gmp') ||
+        roleSet.has('finance') ||
+        accessJob?.managerProfileId === authContext.profileId ||
+        accessJob?.partnerProfileId === authContext.profileId;
+
+      if (!isAuthorized) {
+        throw new Error('Not authorized to generate an invoice for this job');
+      }
+    }
+
+    const tracking = await this.getJobInvoiceMilestoneTracking(jobId);
+    const milestone = tracking.milestones.find((item) => item.taskId === milestoneTaskId);
+
+    if (!milestone) {
+      throw new Error('Milestone not found for this job');
+    }
+
+    if (!milestone.conditionCompleted) {
+      throw new Error('Milestone condition must be completed before generating an invoice');
+    }
+
+    if (milestone.milestonePaid) {
+      throw new Error('This milestone is already fully paid');
+    }
+
+    if (milestone.linkedInvoice && milestone.linkedInvoice.status !== 'void') {
+      return milestone.linkedInvoice;
+    }
+
+    const generatedInvoice = await prisma.$transaction(async (tx) => {
+      const existing = await tx.jobInvoice.findFirst({
+        where: {
+          jobId,
+          milestoneTaskId,
+          status: { not: 'void' },
+        },
+        include: {
+          milestoneTask: { select: { id: true, title: true } },
+          document: { select: { id: true, fileName: true, filePath: true } },
+          lines: {
+            orderBy: { sortOrder: 'asc' },
+          },
+          paymentApplications: {
+            include: {
+              clientPayment: {
+                select: {
+                  id: true,
+                  paymentDate: true,
+                  referenceNumber: true,
+                },
+              },
+            },
+            orderBy: { appliedAt: 'asc' },
+          },
+        },
+      });
+
+      if (existing) {
+        return existing;
+      }
+
+      const job = await tx.job.findUnique({
+        where: { id: jobId },
+        select: {
+          id: true,
+          clientId: true,
+          jobName: true,
+          jobCode: true,
+          currency: true,
+        },
+      });
+
+      if (!job?.clientId) {
+        throw new Error('A client-linked job is required before generating an invoice');
+      }
+
+      const template = await this.ensureDefaultJobInvoiceTemplate(
+        tx,
+        authContext?.profileId ?? null
+      );
+      const issueDueDate = milestone.dueDate
+        ? new Date(milestone.dueDate)
+        : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+      const invoice = await tx.jobInvoice.create({
+        data: {
+          jobId,
+          clientId: job.clientId,
+          milestoneTaskId,
+          jobInvoiceTemplateId: template.id,
+          generatedByProfileId: authContext?.profileId ?? null,
+          invoiceNumber: milestone.invoiceNumberSuggestion,
+          title: `${job.jobName} - ${milestone.targetPercent}% milestone invoice`,
+          description: milestone.requirements || `Billing milestone at ${milestone.targetPercent}%`,
+          status: 'draft',
+          currency: job.currency || 'KES',
+          expectedPercent: milestone.targetPercent,
+          subtotalAmount: milestone.milestoneAmount,
+          totalAmount: milestone.milestoneAmount,
+          amountOutstanding: milestone.milestoneAmount,
+          dueDate: issueDueDate,
+          notes: milestone.requirements || null,
+        },
+      });
+
+      await tx.jobInvoiceLine.create({
+        data: {
+          jobInvoiceId: invoice.id,
+          lineType: 'milestone_fee',
+          description: `${milestone.targetPercent}% milestone billing - ${milestone.title}`,
+          quantity: new Prisma.Decimal(1),
+          unitPrice: new Prisma.Decimal(milestone.milestoneAmount),
+          lineAmount: new Prisma.Decimal(milestone.milestoneAmount),
+          sortOrder: 1,
+          metadata: {
+            milestoneTaskId,
+            targetPercent: milestone.targetPercent,
+          },
+        },
+      });
+
+      await tx.jobInvoiceStatusHistory.create({
+        data: {
+          jobInvoiceId: invoice.id,
+          fromStatus: null,
+          toStatus: 'draft',
+          changedByProfileId: authContext?.profileId ?? null,
+          notes: 'Draft invoice auto-generated from completed billing milestone.',
+        },
+      });
+
+      return tx.jobInvoice.findUniqueOrThrow({
+        where: { id: invoice.id },
+        include: {
+          milestoneTask: { select: { id: true, title: true } },
+          document: { select: { id: true, fileName: true, filePath: true } },
+          lines: {
+            orderBy: { sortOrder: 'asc' },
+          },
+          paymentApplications: {
+            include: {
+              clientPayment: {
+                select: {
+                  id: true,
+                  paymentDate: true,
+                  referenceNumber: true,
+                },
+              },
+            },
+            orderBy: { appliedAt: 'asc' },
+          },
+        },
+      });
+    });
+
+    return this.serializeJobInvoice(generatedInvoice);
+  }
+
+  async issueJobInvoice(
+    jobId: number,
+    invoiceId: number,
+    authContext: AuthContext
+  ): Promise<JobInvoiceSummaryItem> {
+    const roleSet = this.roleSet(authContext.roles);
+    const invoice = await prisma.jobInvoice.findFirst({
+      where: { id: invoiceId, jobId },
+      select: {
+        id: true,
+        status: true,
+        issuedAt: true,
+        dueDate: true,
+        amountPaid: true,
+        totalAmount: true,
+        job: {
+          select: {
+            managerProfileId: true,
+            partnerProfileId: true,
+          },
+        },
+      },
+    });
+
+    if (!invoice) {
+      throw new Error('Invoice not found for this job');
+    }
+
+    const isFinance =
+      roleSet.has('finance') ||
+      roleSet.has('super_admin') ||
+      roleSet.has('hr') ||
+      roleSet.has('gmp');
+    const isJobOwner =
+      invoice.job.managerProfileId === authContext.profileId ||
+      invoice.job.partnerProfileId === authContext.profileId;
+
+    if (!isFinance && !isJobOwner) {
+      throw new Error('Not authorized to issue this invoice');
+    }
+
+    const updatedInvoice = await prisma.$transaction(async (tx) => {
+      const nextStatus = this.resolveJobInvoiceStatus({
+        currentStatus: invoice.status,
+        totalAmount: Number(invoice.totalAmount || 0),
+        amountPaid: Number(invoice.amountPaid || 0),
+        dueDate: invoice.dueDate,
+        issuedAt: new Date(),
+      });
+
+      await tx.jobInvoice.update({
+        where: { id: invoiceId },
+        data: {
+          issuedByProfileId: authContext.profileId,
+          issuedAt: new Date(),
+          status: nextStatus,
+        },
+      });
+
+      await tx.jobInvoiceStatusHistory.create({
+        data: {
+          jobInvoiceId: invoiceId,
+          fromStatus: invoice.status,
+          toStatus: nextStatus,
+          changedByProfileId: authContext.profileId,
+          notes: 'Invoice issued for client billing.',
+        },
+      });
+
+      await this.generateJobInvoiceDocument(tx, invoiceId);
+      return this.syncJobInvoicePaymentState(tx, invoiceId);
+    });
+
+    return this.serializeJobInvoice(updatedInvoice);
+  }
+
+  async applyClientPaymentToInvoice(
+    tx: Prisma.TransactionClient,
+    input: {
+      invoiceId: number;
+      clientPaymentId: number;
+      appliedAmount: number;
+      appliedByProfileId?: number | null;
+      notes?: string | null;
+    }
+  ) {
+    if (input.appliedAmount <= 0) {
+      return null;
+    }
+
+    await tx.jobInvoicePaymentApplication.upsert({
+      where: {
+        jobInvoiceId_clientPaymentId: {
+          jobInvoiceId: input.invoiceId,
+          clientPaymentId: input.clientPaymentId,
+        },
+      },
+      update: {
+        appliedAmount: input.appliedAmount,
+        appliedAt: new Date(),
+        appliedByProfileId: input.appliedByProfileId ?? null,
+        notes: input.notes ?? null,
+      },
+      create: {
+        jobInvoiceId: input.invoiceId,
+        clientPaymentId: input.clientPaymentId,
+        appliedAmount: input.appliedAmount,
+        appliedByProfileId: input.appliedByProfileId ?? null,
+        notes: input.notes ?? null,
+      },
+    });
+
+    return this.syncJobInvoicePaymentState(tx, input.invoiceId);
+  }
+
   async notifyNextReadyInvoiceMilestone(jobId: number, authContext?: AuthContext) {
     const tracking = await this.getJobInvoiceMilestoneTracking(jobId);
     if (tracking.nextReadyMilestone) {
+      await this.createJobInvoiceDraftForMilestone(
+        jobId,
+        tracking.nextReadyMilestone.taskId,
+        authContext
+      );
       await this.notifyInvoiceReadyForMilestone(
         jobId,
         tracking.nextReadyMilestone,
@@ -1671,6 +2566,7 @@ class JobService {
     );
 
     if (status === 'completed' && updatedMilestone?.readyForInvoice) {
+      await this.createJobInvoiceDraftForMilestone(jobId, milestoneTaskId, authContext);
       await this.notifyInvoiceReadyForMilestone(
         jobId,
         updatedMilestone,
@@ -2219,7 +3115,7 @@ class JobService {
             message: `Allocated budget (${totalEstimatedBillable.toFixed(2)}) exceeds allowed fee (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
             actionRequired: true,
             jobId: job.id,
-            link: `/workload-management?jobId=${job.id}`,
+            link: this.buildTrackingPath(job.id),
           },
           {
             userId: authContext.userId,
@@ -2237,7 +3133,7 @@ class JobService {
             message: `Allocated budget (${totalEstimatedBillable.toFixed(2)}) exceeds allowed fee (${maxAllowedCost.toFixed(2)}) for "${job.jobName}".`,
             actionRequired: true,
             jobId: job.id,
-            link: `/workload-management?jobId=${job.id}`,
+            link: this.buildTrackingPath(job.id),
           },
           {
             userId: authContext.userId,
@@ -2869,19 +3765,30 @@ class JobService {
   async getJobProfitability(jobId: number) {
     const job = await this.getJobById(jobId, ['staffing', 'timeEntries']);
 
-    // Sum billable amounts from time entries
-    const timeEntryResult = await prisma.timeEntry.aggregate({
-      where: { jobId },
-      _sum: {
-        billableAmount: true,
-        costAmount: true,
-        profitLoss: true,
-      },
-    });
+    const [timeEntryResult, requisitionResult] = await Promise.all([
+      prisma.timeEntry.aggregate({
+        where: { jobId },
+        _sum: {
+          billableAmount: true,
+          costAmount: true,
+        },
+      }),
+      prisma.requisitionRequest.aggregate({
+        where: {
+          jobId,
+          status: 'approved',
+        },
+        _sum: {
+          amount: true,
+        },
+      }),
+    ]);
 
     const totalRevenue = timeEntryResult._sum.billableAmount || 0;
-    const totalCost = timeEntryResult._sum.costAmount || 0;
-    const totalProfitLoss = timeEntryResult._sum.profitLoss || 0;
+    const laborCost = Number(timeEntryResult._sum.costAmount || 0);
+    const approvedRequisitionCost = Number(requisitionResult._sum.amount || 0);
+    const totalCost = laborCost + approvedRequisitionCost;
+    const totalProfitLoss = Number(totalRevenue) - totalCost;
 
     const revenueNumber = Number(totalRevenue);
     const profitNumber = Number(totalProfitLoss);
@@ -2891,6 +3798,8 @@ class JobService {
       jobId,
       jobName: job.jobName,
       totalRevenue: Number(totalRevenue),
+      laborCost,
+      approvedRequisitionCost,
       totalCost: Number(totalCost),
       totalProfitLoss: Number(totalProfitLoss),
       marginPercent: Number(marginPercent.toFixed(2)),
@@ -3099,6 +4008,35 @@ class JobService {
             allocationMonth: true,
           },
         },
+        requisitionRequests: {
+          select: {
+            id: true,
+            requisitionNumber: true,
+            title: true,
+            status: true,
+            amount: true,
+            currency: true,
+            submittedAt: true,
+            approvedAt: true,
+            isClientRecoverable: true,
+            requester: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+            requisitionType: {
+              select: {
+                id: true,
+                name: true,
+                sourceModule: true,
+              },
+            },
+          },
+          orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+          take: 25,
+        },
         statusTransitions: {
           where: { entityType: 'Job', entityId: jobId },
           orderBy: { createdAt: 'asc' },
@@ -3123,7 +4061,8 @@ class JobService {
       const isAdmin =
         roleSet.has('super_admin') ||
         roleSet.has('hr') ||
-        roleSet.has('gmp');
+        roleSet.has('gmp') ||
+        roleSet.has('finance');
       const isManager = job.managerProfileId === authContext.profileId;
       const isPartner = job.partnerProfileId === authContext.profileId;
       const isStaffAssigned = job.staffing.some(
@@ -3134,6 +4073,8 @@ class JobService {
         throw { statusCode: 403, message: 'Not authorized to view tracking for this job' };
       }
     }
+
+    const jobInvoices = await this.listJobInvoices(jobId);
 
     const activeTimeEntries = job.timeEntries.filter((entry) =>
       ['pending', 'submitted', 'approved'].includes(String(entry.status))
@@ -3164,12 +4105,35 @@ class JobService {
     const approvedBilledAmount = roundCurrency(
       approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
     );
-    const costToDate = roundCurrency(
+    const laborCostToDate = roundCurrency(
       activeTimeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0)
     );
-    const profitToDate = roundCurrency(
-      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.profitLoss || 0), 0)
+    const requisitionRequests = job.requisitionRequests || [];
+    const approvedRequisitions = requisitionRequests.filter(
+      (item) => String(item.status) === 'approved'
     );
+	    const pendingRequisitions = requisitionRequests.filter((item) =>
+	      [
+	        'pending_manager_approval',
+	        'pending_partner_approval',
+	        'pending_gmp_approval',
+	        'pending_finance_approval',
+	      ].includes(String(item.status))
+	    );
+    const approvedRequisitionCost = roundCurrency(
+      approvedRequisitions.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    );
+    const committedRequisitionCost = roundCurrency(
+      pendingRequisitions.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    );
+    const recoverableRequisitionCost = roundCurrency(
+      approvedRequisitions
+        .filter((item) => item.isClientRecoverable)
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    );
+    const costToDate = roundCurrency(laborCostToDate + approvedRequisitionCost);
+    const totalCommittedCost = roundCurrency(costToDate + committedRequisitionCost);
+    const profitToDate = roundCurrency(billedAmount - costToDate);
 
     const totalHoursWorked = roundCurrency(
       activeTimeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
@@ -3354,6 +4318,20 @@ class JobService {
         : 0;
     const marginPercent =
       billedAmount > 0 ? Number(((profitToDate / billedAmount) * 100).toFixed(2)) : 0;
+    const recentRequisitions = requisitionRequests.map((item) => ({
+      id: item.id,
+      requisitionNumber: item.requisitionNumber,
+      title: item.title,
+      status: item.status,
+      amount: Number(item.amount || 0),
+      currency: item.currency,
+      submittedAt: item.submittedAt,
+      approvedAt: item.approvedAt,
+      isClientRecoverable: item.isClientRecoverable,
+      requesterName: `${item.requester?.firstName || ''} ${item.requester?.lastName || ''}`.trim(),
+      requisitionTypeName: item.requisitionType?.name || null,
+      sourceModule: item.requisitionType?.sourceModule || null,
+    }));
 
     return {
       job: this.withDerivedOverdueStatus({
@@ -3464,7 +4442,12 @@ class JobService {
           expectedFeeAmount,
           billedAmount,
           approvedBilledAmount,
+          laborCostToDate,
+          approvedRequisitionCost,
+          committedRequisitionCost,
+          recoverableRequisitionCost,
           costToDate,
+          totalCommittedCost,
           profitToDate,
           marginPercent,
           billedVsExpectedPercent,
@@ -3504,10 +4487,34 @@ class JobService {
             )
           ),
         },
+        invoices: {
+          total: jobInvoices.length,
+          draftCount: jobInvoices.filter((invoice) => invoice.status === 'draft').length,
+          issuedCount: jobInvoices.filter((invoice) => invoice.status === 'issued').length,
+          partiallyPaidCount: jobInvoices.filter((invoice) => invoice.status === 'partially_paid').length,
+          paidCount: jobInvoices.filter((invoice) => invoice.status === 'paid').length,
+          overdueCount: jobInvoices.filter((invoice) => invoice.status === 'overdue').length,
+          nextDueDate:
+            [...jobInvoices]
+              .filter((invoice) => invoice.status !== 'paid' && invoice.status !== 'void' && invoice.dueDate)
+              .sort((left, right) =>
+                new Date(left.dueDate || 0).getTime() - new Date(right.dueDate || 0).getTime()
+              )[0]?.dueDate ?? null,
+          items: jobInvoices,
+        },
         milestones: invoiceMilestones,
         documentReadiness: {
           missingForInProgress: missingForInProgress.map((item) => item.label),
           missingForCompletion: missingForCompletion.map((item) => item.label),
+        },
+        requisitions: {
+          totalRequests: requisitionRequests.length,
+          approvedCount: approvedRequisitions.length,
+          pendingCount: pendingRequisitions.length,
+          approvedSpend: approvedRequisitionCost,
+          committedSpend: committedRequisitionCost,
+          recoverableApprovedSpend: recoverableRequisitionCost,
+          recent: recentRequisitions,
         },
       },
       statusTimeline: job.statusTransitions,

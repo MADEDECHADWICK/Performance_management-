@@ -1,3 +1,5 @@
+// This module defines the HTTP security configuration for the application, including CORS(Cross Origin Resourse Shairing) settings, security headers, and request body limits. It provides functions to build CORS options based on environment variables and to set appropriate security headers on responses. The configuration is designed to be flexible, allowing for different settings in development and production environments while maintaining a secure default configuration. It also includes utility functions for determining whether to trust proxy headers, which is important for applications running behind a reverse proxy or load balancer. By centralizing this configuration, we can ensure that all parts of the application adhere to consistent security practices and can easily adjust settings as needed for different deployment scenarios.
+
 import type { NextFunction, Request, Response } from "express";
 import type { CorsOptions } from "cors";
 
@@ -28,7 +30,7 @@ const parseOriginList = (value: string | undefined) =>
     .map((origin) => normalizeOrigin(origin))
     .filter(Boolean);
 
-const getAllowedOrigins = () => {
+export const getAllowedOrigins = () => {
   const configuredOrigins = parseOriginList(process.env.CORS_ORIGIN);
   if (configuredOrigins.length > 0) {
     return Array.from(new Set(configuredOrigins));
@@ -39,6 +41,14 @@ const getAllowedOrigins = () => {
   }
 
   return DEFAULT_DEV_ALLOWED_ORIGINS;
+};
+
+export const buildFrameAncestorsDirective = (origins?: string[]) => {
+  const allowedOrigins = Array.from(new Set((origins || getAllowedOrigins()).filter(Boolean)));
+  if (allowedOrigins.length === 0) {
+    return "frame-ancestors 'self'";
+  }
+  return `frame-ancestors 'self' ${allowedOrigins.join(" ")}`;
 };
 
 const isAllowedOrigin = (origin: string | undefined, allowedOrigins: Set<string>) => {
@@ -62,6 +72,7 @@ export const buildCorsOptions = (): CorsOptions => ({
   optionsSuccessStatus: 204,
 });
 
+// The securityHeadersMiddleware function sets various HTTP headers to enhance the security of the application. It includes headers to prevent MIME type sniffing, clickjacking, and to control referrer information. In production environments, it also sets the Strict-Transport-Security header to enforce secure connections. By applying this middleware to all responses, we can help protect the application from common web vulnerabilities and ensure that security best practices are followed consistently across all endpoints.
 export const securityHeadersMiddleware = (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");

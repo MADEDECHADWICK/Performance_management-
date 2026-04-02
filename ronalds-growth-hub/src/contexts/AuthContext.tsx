@@ -12,7 +12,6 @@ import {
   type CanonicalRole,
 } from "@/auth/canonicalRoles";
 import {
-  getEffectiveViewEntitlements,
   getViewPermissionDefinition,
 } from "@/auth/viewAccess";
 
@@ -48,10 +47,6 @@ const MODULE_KEY_ALIASES: Record<string, string> = {
   evaluations: 'evaluations',
   evaluation: 'evaluations',
   feedback: 'evaluations',
-  kpis: 'kpis',
-  kpi: 'kpis',
-  goals: 'kpis',
-  okrs: 'kpis',
   finance: 'finance',
   financials: 'finance',
   proposals: 'proposals',
@@ -61,6 +56,10 @@ const MODULE_KEY_ALIASES: Record<string, string> = {
   'knowledge-hub': 'knowledge_hub',
   knowledgehub: 'knowledge_hub',
   notifications: 'notifications',
+  leave: 'leave',
+  leaves: 'leave',
+  requisition: 'requisitions',
+  requisitions: 'requisitions',
   reports: 'reports',
   analytics: 'reports',
   settings: 'settings',
@@ -112,6 +111,7 @@ interface AuthContextType {
   profile: Profile | null;
   roles: CanonicalRole[];
   viewAccessKeys: string[];
+  homeViewKey: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   
@@ -171,14 +171,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return canonicalizeRoles(roleNames);
   }, [roleNames]);
 
-  const viewAccessKeys = useMemo(
-    () => getEffectiveViewEntitlements(canonicalRoles),
-    [canonicalRoles]
-  );
+  const viewAccessKeys = useMemo(() => {
+    const source = Array.isArray(user?.viewAccessKeys) ? user.viewAccessKeys : [];
+    return Array.from(
+      new Set(
+        source
+          .map((key) => String(key || "").toLowerCase().trim())
+          .filter(Boolean)
+      )
+    );
+  }, [user?.viewAccessKeys]);
   const viewAccessSet = useMemo(
     () => new Set(viewAccessKeys.map((key) => String(key).toLowerCase().trim())),
     [viewAccessKeys]
   );
+  const homeViewKey = useMemo(() => {
+    const normalized = String(user?.homeViewKey || "").toLowerCase().trim();
+    if (!normalized) return null;
+    return viewAccessSet.has(normalized) ? normalized : null;
+  }, [user?.homeViewKey, viewAccessSet]);
 
   const moduleAccessMatrix = useMemo<Record<string, ModuleAction[]>>(() => {
     const source = user?.moduleAccess;
@@ -368,6 +379,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     profile,
     roles: canonicalRoles,
     viewAccessKeys,
+    homeViewKey,
     isLoading,
     isAuthenticated,
     isAdmin,

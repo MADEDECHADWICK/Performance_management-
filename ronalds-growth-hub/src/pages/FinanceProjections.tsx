@@ -7,6 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AnalyticsChartShell,
+  AnalyticsGradientDefs,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGradientFill,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -300,23 +311,29 @@ export default function FinanceProjections() {
                   No projection totals yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={attainmentMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={55}
-                      outerRadius={88}
-                      paddingAngle={2}
-                    >
-                      <Cell fill="#22c55e" />
-                      <Cell fill="#f97316" />
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={attainmentMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        <Cell fill="#22c55e" />
+                        <Cell fill="#f97316" />
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -332,24 +349,30 @@ export default function FinanceProjections() {
                   No status data available.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={statusMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={55}
-                      outerRadius={88}
-                      paddingAngle={2}
-                    >
-                      {statusMix.map((entry, index) => (
-                        <Cell key={`status-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={statusMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        {statusMix.map((entry, index) => (
+                          <Cell key={`status-${entry.name}`} fill={analyticsColorAt(index)} />
+                        ))}
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -456,17 +479,31 @@ export default function FinanceProjections() {
                   No projection data to chart yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthChart}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
-                    <YAxis />
-                    <Tooltip formatter={(value) => `KES ${Number(value).toLocaleString()}`} />
-                    <Legend />
-                    <Bar dataKey="projected" fill="hsl(var(--primary))" />
-                    <Bar dataKey="collected" fill="hsl(var(--secondary))" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={monthChart}>
+                      <AnalyticsGradientDefs
+                        items={[
+                          { id: "projectionProjected", color: analyticsColorAt(0) },
+                          { id: "projectionCollected", color: analyticsColorAt(1) },
+                        ]}
+                      />
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="month" {...analyticsAxisProps} />
+                      <YAxis {...analyticsAxisProps} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Bar dataKey="projected" name="Projected" fill={analyticsGradientFill("projectionProjected")} radius={[10, 10, 4, 4]} />
+                      <Bar dataKey="collected" name="Collected" fill={analyticsGradientFill("projectionCollected")} radius={[10, 10, 4, 4]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>

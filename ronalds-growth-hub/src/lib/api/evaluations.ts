@@ -5,9 +5,7 @@ export type EvaluationCycleType = "annual" | "mid_year" | "quarterly" | "probati
 export type EvaluationCycleStatus = "draft" | "active" | "closed";
 export type EvaluationRelationship = "self" | "peer" | "manager" | "subordinate";
 export type EvaluationAssignmentStatus = "pending" | "in_progress" | "submitted";
-export type EvaluationQuestionCategory = "competency" | "behavior" | "goal" | "culture";
-export type KpiStatus = "on_track" | "at_risk" | "achieved" | "missed";
-export type DevelopmentGoalStatus = "not_started" | "in_progress" | "completed" | "deferred";
+export type EvaluationQuestionCategory = "competency" | "behavior" | "culture";
 export type FeedbackType = "praise" | "coaching" | "concern";
 export type FeedbackVisibility = "self" | "manager" | "hr" | "all";
 export type CheckInStatus = "scheduled" | "completed" | "missed";
@@ -155,114 +153,9 @@ export interface CycleScoreReport {
   overall: number;
   byCategory: Record<string, number>;
   ratingBand: string;
-  kpiCompletionPercent: number;
-  developmentGoalProgress: number;
   peerVsManagerVariance: number;
   averageByRelationship: Record<string, number>;
   totalScore: number;
-}
-
-export interface KpiItem {
-  id: number;
-  userId: number;
-  ownerProfileId?: number | null;
-  cycleId?: number | null;
-  title: string;
-  name?: string;
-  description?: string | null;
-  category?: string | null;
-  kpiType?: string | null;
-  strategicTheme?: string | null;
-  strategicObjective?: string | null;
-  criticalSuccessFactor?: string | null;
-  indicatorType?: string | null;
-  kpiCategory?: string | null;
-  target: number;
-  targetValue?: number;
-  actual: number;
-  actualValue?: number;
-  baseline?: number | null;
-  baselineText?: string | null;
-  unit?: string | null;
-  measurementUnit?: string | null;
-  targetFrequency?: string | null;
-  targetType?: string | null;
-  targetDescription?: string | null;
-  weight: number;
-  dueDate?: string | null;
-  status: KpiStatus | string;
-  progressStatus?: KpiStatus | string;
-  redThreshold?: number | null;
-  amberThreshold?: number | null;
-  greenThreshold?: number | null;
-  reviewOwnerProfileId?: number | null;
-  reviewFrequency?: string | null;
-  approvalRequired?: boolean;
-  evidenceRequired?: boolean;
-  commentaryRequired?: boolean;
-  dataSourceType?: string | null;
-  sourceReference?: string | null;
-  formulaLocked?: boolean;
-  rollupMethod?: string | null;
-  inheritWeight?: boolean;
-  isActive?: boolean;
-  createdBy?: number | null;
-  createdByProfileId?: number | null;
-  createdAt: string;
-  updatedAt: string;
-  owner?: Partial<Profile> | null;
-  reviewOwner?: Partial<Profile> | null;
-  metrics?: {
-    direction: "higher_better" | "lower_better" | "milestone";
-    achievementPercent: number;
-    progressPercent: number;
-    weightedScore: number;
-    weightPercent: number;
-    varianceToTarget: number;
-    remainingToTarget: number;
-    thresholdBand: "red" | "amber" | "green" | "none";
-    status: KpiStatus | string;
-    isOverdue: boolean;
-    isDueSoon: boolean;
-    daysRemaining?: number | null;
-    lastMeasuredAt?: string | null;
-  };
-  history?: Array<{
-    id: number;
-    recordedAt: string;
-    actual: number;
-    target: number;
-    achievementPercent: number;
-    weightedScore: number;
-    note?: string | null;
-  }>;
-}
-
-export interface OkrItem {
-  id: number;
-  ownerProfileId: number;
-  cycleId?: number | null;
-  objective: string;
-  keyResults: Array<{
-    title: string;
-    target?: number;
-    actual?: number;
-    unit?: string;
-  }>;
-  progress: number;
-  status: KpiStatus | string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DevelopmentGoalItem {
-  id: number;
-  title: string;
-  description: string;
-  progress: number;
-  targetDate: string;
-  status: DevelopmentGoalStatus | string;
-  linkedKpiId?: number | null;
 }
 
 export interface FeedbackItem {
@@ -294,42 +187,8 @@ export interface CheckInItem {
 export interface EmployeeEvaluationDashboard {
   userId: number;
   pendingEvaluations: EvaluationAssignment[];
-  kpiSummary: {
-    total: number;
-    byStatus: Record<string, number>;
-    items: KpiItem[];
-  };
-  okrSummary: {
-    total: number;
-    byStatus: Record<string, number>;
-    items: OkrItem[];
-  };
-  developmentGoalSummary: {
-    total: number;
-    byStatus: Record<string, number>;
-    items: DevelopmentGoalItem[];
-  };
   recentFeedback: FeedbackItem[];
   upcomingCheckIns: CheckInItem[];
-}
-
-export interface EmployeeKpiDashboard {
-  userId: number;
-  completionPercentages: {
-    kpis: number;
-    developmentGoals: number;
-  };
-  summary?: {
-    total: number;
-    overdue: number;
-    dueSoon: number;
-    weightedProgress: number;
-    averageAchievementPercent: number;
-    byStatus: Record<string, number>;
-  };
-  kpis: Record<string, KpiItem[]>;
-  okrs: Record<string, OkrItem[]>;
-  developmentGoals: Record<string, DevelopmentGoalItem[]>;
 }
 
 export interface CreateCyclePayload {
@@ -414,51 +273,6 @@ export interface CycleResultsResponse extends EvaluationCycleSummary {
   results: CycleResultItem[];
 }
 
-export interface CreateKpiPayload {
-  userId?: number;
-  ownerProfileId?: number;
-  cycleId?: number;
-  departmentId?: number;
-  roleId?: number;
-  title: string;
-  name?: string;
-  description?: string;
-  category?: string;
-  kpiType?: string;
-  strategicTheme?: string;
-  strategicObjective?: string;
-  criticalSuccessFactor?: string;
-  indicatorType?: string;
-  kpiCategory?: string;
-  target: number;
-  targetValue?: number;
-  actual?: number;
-  actualValue?: number;
-  baseline?: number;
-  baselineText?: string;
-  unit?: string;
-  measurementUnit?: string;
-  targetFrequency?: string;
-  targetType?: string;
-  targetDescription?: string;
-  weight?: number;
-  dueDate?: string;
-  reviewOwnerProfileId?: number;
-  reviewFrequency?: string;
-  approvalRequired?: boolean;
-  evidenceRequired?: boolean;
-  commentaryRequired?: boolean;
-  redThreshold?: number;
-  amberThreshold?: number;
-  greenThreshold?: number;
-  dataSourceType?: string;
-  sourceReference?: string;
-  formulaLocked?: boolean;
-  rollupMethod?: string;
-  inheritWeight?: boolean;
-  isActive?: boolean;
-}
-
 export interface SubmitFeedbackPayload {
   receiverId: number;
   jobId?: number;
@@ -493,12 +307,6 @@ export interface TeamDirectoryPerson {
   positionTitle?: string | null;
 }
 
-export interface KpiLibraryItem {
-  id: number;
-  name: string;
-  category?: string | null;
-}
-
 type RawTemplateQuestionSection = {
   title?: string;
   category?: string;
@@ -522,7 +330,6 @@ const inferTemplateQuestionCategory = (
     .replace(/[\s-]+/g, "_");
 
   if (!normalized) return fallback;
-  if (normalized.includes("goal")) return "goal";
   if (normalized.includes("culture") || normalized.includes("value")) return "culture";
   if (
     normalized.includes("behavior") ||
@@ -612,48 +419,6 @@ const evaluationsAPI = {
 
   acknowledgeEvaluation: async (assignmentId: number): Promise<EvaluationAssignment> =>
     api.patch(`/evaluations/assignments/${assignmentId}/acknowledge`),
-
-  getMyKPIs: async (userId?: number): Promise<KpiItem[]> =>
-    api.get(`/kpis${userId ? `?userId=${userId}` : ""}`),
-
-  listKPIs: async (filters?: {
-    userId?: number;
-    departmentId?: number;
-    status?: KpiStatus;
-    isActive?: boolean;
-  }): Promise<KpiItem[]> => {
-    const params = new URLSearchParams();
-    if (filters?.userId) params.append("userId", String(filters.userId));
-    if (filters?.departmentId) params.append("departmentId", String(filters.departmentId));
-    if (filters?.status) params.append("status", filters.status);
-    if (filters?.isActive !== undefined) params.append("isActive", String(filters.isActive));
-    const query = params.toString();
-    return api.get(`/kpis${query ? `?${query}` : ""}`);
-  },
-
-  createKPI: async (data: CreateKpiPayload): Promise<KpiItem> =>
-    api.post("/kpis", data),
-
-  updateKPI: async (kpiId: number, data: Partial<CreateKpiPayload>): Promise<KpiItem> =>
-    api.patch(`/kpis/${kpiId}`, data),
-
-  getKPIDetail: async (kpiId: number): Promise<KpiItem> => api.get(`/kpis/${kpiId}`),
-
-  deleteKPI: async (kpiId: number): Promise<{ id: number; deleted: boolean }> =>
-    api.delete(`/kpis/${kpiId}`),
-
-  updateKPIProgress: async (
-    kpiId: number,
-    actual: number,
-    options?: { note?: string; measuredAt?: string }
-  ): Promise<KpiItem> =>
-    api.patch(`/kpis/${kpiId}/progress`, { actual, ...options }),
-
-  getEmployeeKpiDashboard: async (userId: number): Promise<EmployeeKpiDashboard> =>
-    api.get(`/kpis/dashboard/${userId}`),
-
-  getKpiLibrary: async (): Promise<KpiLibraryItem[]> =>
-    api.get("/kpi/archive/kpis"),
 
   getEmployeeDashboard: async (userId: number): Promise<EmployeeEvaluationDashboard> =>
     api.get(`/evaluations/dashboard/${userId}`),

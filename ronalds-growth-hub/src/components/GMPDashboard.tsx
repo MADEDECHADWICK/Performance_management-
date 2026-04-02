@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import JobOperationsOverview from "@/components/jobs/JobOperationsOverview";
 import PageLoader from "@/components/ui/page-loader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AnalyticsChartShell,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +33,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
+  Legend,
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
@@ -259,14 +270,16 @@ interface AlertsData {
 export default function GMPDashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, isLoading: authLoading, isGMP } = useAuth();
+  const { user, isLoading: authLoading, isGMP, hasViewAccess } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [personalData, setPersonalData] = useState<PersonalData | null>(null);
   const [alertsData, setAlertsData] = useState<AlertsData | null>(null);
   const [lossAlertCount, setLossAlertCount] = useState(0);
   const [pipelineMetrics, setPipelineMetrics] = useState<ProposalMetrics | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const canOpenAdminPanel = hasViewAccess("people.role_access_management");
 
   useEffect(() => {
     if (authLoading) return;
@@ -289,6 +302,7 @@ export default function GMPDashboard() {
   const verifyGMPAccessAndLoadData = async () => {
     try {
       setIsLoading(true);
+      setDashboardError(null);
 
       await Promise.all([loadDashboardData(), loadPersonalData(), loadAlertsData(), loadPipelineMetrics()]);
       setLastUpdated(new Date());
@@ -309,24 +323,11 @@ export default function GMPDashboard() {
     try {
       const data = await apiFetch("GET", "/gmp-dashboard/overview");
       setDashboardData(data);
+      setDashboardError(null);
     } catch (error) {
       console.error("Error loading dashboard overview:", error);
-      setDashboardData({
-        firmMetrics: {
-          total_employees: 0,
-          total_partners: 0,
-          total_managers: 0,
-          total_revenue: 0,
-          total_fees: 0,
-          active_jobs: 0,
-          active_clients: 0,
-          total_departments: 0,
-          evaluations_this_month: 0,
-        },
-        partnerRankings: [],
-        managerRankings: [],
-        departmentBreakdown: [],
-      });
+      setDashboardData(null);
+      setDashboardError("Executive overview could not be loaded from the system.");
     }
   };
 
@@ -336,17 +337,7 @@ export default function GMPDashboard() {
       setPersonalData(data);
     } catch (error) {
       console.error("Error loading personal data:", error);
-      setPersonalData({
-        personalMetrics: {
-          activeJobs: 0,
-          totalRevenue: 0,
-          totalFees: 0,
-          directReports: 0,
-          overallScore: 0,
-        },
-        jobs: [],
-        directReports: [],
-      });
+      setPersonalData(null);
     }
   };
 
@@ -505,6 +496,46 @@ export default function GMPDashboard() {
     0;
 
   const pipelineValue = pipelineMetrics?.pipelineValue ?? 0;
+  const gmpJobMetrics = [
+    {
+      label: "Firm revenue",
+      value: formatCompactCurrency(collected),
+      hint: `Projected ${formatCompactCurrency(projected)}`,
+      icon: Briefcase,
+      tone: "primary" as const,
+      graphValue: collected,
+      graphBaseline: projected,
+    },
+    {
+      label: "Firm profit",
+      value: formatCompactCurrency(profitability),
+      hint: `Collection rate ${formatPercentage(collectionRate)}`,
+      icon: Target,
+      tone: profitability >= 0 ? ("positive" as const) : ("danger" as const),
+      graphValue: profitability,
+      graphBaseline: 0,
+      inverse: profitability < 0,
+    },
+    {
+      label: "Active jobs",
+      value: String(firmMetrics?.activeJobs ?? firmMetrics?.active_jobs ?? 0),
+      hint: `${formatPercentage(firmMetrics?.utilizationRate ?? firmMetrics?.utilization_rate ?? 0)} utilization`,
+      icon: Crown,
+      tone: "warning" as const,
+      graphValue: Number(firmMetrics?.activeJobs ?? firmMetrics?.active_jobs ?? 0),
+      graphBaseline: Number(dashboardData?.riskSummary?.onHoldJobs ?? 0),
+    },
+    {
+      label: "At-risk exposure",
+      value: formatCompactCurrency(atRiskExposure),
+      hint: `${atRiskCount} jobs currently flagged`,
+      icon: AlertTriangle,
+      tone: "danger" as const,
+      graphValue: atRiskExposure,
+      graphBaseline: 0,
+      inverse: true,
+    },
+  ];
 
   const revenueTrend: Array<{ month: string; collected: number; projected: number }> =
     dashboardData?.projectionTrend && dashboardData.projectionTrend.length > 0
@@ -572,6 +603,39 @@ export default function GMPDashboard() {
     );
   }
 
+  if (!dashboardData) {
+    return (
+      <DashboardLayout>
+        <div className="p-6 space-y-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-gradient-to-r from-amber-400 to-yellow-600 rounded-full flex items-center justify-center">
+                <Crown className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">GMP Executive Overview</h1>
+                <p className="text-gray-600">Firm pulse, risk, and partner performance at a glance</p>
+              </div>
+            </div>
+            <Button variant="outline" onClick={handleRefresh}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+          </div>
+
+          <Card className="border-dashed bg-muted/30">
+            <CardHeader>
+              <CardTitle>Executive overview unavailable</CardTitle>
+              <CardDescription>
+                {dashboardError || "No GMP dashboard payload was returned for this profile."}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
       <div className="p-6 space-y-6">
@@ -594,12 +658,21 @@ export default function GMPDashboard() {
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
-            <Button variant="outline" onClick={() => navigate("/role-management")}>
-              <Settings className="h-4 w-4 mr-2" />
-              Admin Panel
-            </Button>
+            {canOpenAdminPanel ? (
+              <Button variant="outline" onClick={() => navigate("/role-management")}>
+                <Settings className="h-4 w-4 mr-2" />
+                Admin Panel
+              </Button>
+            ) : null}
           </div>
         </div>
+
+        <JobOperationsOverview
+          title="Executive job operations"
+          description="Keep firm revenue, delivery pressure, and portfolio risk visible in one cleaner executive board before you step into partner and department detail."
+          metrics={gmpJobMetrics}
+          showLocator={false}
+        />
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
           <Card>
@@ -686,22 +759,42 @@ export default function GMPDashboard() {
             <div className="xl:col-span-2">
               <p className="text-sm font-medium text-muted-foreground mb-3">Revenue trend (last 6 months)</p>
               {revenueTrend.length > 0 ? (
-                <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={revenueTrend}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
-                    <YAxis />
-                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                    <Line type="monotone" dataKey="collected" stroke="#2563eb" strokeWidth={3} />
-                    <Line
-                      type="monotone"
-                      dataKey="projected"
-                      stroke="#f59e0b"
-                      strokeWidth={2}
-                      strokeDasharray="4 4"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell className="h-[240px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={revenueTrend} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="month" {...analyticsAxisProps} />
+                      <YAxis {...analyticsAxisProps} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => formatCurrency(Number(value))}
+                          />
+                        }
+                      />
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Line
+                        type="monotone"
+                        dataKey="collected"
+                        name="Collected"
+                        stroke={analyticsColorAt(0)}
+                        strokeWidth={3}
+                        dot={{ r: 0 }}
+                        activeDot={{ r: 5, strokeWidth: 0, fill: analyticsColorAt(0) }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="projected"
+                        name="Projected"
+                        stroke={analyticsColorAt(2)}
+                        strokeWidth={2.5}
+                        strokeDasharray="4 4"
+                        dot={{ r: 0 }}
+                        activeDot={{ r: 5, strokeWidth: 0, fill: analyticsColorAt(2) }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               ) : (
                 <p className="text-sm text-muted-foreground">No trend data available yet.</p>
               )}
@@ -710,16 +803,24 @@ export default function GMPDashboard() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground mb-3">Department split</p>
                 {departmentSplit.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={180}>
-                    <PieChart>
-                      <Pie data={departmentSplit} dataKey="revenue" nameKey="department" outerRadius={70}>
-                        {departmentSplit.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={["#2563eb", "#10b981", "#f59e0b", "#6366f1", "#ef4444"][index % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <AnalyticsChartShell className="h-[180px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={departmentSplit} dataKey="revenue" nameKey="department" {...analyticsDonutProps}>
+                          {departmentSplit.map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={analyticsColorAt(index)} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          content={
+                            <AnalyticsTooltipContent
+                              valueFormatter={(value) => formatCurrency(Number(value))}
+                            />
+                          }
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </AnalyticsChartShell>
                 ) : (
                   <p className="text-sm text-muted-foreground">No department data yet.</p>
                 )}
@@ -995,5 +1096,3 @@ export default function GMPDashboard() {
     </DashboardLayout>
   );
 }
-
-

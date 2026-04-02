@@ -221,29 +221,4 @@ export class DepartmentController {
     }
   }
 
-  /**
-   * GET /departments/:departmentId/team-kpis
-   * Get team KPI breakdown for department
-   */
-  static async getDepartmentTeamKpis(req: AuthRequest, res: Response): Promise<void> {
-    try {
-      const departmentId = Number(req.params.departmentId);
-      const status = typeof req.query.status === "string" ? req.query.status : undefined;
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roles: req.userRoles ?? [],
-      };
-
-      const data = await departmentService.getDepartmentTeamKpis(departmentId, {
-        status: status as any,
-      }, auth);
-
-      res.json(successResponse(data, "Department team KPIs retrieved"));
-    } catch (error: any) {
-      res.status(error.statusCode || 500).json(
-        errorResponse(error.message, error.statusCode || 500)
-      );
-    }
-  }
 }

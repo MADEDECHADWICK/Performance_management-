@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { TaskStatus } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import prisma from '../prisma';
 import { createAudit } from '../utils/audit';
 
@@ -13,10 +14,7 @@ const normalizeRole = (value: string) => value.toLowerCase().trim();
 
 const getRoleSet = (req: AuthRequest) => {
   const roleSet = new Set<string>();
-  (req.userRoles || []).forEach((role) => roleSet.add(normalizeRole(role)));
-  if (req.profile?.role?.name) {
-    roleSet.add(normalizeRole(req.profile.role.name));
-  }
+  resolveRequestAccessRoles(req).forEach((role) => roleSet.add(normalizeRole(role)));
   return roleSet;
 };
 

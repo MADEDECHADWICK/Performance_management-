@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { resolveRequestPrimaryAccessRole } from "../auth/accessRoles";
 import { loadProfile } from "../middleware/loadProfile";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import prisma from "../prisma";
@@ -291,7 +292,7 @@ router.patch(
       const auth = {
         userId: req.user?.userId ?? 0,
         profileId: req.profile?.id ?? 0,
-        roleName: req.profile?.role?.name,
+        roleName: resolveRequestPrimaryAccessRole(req),
       };
 
       const profiles = await prisma.profile.findMany({
@@ -326,7 +327,7 @@ router.patch(
           message: "An evaluation was returned to in-progress for updates.",
           evaluationDefinitionId: assignment.evaluationDefinitionId,
           actionRequired: true,
-          link: `/evaluations/${assignment.id}`,
+          link: `/evaluations/assignments/${assignment.id}`,
         },
         auth
       );
@@ -341,7 +342,7 @@ router.patch(
           message: "HR has reopened an evaluation for further updates.",
           evaluationDefinitionId: assignment.evaluationDefinitionId,
           actionRequired: false,
-          link: `/evaluations/${assignment.id}`,
+          link: `/evaluations/assignments/${assignment.id}`,
         },
         auth
       );

@@ -143,7 +143,7 @@ export class RoleAwareAnalyticsService {
 
       const scoreBreakdown = (evaluation.scoreBreakdown || {}) as Record<string, any>;
       const nonFinScore = Number(
-        evaluation.nonFinancialWeighted || evaluation.evaluationScore || evaluation.kpiScore || 0
+        evaluation.nonFinancialWeighted || evaluation.evaluationScore || 0
       );
       const overallScore = Number(evaluation.totalScore || evaluation.nonFinancialWeighted || 0);
       

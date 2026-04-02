@@ -233,19 +233,16 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
 
     const profile = await prisma.profile.findUnique({
       where: { id: profileId },
-      select: { positionTitle: true, departmentId: true },
+      select: { departmentId: true },
     });
 
     if (!profile) {
       return res.status(404).json({ error: 'User profile not found' });
     }
 
-    const positionTitle = profile.positionTitle?.toLowerCase() || '';
-    const isGmp =
-      positionTitle.includes('group managing partner') ||
-      roleSet.has('gmp');
-    const isPartner = positionTitle.includes('partner') || roleSet.has('partner');
-    const isManager = positionTitle.includes('manager') || roleSet.has('manager');
+    const isGmp = roleSet.has('super_admin') || roleSet.has('gmp');
+    const isPartner = roleSet.has('partner');
+    const isManager = roleSet.has('manager');
 
     let financialData: any = {};
 

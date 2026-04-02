@@ -37,8 +37,11 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
-import { resolveCanonicalRole, type CanonicalRole } from "@/auth/canonicalRoles";
-import { getRoleViewEntitlements, getViewPermissionDefinition } from "@/auth/viewAccess";
+import { resolveCanonicalRole } from "@/auth/canonicalRoles";
+import {
+  VIEW_PERMISSION_DEFINITIONS,
+  getViewPermissionDefinition,
+} from "@/auth/viewAccess";
 import { Loader2, Search } from "lucide-react";
 
 interface User {
@@ -78,6 +81,15 @@ interface ModuleRolePolicy {
   explicitAccess: Record<string, string[]>;
   effectiveAccess: Record<string, string[]>;
   permissionKeys: string[];
+}
+
+interface ViewRolePolicy {
+  id: number;
+  name: string;
+  isActive: boolean;
+  hasExplicitConfiguration: boolean;
+  explicitViewKeys: string[];
+  effectiveViewKeys: string[];
 }
 
 const MODULE_ACTION_GUIDE: Array<{
@@ -187,9 +199,12 @@ const UserRoleManagement = () => {
   const [positionRoles, setPositionRoles] = useState<PositionRole[]>([]);
   const [moduleDefinitions, setModuleDefinitions] = useState<ModuleDefinition[]>([]);
   const [moduleRolePolicies, setModuleRolePolicies] = useState<ModuleRolePolicy[]>([]);
+  const [viewRolePolicies, setViewRolePolicies] = useState<ViewRolePolicy[]>([]);
   const [selectedPolicyRole, setSelectedPolicyRole] = useState<string>("");
   const [moduleDraft, setModuleDraft] = useState<Record<string, string[]>>({});
+  const [viewDraft, setViewDraft] = useState<string[]>([]);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
+  const [isSavingViewPolicy, setIsSavingViewPolicy] = useState(false);
   const [showPolicyEditor, setShowPolicyEditor] = useState(false);
   const [showRoleMatrix, setShowRoleMatrix] = useState(false);
   const [showTechnicalPolicyEditor, setShowTechnicalPolicyEditor] = useState(false);
@@ -281,10 +296,7 @@ const UserRoleManagement = () => {
   }, []);
 
   const selectedRoleViewEntitlements = useMemo(() => {
-    const normalizedRole = toPrimaryAccessRole(selectedPolicyRole);
-    if (!PRIMARY_ACCESS_ROLE_SET.has(normalizedRole)) return [];
-
-    return getRoleViewEntitlements(normalizedRole as CanonicalRole).map((viewKey) => {
+    return viewDraft.map((viewKey) => {
       const definition = getViewPermissionDefinition(viewKey);
       return {
         key: viewKey,
@@ -292,7 +304,7 @@ const UserRoleManagement = () => {
         category: definition?.category || "Other",
       };
     });
-  }, [selectedPolicyRole]);
+  }, [viewDraft]);
 
   const selectedRoleViewEntitlementsByCategory = useMemo(() => {
     const grouped = new Map<string, Array<{ key: string; label: string }>>();
@@ -311,13 +323,47 @@ const UserRoleManagement = () => {
       .sort((a, b) => a.category.localeCompare(b.category));
   }, [selectedRoleViewEntitlements]);
 
+  const viewPermissionDefinitionGroups = useMemo(() => {
+    const grouped = new Map<
+      string,
+      Array<{ key: string; label: string; module?: string; action?: string }>
+    >();
+
+    VIEW_PERMISSION_DEFINITIONS.forEach((definition) => {
+      const existing = grouped.get(definition.category) || [];
+      existing.push({
+        key: definition.key,
+        label: definition.label,
+        module: definition.module,
+        action: definition.action,
+      });
+      grouped.set(definition.category, existing);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([category, views]) => ({
+        category,
+        views: views.sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }, []);
+
+  const viewDraftSet = useMemo(() => new Set(viewDraft), [viewDraft]);
+
   const loadUsers = useCallback(async () => {
     try {
       setIsLoading(true);
-      const [data, roles, rolePoliciesResponse, moduleCatalogResponse] = await Promise.all([
+      const [
+        data,
+        roles,
+        rolePoliciesResponse,
+        viewRolePoliciesResponse,
+        moduleCatalogResponse,
+      ] = await Promise.all([
         apiFetch("GET", "/user-roles/list/all"),
         apiFetch("GET", "/roles"),
         apiFetch("GET", "/module-access/roles"),
+        apiFetch("GET", "/module-access/view-roles"),
         apiFetch("GET", "/module-access/modules"),
       ]);
       const normalizedUsers = (data || []).map((user: User) => ({
@@ -329,6 +375,11 @@ const UserRoleManagement = () => {
       setModuleRolePolicies(
         (rolePoliciesResponse?.roles || []).filter(
           (policy: ModuleRolePolicy) => !isUserOverrideRole(policy.name)
+        )
+      );
+      setViewRolePolicies(
+        (viewRolePoliciesResponse?.roles || []).filter(
+          (policy: ViewRolePolicy) => !isUserOverrideRole(policy.name)
         )
       );
       setModuleDefinitions(moduleCatalogResponse?.modules || []);
@@ -418,6 +469,24 @@ const UserRoleManagement = () => {
     });
     setModuleDraft(draft);
   }, [moduleDefinitions, moduleRolePolicies, selectedPolicyRole]);
+
+  useEffect(() => {
+    if (!selectedPolicyRole) {
+      setViewDraft([]);
+      return;
+    }
+
+    const policy = viewRolePolicies.find((item) => item.name === selectedPolicyRole);
+    setViewDraft(
+      Array.from(
+        new Set(
+          (policy?.effectiveViewKeys || [])
+            .map((viewKey) => String(viewKey || "").toLowerCase().trim())
+            .filter(Boolean)
+        )
+      )
+    );
+  }, [selectedPolicyRole, viewRolePolicies]);
 
   const openRoleEditor = (user: User) => {
     if (isSelfRoleEdit(user)) {
@@ -671,6 +740,15 @@ const UserRoleManagement = () => {
     });
   };
 
+  const toggleViewKey = (viewKey: string, checked: boolean) => {
+    setViewDraft((prev) => {
+      const current = new Set(prev);
+      if (checked) current.add(viewKey);
+      else current.delete(viewKey);
+      return Array.from(current).sort((a, b) => a.localeCompare(b));
+    });
+  };
+
   const saveModulePolicy = async () => {
     if (!selectedPolicyRole) {
       toast({
@@ -706,6 +784,38 @@ const UserRoleManagement = () => {
       });
     } finally {
       setIsSavingPolicy(false);
+    }
+  };
+
+  const saveViewPolicy = async () => {
+    if (!selectedPolicyRole) {
+      toast({
+        title: "Select role",
+        description: "Choose a role before saving screen entitlements.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsSavingViewPolicy(true);
+      await apiFetch("PUT", `/module-access/view-roles/${selectedPolicyRole}`, {
+        viewKeys: viewDraft,
+      });
+      toast({
+        title: "Screen entitlements updated",
+        description: `${formatRoleLabel(selectedPolicyRole)} view access saved.`,
+      });
+      await loadUsers();
+    } catch (error: unknown) {
+      const err = error as Record<string, string>;
+      toast({
+        title: "Failed to update screen entitlements",
+        description: err.error || "Unable to save role screen access.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingViewPolicy(false);
     }
   };
 
@@ -983,7 +1093,7 @@ const UserRoleManagement = () => {
             </p>
           ) : (
             <>
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="w-full md:w-72">
               <label className="text-sm font-medium">Role policy</label>
               <Select value={selectedPolicyRole} onValueChange={setSelectedPolicyRole}>
@@ -999,21 +1109,36 @@ const UserRoleManagement = () => {
                 </SelectContent>
               </Select>
             </div>
-            <Button
-              onClick={saveModulePolicy}
-              disabled={!selectedPolicyRole || isSavingPolicy || !showTechnicalPolicyEditor}
-            >
-              {isSavingPolicy ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving policy...
-                </>
-              ) : (
-                showTechnicalPolicyEditor
-                  ? "Save Technical Module Policy"
-                  : "Open Technical Editor to Save"
-              )}
-            </Button>
+            <div className="flex flex-wrap gap-2 md:justify-end">
+              <Button
+                onClick={saveViewPolicy}
+                disabled={!selectedPolicyRole || isSavingViewPolicy}
+              >
+                {isSavingViewPolicy ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving screen access...
+                  </>
+                ) : (
+                  "Save Screen Entitlements"
+                )}
+              </Button>
+              <Button
+                onClick={saveModulePolicy}
+                disabled={!selectedPolicyRole || isSavingPolicy || !showTechnicalPolicyEditor}
+              >
+                {isSavingPolicy ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving policy...
+                  </>
+                ) : showTechnicalPolicyEditor ? (
+                  "Save Technical Module Policy"
+                ) : (
+                  "Open Technical Editor to Save"
+                )}
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -1027,9 +1152,9 @@ const UserRoleManagement = () => {
                     type="button"
                     size="sm"
                     variant={active ? "default" : "outline"}
-              onClick={() => setSelectedPolicyRole(rolePolicy.name)}
-            >
-              {formatRoleLabel(rolePolicy.name)}
+                    onClick={() => setSelectedPolicyRole(rolePolicy.name)}
+                  >
+                    {formatRoleLabel(rolePolicy.name)}
                   </Button>
                 );
               })}
@@ -1037,34 +1162,88 @@ const UserRoleManagement = () => {
           </div>
 
           <div className="rounded-md border bg-muted/30 p-3">
-            <p className="text-sm font-medium">Role Experience Entitlements</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              This is the primary RBAC model for which screens each role can open.
-            </p>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-medium">Role Experience Entitlements</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This is the primary RBAC model for which screens each role can open.
+                </p>
+              </div>
+              {selectedPolicyRole ? (
+                <Badge variant="outline">
+                  {viewDraft.length} screen{viewDraft.length === 1 ? "" : "s"}
+                </Badge>
+              ) : null}
+            </div>
             {!selectedPolicyRole ? (
               <p className="mt-2 text-sm text-muted-foreground">
                 Select a role to review its default screen entitlements.
               </p>
-            ) : selectedRoleViewEntitlementsByCategory.length === 0 ? (
-              <p className="mt-2 text-sm text-muted-foreground">
-                No screen entitlements configured for this role.
-              </p>
             ) : (
-              <div className="mt-3 space-y-3">
-                {selectedRoleViewEntitlementsByCategory.map((group) => (
-                  <div key={group.category} className="space-y-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      {group.category}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {group.views.map((view) => (
-                        <Badge key={view.key} variant="outline">
-                          {view.label}
-                        </Badge>
-                      ))}
-                    </div>
+              <div className="mt-3 space-y-4">
+                {selectedRoleViewEntitlementsByCategory.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No screen entitlements configured for this role.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {selectedRoleViewEntitlementsByCategory.map((group) => (
+                      <div key={group.category} className="space-y-2">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          {group.category}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {group.views.map((view) => (
+                            <Badge key={view.key} variant="outline">
+                              {view.label}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {viewPermissionDefinitionGroups.map((group) => (
+                    <div key={group.category} className="rounded-md border bg-background p-3">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {group.category}
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {group.views.map((view) => {
+                          const checked = viewDraftSet.has(view.key);
+                          const moduleSummary = view.module
+                            ? `${view.module}.${view.action || "read"}`
+                            : "route-only";
+
+                          return (
+                            <label
+                              key={view.key}
+                              className="flex items-start gap-3 rounded border px-3 py-2"
+                            >
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(nextChecked) =>
+                                  toggleViewKey(view.key, nextChecked === true)
+                                }
+                              />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium leading-5">{view.label}</p>
+                                <p className="truncate font-mono text-[11px] text-muted-foreground">
+                                  {view.key}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground">
+                                  {moduleSummary}
+                                </p>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

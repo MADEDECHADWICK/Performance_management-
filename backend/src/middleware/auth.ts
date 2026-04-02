@@ -85,8 +85,8 @@ export const authFromReq = (req: AuthRequest) => ({
  * Expected JWT payload
  */
 type AccessTokenPayload = {
-  userId?: number;
-  sub?: number;
+  userId?: number | string;
+  sub?: number | string;
   email: string;
   authRoles?: string[];
   sessionToken?: string;
@@ -110,10 +110,18 @@ export async function authMiddleware(
     }
 
     const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, getJwtSecret()) as AccessTokenPayload;
-    const resolvedUserId = decoded.userId ?? decoded.sub;
+    const verifiedPayload = jwt.verify(token, getJwtSecret());
+    if (!verifiedPayload || typeof verifiedPayload === "string") {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Invalid token payload",
+      });
+    }
 
-    if (!resolvedUserId) {
+    const decoded = verifiedPayload as AccessTokenPayload;
+    const resolvedUserId = Number(decoded.userId ?? decoded.sub);
+
+    if (!Number.isInteger(resolvedUserId) || resolvedUserId <= 0) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized - Invalid token payload",
@@ -168,9 +176,11 @@ export async function authMiddleware(
       });
     }
 
+    
     const authRoles = canonicalizeRoles(decoded.authRoles || []);
     const requestPath = req.originalUrl || req.url || "";
 
+    //Enforcing onboarding gate for users who haven't completed onboarding checklist or induction, if they are trying to access protected routes (anything beyond /auth/* and /onboarding/*). This ensures that new users complete necessary onboarding steps before accessing the main features of the application.
     if (
       shouldEnforceOnboardingGate({
         requestPath,

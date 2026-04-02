@@ -4,26 +4,18 @@
 
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
+import {
+  resolveRequestAccessRoles,
+  resolveRequestPrimaryAccessRole,
+} from "../auth/accessRoles";
 import { ProfileService } from '../services/profiles.service';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
-
-const resolveRoles = (req: AuthRequest) => {
-  const roles = [
-    ...(req.userRoles || []),
-    ...(req.userRoles || []),
-    req.profile?.role?.name,
-  ]
-    .filter(Boolean)
-    .map((role) => String(role));
-  return Array.from(new Set(roles));
-};
 
 const buildAuthContext = (req: AuthRequest) => ({
   userId: req.user!.userId,
   profileId: req.profile!.id,
-  roleName: req.profile?.role?.name,
-  roles: resolveRoles(req),
-  isPartner: req.profile?.isPartner,
+  roleName: resolveRequestPrimaryAccessRole(req),
+  roles: resolveRequestAccessRoles(req),
 });
 
 export class ProfileController {

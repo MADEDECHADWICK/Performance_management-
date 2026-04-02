@@ -1,13 +1,24 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
+import JobOperationsOverview from "@/components/jobs/JobOperationsOverview";
 import PageLoader from '@/components/ui/page-loader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AnalyticsChartShell,
+  AnalyticsGradientDefs,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsGradientFill,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
-import { BarChart3, DollarSign, TrendingUp, AlertCircle, FileSpreadsheet, ArrowUpRight } from "lucide-react";
+import type { RequisitionFinanceTracker } from "@/lib/api/requisitions";
+import { BarChart3, DollarSign, TrendingUp, AlertCircle, ArrowUpRight } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -105,6 +116,7 @@ export default function FinanceDashboard() {
   const [clientBalances, setClientBalances] = useState<ClientBalance[]>([]);
   const [jobProfitability, setJobProfitability] = useState<JobProfitability[]>([]);
   const [allocations, setAllocations] = useState<RevenueAllocation[]>([]);
+  const [requisitionFinanceTracker, setRequisitionFinanceTracker] = useState<RequisitionFinanceTracker | null>(null);
 
   const loadFinanceDashboard = async () => {
     try {
@@ -119,15 +131,26 @@ export default function FinanceDashboard() {
         apiFetch<ClientBalance[]>("GET", "/finance-dashboard/client-balances"),
         apiFetch<JobProfitability[]>("GET", "/finance-dashboard/job-profitability"),
         apiFetch<RevenueAllocation[]>("GET", "/finance-dashboard/revenue-allocations"),
+        apiFetch<RequisitionFinanceTracker>("GET", "/requisitions/finance-tracker"),
       ]);
 
-      const [collectionsResult, projectionsResult, balancesResult, profitabilityResult, allocationsResult] = results;
+      const [
+        collectionsResult,
+        projectionsResult,
+        balancesResult,
+        profitabilityResult,
+        allocationsResult,
+        requisitionTrackerResult,
+      ] = results;
 
       if (collectionsResult.status === "fulfilled") setCollections(collectionsResult.value);
       if (projectionsResult.status === "fulfilled") setProjections(projectionsResult.value);
       if (balancesResult.status === "fulfilled") setClientBalances(balancesResult.value);
       if (profitabilityResult.status === "fulfilled") setJobProfitability(profitabilityResult.value);
       if (allocationsResult.status === "fulfilled") setAllocations(allocationsResult.value);
+      if (requisitionTrackerResult.status === "fulfilled") {
+        setRequisitionFinanceTracker(requisitionTrackerResult.value);
+      }
     } catch (error: any) {
       console.error("Finance dashboard error:", error);
       if (error?.status === 401) {
@@ -139,23 +162,13 @@ export default function FinanceDashboard() {
       } else {
         setOverviewError(error.message || "Finance data unavailable");
       }
-      setOverview((prev) =>
-        prev ?? {
-          month: new Date().toISOString(),
-          projectedMonth: 0,
-          collectedMonth: 0,
-          varianceMonth: 0,
-          totalCollected: 0,
-          totalOutstanding: 0,
-          totalFees: 0,
-          collectionRate: 0,
-        }
-      );
+      setOverview(null);
       setCollections([]);
       setProjections([]);
       setClientBalances([]);
       setJobProfitability([]);
       setAllocations([]);
+      setRequisitionFinanceTracker(null);
     } finally {
       setLoading(false);
     }
@@ -214,6 +227,56 @@ export default function FinanceDashboard() {
     return `KES ${compact}`;
   };
 
+  const accountabilityRows = useMemo(() => {
+    if (!requisitionFinanceTracker) return [];
+    return [...requisitionFinanceTracker.pending]
+      .sort((left, right) => {
+        const leftTime = left.accountabilityDueAt ? new Date(left.accountabilityDueAt).getTime() : Number.MAX_SAFE_INTEGER;
+        const rightTime = right.accountabilityDueAt ? new Date(right.accountabilityDueAt).getTime() : Number.MAX_SAFE_INTEGER;
+        return leftTime - rightTime;
+      })
+      .slice(0, 6);
+  }, [requisitionFinanceTracker]);
+
+  const financeJobMetrics = [
+    {
+      label: "Projected month",
+      value: formatCompactCurrency(overview?.projectedMonth || 0),
+      hint: "Current month plan",
+      icon: TrendingUp,
+      tone: "primary" as const,
+      graphValue: overview?.projectedMonth || 0,
+    },
+    {
+      label: "Collected month",
+      value: formatCompactCurrency(overview?.collectedMonth || 0),
+      hint: `Variance ${formatCompactCurrency(overview?.varianceMonth || 0)}`,
+      icon: DollarSign,
+      tone: "positive" as const,
+      graphValue: overview?.collectedMonth || 0,
+      graphBaseline: overview?.projectedMonth || 0,
+    },
+    {
+      label: "Outstanding book",
+      value: formatCompactCurrency(overview?.totalOutstanding || 0),
+      hint: `Realized ${formatCompactCurrency(overview?.totalCollected || 0)}`,
+      icon: BarChart3,
+      tone: "warning" as const,
+      graphValue: overview?.totalOutstanding || 0,
+      graphBaseline: 0,
+      inverse: true,
+    },
+    {
+      label: "Collection rate",
+      value: `${(overview?.collectionRate || 0).toFixed(1)}%`,
+      hint: `${jobProfitability.length} jobs in profitability scope`,
+      icon: ArrowUpRight,
+      tone: "danger" as const,
+      graphValue: overview?.collectionRate || 0,
+      graphBaseline: 70,
+    },
+  ];
+
   if (loading) {
     return (
       <DashboardLayout>
@@ -223,7 +286,32 @@ export default function FinanceDashboard() {
   }
 
   if (!overview) {
-    return null;
+    return (
+      <DashboardLayout>
+        <div className="space-y-8">
+          <div>
+            <h1 className="text-3xl font-bold">Finance Overview</h1>
+            <p className="text-muted-foreground">
+              High-level finance performance with quick access to each module.
+            </p>
+          </div>
+
+          <Card className="border-dashed bg-muted/30">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5" />
+                Finance data not available yet
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                {overviewError || "No finance overview payload was returned from the system."}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </DashboardLayout>
+    );
   }
 
   return (
@@ -235,6 +323,13 @@ export default function FinanceDashboard() {
             High-level finance performance with quick access to each module.
           </p>
         </div>
+
+        <JobOperationsOverview
+          title="Finance job operations"
+          description="Trace revenue, collections, outstanding exposure, and the jobs behind the numbers from one cleaner finance view."
+          metrics={financeJobMetrics}
+          showLocator={false}
+        />
 
 
         {overviewError && (
@@ -253,74 +348,103 @@ export default function FinanceDashboard() {
           </Card>
         )}
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Projected (Month)</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(overview.projectedMonth)}>
-                {formatCompactCurrency(overview.projectedMonth)}
-              </div>
-              <p className="text-xs text-muted-foreground">Current month plan</p>
-              <MiniStatGraph value={overview.projectedMonth} />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Collected (Month)</CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(overview.collectedMonth)}>
-                {formatCompactCurrency(overview.collectedMonth)}
-              </div>
-              <p className="text-xs text-muted-foreground">Current month actual</p>
-              <MiniStatGraph
-                value={overview.collectedMonth}
-                baseline={overview.projectedMonth}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Variance</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(overview.varianceMonth)}>
-                {formatCompactCurrency(overview.varianceMonth)}
-              </div>
-              <p className="text-xs text-muted-foreground">Projected vs collected</p>
-              <MiniStatGraph value={overview.varianceMonth} baseline={0} />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Outstanding</CardTitle>
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(overview.totalOutstanding)}>
-                {formatCompactCurrency(overview.totalOutstanding)}
-              </div>
-              <p className="text-xs text-muted-foreground">Across all jobs</p>
-              <MiniStatGraph value={overview.totalOutstanding} baseline={0} inverse />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Collection Rate</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">{overview.collectionRate.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">Collected vs fees</p>
-              <MiniStatGraph value={overview.collectionRate} baseline={70} />
-            </CardContent>
-          </Card>
-        </div>
+        {requisitionFinanceTracker ? (
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Awaiting Release</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="metric-value">{requisitionFinanceTracker.counts.unreleasedCount}</div>
+                  <p className="text-xs text-muted-foreground">Approved requisitions not yet disbursed.</p>
+                  <MiniStatGraph value={requisitionFinanceTracker.counts.unreleasedCount} baseline={0} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Pending Accountability</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="metric-value">{requisitionFinanceTracker.counts.pendingCount}</div>
+                  <p className="text-xs text-muted-foreground">Released requisitions still awaiting accountability.</p>
+                  <MiniStatGraph value={requisitionFinanceTracker.counts.pendingCount} baseline={0} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Overdue Accountabilities</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="metric-value">{requisitionFinanceTracker.counts.overdueCount}</div>
+                  <p className="text-xs text-muted-foreground">Past the three-week accountability deadline.</p>
+                  <MiniStatGraph value={requisitionFinanceTracker.counts.overdueCount} baseline={0} inverse />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Completed Accountabilities</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="metric-value">{requisitionFinanceTracker.counts.completedCount}</div>
+                  <p className="text-xs text-muted-foreground">Requisitions fully accounted for.</p>
+                  <MiniStatGraph value={requisitionFinanceTracker.counts.completedCount} baseline={0} />
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Accountability Tracker</CardTitle>
+                <CardDescription>Released requisitions that still need employee accountability.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Requisition</TableHead>
+                      <TableHead>Requester</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Released</TableHead>
+                      <TableHead>Due</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accountabilityRows.length ? (
+                      accountabilityRows.map((request) => {
+                        const isOverdue =
+                          Boolean(request.accountabilityDueAt) &&
+                          new Date(String(request.accountabilityDueAt)).getTime() < Date.now();
+                        return (
+                          <TableRow key={`finance-accountability-${request.id}`}>
+                            <TableCell>
+                              <div className="font-medium">{request.title}</div>
+                              <div className="text-xs text-muted-foreground">{request.requisitionNumber}</div>
+                            </TableCell>
+                            <TableCell>
+                              {request.requester?.firstName} {request.requester?.lastName}
+                            </TableCell>
+                            <TableCell>{formatCurrency(Number(request.amount || 0))}</TableCell>
+                            <TableCell>{request.releasedAt ? new Date(request.releasedAt).toLocaleDateString() : "N/A"}</TableCell>
+                            <TableCell className={isOverdue ? "text-destructive" : ""}>
+                              {request.accountabilityDueAt ? new Date(request.accountabilityDueAt).toLocaleDateString() : "N/A"}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-muted-foreground">
+                          No pending accountabilities right now.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card>
@@ -329,17 +453,51 @@ export default function FinanceDashboard() {
               <CardDescription>Last six months overview.</CardDescription>
             </CardHeader>
             <CardContent className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthChart}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => `KES ${Number(value).toLocaleString()}`} />
-                  <Legend />
-                  <Bar dataKey="projected" fill="hsl(var(--primary))" />
-                  <Bar dataKey="collected" fill="hsl(var(--secondary))" />
-                </BarChart>
-              </ResponsiveContainer>
+              <AnalyticsChartShell>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={monthChart} barCategoryGap={18}>
+                    <AnalyticsGradientDefs
+                      items={[
+                        { id: "finance-dashboard-projected", color: "hsl(var(--chart-1))" },
+                        { id: "finance-dashboard-collected", color: "hsl(var(--chart-2))" },
+                      ]}
+                    />
+                    <CartesianGrid {...analyticsGridProps} />
+                    <XAxis dataKey="month" {...analyticsAxisProps} />
+                    <YAxis
+                      {...analyticsAxisProps}
+                      tickFormatter={(value) =>
+                        new Intl.NumberFormat("en-KE", {
+                          notation: "compact",
+                          compactDisplay: "short",
+                          maximumFractionDigits: 1,
+                        }).format(Number(value || 0))
+                      }
+                    />
+                    <Tooltip
+                      content={
+                        <AnalyticsTooltipContent
+                          valueFormatter={(value, name) => [
+                            `KES ${Number(value || 0).toLocaleString()}`,
+                            name,
+                          ]}
+                        />
+                      }
+                    />
+                    <Legend content={<AnalyticsLegendContent />} />
+                    <Bar
+                      dataKey="projected"
+                      fill={analyticsGradientFill("finance-dashboard-projected")}
+                      radius={[10, 10, 4, 4]}
+                    />
+                    <Bar
+                      dataKey="collected"
+                      fill={analyticsGradientFill("finance-dashboard-collected")}
+                      radius={[10, 10, 4, 4]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </AnalyticsChartShell>
             </CardContent>
           </Card>
 
@@ -480,21 +638,6 @@ export default function FinanceDashboard() {
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader className="space-y-1">
-                  <CardTitle className="text-base">Reports</CardTitle>
-                  <CardDescription>Exportable finance insights.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <FileSpreadsheet className="h-4 w-4" />
-                    Summaries, trends, and exports
-                  </div>
-                  <Button asChild variant="outline" size="sm">
-                    <Link to="/reports">Open reports</Link>
-                  </Button>
-                </CardContent>
-              </Card>
             </div>
           </CardContent>
         </Card>

@@ -6,7 +6,7 @@ import MiniStatGraph from "@/components/ui/mini-stat-graph";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { Building2, Users, TrendingUp, TrendingDown, Award, Download, FileText, Plus, Trash2 } from "lucide-react";
+import { Building2, Users, TrendingUp, Award, Download, FileText, Plus, Trash2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -44,7 +44,6 @@ const DepartmentDashboard = () => {
   const [rankingView, setRankingView] = useState("top");
   const [selectedTeamId, setSelectedTeamId] = useState("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState("all");
-  const [teamKpis, setTeamKpis] = useState<any[]>([]);
   const managerDepartmentId =
     user?.profile?.departmentId != null ? String(user.profile.departmentId) : "";
 
@@ -54,7 +53,6 @@ const DepartmentDashboard = () => {
     if (payload?.items && Array.isArray(payload.items)) return payload.items;
     if (payload?.employees && Array.isArray(payload.employees)) return payload.employees;
     if (payload?.departments && Array.isArray(payload.departments)) return payload.departments;
-    if (payload?.kpis && Array.isArray(payload.kpis)) return payload.kpis;
     if (payload?.payload && Array.isArray(payload.payload)) return payload.payload;
     return [];
   };
@@ -176,14 +174,12 @@ const DepartmentDashboard = () => {
       loadDepartmentStats(selectedDept, selectedTeamId, memberStatusFilter);
       loadTeams(selectedDept);
       loadDepartmentEmployees(selectedDept);
-      loadTeamKpis(selectedDept, memberStatusFilter);
     }
   }, [selectedDept]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDept) {
       loadDepartmentStats(selectedDept, selectedTeamId, memberStatusFilter);
-      loadTeamKpis(selectedDept, memberStatusFilter);
     }
   }, [selectedDept, selectedTeamId, memberStatusFilter, teams]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -296,20 +292,6 @@ const DepartmentDashboard = () => {
       console.error("Error loading teams:", error);
       // Set empty array on error to prevent UI issues
       setTeams([]);
-    }
-  };
-
-  const loadTeamKpis = async (deptId: string, statusFilter?: string) => {
-    try {
-      const query = statusFilter && statusFilter !== "all" ? `?status=${statusFilter}` : "";
-      const data = await apiFetch<any[]>(
-        "GET",
-        `/departments/${deptId}/team-kpis${query}`
-      );
-      setTeamKpis(normalizeArray(data));
-    } catch (error: any) {
-      console.error("Error loading team KPIs:", error);
-      setTeamKpis([]);
     }
   };
 
@@ -562,19 +544,19 @@ const DepartmentDashboard = () => {
                   <Card>
                     <CardHeader>
                       <CardTitle>Performance Breakdown</CardTitle>
-                      <CardDescription>KPI performance by category</CardDescription>
+                      <CardDescription>Performance split by category</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div>
                         <div className="flex justify-between text-sm mb-2">
-                          <span className="font-medium">Financial KPIs (70%)</span>
+                          <span className="font-medium">Financial contribution (70%)</span>
                           <span className="text-primary font-semibold">{deptStats.avgFinancialScore}%</span>
                         </div>
                         <Progress value={parseFloat(deptStats.avgFinancialScore)} className="h-2" />
                       </div>
                       <div>
                         <div className="flex justify-between text-sm mb-2">
-                          <span className="font-medium">Non-Financial KPIs (30%)</span>
+                          <span className="font-medium">Non-financial performance (30%)</span>
                           <span className="text-secondary font-semibold">{deptStats.avgNonFinancialScore}%</span>
                         </div>
                         <Progress value={parseFloat(deptStats.avgNonFinancialScore)} className="h-2" />
@@ -592,7 +574,7 @@ const DepartmentDashboard = () => {
                   <Card>
                     <CardHeader>
                       <CardTitle>Department Insights</CardTitle>
-                      <CardDescription>Key performance indicators</CardDescription>
+                      <CardDescription>Key department health signals</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="flex items-start gap-3">
@@ -626,131 +608,6 @@ const DepartmentDashboard = () => {
                   </Card>
                 </div>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Team KPI Breakdown</CardTitle>
-                    <CardDescription>Snapshot by evaluation teams within this department</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
-                      <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                        Teams: {teamKpis.length}
-                      </span>
-                      <span className="rounded-full bg-rose-50 px-2 py-1 text-rose-700">
-                        Needs attention:{" "}
-                        {
-                          teamKpis.filter((team) => {
-                            const delta = Number(team.deltaOverall || 0);
-                            const trend =
-                              team.trendDirection ||
-                              (delta > 0 ? "up" : delta < 0 ? "down" : "flat");
-                            return (
-                              trend === "down" &&
-                              Math.abs(delta) >= 1 &&
-                              Number(team.previousOverallScore || 0) > 0
-                            );
-                          }).length
-                        }
-                      </span>
-                    </div>
-                    {loading && teams.length > 0 ? (
-                      <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
-                        <p className="text-sm font-medium text-foreground">Loading team KPIs...</p>
-                        <p className="text-xs text-muted-foreground">
-                          Fetching the latest performance scores for each team.
-                        </p>
-                      </div>
-                    ) : teamKpis.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center">
-                        <p className="text-sm font-medium text-foreground">
-                          {teams.length === 0 ? "No teams configured" : "No team KPI scores yet"}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {teams.length === 0
-                            ? "Create evaluation teams to see team-level KPI performance."
-                            : "Team scores will appear after the first performance scores are calculated."}
-                        </p>
-                      </div>
-                    ) : (
-                      <>
-                        {selectedTeamId !== "all" &&
-                          !teamKpis.some((team) => String(team.teamId) === selectedTeamId) && (
-                            <div className="mb-4 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-center text-xs text-muted-foreground">
-                              The selected team does not have KPI data yet.
-                            </div>
-                          )}
-                      <div className="grid gap-4 md:grid-cols-2">
-                        {teamKpis
-                          .filter((team) =>
-                            selectedTeamId === "all"
-                              ? true
-                              : String(team.teamId) === selectedTeamId
-                          )
-                          .map((team) => {
-                            const teamOverall = Number(team.overallScore || 0).toFixed(1);
-                            const teamFinancial = Number(team.financialScore || 0).toFixed(1);
-                            const teamNonFinancial = Number(team.nonFinancialScore || 0).toFixed(1);
-                            const delta = Number(team.deltaOverall || 0);
-                            const trend =
-                              team.trendDirection || (delta > 0 ? "up" : delta < 0 ? "down" : "flat");
-                            const needsAttention =
-                              trend === "down" &&
-                              Math.abs(delta) >= 1 &&
-                              Number(team.previousOverallScore || 0) > 0;
-
-                          return (
-                            <Card key={team.teamId} className="border-muted/40">
-                              <CardHeader className="pb-2">
-                                <CardTitle className="text-base font-semibold">{team.teamName}</CardTitle>
-                                <CardDescription className="flex flex-wrap items-center gap-2">
-                                  <span>{team.activeCount} active | {team.memberCount} total</span>
-                                  <span
-                                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                                    title={`Previous score: ${Number(team.previousOverallScore || 0).toFixed(1)}%`}
-                                  >
-                                    {trend === "up" && <TrendingUp className="h-3 w-3 text-emerald-500" />}
-                                    {trend === "down" && <TrendingDown className="h-3 w-3 text-rose-500" />}
-                                    {trend === "flat" && <span className="h-3 w-3 text-muted-foreground">o</span>}
-                                    {Math.abs(delta).toFixed(1)} pts
-                                  </span>
-                                  {needsAttention && (
-                                    <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700">
-                                      Needs attention
-                                    </span>
-                                  )}
-                                </CardDescription>
-                              </CardHeader>
-                              <CardContent className="space-y-3">
-                                <div>
-                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                    <span>Financial KPI</span>
-                                    <span className="text-foreground font-medium">{teamFinancial}%</span>
-                                  </div>
-                                  <Progress value={parseFloat(teamFinancial)} className="h-2" />
-                                </div>
-                                <div>
-                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                    <span>Non-Financial KPI</span>
-                                    <span className="text-foreground font-medium">{teamNonFinancial}%</span>
-                                  </div>
-                                  <Progress value={parseFloat(teamNonFinancial)} className="h-2" />
-                                </div>
-                                <div>
-                                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                    <span>Overall Score</span>
-                                    <span className="text-foreground font-medium">{teamOverall}%</span>
-                                  </div>
-                                  <Progress value={parseFloat(teamOverall)} className="h-2" />
-                                </div>
-                              </CardContent>
-                            </Card>
-                          );
-                        })}
-                      </div>
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
               </>
             ) : (
               <Card>
@@ -759,7 +616,7 @@ const DepartmentDashboard = () => {
                     <Building2 className="h-6 w-6 text-muted-foreground" />
                     <p className="text-sm font-medium text-foreground">Select a department to view performance data</p>
                     <p className="text-xs text-muted-foreground">
-                      Choose a department above to load KPIs, reviews, and insights.
+                      Choose a department above to load reviews and insights.
                     </p>
                   </div>
                 </CardContent>

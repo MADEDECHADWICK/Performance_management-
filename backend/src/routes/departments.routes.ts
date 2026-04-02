@@ -1,6 +1,6 @@
 /**
  * Department Routes
- * Endpoints for department management, KPIs, and organizational metrics
+ * Endpoints for department management and organizational metrics
  */
 
 import { Router } from "express";
@@ -10,7 +10,6 @@ import { validateRequest, handleValidationErrors } from "../middleware/validate"
 import {
   createDepartmentValidators,
   updateDepartmentValidators,
-  createDepartmentKpiValidators,
 } from "../validators/department.validators";
 
 const router = Router();
@@ -84,17 +83,6 @@ router.get(
   "/:departmentId/managers",
   ...withDepartmentAccess(),
   DepartmentController.getDepartmentManagers
-);
-
-/**
- * GET /departments/:departmentId/team-kpis
- * Team-level KPI breakdown for a department
- * Query: status (active|inactive|all)
- */
-router.get(
-  "/:departmentId/team-kpis",
-  ...withDepartmentAccess(),
-  DepartmentController.getDepartmentTeamKpis
 );
 
 export default router;

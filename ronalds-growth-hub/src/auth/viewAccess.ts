@@ -12,21 +12,6 @@ export type ViewPermissionDefinition = {
   patterns: RegExp[];
 };
 
-const COMMON_VIEW_KEYS = [
-  "profile.my",
-  "goals.my",
-  "scorecard.my",
-  "evaluations.my",
-  "feedback.continuous",
-  "reviews.upward",
-  "timesheets.my",
-  "development.plan",
-  "documents.workspace",
-  "knowledge.hub",
-  "notifications.center",
-  "todos.my",
-] as const;
-
 export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
   {
     key: "dashboard.employee",
@@ -110,24 +95,6 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     patterns: [/^\/profile(?:\/|$)/],
   },
   {
-    key: "goals.my",
-    label: "Goals",
-    category: "Self Service",
-    module: "kpis",
-    action: "read",
-    defaultPath: "/goals",
-    patterns: [/^\/goals(?:\/|$)/],
-  },
-  {
-    key: "scorecard.my",
-    label: "Scorecard",
-    category: "Self Service",
-    module: "kpis",
-    action: "read",
-    defaultPath: "/scorecard",
-    patterns: [/^\/scorecard(?:\/|$)/],
-  },
-  {
     key: "evaluations.my",
     label: "My Evaluations",
     category: "Evaluations",
@@ -137,8 +104,6 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     patterns: [
       /^\/evaluations\/?$/,
       /^\/evaluations\/assignments(?:\/[^/]+)?(?:\/|$)/,
-      /^\/evaluation\/[^/]+(?:\/|$)/,
-      /^\/complete-evaluation\/[^/]+(?:\/|$)/,
     ],
   },
   {
@@ -155,15 +120,6 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     ],
   },
   {
-    key: "reviews.upward",
-    label: "Upward Reviews",
-    category: "Evaluations",
-    module: "evaluations",
-    action: "read",
-    defaultPath: "/evaluations",
-    patterns: [/^\/upward-reviews(?:\/|$)/],
-  },
-  {
     key: "timesheets.my",
     label: "Timesheets",
     category: "Self Service",
@@ -171,6 +127,60 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     action: "read",
     defaultPath: "/timesheets",
     patterns: [/^\/timesheets(?:\/|$)/],
+  },
+  {
+    key: "leave.admin",
+    label: "Leave Admin",
+    category: "Leave Management",
+    module: "leave",
+    action: "admin",
+    defaultPath: "/leave/admin",
+    patterns: [/^\/leave\/admin(?:\/|$)/],
+  },
+  {
+    key: "leave.approvals",
+    label: "Leave Approvals",
+    category: "Leave Management",
+    module: "leave",
+    action: "approve",
+    defaultPath: "/leave/approvals",
+    patterns: [/^\/leave\/approvals(?:\/|$)/],
+  },
+  {
+    key: "leave.my",
+    label: "My Leave",
+    category: "Self Service",
+    module: "leave",
+    action: "read",
+    defaultPath: "/leave",
+    patterns: [/^\/leave(?:\/|$)/],
+  },
+  {
+    key: "requisitions.admin",
+    label: "Requisition Admin",
+    category: "Requisitions",
+    module: "requisitions",
+    action: "admin",
+    defaultPath: "/requisitions/admin",
+    patterns: [/^\/requisitions\/admin(?:\/|$)/],
+  },
+  {
+    key: "requisitions.approvals",
+    label: "Requisition Approvals",
+    category: "Requisitions",
+    module: "requisitions",
+    action: "approve",
+    defaultPath: "/requisitions/approvals",
+    patterns: [/^\/requisitions\/approvals(?:\/|$)/],
+  },
+  {
+    key: "requisitions.my",
+    label: "My Requisitions",
+    category: "Self Service",
+    module: "requisitions",
+    action: "read",
+    defaultPath: "/requisitions",
+    patterns: [/^\/requisitions(?:\/|$)/],
   },
   {
     key: "development.plan",
@@ -222,7 +232,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     label: "Employee Management",
     category: "People & Access",
     module: "users",
-    action: "read",
+    action: "approve",
     defaultPath: "/employee-management",
     patterns: [/^\/employee-management(?:\/|$)/],
   },
@@ -377,20 +387,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     module: "evaluations",
     action: "read",
     defaultPath: "/evaluations/cycles",
-    patterns: [
-      /^\/evaluation-management(?:\/|$)/,
-      /^\/create-evaluation(?:\/|$)/,
-      /^\/evaluations\/cycles(?:\/|$)/,
-    ],
-  },
-  {
-    key: "evaluations.manager_view",
-    label: "Manager Evaluations",
-    category: "Evaluations",
-    module: "evaluations",
-    action: "read",
-    defaultPath: "/evaluations",
-    patterns: [/^\/manager-evaluation(?:\/|$)/],
+    patterns: [/^\/evaluations\/cycles(?:\/|$)/],
   },
   {
     key: "evaluations.project_view",
@@ -409,15 +406,6 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     action: "read",
     defaultPath: "/calibration",
     patterns: [/^\/calibration(?:\/|$)/],
-  },
-  {
-    key: "kpi.management",
-    label: "KPI Management",
-    category: "Performance",
-    module: "kpis",
-    action: "read",
-    defaultPath: "/kpi-management",
-    patterns: [/^\/kpi-management(?:\/|$)/, /^\/evaluations\/kpis(?:\/|$)/],
   },
   {
     key: "finance.summary",
@@ -474,13 +462,13 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     patterns: [/^\/finance-allocations(?:\/|$)/],
   },
   {
-    key: "reports.core",
-    label: "Reports",
+    key: "reports.workspace",
+    label: "Reports Workspace",
     category: "Reporting",
     module: "reports",
     action: "read",
     defaultPath: "/reports",
-    patterns: [/^\/reports(?:\/|$)/, /^\/non-financial-analytics(?:\/|$)/],
+    patterns: [/^\/reports(?:\/|$)/],
   },
   {
     key: "reports.audit_logs",
@@ -583,153 +571,6 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
   },
 ];
 
-const ALL_VIEW_KEYS = VIEW_PERMISSION_DEFINITIONS.map((definition) => definition.key);
-
-const MARKETING_VIEW_KEYS = [
-  "dashboard.marketing",
-  "clients.list",
-  "clients.create_edit",
-  "clients.portfolio",
-  "clients.onboarding_queue",
-  "clients.engagement_letters",
-  "clients.business_development",
-  "clients.surveys",
-  "analytics.marketing",
-] as const;
-
-const FINANCE_VIEW_KEYS = [
-  "dashboard.finance",
-  "finance.summary",
-  "finance.collections",
-  "finance.projections",
-  "finance.balances",
-  "finance.profitability",
-  "finance.allocations",
-  "analytics.finance",
-] as const;
-
-const MANAGER_VIEW_KEYS = [
-  "dashboard.manager",
-  "dashboard.department",
-  "clients.list",
-  "clients.portfolio",
-  "jobs.workflow",
-  "jobs.workload_management",
-  "jobs.team_overview",
-  "team.performance",
-  "team.staff_development",
-  "evaluations.management",
-  "evaluations.manager_view",
-  "evaluations.project_view",
-  "kpi.management",
-  "finance.summary",
-  "reports.core",
-  "analytics.manager",
-] as const;
-
-const PARTNER_VIEW_KEYS = [
-  "dashboard.partner",
-  "clients.portfolio",
-  "clients.business_development",
-  "jobs.workflow",
-  "jobs.team_overview",
-  "team.performance",
-  "team.staff_development",
-  "kpi.management",
-  "partner.metrics",
-  "partner.portfolio_summary",
-  "evaluations.manager_view",
-  "evaluations.project_view",
-  "finance.summary",
-  "reports.core",
-  "analytics.partner",
-] as const;
-
-const GMP_VIEW_KEYS = [
-  "dashboard.gmp",
-  "dashboard.hr",
-  "dashboard.partner",
-  "dashboard.manager",
-  "dashboard.department",
-  "dashboard.marketing",
-  "dashboard.finance",
-  "people.employee_management",
-  "people.positions_rates",
-  "people.recruitment_candidates",
-  "clients.list",
-  "clients.create_edit",
-  "clients.portfolio",
-  "clients.onboarding_queue",
-  "clients.engagement_letters",
-  "clients.business_development",
-  "clients.surveys",
-  "jobs.workflow",
-  "jobs.admin_create",
-  "jobs.workload_management",
-  "jobs.team_overview",
-  "team.performance",
-  "team.staff_development",
-  "evaluations.management",
-  "evaluations.manager_view",
-  "evaluations.project_view",
-  "evaluations.calibration",
-  "kpi.management",
-  "finance.summary",
-  "finance.collections",
-  "finance.projections",
-  "finance.balances",
-  "finance.profitability",
-  "finance.allocations",
-  "reports.core",
-  "reports.audit_logs",
-  "analytics.gmp",
-  "partner.metrics",
-  "partner.portfolio_summary",
-] as const;
-
-const HR_VIEW_KEYS = [
-  "dashboard.hr",
-  "dashboard.department",
-  "dashboard.partner",
-  "dashboard.manager",
-  ...MARKETING_VIEW_KEYS,
-  ...FINANCE_VIEW_KEYS,
-  ...MANAGER_VIEW_KEYS,
-  ...PARTNER_VIEW_KEYS,
-  "people.employee_management",
-  "people.role_access_management",
-  "people.positions_rates",
-  "people.recruitment_candidates",
-  "jobs.admin_create",
-  "evaluations.management",
-  "evaluations.calibration",
-  "kpi.management",
-  "reports.audit_logs",
-  "reports.ops_center",
-  "analytics.hr",
-] as const;
-
-const EMPLOYEE_VIEW_KEYS = [
-  "dashboard.employee",
-  "kpi.management",
-  "jobs.workflow",
-  "finance.summary",
-  "analytics.employee",
-] as const;
-
-const ROLE_VIEW_ENTITLEMENTS: Record<CanonicalRole, string[] | "*"> = {
-  super_admin: "*",
-  hr: [...COMMON_VIEW_KEYS, ...HR_VIEW_KEYS],
-  gmp: [...COMMON_VIEW_KEYS, ...GMP_VIEW_KEYS],
-  partner: [...COMMON_VIEW_KEYS, ...PARTNER_VIEW_KEYS],
-  manager: [...COMMON_VIEW_KEYS, ...MANAGER_VIEW_KEYS],
-  finance: [...COMMON_VIEW_KEYS, ...FINANCE_VIEW_KEYS, "kpi.management", "reports.core"],
-  marketing: [...COMMON_VIEW_KEYS, ...MARKETING_VIEW_KEYS, "kpi.management", "reports.core"],
-  employee: [...COMMON_VIEW_KEYS, ...EMPLOYEE_VIEW_KEYS],
-};
-
-const unique = (values: string[]) => Array.from(new Set(values));
-
 const viewDefinitionsByKey = new Map(
   VIEW_PERMISSION_DEFINITIONS.map((definition) => [definition.key, definition] as const)
 );
@@ -744,23 +585,6 @@ export const resolveViewPermissionByPath = (pathname: string) => {
       definition.patterns.some((pattern) => pattern.test(normalizedPathname))
     ) || null
   );
-};
-
-export const getRoleViewEntitlements = (role: CanonicalRole) => {
-  const configured = ROLE_VIEW_ENTITLEMENTS[role];
-  if (configured === "*") {
-    return [...ALL_VIEW_KEYS];
-  }
-  return unique(configured || []);
-};
-
-export const getEffectiveViewEntitlements = (roles: CanonicalRole[]) => {
-  if (roles.includes("super_admin")) {
-    return [...ALL_VIEW_KEYS];
-  }
-
-  const combined = roles.flatMap((role) => getRoleViewEntitlements(role));
-  return unique(combined);
 };
 
 const LANDING_VIEW_PRIORITY_BY_ROLE: Array<{ role: CanonicalRole; viewKey: string }> = [
@@ -780,14 +604,12 @@ const LANDING_FALLBACK_VIEW_PRIORITY = [
   "jobs.workflow",
   "clients.list",
   "evaluations.my",
-  "goals.my",
   "finance.summary",
   "clients.business_development",
   "clients.surveys",
   "knowledge.hub",
   "documents.workspace",
   "notifications.center",
-  "reports.core",
 ];
 
 export const resolvePreferredHomeRouteByViewAccess = (
@@ -810,12 +632,3 @@ export const resolvePreferredHomeRouteByViewAccess = (
 
   return "/auth";
 };
-
-export const getRoleViewMatrix = () =>
-  Object.entries(ROLE_VIEW_ENTITLEMENTS).reduce(
-    (acc, [role, configured]) => {
-      acc[role] = configured === "*" ? [...ALL_VIEW_KEYS] : unique(configured);
-      return acc;
-    },
-    {} as Record<string, string[]>
-  );

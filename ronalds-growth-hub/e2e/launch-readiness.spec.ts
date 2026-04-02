@@ -50,7 +50,6 @@ const managerUser: MockUser = {
   moduleAccess: {
     dashboard: ["read"],
     evaluations: ["read", "write"],
-    kpis: ["read", "write", "approve"],
   },
   profile: {
     id: 702,
@@ -116,79 +115,6 @@ const evaluationDirectory = {
     },
   ],
   departments: [{ id: 11, name: "Audit" }],
-};
-
-const emptyKpiDashboard = {
-  userId: 702,
-  completionPercentages: {
-    kpis: 0,
-    developmentGoals: 0,
-  },
-  summary: {
-    total: 0,
-    overdue: 0,
-    dueSoon: 0,
-    weightedProgress: 0,
-    averageAchievementPercent: 0,
-    byStatus: {},
-  },
-  kpis: {},
-  okrs: {},
-  developmentGoals: {},
-};
-
-const baseTeamKpi = {
-  id: 15,
-  userId: 804,
-  ownerProfileId: 804,
-  title: "Billable realization",
-  description: "Track realization for the current quarter.",
-  target: 90,
-  actual: 72,
-  baseline: 60,
-  unit: "%",
-  weight: 1,
-  dueDate: "2026-03-31",
-  status: "on_track",
-  targetType: "higher_better",
-  targetFrequency: "monthly",
-  reviewFrequency: "monthly",
-  evidenceRequired: false,
-  commentaryRequired: true,
-  isActive: true,
-  createdAt: TIMESTAMP,
-  updatedAt: TIMESTAMP,
-  owner: {
-    id: 804,
-    firstName: "Eli",
-    lastName: "Analyst",
-  },
-  metrics: {
-    direction: "higher_better",
-    achievementPercent: 80,
-    progressPercent: 80,
-    weightedScore: 80,
-    weightPercent: 100,
-    varianceToTarget: -18,
-    remainingToTarget: 18,
-    thresholdBand: "green",
-    status: "on_track",
-    isOverdue: false,
-    isDueSoon: true,
-    daysRemaining: 19,
-    lastMeasuredAt: TIMESTAMP,
-  },
-  history: [
-    {
-      id: 901,
-      recordedAt: TIMESTAMP,
-      actual: 72,
-      target: 90,
-      achievementPercent: 80,
-      weightedScore: 80,
-      note: "Monthly close baseline.",
-    },
-  ],
 };
 
 const buildEnvelope = (data: unknown, status = 200) => ({
@@ -302,7 +228,9 @@ const installDefaultApiFallbacks = async (page: Page, currentUser?: MockUser | n
 
 const selectRadixOption = async (page: Page, testId: string, optionName: RegExp | string) => {
   await page.getByTestId(testId).click();
-  await page.getByRole("option", { name: optionName }).click();
+  const option = page.getByRole("option", { name: optionName }).first();
+  await option.scrollIntoViewIfNeeded();
+  await option.click({ force: true });
 };
 
 test("logs in through the UI and lands on the HR dashboard", async ({ page }) => {
@@ -660,97 +588,4 @@ test("submits an evaluation assignment with a score and evaluator signature", as
     ],
     evaluatorSigned: true,
   });
-});
-
-test("updates KPI progress from the manager workspace", async ({ page }) => {
-  let progressPayload: Record<string, unknown> | null = null;
-  const state = {
-    kpis: [{ ...baseTeamKpi }],
-  };
-
-  await withSession(page, managerUser);
-  await page.route(`${API_ORIGIN}/api/**`, async (route) => {
-    if (await handleOptions(route)) return;
-
-    const request = route.request();
-    const url = new URL(request.url());
-    const path = url.pathname.replace(/^\/api/, "");
-    const method = request.method();
-
-    if (method === "GET" && path === "/auth/me") {
-      await fulfillJson(route, managerUser);
-      return;
-    }
-
-    if (method === "GET" && path === "/kpis/dashboard/702") {
-      await fulfillJson(route, emptyKpiDashboard);
-      return;
-    }
-
-    if (method === "GET" && path === "/evaluations/directory") {
-      await fulfillJson(route, evaluationDirectory);
-      return;
-    }
-
-    if (method === "GET" && path === "/kpis") {
-      await fulfillJson(route, state.kpis);
-      return;
-    }
-
-    if (method === "GET" && path === "/kpis/15") {
-      await fulfillJson(route, state.kpis[0]);
-      return;
-    }
-
-    if (method === "PATCH" && path === "/kpis/15/progress") {
-      progressPayload = request.postDataJSON() as Record<string, unknown>;
-      state.kpis = state.kpis.map((kpi) =>
-        kpi.id === 15
-          ? {
-              ...kpi,
-              actual: Number(progressPayload?.actual || 0),
-              updatedAt: TIMESTAMP,
-              metrics: {
-                ...kpi.metrics,
-                achievementPercent: 95,
-                progressPercent: 95,
-                weightedScore: 95,
-                varianceToTarget: -5,
-                remainingToTarget: 5,
-                lastMeasuredAt: String(progressPayload?.measuredAt || TIMESTAMP),
-              },
-              history: [
-                {
-                  id: 902,
-                  recordedAt: String(progressPayload?.measuredAt || TIMESTAMP),
-                  actual: Number(progressPayload?.actual || 0),
-                  target: 90,
-                  achievementPercent: 95,
-                  weightedScore: 95,
-                  note: String(progressPayload?.note || ""),
-                },
-              ],
-            }
-          : kpi
-      );
-      await fulfillJson(route, state.kpis[0]);
-      return;
-    }
-
-    await fulfillJson(route, {});
-  });
-
-  await page.goto("/evaluations/kpis");
-  await expect(page.getByRole("heading", { name: "KPI Dashboard" })).toBeVisible();
-
-  await page.getByTestId("kpi-progress-actual-15").fill("86");
-  await page.getByTestId("kpi-progress-note-15").fill("Updated after monthly finance close.");
-  await page.getByTestId("kpi-progress-save-15").click();
-
-  await expect(page.getByText("KPI progress updated", { exact: true })).toBeVisible();
-  expect(progressPayload).toMatchObject({
-    actual: 86,
-    note: "Updated after monthly finance close.",
-  });
-  expect(typeof progressPayload?.measuredAt).toBe("string");
 });

@@ -53,6 +53,15 @@ jest.mock("../controllers/job.controller", () => ({
     getInvoiceMilestones: jest.fn((_req: any, res: any) =>
       res.status(200).json({ ok: "getInvoiceMilestones" })
     ),
+    getJobInvoices: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "getJobInvoices" })
+    ),
+    createJobInvoiceDraft: jest.fn((_req: any, res: any) =>
+      res.status(201).json({ ok: "createJobInvoiceDraft" })
+    ),
+    issueJobInvoice: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "issueJobInvoice" })
+    ),
     updateJob: jest.fn((_req: any, res: any) => res.status(200).json({ ok: "updateJob" })),
     updateJobStatus: jest.fn((_req: any, res: any) =>
       res.status(200).json({ ok: "updateJobStatus" })

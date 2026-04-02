@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import JobOperationsOverview from "@/components/jobs/JobOperationsOverview";
 import PageLoader from '@/components/ui/page-loader';
 import UserRoleManagement from "@/components/UserRoleManagement";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +27,8 @@ import {
   ClipboardCheck,
   Shield,
   Circle,
-  RefreshCw
+  RefreshCw,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
@@ -56,7 +58,6 @@ interface PerformanceData {
   customerScore: number;
   internalProcessScore: number;
   learningGrowthScore: number;
-  okrScore: number;
   projectEvaluationScore: number;
   lossAlert?: boolean;
 }
@@ -134,7 +135,7 @@ interface HrApprovalControls {
 }
 
 const HRDashboard = () => {
-  const { user, isLoading: authLoading, isAdmin, hasModuleAccess } = useAuth();
+  const { user, isLoading: authLoading, isAdmin, hasModuleAccess, hasViewAccess } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [pendingTasks, setPendingTasks] = useState(0);
   const [performance, setPerformance] = useState<PerformanceData | null>(null);
@@ -295,7 +296,6 @@ const HRDashboard = () => {
           customerScore: Math.round(nonFinancial.customerSatisfactionScore || 0),
           internalProcessScore: Math.round(nonFinancial.internalProcessesScore || 0),
           learningGrowthScore: Math.round(nonFinancial.learningGrowthScore || 0),
-          okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
           lossAlert,
         });
@@ -352,45 +352,11 @@ const HRDashboard = () => {
           ) / clientEvals.length
         : 0;
 
-      const assignmentsPayload = await apiFetch(
-        'GET',
-        `/employee-kpi-assignments?employeeProfileId=${profileId}&includeTracking=true`
-      );
-      const kpiAssignments = asRows(assignmentsPayload);
-      const bscCategory = (assignment: any) =>
-        String(
-          assignment?.kpi?.bscCategory ??
-          assignment?.kpi?.bsc_category ??
-          assignment?.kpis?.bscCategory ??
-          assignment?.kpis?.bsc_category ??
-          ""
-        ).toLowerCase();
-
-      const financialKPIs = kpiAssignments.filter((k) => bscCategory(k) === "financial");
-      const customerKPIs = kpiAssignments.filter((k) => bscCategory(k) === "customer");
-      const internalKPIs = kpiAssignments.filter((k) => {
-        const category = bscCategory(k);
-        return category === "internal_processes" || category === "internalprocesses";
-      });
-      const learningKPIs = kpiAssignments.filter((k) => {
-        const category = bscCategory(k);
-        return category === "learning_growth" || category === "learninggrowth";
-      });
-
-      const calculateScore = (kpis: any[]) => {
-        if (kpis.length === 0) return 0;
-        const total = kpis.reduce((sum, row) => {
-          const achieved = toNumber(row.achievedValue ?? row.achieved_value);
-          const target = toNumber(row.targetValue ?? row.target_value) || 1;
-          return sum + (achieved / target) * 100;
-        }, 0);
-        return Math.min(100, total / kpis.length);
-      };
-
-      const financialScore = calculateScore(financialKPIs);
-      const customerScore = calculateScore(customerKPIs);
-      const internalProcessScore = calculateScore(internalKPIs);
-      const learningGrowthScore = calculateScore(learningKPIs);
+      const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
+      const financialScore = Math.min(100, Math.round(utilizationRate));
+      const customerScore = Math.min(100, Math.round(avgClientRating * 20));
+      const internalProcessScore = 0;
+      const learningGrowthScore = 0;
 
       const overallScore = (
         financialScore * 0.40 +
@@ -398,8 +364,6 @@ const HRDashboard = () => {
         internalProcessScore * 0.20 +
         learningGrowthScore * 0.10
       );
-
-      const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
 
       setPerformance({
         overallScore: Math.round(overallScore * 10) / 10,
@@ -412,7 +376,6 @@ const HRDashboard = () => {
         customerScore: Math.round(customerScore),
         internalProcessScore: Math.round(internalProcessScore),
         learningGrowthScore: Math.round(learningGrowthScore),
-        okrScore: 0,
         projectEvaluationScore: 0,
         lossAlert: false,
       });
@@ -532,11 +495,12 @@ const HRDashboard = () => {
 
   const canViewPersonalTab = hasModuleAccess("dashboard", "read");
   const canViewCompanyTab = hasModuleAccess("reports", "read") || hasModuleAccess("dashboard", "read");
-  const canViewRoleTab = hasModuleAccess("access_control", "read") || hasModuleAccess("users", "read");
+  const canViewRoleTab =
+    hasViewAccess("people.role_access_management") &&
+    hasModuleAccess("access_control", "admin");
   const canViewManagementTab =
     hasModuleAccess("users", "read") ||
     hasModuleAccess("jobs", "read") ||
-    hasModuleAccess("kpis", "read") ||
     hasModuleAccess("finance", "read");
   const canRecomputeScores = hasModuleAccess("reports", "admin");
 
@@ -553,9 +517,48 @@ const HRDashboard = () => {
   const canUseDepartmentTools = hasModuleAccess("dashboard", "read");
   const canManageEmployees = hasModuleAccess("users", "read");
   const canManageEvaluations = hasModuleAccess("evaluations", "read");
-  const canManageKpis = hasModuleAccess("kpis", "read");
   const canViewFinanceTools = hasModuleAccess("finance", "read");
   const canViewAuditLogs = hasModuleAccess("reports", "read");
+  const hrJobMetrics = [
+    {
+      label: "Firm fee book",
+      value: formatCurrency(companyMetrics?.totalFees || 0),
+      hint: `Collected ${formatCurrency(companyMetrics?.totalCollected || 0)}`,
+      icon: DollarSign,
+      tone: "primary" as const,
+      graphValue: companyMetrics?.totalFees || 0,
+      graphBaseline: companyMetrics?.totalCollected || 0,
+    },
+    {
+      label: "Firm profit",
+      value: formatCurrency(companyMetrics?.firmProfit || 0),
+      hint: `Collection rate ${(companyMetrics?.collectionRate || 0).toFixed(1)}%`,
+      icon: TrendingUp,
+      tone: (companyMetrics?.firmProfit || 0) >= 0 ? ("positive" as const) : ("danger" as const),
+      graphValue: companyMetrics?.firmProfit || 0,
+      graphBaseline: 0,
+      inverse: (companyMetrics?.firmProfit || 0) < 0,
+    },
+    {
+      label: "Utilization watch",
+      value: `${(companyMetrics?.utilizationRate || 0).toFixed(0)}%`,
+      hint: `${companyMetrics?.totalEmployees || 0} active employees`,
+      icon: Users,
+      tone: "warning" as const,
+      graphValue: companyMetrics?.utilizationRate || 0,
+      graphBaseline: 75,
+    },
+    {
+      label: "Overdue jobs",
+      value: String(companyMetrics?.overdueJobs || 0),
+      hint: `Outstanding ${formatCurrency(companyMetrics?.totalOutstanding || 0)}`,
+      icon: AlertCircle,
+      tone: "danger" as const,
+      graphValue: companyMetrics?.overdueJobs || 0,
+      graphBaseline: 0,
+      inverse: true,
+    },
+  ];
 
   if (isLoading) {
     return (
@@ -592,22 +595,39 @@ const HRDashboard = () => {
               View your personal performance and manage company-wide operations
             </p>
           </div>
-          {canRecomputeScores && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRecomputeScores}
-              disabled={isRecomputeLoading}
-            >
-              {isRecomputeLoading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              Recompute scores
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {hasViewAccess("reports.workspace") && (
+              <Link to="/reports">
+                <Button size="sm" variant="outline">
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Open Reports
+                </Button>
+              </Link>
+            )}
+            {canRecomputeScores && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRecomputeScores}
+                disabled={isRecomputeLoading}
+              >
+                {isRecomputeLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Recompute scores
+              </Button>
+            )}
+          </div>
         </div>
+
+        <JobOperationsOverview
+          title="Firmwide job operations"
+          description="See staffing readiness, fee realization, and delivery pressure across the firm from one simpler HR command surface."
+          metrics={hrJobMetrics}
+          showLocator={false}
+        />
 
         <Tabs key={defaultTab} defaultValue={defaultTab} className="w-full min-w-0">
           <TabsList className="mb-6 grid h-auto w-full min-w-0 grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-4">
@@ -727,7 +747,7 @@ const HRDashboard = () => {
                   <p className="text-xs text-muted-foreground">Job-based reviews</p>
                   <MiniStatGraph
                     value={performance?.projectEvaluationScore || 0}
-                    baseline={performance?.okrScore || 0}
+                    baseline={performance?.learningGrowthScore || 0}
                   />
                 </CardContent>
               </Card>
@@ -802,20 +822,6 @@ const HRDashboard = () => {
                     </div>
                     <div>
                       <div className="flex justify-between text-sm mb-1">
-                        <span className="font-medium">OKR Progress</span>
-                        <span className="text-primary font-semibold">
-                          {performance?.okrScore || 0}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-gradient-to-r from-primary to-success h-2 rounded-full"
-                          style={{ width: `${performance?.okrScore || 0}%` }}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-sm mb-1">
                         <span className="font-medium">Project Evaluations</span>
                         <span className="text-warning font-semibold">
                           {performance?.projectEvaluationScore || 0}%
@@ -829,12 +835,6 @@ const HRDashboard = () => {
                       </div>
                     </div>
                   </div>
-                  <Link to="/scorecard" className="block mt-4">
-                    <Button className="w-full" variant="outline">
-                      <BarChart3 className="h-4 w-4 mr-2" />
-                      View Full Scorecard
-                    </Button>
-                  </Link>
                 </CardContent>
               </Card>
 
@@ -1205,6 +1205,14 @@ const HRDashboard = () => {
                       </Button>
                     </Link>
                   )}
+                  {hasViewAccess("reports.workspace") && (
+                    <Link to="/reports">
+                      <Button className="w-full" variant="outline">
+                        <FileSpreadsheet className="h-4 w-4 mr-2" />
+                        Open Reports Workspace
+                      </Button>
+                    </Link>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1385,26 +1393,6 @@ const HRDashboard = () => {
                     <Button className="w-full">
                       <Calendar className="h-4 w-4 mr-2" />
                       Manage Evaluations
-                    </Button>
-                  </Link>
-                </CardContent>
-              </Card>
-              )}
-
-              {canManageKpis && (
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Target className="h-5 w-5 text-primary" />
-                    KPI Management
-                  </CardTitle>
-                  <CardDescription>Define and assign performance metrics</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Link to="/kpi-management">
-                    <Button className="w-full">
-                      <Target className="h-4 w-4 mr-2" />
-                      Manage KPIs
                     </Button>
                   </Link>
                 </CardContent>

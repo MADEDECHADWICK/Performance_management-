@@ -3,6 +3,14 @@ import DashboardLayout from "@/components/DashboardLayout";
 import PageLoader from '@/components/ui/page-loader';
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AnalyticsChartShell,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsDonutProps,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,6 +18,7 @@ import { apiFetch } from "@/lib/api";
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   Legend,
   Pie,
@@ -263,23 +272,27 @@ export default function FinanceAllocations() {
                   No gain/loss data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={gainLossMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={54}
-                      outerRadius={86}
-                      paddingAngle={2}
-                    >
-                      <Cell fill="#22c55e" />
-                      <Cell fill="#ef4444" />
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={gainLossMix} dataKey="value" nameKey="name" {...analyticsDonutProps}>
+                        <Cell fill="hsl(var(--chart-2))" />
+                        <Cell fill="hsl(var(--chart-4))" />
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value, name) => [
+                              `KES ${Number(value || 0).toLocaleString()}`,
+                              name,
+                            ]}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -295,24 +308,33 @@ export default function FinanceAllocations() {
                   No employee allocation data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={employeeAllocationMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={54}
-                      outerRadius={86}
-                      paddingAngle={2}
-                    >
-                      {employeeAllocationMix.map((entry, index) => (
-                        <Cell key={`employee-mix-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={employeeAllocationMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        {employeeAllocationMix.map((entry, index) => (
+                          <Cell key={`employee-mix-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
+                        ))}
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value, name) => [
+                              `KES ${Number(value || 0).toLocaleString()}`,
+                              name,
+                            ]}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -328,18 +350,30 @@ export default function FinanceAllocations() {
                   No client allocation data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={clientAllocationBreakdown}>
-                    <XAxis dataKey="client" tickLine={false} axisLine={false} fontSize={11} />
-                    <YAxis hide />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                    <Bar dataKey="allocated" radius={[6, 6, 0, 0]}>
-                      {clientAllocationBreakdown.map((entry, index) => (
-                        <Cell key={`client-allocation-${entry.client}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={clientAllocationBreakdown} barCategoryGap={18}>
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="client" {...analyticsAxisProps} />
+                      <YAxis hide />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value, name) => [
+                              `KES ${Number(value || 0).toLocaleString()}`,
+                              name,
+                            ]}
+                          />
+                        }
+                      />
+                      <Bar dataKey="allocated" radius={[10, 10, 4, 4]}>
+                        {clientAllocationBreakdown.map((entry, index) => (
+                          <Cell key={`client-allocation-${entry.client}`} fill={chartPalette[index % chartPalette.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>

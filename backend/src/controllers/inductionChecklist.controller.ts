@@ -10,6 +10,16 @@ const authFromReq = (req: AuthRequest) => ({
 });
 
 export class InductionChecklistController {
+  static async getDefaultTemplate(req: AuthRequest, res: Response) {
+    try {
+      const template = InductionChecklistService.getDefaultTemplate();
+      res.json(successResponse(template, "Default induction template retrieved"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.getDefaultTemplate error:", e);
+      res.status(500).json(errorResponse(e.message ?? "Failed to load default template", 500));
+    }
+  }
+
   static async create(req: AuthRequest, res: Response) {
     try {
       const { onboardingCaseId, employeeProfileId, checklistName, dueDate, items } = req.body;
@@ -88,6 +98,52 @@ export class InductionChecklistController {
     } catch (e: any) {
       console.error("InductionChecklistController.attachDocument error:", e);
       res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to attach document", e.statusCode ?? 400));
+    }
+  }
+
+  static async acknowledge(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const updated = await InductionChecklistService.acknowledgeChecklist(
+        checklistId,
+        authFromReq(req)
+      );
+      res.json(successResponse(updated, "Checklist acknowledged"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.acknowledge error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to acknowledge checklist", e.statusCode ?? 400));
+    }
+  }
+
+  static async hrSignoff(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const updated = await InductionChecklistService.hrSignoffChecklist(
+        checklistId,
+        req.body?.notes,
+        authFromReq(req)
+      );
+      res.json(successResponse(updated, "Checklist signed off"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.hrSignoff error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to sign off checklist", e.statusCode ?? 400));
+    }
+  }
+
+  static async updateItemComments(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const itemId = Number(req.params.itemId);
+      const updated = await InductionChecklistService.updateItemComments(
+        checklistId,
+        itemId,
+        req.body?.comments ?? "",
+        authFromReq(req)
+      );
+      res.json(successResponse(updated, "Checklist item comments updated"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.updateItemComments error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to update item comments", e.statusCode ?? 400));
     }
   }
 }

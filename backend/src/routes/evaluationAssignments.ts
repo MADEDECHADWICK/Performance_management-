@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import {
+  resolveRequestAccessRoles,
+  resolveRequestPrimaryAccessRole,
+} from "../auth/accessRoles";
 import { loadProfile } from '../middleware/loadProfile';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { createAudit } from '../utils/audit';
@@ -16,11 +20,7 @@ const router = Router();
 const normalizeRole = (role: string) => role.toLowerCase().trim();
 
 const resolveRoles = (req: AuthRequest) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role) => roles.add(normalizeRole(role)));
-  (req.user?.authRoles || []).forEach((role) => roles.add(normalizeRole(role)));
-  if (req.profile?.role?.name) roles.add(normalizeRole(req.profile.role.name));
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => normalizeRole(role));
 };
 
 const isPrivileged = (roles: string[]) =>
@@ -65,7 +65,7 @@ const getManagedProfileIds = async (managerProfileId: number) => {
 const buildAuthContext = (req: AuthRequest) => ({
   userId: req.user?.userId ?? 0,
   profileId: req.profile?.id ?? req.user?.profileId ?? 0,
-  roleName: req.profile?.role?.name,
+  roleName: resolveRequestPrimaryAccessRole(req),
 });
 
 const getProfilesByRoles = async (roleNames: string[]) => {
@@ -158,7 +158,7 @@ const notifyEvaluationSubmitted = async (
       message: "An evaluation has been submitted and is awaiting your acknowledgement.",
       evaluationDefinitionId: assignment.evaluationDefinitionId,
       actionRequired: true,
-      link: `/evaluations/${assignment.id}`,
+      link: `/evaluations/assignments/${assignment.id}`,
     },
     auth
   );
@@ -199,7 +199,7 @@ const notifyEvaluationSigned = async (assignment: any, req: AuthRequest) => {
       message: "Your evaluator has signed the evaluation.",
       evaluationDefinitionId: assignment.evaluationDefinitionId,
       actionRequired: false,
-      link: `/evaluations/${assignment.id}`,
+      link: `/evaluations/assignments/${assignment.id}`,
     },
     auth
   );
@@ -239,7 +239,7 @@ const notifyEvaluationAcknowledged = async (assignment: any, req: AuthRequest) =
       message: "The evaluatee has acknowledged the evaluation.",
       evaluationDefinitionId: assignment.evaluationDefinitionId,
       actionRequired: false,
-      link: `/evaluations/${assignment.id}`,
+      link: `/evaluations/assignments/${assignment.id}`,
     },
     auth
   );

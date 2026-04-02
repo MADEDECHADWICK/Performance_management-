@@ -1,3 +1,5 @@
+// This middleware implements an onboarding gate that restricts access to certain API routes for users who have not completed the onboarding process. It checks the user's roles and onboarding status, and allows access to specific routes that are necessary for completing onboarding tasks (e.g., viewing their profile, accessing onboarding checklists) while blocking access to other routes until onboarding is completed. The middleware is designed to be flexible, allowing for exemptions based on user roles and specific allowlisted paths. By enforcing this gate, we can ensure that new users complete the necessary steps to get started with the application before accessing its full functionality.
+
 import type { CanonicalRole } from "../auth/canonicalRoles";
 
 type OnboardingGateProfileState = {

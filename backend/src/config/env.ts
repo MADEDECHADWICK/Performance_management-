@@ -1,3 +1,5 @@
+// This module is responsible for loading and validating runtime configuration from environment variables. It provides a structured way to access configuration values throughout the application, ensuring that they are properly typed and have sensible defaults. The configuration includes settings for server behavior, logging, rate limiting, observability, file uploads, and more. By centralizing configuration management in this module, we can maintain consistency and make it easier to manage different environments (development, testing, production) with appropriate settings for each.
+
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -67,6 +69,17 @@ export const runtimeConfig = Object.freeze({
   port: parsePositiveInteger(process.env.PORT, 4000, "PORT"),
   logLevel,
   requestLoggingEnabled: parseBoolean(process.env.REQUEST_LOGGING_ENABLED, true),
+  httpRateLimitEnabled: parseBoolean(process.env.HTTP_RATE_LIMIT_ENABLED, true),
+  httpRateLimitWindowMs: parsePositiveInteger(
+    process.env.HTTP_RATE_LIMIT_WINDOW_MS,
+    60_000,
+    "HTTP_RATE_LIMIT_WINDOW_MS"
+  ),
+  httpRateLimitMaxRequests: parsePositiveInteger(
+    process.env.HTTP_RATE_LIMIT_MAX_REQUESTS,
+    nodeEnv === "production" ? 300 : 1_000,
+    "HTTP_RATE_LIMIT_MAX_REQUESTS"
+  ),
   observabilityEnabled: parseBoolean(process.env.OBSERVABILITY_ENABLED, true),
   observabilityMonitorIntervalMs: parsePositiveInteger(
     process.env.OBSERVABILITY_MONITOR_INTERVAL_MS,
@@ -90,7 +103,11 @@ export const runtimeConfig = Object.freeze({
   ),
   uploadRoot: resolvePathFromCwd(process.env.UPLOAD_ROOT, "uploads"),
   uploadPublicBasePath: normalizePublicBasePath(process.env.UPLOAD_PUBLIC_BASE_PATH),
-  serveLocalUploads: parseBoolean(process.env.SERVE_LOCAL_UPLOADS, true),
+  diskUploadsEnabled: parseBoolean(
+    process.env.ENABLE_LOCAL_DISK_UPLOADS,
+    nodeEnv !== "production"
+  ),
+  serveLocalUploads: parseBoolean(process.env.SERVE_LOCAL_UPLOADS, nodeEnv !== "production"),
   documentUploadMaxBytes: parsePositiveInteger(
     process.env.DOCUMENT_UPLOAD_MAX_BYTES,
     10 * 1024 * 1024,
@@ -106,6 +123,9 @@ export const runtimeConfig = Object.freeze({
 export const isProductionEnv = () => runtimeConfig.nodeEnv === "production";
 
 export const ensureUploadRootExists = () => {
+  if (!runtimeConfig.diskUploadsEnabled && !runtimeConfig.serveLocalUploads) {
+    return;
+  }
   fs.mkdirSync(runtimeConfig.uploadRoot, { recursive: true });
 };
 

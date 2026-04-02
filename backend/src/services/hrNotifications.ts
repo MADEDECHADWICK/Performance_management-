@@ -1,6 +1,7 @@
 import { prisma } from '../prisma';
 import { NotificationService } from './notifications.service';
 import { AuthRequest } from '../middleware/auth';
+import { resolveRequestPrimaryAccessRole } from "../auth/accessRoles";
 
 export const HR_ROLE_NAMES = [
   'hr',
@@ -11,11 +12,23 @@ export const HR_ROLE_NAMES = [
 const buildAuthContext = (req: AuthRequest) => ({
   userId: req.user?.userId ?? 0,
   profileId: req.user?.profileId ?? req.profile?.id ?? 0,
-  roleName: req.profile?.role?.name,
+  roleName: resolveRequestPrimaryAccessRole(req),
 });
 
 export const notifyHrGroup = async (
-  message: { title: string; body: string; link?: string; relatedEntityId?: number },
+  message: {
+    title: string;
+    body: string;
+    link?: string;
+    relatedEntityId?: number;
+    targetEntityType?: string;
+    targetEntityId?: number;
+    eventType?: string;
+    priority?: "low" | "medium" | "high" | "critical";
+    canonicalRoute?: string;
+    requiredPermission?: string;
+    templateLabel?: string;
+  },
   auth: AuthRequest
 ) => {
   const recipients = await prisma.profile.findMany({
@@ -44,7 +57,14 @@ export const notifyHrGroup = async (
           title: message.title,
           message: message.body,
           actionRequired: true,
-          link: message.link,
+          link: message.link ?? message.canonicalRoute,
+          eventType: message.eventType,
+          priority: message.priority,
+          targetEntityType: message.targetEntityType,
+          targetEntityId: message.targetEntityId ?? message.relatedEntityId,
+          canonicalRoute: message.canonicalRoute ?? message.link,
+          requiredPermission: message.requiredPermission,
+          templateLabel: message.templateLabel,
         },
         buildAuthContext(auth)
       )

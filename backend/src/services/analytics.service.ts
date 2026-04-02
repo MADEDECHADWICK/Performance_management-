@@ -43,59 +43,6 @@ const periodKey = (date: Date, period: TrendPeriod): string => {
 };
 
 class AnalyticsService {
-  async getKPITrends(options: {
-    period: TrendPeriod;
-    departmentId?: string;
-    months?: number;
-  }): Promise<any> {
-    const months = options.months || (options.period === "yearly" ? 12 : 6);
-    const startDate = new Date();
-    startDate.setMonth(startDate.getMonth() - months);
-
-    const departmentId = options.departmentId ? Number(options.departmentId) : undefined;
-    const where: Prisma.PerformanceScoreWhereInput = {
-      calculatedAt: { gte: startDate },
-      ...(Number.isFinite(departmentId)
-        ? { employee: { departmentId: departmentId as number } }
-        : {}),
-    };
-
-    const scores = await prisma.performanceScore.findMany({
-      where,
-      select: {
-        calculatedAt: true,
-        totalScore: true,
-      },
-      orderBy: { calculatedAt: "asc" },
-    });
-
-    const grouped = new Map<string, number[]>();
-    scores.forEach((item) => {
-      const key = periodKey(item.calculatedAt, options.period);
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(toNumber(item.totalScore));
-    });
-
-    const data = Array.from(grouped.entries()).map(([key, values]) => {
-      const average = values.length
-        ? values.reduce((sum, current) => sum + current, 0) / values.length
-        : 0;
-      return {
-        period: key,
-        average: Number(average.toFixed(2)),
-        count: values.length,
-        trend: this.calculateTrend(values),
-      };
-    });
-
-    return {
-      period: options.period,
-      departmentId: options.departmentId,
-      months,
-      data,
-    };
-  }
-
   async getPerformanceComparison(options: {
     cycleId: string;
     departmentId?: string;

@@ -1,5 +1,6 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
+import { buildPrimaryRoleAuthContext } from "../auth/accessRoles";
 import { NotificationTemplateService } from "../services/notificationTemplates.service";
 import { errorResponse, successResponse } from "../utils/response";
 
@@ -25,11 +26,7 @@ export class NotificationTemplateController {
 
   static async createTemplate(req: AuthRequest, res: Response) {
     try {
-      const auth = {
-        userId: req.user!.userId,
-        profileId: req.profile!.id,
-        roleName: req.profile!.role?.name,
-      };
+      const auth = buildPrimaryRoleAuthContext(req);
 
       const template = await NotificationTemplateService.createTemplate(
         {

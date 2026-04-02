@@ -19,6 +19,12 @@ import {
   getPublicUploadPrefix,
   resolveLocalUploadPath,
 } from "../config/uploads";
+import { logger, toLogContext } from "../lib/logger";
+import { rejectMultipartDiskUploadsDisabled } from "../middleware/rejectMultipartDiskUploads";
+import {
+  submitKnowledgeHubQuizAttempt,
+  updateKnowledgeHubProgress,
+} from "../services/learningDevelopment.service";
 
 const router = Router();
 
@@ -42,6 +48,12 @@ const KNOWLEDGE_RESOURCE_TYPES = [
 ] as const;
 
 const KNOWLEDGE_ASSET_KINDS = ["document", "image", "video", "link"] as const;
+const KNOWLEDGE_COMPLETION_MODES = [
+  "video_end",
+  "watch_percent",
+  "document_scroll",
+  "manual",
+] as const;
 
 const localKnowledgeHubUploadPrefix = `${getPublicUploadPrefix("knowledge-hub")}/`;
 const upload = buildDiskUpload("knowledge-hub");
@@ -71,6 +83,11 @@ type KnowledgeHubRow = {
   is_featured: boolean;
   is_published: boolean;
   published_at: Date | null;
+  estimated_duration_minutes: number | null;
+  completion_mode: string;
+  completion_threshold_percent: Prisma.Decimal | number | null;
+  min_read_seconds: number | null;
+  points_on_completion: number;
   created_by_profile_id: number | null;
   updated_by_profile_id: number | null;
   created_at: Date;
@@ -154,6 +171,27 @@ const parseBooleanInput = (value: unknown, fallback = false) => {
   return fallback;
 };
 
+const parseNullableInt = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+};
+
+const parseNullablePercentage = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0) return 0;
+  if (parsed > 100) return 100;
+  return Math.round(parsed * 100) / 100;
+};
+
+const withStatusCode = (message: string, statusCode: number) => {
+  const error = new Error(message) as Error & { statusCode?: number };
+  error.statusCode = statusCode;
+  return error;
+};
+
 const toNullableTrimmedString = (value: unknown) => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -200,7 +238,10 @@ const deleteLocalKnowledgeHubUpload = (linkUrl: string | null) => {
       fs.unlinkSync(filePath);
     }
   } catch (error) {
-    console.warn("Failed to remove knowledge hub upload:", filePath, error);
+    logger.warn("knowledge_hub_upload_delete_failed", {
+      filePath,
+      ...toLogContext(error),
+    });
   }
 };
 
@@ -240,6 +281,10 @@ const withArrayDefaults = (row: KnowledgeHubRow) => ({
   ...row,
   submodules: Array.isArray(row.submodules) ? row.submodules : [],
   tags: Array.isArray(row.tags) ? row.tags : [],
+  completion_threshold_percent:
+    row.completion_threshold_percent === null
+      ? null
+      : Number(row.completion_threshold_percent),
 });
 
 const knowledgeResourceSelectSql = Prisma.sql`
@@ -260,6 +305,11 @@ const knowledgeResourceSelectSql = Prisma.sql`
     r.is_featured,
     r.is_published,
     r.published_at,
+    r.estimated_duration_minutes,
+    r.completion_mode,
+    r.completion_threshold_percent,
+    r.min_read_seconds,
+    r.points_on_completion,
     r.created_by_profile_id,
     r.updated_by_profile_id,
     r.created_at,
@@ -288,6 +338,9 @@ const isKnownResourceType = (value: string) =>
 
 const isKnownAssetKind = (value: string) =>
   (KNOWLEDGE_ASSET_KINDS as readonly string[]).includes(value);
+
+const isKnownCompletionMode = (value: string) =>
+  (KNOWLEDGE_COMPLETION_MODES as readonly string[]).includes(value);
 
 const listValidators = [
   query("search").optional().isString().isLength({ max: 120 }),
@@ -360,6 +413,17 @@ const createValidators = [
   body("allowDownload").optional().isBoolean(),
   body("isFeatured").optional().isBoolean(),
   body("isPublished").optional().isBoolean(),
+  body("estimatedDurationMinutes").optional({ nullable: true }).isInt({ min: 0, max: 1440 }).toInt(),
+  body("completionMode")
+    .optional()
+    .custom((value) => isKnownCompletionMode(String(value)))
+    .withMessage("completionMode must be a supported value"),
+  body("completionThresholdPercent")
+    .optional({ nullable: true })
+    .isFloat({ min: 0, max: 100 })
+    .toFloat(),
+  body("minReadSeconds").optional({ nullable: true }).isInt({ min: 0, max: 86400 }).toInt(),
+  body("pointsOnCompletion").optional().isInt({ min: 0, max: 100000 }).toInt(),
 ];
 
 const updateValidators = [
@@ -388,6 +452,17 @@ const updateValidators = [
   body("allowDownload").optional().isBoolean(),
   body("isFeatured").optional().isBoolean(),
   body("isPublished").optional().isBoolean(),
+  body("estimatedDurationMinutes").optional({ nullable: true }).isInt({ min: 0, max: 1440 }).toInt(),
+  body("completionMode")
+    .optional()
+    .custom((value) => isKnownCompletionMode(String(value)))
+    .withMessage("completionMode must be a supported value"),
+  body("completionThresholdPercent")
+    .optional({ nullable: true })
+    .isFloat({ min: 0, max: 100 })
+    .toFloat(),
+  body("minReadSeconds").optional({ nullable: true }).isInt({ min: 0, max: 86400 }).toInt(),
+  body("pointsOnCompletion").optional().isInt({ min: 0, max: 100000 }).toInt(),
 ];
 
 const getResourceById = async (resourceId: number, includeDrafts: boolean) => {
@@ -401,6 +476,55 @@ const getResourceById = async (resourceId: number, includeDrafts: boolean) => {
 
   return rows[0] ? withArrayDefaults(rows[0]) : null;
 };
+
+const serializeKnowledgeQuiz = (
+  quiz: {
+    id: number;
+    resourceId: number;
+    title: string;
+    passMark: Prisma.Decimal | number;
+    pointsOnPass: number;
+    attemptLimit: number | null;
+    isActive: boolean;
+    questions: Array<{
+      id: number;
+      questionType: string;
+      prompt: string;
+      displayOrder: number;
+      required: boolean;
+      explanation: string | null;
+      options: Array<{
+        id: number;
+        label: string;
+        displayOrder: number;
+        isCorrect: boolean;
+      }>;
+    }>;
+  },
+  includeCorrectAnswers: boolean
+) => ({
+  id: quiz.id,
+  resourceId: quiz.resourceId,
+  title: quiz.title,
+  passMark: Number(quiz.passMark),
+  pointsOnPass: quiz.pointsOnPass,
+  attemptLimit: quiz.attemptLimit,
+  isActive: quiz.isActive,
+  questions: quiz.questions.map((question) => ({
+    id: question.id,
+    questionType: question.questionType,
+    prompt: question.prompt,
+    displayOrder: question.displayOrder,
+    required: question.required,
+    explanation: question.explanation,
+    options: question.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      displayOrder: option.displayOrder,
+      ...(includeCorrectAnswers ? { isCorrect: option.isCorrect } : {}),
+    })),
+  })),
+});
 
 router.get("/meta", (_req, res) => {
   res.json({
@@ -503,8 +627,465 @@ router.get(
         pageSize,
       });
     } catch (error: any) {
-      console.error("Failed to list knowledge hub resources:", error);
+      logger.error("knowledge_hub_resource_list_failed", toLogContext(error));
       return res.status(500).json({ error: "Failed to load knowledge hub resources" });
+    }
+  }
+);
+
+router.get("/points/me", async (req: AuthRequest, res) => {
+  try {
+    const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
+    if (!profileId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const [entries, aggregate] = await Promise.all([
+      prisma.learningPointLedger.findMany({
+        where: { profileId },
+        orderBy: [{ awardedAt: "desc" }, { id: "desc" }],
+        take: 50,
+      }),
+      prisma.learningPointLedger.aggregate({
+        where: { profileId },
+        _sum: { points: true },
+      }),
+    ]);
+
+    return res.json({
+      totalPoints: aggregate._sum.points ?? 0,
+      entries,
+    });
+  } catch (error: any) {
+    logger.error("knowledge_hub_points_load_failed", toLogContext(error));
+    return res.status(500).json({ error: "Failed to load learning points" });
+  }
+});
+
+router.get(
+  "/:resourceId/progress",
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
+      if (!profileId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const resourceId = Number(req.params.resourceId);
+      const resource = await prisma.knowledgeHubResource.findUnique({
+        where: { id: resourceId },
+        select: {
+          id: true,
+          pointsOnCompletion: true,
+          completionMode: true,
+          completionThresholdPercent: true,
+          minReadSeconds: true,
+          quiz: {
+            select: { id: true },
+          },
+        },
+      });
+
+      if (!resource) {
+        return res.status(404).json({ error: "Knowledge resource not found" });
+      }
+
+      const [progress, points] = await Promise.all([
+        prisma.knowledgeHubResourceProgress.findUnique({
+          where: {
+            resourceId_profileId: {
+              resourceId,
+              profileId,
+            },
+          },
+        }),
+        prisma.learningPointLedger.findMany({
+          where: {
+            profileId,
+            OR: [
+              {
+                eventType: "knowledge_resource_completed",
+                sourceType: "knowledge_resource",
+                sourceId: resourceId,
+              },
+              ...(resource.quiz?.id
+                ? [
+                    {
+                      eventType: "knowledge_quiz_passed" as const,
+                      sourceType: "knowledge_quiz" as const,
+                      sourceId: resource.quiz.id,
+                    },
+                  ]
+                : []),
+            ],
+          },
+          select: {
+            id: true,
+            eventType: true,
+            sourceType: true,
+            sourceId: true,
+            points: true,
+            awardedAt: true,
+            metadata: true,
+          },
+        }),
+      ]);
+
+      return res.json({
+        resource,
+        progress,
+        points,
+      });
+    } catch (error: any) {
+      logger.error("knowledge_hub_progress_load_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      return res.status(500).json({ error: "Failed to load knowledge hub progress" });
+    }
+  }
+);
+
+router.put(
+  "/:resourceId/progress",
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
+      if (!profileId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const result = await updateKnowledgeHubProgress({
+        resourceId: Number(req.params.resourceId),
+        profileId,
+        actorProfileId: profileId,
+        progress: {
+          timeSpentSeconds: parseNullableInt(req.body?.timeSpentSeconds),
+          scrollPercent: parseNullablePercentage(req.body?.scrollPercent),
+          watchSeconds: parseNullableInt(req.body?.watchSeconds),
+          watchPercent: parseNullablePercentage(req.body?.watchPercent),
+          completed: parseBooleanInput(req.body?.completed, false),
+        },
+      });
+
+      return res.json(result);
+    } catch (error: any) {
+      logger.error("knowledge_hub_progress_update_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      const statusCode = Number(error?.statusCode || 500);
+      return res.status(statusCode).json({
+        error: statusCode >= 500 ? "Failed to update knowledge hub progress" : error.message,
+      });
+    }
+  }
+);
+
+router.get(
+  "/:resourceId/quiz",
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
+      if (!profileId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const canWrite = await hasKnowledgeHubWriteAccess(req);
+      const quiz = await prisma.knowledgeHubQuiz.findFirst({
+        where: {
+          resourceId: Number(req.params.resourceId),
+          ...(canWrite ? {} : { isActive: true }),
+        },
+        include: {
+          questions: {
+            orderBy: { displayOrder: "asc" },
+            include: {
+              options: {
+                orderBy: { displayOrder: "asc" },
+              },
+            },
+          },
+          attempts: {
+            where: {
+              profileId,
+            },
+            orderBy: [{ attemptNo: "desc" }],
+            take: 5,
+            select: {
+              id: true,
+              attemptNo: true,
+              score: true,
+              status: true,
+              submittedAt: true,
+              passedAt: true,
+            },
+          },
+        },
+      });
+
+      if (!quiz) {
+        return res.status(404).json({ error: "Knowledge quiz not found" });
+      }
+
+      return res.json({
+        ...serializeKnowledgeQuiz(quiz, canWrite),
+        attempts: quiz.attempts.map((attempt) => ({
+          ...attempt,
+          score: Number(attempt.score),
+        })),
+      });
+    } catch (error: any) {
+      logger.error("knowledge_hub_quiz_load_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      return res.status(500).json({ error: "Failed to load knowledge quiz" });
+    }
+  }
+);
+
+router.put(
+  "/:resourceId/quiz",
+  requireModuleAccess("knowledge_hub", "write"),
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const resourceId = Number(req.params.resourceId);
+      const title = String(req.body?.title || "").trim();
+      const passMark = parseNullablePercentage(req.body?.passMark);
+      const pointsOnPass = Math.max(0, parseNullableInt(req.body?.pointsOnPass) ?? 0);
+      const attemptLimit = parseNullableInt(req.body?.attemptLimit);
+      const isActive = parseBooleanInput(req.body?.isActive, true);
+      const questionsInput = Array.isArray(req.body?.questions) ? req.body.questions : [];
+
+      if (!title || passMark === null) {
+        return res.status(400).json({ error: "title and passMark are required" });
+      }
+
+      const resource = await prisma.knowledgeHubResource.findUnique({
+        where: { id: resourceId },
+        select: { id: true },
+      });
+      if (!resource) {
+        return res.status(404).json({ error: "Knowledge resource not found" });
+      }
+
+      const existingQuiz = await prisma.knowledgeHubQuiz.findUnique({
+        where: { resourceId },
+        include: {
+          attempts: {
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+
+      if (existingQuiz?.attempts.length) {
+        return res.status(409).json({
+          error: "Quiz cannot be replaced after learners have started attempting it",
+        });
+      }
+
+      const normalizedQuestions = questionsInput.map((question: any, index: number) => {
+        const questionType = String(question?.questionType || "").trim();
+        if (!questionType || !["single_choice", "multiple_choice", "true_false", "short_text"].includes(questionType)) {
+          throw withStatusCode(`Invalid questionType at position ${index + 1}`, 400);
+        }
+
+        const prompt = String(question?.prompt || "").trim();
+        if (!prompt) {
+          throw withStatusCode(`Question prompt is required at position ${index + 1}`, 400);
+        }
+
+        const options = Array.isArray(question?.options) ? question.options : [];
+        return {
+          questionType,
+          prompt,
+          displayOrder: Number(question?.displayOrder || index + 1),
+          required: parseBooleanInput(question?.required, true),
+          explanation: toNullableTrimmedString(question?.explanation),
+          options: options.map((option: any, optionIndex: number) => ({
+            label: String(option?.label || "").trim(),
+            isCorrect: parseBooleanInput(option?.isCorrect, false),
+            displayOrder: Number(option?.displayOrder || optionIndex + 1),
+          })),
+        };
+      });
+
+      const quiz = await prisma.$transaction(async (tx) => {
+        const savedQuiz = existingQuiz
+          ? await tx.knowledgeHubQuiz.update({
+              where: { id: existingQuiz.id },
+              data: {
+                title,
+                passMark,
+                pointsOnPass,
+                attemptLimit,
+                isActive,
+              },
+            })
+          : await tx.knowledgeHubQuiz.create({
+              data: {
+                resourceId,
+                title,
+                passMark,
+                pointsOnPass,
+                attemptLimit,
+                isActive,
+              },
+            });
+
+        await tx.knowledgeHubQuizQuestion.deleteMany({
+          where: {
+            quizId: savedQuiz.id,
+          },
+        });
+
+        for (const question of normalizedQuestions) {
+          await tx.knowledgeHubQuizQuestion.create({
+            data: {
+              quizId: savedQuiz.id,
+              questionType: question.questionType as any,
+              prompt: question.prompt,
+              displayOrder: question.displayOrder,
+              required: question.required,
+              explanation: question.explanation,
+              options:
+                question.options.length > 0
+                  ? {
+                      create: question.options.map((option: { label: string; isCorrect: boolean; displayOrder: number }) => ({
+                        label: option.label,
+                        isCorrect: option.isCorrect,
+                        displayOrder: option.displayOrder,
+                      })),
+                    }
+                  : undefined,
+            },
+          });
+        }
+
+        return tx.knowledgeHubQuiz.findUniqueOrThrow({
+          where: { id: savedQuiz.id },
+          include: {
+            questions: {
+              orderBy: { displayOrder: "asc" },
+              include: {
+                options: {
+                  orderBy: { displayOrder: "asc" },
+                },
+              },
+            },
+          },
+        });
+      });
+
+      return res.json(serializeKnowledgeQuiz(quiz, true));
+    } catch (error: any) {
+      logger.error("knowledge_hub_quiz_save_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      const statusCode = Number(error?.statusCode || 500);
+      return res.status(statusCode).json({
+        error: statusCode >= 500 ? "Failed to save knowledge quiz" : error.message,
+      });
+    }
+  }
+);
+
+router.delete(
+  "/:resourceId/quiz",
+  requireModuleAccess("knowledge_hub", "write"),
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const quiz = await prisma.knowledgeHubQuiz.findUnique({
+        where: {
+          resourceId: Number(req.params.resourceId),
+        },
+        include: {
+          attempts: {
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+
+      if (!quiz) {
+        return res.status(404).json({ error: "Knowledge quiz not found" });
+      }
+
+      if (quiz.attempts.length) {
+        return res.status(409).json({
+          error: "Quiz cannot be deleted after learners have started attempting it",
+        });
+      }
+
+      await prisma.knowledgeHubQuiz.delete({
+        where: { id: quiz.id },
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      logger.error("knowledge_hub_quiz_delete_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      return res.status(500).json({ error: "Failed to delete knowledge quiz" });
+    }
+  }
+);
+
+router.post(
+  "/:resourceId/quiz-attempts",
+  ...resourceIdValidators,
+  handleValidationErrors,
+  async (req: AuthRequest, res) => {
+    try {
+      const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
+      if (!profileId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+      const result = await submitKnowledgeHubQuizAttempt({
+        resourceId: Number(req.params.resourceId),
+        profileId,
+        actorProfileId: profileId,
+        answers: answers.map((answer: any) => ({
+          questionId: Number(answer?.questionId),
+          optionIds: Array.isArray(answer?.optionIds)
+            ? answer.optionIds.map((optionId: unknown) => Number(optionId))
+            : [],
+          freeTextAnswer: toNullableTrimmedString(answer?.freeTextAnswer),
+        })),
+      });
+
+      return res.status(201).json({
+        ...result,
+        attempt: {
+          ...result.attempt,
+          score: Number(result.attempt.score),
+        },
+      });
+    } catch (error: any) {
+      logger.error("knowledge_hub_quiz_submit_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
+      const statusCode = Number(error?.statusCode || 500);
+      return res.status(statusCode).json({
+        error: statusCode >= 500 ? "Failed to submit knowledge quiz" : error.message,
+      });
     }
   }
 );
@@ -525,7 +1106,10 @@ router.get(
 
       return res.json(row);
     } catch (error: any) {
-      console.error("Failed to load knowledge hub resource:", error);
+      logger.error("knowledge_hub_resource_load_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
       return res.status(500).json({ error: "Failed to load knowledge hub resource" });
     }
   }
@@ -534,6 +1118,7 @@ router.get(
 router.post(
   "/",
   requireModuleAccess("knowledge_hub", "write"),
+  rejectMultipartDiskUploadsDisabled("knowledge-hub"),
   upload.single("file"),
   ...createValidators,
   handleValidationErrors,
@@ -557,6 +1142,13 @@ router.post(
       const allowDownload = parseBooleanInput(payload.allowDownload, true);
       const isFeatured = parseBooleanInput(payload.isFeatured, false);
       const isPublished = parseBooleanInput(payload.isPublished, true);
+      const estimatedDurationMinutes = parseNullableInt(payload.estimatedDurationMinutes);
+      const completionMode = isKnownCompletionMode(String(payload.completionMode || ""))
+        ? String(payload.completionMode)
+        : "manual";
+      const completionThresholdPercent = parseNullablePercentage(payload.completionThresholdPercent);
+      const minReadSeconds = parseNullableInt(payload.minReadSeconds);
+      const pointsOnCompletion = Math.max(0, parseNullableInt(payload.pointsOnCompletion) ?? 0);
 
       const createdRows = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
         INSERT INTO knowledge_hub_resources (
@@ -575,6 +1167,11 @@ router.post(
           is_featured,
           is_published,
           published_at,
+          estimated_duration_minutes,
+          completion_mode,
+          completion_threshold_percent,
+          min_read_seconds,
+          points_on_completion,
           created_by_profile_id,
           updated_by_profile_id
         )
@@ -594,6 +1191,11 @@ router.post(
           ${isFeatured},
           ${isPublished},
           CASE WHEN ${isPublished} THEN NOW() ELSE NULL END,
+          ${estimatedDurationMinutes},
+          ${completionMode},
+          ${completionThresholdPercent},
+          ${minReadSeconds},
+          ${pointsOnCompletion},
           ${actorProfileId},
           ${actorProfileId}
         )
@@ -611,7 +1213,7 @@ router.post(
       if (uploadedAsset) {
         deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
       }
-      console.error("Failed to create knowledge hub resource:", error);
+      logger.error("knowledge_hub_resource_create_failed", toLogContext(error));
       return res.status(500).json({ error: "Failed to create knowledge hub resource" });
     }
   }
@@ -620,6 +1222,7 @@ router.post(
 router.patch(
   "/:resourceId",
   requireModuleAccess("knowledge_hub", "write"),
+  rejectMultipartDiskUploadsDisabled("knowledge-hub"),
   upload.single("file"),
   ...updateValidators,
   handleValidationErrors,
@@ -715,6 +1318,35 @@ router.patch(
         );
       }
 
+      if (hasKey(payload, "estimatedDurationMinutes")) {
+        setClauses.push(
+          Prisma.sql`estimated_duration_minutes = ${parseNullableInt(payload.estimatedDurationMinutes)}`
+        );
+      }
+
+      if (hasKey(payload, "completionMode")) {
+        const completionMode = isKnownCompletionMode(String(payload.completionMode || ""))
+          ? String(payload.completionMode)
+          : "manual";
+        setClauses.push(Prisma.sql`completion_mode = ${completionMode}`);
+      }
+
+      if (hasKey(payload, "completionThresholdPercent")) {
+        setClauses.push(
+          Prisma.sql`completion_threshold_percent = ${parseNullablePercentage(payload.completionThresholdPercent)}`
+        );
+      }
+
+      if (hasKey(payload, "minReadSeconds")) {
+        setClauses.push(Prisma.sql`min_read_seconds = ${parseNullableInt(payload.minReadSeconds)}`);
+      }
+
+      if (hasKey(payload, "pointsOnCompletion")) {
+        setClauses.push(
+          Prisma.sql`points_on_completion = ${Math.max(0, parseNullableInt(payload.pointsOnCompletion) ?? 0)}`
+        );
+      }
+
       if (setClauses.length <= 2) {
         return res.status(400).json({ error: "No updates provided" });
       }
@@ -746,7 +1378,10 @@ router.patch(
       if (uploadedAsset) {
         deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
       }
-      console.error("Failed to update knowledge hub resource:", error);
+      logger.error("knowledge_hub_resource_update_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
       return res.status(500).json({ error: "Failed to update knowledge hub resource" });
     }
   }
@@ -777,7 +1412,10 @@ router.delete(
 
       return res.json({ success: true });
     } catch (error: any) {
-      console.error("Failed to delete knowledge hub resource:", error);
+      logger.error("knowledge_hub_resource_delete_failed", {
+        resourceId: Number(req.params.resourceId),
+        ...toLogContext(error),
+      });
       return res.status(500).json({ error: "Failed to delete knowledge hub resource" });
     }
   }

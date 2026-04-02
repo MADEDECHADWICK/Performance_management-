@@ -397,7 +397,7 @@ const Calibration = () => {
                         />
                         <Button
                           variant="outline"
-                          onClick={() => navigate(`/evaluation/${item.id}`)}
+                          onClick={() => navigate(`/evaluations/assignments/${item.id}`)}
                         >
                           View
                         </Button>

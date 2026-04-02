@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { loadProfile } from '../middleware/loadProfile';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import {
@@ -12,11 +13,7 @@ import { createAudit } from '../utils/audit';
 const router = Router();
 
 const resolveRoles = (req: AuthRequest) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  (req.user?.authRoles || []).forEach((role) => roles.add(role.toLowerCase()));
-  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => role.toLowerCase());
 };
 
 const isPrivileged = (roles: string[]) =>
@@ -37,7 +34,7 @@ const normalizeTemplateResponse = (template: any) => {
   };
 };
 
-// GET /evaluation_templates?isActive=true
+// GET /evaluation-templates?isActive=true
 router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { isActive } = req.query;
@@ -59,7 +56,7 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   }
 });
 
-// GET /evaluation_templates/:id
+// GET /evaluation-templates/:id
 router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
@@ -84,7 +81,7 @@ router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) =>
   }
 });
 
-// POST /evaluation_templates
+// POST /evaluation-templates
 router.post(
   '/',
   authMiddleware,
@@ -139,7 +136,7 @@ router.post(
   }
 });
 
-// PATCH /evaluation_templates/:id
+// PATCH /evaluation-templates/:id
 router.patch(
   '/:id',
   authMiddleware,
@@ -191,7 +188,7 @@ router.patch(
   }
 });
 
-// DELETE /evaluation_templates/:id
+// DELETE /evaluation-templates/:id
 router.delete(
   '/:id',
   authMiddleware,

@@ -1,5 +1,4 @@
-//Permission-based authorization
-//Checks if user has required permissions - specific action
+// This middleware provides a function `requirePermission` that can be used to enforce permission-based access control on API routes. It checks the authenticated user's permissions against the required permissions specified for a route. The middleware retrieves the user's permissions from the authorization context, normalizes them for case-insensitive comparison, and determines if the user has all the required permissions to proceed with the request. If the user is not authenticated or does not have the necessary permissions, it responds with appropriate HTTP status codes (401 for unauthenticated, 403 for insufficient permissions). By using this middleware, we can ensure that only users with the necessary permissions can access certain endpoints in the application.
 
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "./auth";

@@ -16,8 +16,6 @@ export { default as jobsAPI } from './jobs';
 export { default as timeEntriesAPI } from './timeEntries';
 export { default as employeesAPI } from './employees';
 export { default as evaluationsAPI } from './evaluations';
-export { default as kpisAPI } from './kpis';
-export { default as kpiCascadeV2API } from './kpiCascadeV2';
 export { default as dashboardsAPI } from './dashboards';
 export { default as documentsAPI } from './documents';
 export { default as departmentsAPI } from './departments';
@@ -30,7 +28,11 @@ export { default as notificationTemplatesAPI } from './notificationTemplates';
 export { default as performanceFrameworkAPI } from './performanceFramework';
 export { default as moduleAccessAPI } from './moduleAccess';
 export { default as knowledgeHubAPI } from './knowledgeHub';
+export { default as learningDevelopmentAPI } from './learningDevelopment';
 export { default as opsAPI } from './ops';
+export { default as leaveAPI } from './leave';
+export { default as requisitionsAPI } from './requisitions';
+export { default as reportingAPI } from './reporting';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -40,8 +42,6 @@ import jobsAPI from './jobs';
 import timeEntriesAPI from './timeEntries';
 import employeesAPI from './employees';
 import evaluationsAPI from './evaluations';
-import kpisAPI from './kpis';
-import kpiCascadeV2API from './kpiCascadeV2';
 import dashboardsAPI from './dashboards';
 import documentsAPI from './documents';
 import departmentsAPI from './departments';
@@ -54,7 +54,11 @@ import notificationTemplatesAPI from './notificationTemplates';
 import performanceFrameworkAPI from './performanceFramework';
 import moduleAccessAPI from './moduleAccess';
 import knowledgeHubAPI from './knowledgeHub';
+import learningDevelopmentAPI from './learningDevelopment';
 import opsAPI from './ops';
+import leaveAPI from './leave';
+import requisitionsAPI from './requisitions';
+import reportingAPI from './reporting';
 
 const API = {
   auth: authAPI,
@@ -64,8 +68,6 @@ const API = {
   timeEntries: timeEntriesAPI,
   employees: employeesAPI,
   evaluations: evaluationsAPI,
-  kpis: kpisAPI,
-  kpiCascadeV2: kpiCascadeV2API,
   dashboards: dashboardsAPI,
   documents: documentsAPI,
   departments: departmentsAPI,
@@ -78,7 +80,11 @@ const API = {
   performanceFramework: performanceFrameworkAPI,
   moduleAccess: moduleAccessAPI,
   knowledgeHub: knowledgeHubAPI,
+  learningDevelopment: learningDevelopmentAPI,
   ops: opsAPI,
+  leave: leaveAPI,
+  requisitions: requisitionsAPI,
+  reporting: reportingAPI,
 };
 
 export default API;

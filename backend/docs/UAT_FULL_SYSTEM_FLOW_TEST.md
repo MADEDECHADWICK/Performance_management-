@@ -114,38 +114,38 @@ Log in as James Kariuki.
 | 1 | Navigate to Finance Dashboard | View Tax dept revenue, collections, WIP, debtor aging. |
 | 2 | View per-job financials | Drill TAX001 for revenue/cost/margin. |
 | 3 | View team performance | Revenue by team member (Brian, Kevin, Grace). |
-| 4 | View KPI financial targets | KPI revenue/billing targets reflected in Finance. |
+| 4 | View financial targets | Revenue and billing targets reflected in Finance. |
 
-## Section 5: KPI & Performance Management
+## Section 5: Performance Reviews & Development
 
-### 5.1 Partner Sets Department KPIs (James Kariuki)
-
-| # | Action | Expected Detail / Test Notes |
-|---|---|---|
-| 1 | Navigate to KPI module | KPI > Department Initiatives. |
-| 2 | Create KPI - Revenue Target | Monthly target KES 500,000 for Tax department. |
-| 3 | Create KPI - Client Retention | Target 90%, quarterly. |
-| 4 | Create KPI - Job Completion Rate | Target 85%, monthly. |
-| 5 | Assign KPIs | Assign targets to Brian, Kevin, Grace. |
-| 6 | Verify employee notification | `New KPI targets` notification received. |
-
-### 5.2 Manager Sets Employee KPIs (Brian Mutua)
+### 5.1 Partner Reviews Department Performance Signals (James Kariuki)
 
 | # | Action | Expected Detail / Test Notes |
 |---|---|---|
-| 1 | View department KPI goals | Sees KPI goals assigned by James. |
-| 2 | Create KPI for Kevin | Billable Hours, target 120 hrs/month. |
-| 3 | Create KPI for Grace | On-time report submission, target 100%. |
-| 4 | Track KPI progress | Progress bars/percentages update as data changes. |
+| 1 | Navigate to performance views | Review department delivery, utilization, and evaluation readiness. |
+| 2 | Review revenue target attainment | Monthly revenue performance for the Tax department is visible. |
+| 3 | Review client retention signals | Client health and service quality signals are visible. |
+| 4 | Review job completion performance | Timeliness and workload pressure are visible. |
+| 5 | Review staff readiness | Brian, Kevin, and Grace show current performance and workload context. |
+| 6 | Verify notification flow | Relevant operational or evaluation notifications are received. |
 
-### 5.3 Employee Views KPI Progress (Kevin Otieno)
+### 5.2 Manager Reviews Team Performance (Brian Mutua)
 
 | # | Action | Expected Detail / Test Notes |
 |---|---|---|
-| 1 | Navigate to KPI module | Open personal KPI dashboard. |
-| 2 | Verify KPI targets displayed | Billable hours target and current value visible. |
-| 3 | Verify progress tracking | Progress bars/trends/percent indicators visible. |
-| 4 | Check department KPI visibility | Can view department goals but edit/input personal KPIs only. |
+| 1 | View department performance signals | Sees department delivery and evaluation status. |
+| 2 | Review Kevin's delivery metrics | Time, job, and utilization signals are visible. |
+| 3 | Review Grace's quality and timeliness | Operational performance signals are visible. |
+| 4 | Track performance progress | Progress indicators update as data changes. |
+
+### 5.3 Employee Views Personal Performance Progress (Kevin Otieno)
+
+| # | Action | Expected Detail / Test Notes |
+|---|---|---|
+| 1 | Navigate to personal performance views | Open personal dashboard and evaluation views. |
+| 2 | Verify personal workload and performance metrics | Current workload and progress indicators are visible. |
+| 3 | Verify progress tracking | Trends and status indicators are visible. |
+| 4 | Check department visibility | Employee remains limited to personal views and permitted context only. |
 
 ## Section 6: Business Development & Proposals
 
@@ -219,14 +219,14 @@ Mark each item `Pass` or `Fail`.
 | Timesheet hours update job progress % in real time |  |  |
 | Hours logged by employees appear in Finance revenue calculations |  |  |
 | Work plan approval by Partner triggers employee notifications |  |  |
-| KPI progress auto-updates based on job and timesheet data |  |  |
+| Performance progress auto-updates based on job and timesheet data |  |  |
 | Proposals submitted by Manager are visible in Partner BD pipeline |  |  |
 | Workload module reflects current timesheet allocations accurately |  |  |
 | Training notifications sent to all assigned attendees |  |  |
 | Document version history maintained on resubmission |  |  |
-| Partner can see all team jobs, financials, KPIs in one dashboard |  |  |
-| Manager can see all employee KPIs, workload, and job progress |  |  |
-| Employee view is restricted to own jobs, KPIs, and documents only |  |  |
+| Partner can see all team jobs, financials, and workload in one dashboard |  |  |
+| Manager can see team workload and job progress in one dashboard |  |  |
+| Employee view is restricted to own jobs, documents, and self-service items only |  |  |
 
 ## Section 11: Expected Role Permission Matrix
 
@@ -242,8 +242,8 @@ Mark each item `Pass` or `Fail`.
 | Work plan creation & submission | ❌ No | ✅ Approve | ✅ Full | ❌ No |
 | Finance - individual revenue view | ❌ No | ❌ No | ❌ No | ✅ Own only |
 | Finance - dept/team overview | ❌ No | ✅ Full | ✅ Dept only | ❌ No |
-| Create KPI initiatives | ❌ No | ✅ Dept level | ✅ Team level | ❌ No |
-| View KPI progress | ❌ No | ✅ All teams | ✅ Own dept | ✅ Own only |
+| Create performance initiatives | ❌ No | ❌ No | ❌ No | ❌ No |
+| View performance progress | ❌ No | ✅ All teams | ✅ Own dept | ✅ Own only |
 | Business development / proposals | ❌ No | ✅ Full | ✅ Create/submit | ❌ No |
 | Workload management | ❌ No | ✅ View | ✅ Full | ❌ No |
 | Schedule trainings | ❌ No | ✅ Full | ✅ Full | ❌ No |
@@ -271,4 +271,3 @@ Mark each item `Pass` or `Fail`.
   - `cd backend`
   - `npm run seed:uat-team`
 - Existing data is upserted, so this can be re-run safely.
-

@@ -9,6 +9,17 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AnalyticsChartShell,
+  AnalyticsGradientDefs,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGradientFill,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -617,24 +628,30 @@ export default function FinanceBalances() {
                   No aging data available.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={agingAmountMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={52}
-                      outerRadius={86}
-                      paddingAngle={2}
-                    >
-                      {agingAmountMix.map((entry, index) => (
-                        <Cell key={`aging-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={agingAmountMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        {agingAmountMix.map((entry, index) => (
+                          <Cell key={`aging-${entry.name}`} fill={analyticsColorAt(index)} />
+                        ))}
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -650,24 +667,30 @@ export default function FinanceBalances() {
                   No SLA distribution data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={slaMix}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={52}
-                      outerRadius={86}
-                      paddingAngle={2}
-                    >
-                      <Cell fill="#22c55e" />
-                      <Cell fill="#f59e0b" />
-                      <Cell fill="#ef4444" />
-                    </Pie>
-                    <Legend verticalAlign="bottom" height={18} />
-                    <Tooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={slaMix}
+                        dataKey="value"
+                        nameKey="name"
+                        {...analyticsDonutProps}
+                      >
+                        <Cell fill="#22c55e" />
+                        <Cell fill="#f59e0b" />
+                        <Cell fill="#ef4444" />
+                      </Pie>
+                      <Legend content={<AnalyticsLegendContent />} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                          />
+                        }
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>
@@ -683,15 +706,28 @@ export default function FinanceBalances() {
                   No owner exposure data yet.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={ownerExposureChart}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="owner" tickLine={false} axisLine={false} fontSize={11} />
-                    <YAxis hide />
-                    <Tooltip formatter={(value: number) => `KES ${Number(value || 0).toLocaleString()}`} />
-                    <Bar dataKey="amount" radius={[6, 6, 0, 0]} fill="#0ea5e9" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={ownerExposureChart}>
+                      <AnalyticsGradientDefs items={[{ id: "ownerExposureAmount", color: "#0ea5e9" }]} />
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="owner" {...analyticsAxisProps} />
+                      <YAxis hide />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value) => `KES ${Number(value || 0).toLocaleString()}`}
+                          />
+                        }
+                      />
+                      <Bar
+                        dataKey="amount"
+                        radius={[10, 10, 4, 4]}
+                        fill={analyticsGradientFill("ownerExposureAmount")}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               )}
             </CardContent>
           </Card>

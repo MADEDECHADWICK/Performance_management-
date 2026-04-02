@@ -1,3 +1,5 @@
+// This file defines the routes for managing module access policies in the application. It includes endpoints for listing modules and actions, retrieving and updating role-based module access policies, and managing per-user module access overrides. The routes are protected by authentication and authorization middleware to ensure that only users with appropriate permissions can view or modify module access settings. The implementation also includes normalization of input data, auditing of changes, and structured responses for frontend consumption.
+
 import { Router } from "express";
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
@@ -15,6 +17,14 @@ import {
   matrixToPermissionKeys,
   moduleCatalog,
 } from "../services/moduleAccess.service";
+import {
+  EXPLICIT_NONE_VIEW_KEY,
+  listKnownViewKeys,
+  listRoleViewPolicies,
+  normalizeKnownViewKeys,
+  replaceRoleViewPermissions,
+  toRoleViewPolicySummary,
+} from "../services/viewAccess.service";
 import {
   CANONICAL_ROLES,
   canonicalizeRoleName,
@@ -81,6 +91,8 @@ const normalizePermissionKeys = (permissionKeys: unknown): string[] => {
     )
   );
 };
+
+const normalizeViewKeysPayload = (viewKeys: unknown) => normalizeKnownViewKeys(viewKeys);
 
 const toRoleSummary = (
   role: {
@@ -153,6 +165,12 @@ router.get("/requirements", canManageModulePolicies, async (_req, res) => {
   });
 });
 
+router.get("/views", canManageModulePolicies, async (_req, res) => {
+  res.json({
+    viewKeys: listKnownViewKeys(),
+  });
+});
+
 router.get("/roles", canManageModulePolicies, async (_req, res) => {
   try {
     const roles = await prisma.authRole.findMany({
@@ -175,6 +193,17 @@ router.get("/roles", canManageModulePolicies, async (_req, res) => {
   } catch (error) {
     console.error("Failed to list module access policies:", error);
     res.status(500).json({ error: "Failed to list module access policies" });
+  }
+});
+
+router.get("/view-roles", canManageModulePolicies, async (_req, res) => {
+  try {
+    const roles = await listRoleViewPolicies();
+
+    res.json({ roles });
+  } catch (error) {
+    console.error("Failed to list view access policies:", error);
+    res.status(500).json({ error: "Failed to list view access policies" });
   }
 });
 
@@ -281,6 +310,74 @@ router.put("/roles/:roleName", canManageModulePolicies, async (req: AuthRequest,
   } catch (error) {
     console.error("Failed to update role module policy:", error);
     res.status(500).json({ error: "Failed to update role module policy" });
+  }
+});
+
+router.put("/view-roles/:roleName", canManageModulePolicies, async (req: AuthRequest, res) => {
+  try {
+    const roleName = String(req.params.roleName || "").toLowerCase().trim();
+    if (!roleName) {
+      return res.status(400).json({ error: "Role name is required" });
+    }
+
+    const hasViewPayload = req.body?.viewKeys !== undefined || req.body?.views !== undefined;
+    let viewKeys = normalizeViewKeysPayload(req.body?.viewKeys ?? req.body?.views);
+
+    if (viewKeys.length === 0 && hasViewPayload) {
+      viewKeys = [EXPLICIT_NONE_VIEW_KEY];
+    }
+
+    const role = await prisma.authRole.findUnique({
+      where: { name: roleName },
+      select: { id: true, name: true },
+    });
+
+    if (!role) {
+      return res.status(404).json({ error: "Role not found" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await replaceRoleViewPermissions(tx, role.id, viewKeys);
+    });
+
+    await createAudit({
+      action: "view_access.role_policy_updated",
+      entity_type: "auth_role",
+      entity_id: role.id,
+      user_id: req.user?.userId ? Number(req.user.userId) : undefined,
+      ip_address: req.ip,
+      metadata: {
+        roleName: role.name,
+        viewKeys: normalizeViewKeysPayload(viewKeys).filter(
+          (viewKey) => viewKey !== EXPLICIT_NONE_VIEW_KEY
+        ),
+      },
+    });
+
+    const updatedRole = await prisma.authRole.findUnique({
+      where: { id: role.id },
+      include: {
+        viewPermissions: {
+          include: {
+            viewPermission: {
+              select: { key: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!updatedRole) {
+      return res.status(404).json({ error: "Role not found after update" });
+    }
+
+    res.json({
+      role: toRoleViewPolicySummary(updatedRole),
+      message: "Role view access policy updated",
+    });
+  } catch (error) {
+    console.error("Failed to update role view policy:", error);
+    res.status(500).json({ error: "Failed to update role view policy" });
   }
 });
 

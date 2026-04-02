@@ -1,3 +1,5 @@
+// This file defines the API routes for managing employee offboarding cases and their associated checklists. It includes endpoints for listing, creating, retrieving, updating, and reactivating offboarding cases, as well as managing the checklist items for each case. The routes are protected with validation middleware to ensure that incoming requests meet the required criteria before being processed by the corresponding controller methods. By organizing these routes in a dedicated file, we can maintain a clear structure for our API and facilitate the management of employee offboarding processes within the application.
+
 import { Router } from "express";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";
 import {

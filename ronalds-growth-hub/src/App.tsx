@@ -13,6 +13,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 const SetPassword = lazy(() => import("./pages/SetPassword"));
+const CertificateVerification = lazy(() => import("./pages/CertificateVerification"));
 
 // Dashboards
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -33,10 +34,18 @@ const JobWorkflowDashboard = lazy(() => import("./pages/JobWorkflowDashboard"));
 
 // Time Management
 const TimesheetsNew = lazy(() => import("./pages/TimesheetsNew"));
+const LeaveManagement = lazy(() => import("./pages/LeaveManagement"));
+const LeaveApprovals = lazy(() => import("./pages/LeaveApprovals"));
+const LeaveAdmin = lazy(() => import("./pages/LeaveAdmin"));
+const Requisitions = lazy(() => import("./pages/Requisitions"));
+const RequisitionApprovals = lazy(() => import("./pages/RequisitionApprovals"));
+const RequisitionAdmin = lazy(() => import("./pages/RequisitionAdmin"));
 
 // Employee & Profile
 const EmployeeProfile = lazy(() => import("./pages/EmployeeProfile"));
 const EmployeeManagement = lazy(() => import("./pages/EmployeeManagement"));
+const BalancedScorecardModule = lazy(() => import("./pages/BalancedScorecardModule"));
+const ReportsWorkspace = lazy(() => import("./pages/ReportsWorkspace"));
 
 // Evaluations
 const ClientEvaluation = lazy(() => import("./pages/ClientEvaluation"));
@@ -45,17 +54,9 @@ const EvaluationDashboard = lazy(() => import("./pages/evaluations/EvaluationDas
 const EvaluationCycleManager = lazy(() => import("./pages/evaluations/EvaluationCycleManager"));
 const EvaluationForm = lazy(() => import("./pages/evaluations/EvaluationForm"));
 const EvaluationResults = lazy(() => import("./pages/evaluations/EvaluationResults"));
-const EvaluationKPIDashboard = lazy(() => import("./pages/evaluations/KPIDashboard"));
 const FeedbackHub = lazy(() => import("./pages/evaluations/FeedbackHub"));
 
-// KPIs & Goals
-const KPIManagement = lazy(() => import("./pages/KPICascadeV2Management"));
-const Goals = lazy(() => import("./pages/Goals"));
-const Scorecard = lazy(() => import("./pages/Scorecard"));
-
-// Analytics & Reports
-const Reports = lazy(() => import("./pages/Reports"));
-const NonFinancialAnalytics = lazy(() => import("./pages/NonFinancialAnalytics"));
+// Analytics
 const ModuleAnalytics = lazy(() => import("./pages/ModuleAnalytics"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
 const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
@@ -98,21 +99,16 @@ const RecruitmentCandidates = lazy(() => import("./pages/RecruitmentCandidates")
 
 const queryClient = new QueryClient();
 
+function LegacyJobTrackingRedirect() {
+  const { jobId } = useParams<{ jobId?: string }>();
+  return <Navigate to={jobId ? `/jobs/${jobId}/tracking` : "/job-workflow-dashboard"} replace />;
+}
+
 const RouteFallback = () => (
   <div className="p-4 sm:p-6">
     <PageLoader message="Loading page..." minHeightClassName="min-h-[50vh]" />
   </div>
 );
-
-const LegacyEvaluationAssignmentRedirect = () => {
-  const { assignmentId } = useParams();
-  return (
-    <Navigate
-      to={assignmentId ? `/evaluations/assignments/${assignmentId}` : "/evaluations"}
-      replace
-    />
-  );
-};
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -129,6 +125,8 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/set-password" element={<SetPassword />} />
+              <Route path="/certificates/verify" element={<CertificateVerification />} />
+              <Route path="/certificates/verify/:verificationCode" element={<CertificateVerification />} />
               
               {/* Dashboards */}
               <Route path="/dashboard" element={<AppRouteGuard><Dashboard /></AppRouteGuard>} />
@@ -244,7 +242,7 @@ const App = () => (
                 path="/jobs"
                 element={
                   <AppRouteGuard>
-                    <JobWorkflowDashboard />
+                    <Navigate to="/job-workflow-dashboard" replace />
                   </AppRouteGuard>
                 }
               />
@@ -281,16 +279,55 @@ const App = () => (
                 }
               />
               
-              {/* Time Management */}
-              <Route path="/timesheets" element={<AppRouteGuard><TimesheetsNew /></AppRouteGuard>} />
-              
-              {/* Employee & Profile */}
+	              {/* Time Management */}
+		              <Route path="/timesheets" element={<AppRouteGuard><TimesheetsNew /></AppRouteGuard>} />
+		              <Route path="/leave" element={<AppRouteGuard><LeaveManagement /></AppRouteGuard>} />
+		              <Route path="/leave/apply" element={<AppRouteGuard><LeaveManagement /></AppRouteGuard>} />
+		              <Route path="/leave/approvals" element={<AppRouteGuard><LeaveApprovals /></AppRouteGuard>} />
+		              <Route path="/leave/admin" element={<AppRouteGuard><LeaveAdmin /></AppRouteGuard>} />
+		              <Route path="/requisitions" element={<AppRouteGuard><Requisitions /></AppRouteGuard>} />
+		              <Route path="/requisitions/approvals" element={<AppRouteGuard><RequisitionApprovals /></AppRouteGuard>} />
+		              <Route path="/requisitions/admin" element={<AppRouteGuard><RequisitionAdmin /></AppRouteGuard>} />
+		              
+		              {/* Employee & Profile */}
               <Route path="/profile" element={<AppRouteGuard><EmployeeProfile /></AppRouteGuard>} />
               <Route
                 path="/employee-management"
                 element={
                   <AppRouteGuard>
                     <EmployeeManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/bsc-management"
+                element={
+                  <AppRouteGuard>
+                    <BalancedScorecardModule />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/bsc-management/:workspaceRole"
+                element={
+                  <AppRouteGuard>
+                    <BalancedScorecardModule />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/reports"
+                element={
+                  <AppRouteGuard>
+                    <ReportsWorkspace />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/kpi-management"
+                element={
+                  <AppRouteGuard>
+                    <Navigate to="/bsc-management" replace />
                   </AppRouteGuard>
                 }
               />
@@ -354,83 +391,10 @@ const App = () => (
                 }
               />
               <Route
-                path="/evaluations/kpis"
-                element={
-                  <AppRouteGuard>
-                    <EvaluationKPIDashboard />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
                 path="/evaluations/feedback"
                 element={
                   <AppRouteGuard>
                     <FeedbackHub />
-                  </AppRouteGuard>
-                }
-              />
-              {/* Legacy evaluation route aliases */}
-              <Route
-                path="/my-evaluations"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/self-evaluation"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/peer-reviews"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/evaluation-management"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations/cycles" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/create-evaluation"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations/cycles" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/evaluation/:assignmentId"
-                element={
-                  <AppRouteGuard>
-                    <LegacyEvaluationAssignmentRedirect />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/complete-evaluation/:assignmentId"
-                element={
-                  <AppRouteGuard>
-                    <LegacyEvaluationAssignmentRedirect />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/manager-evaluation"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations" replace />
                   </AppRouteGuard>
                 }
               />
@@ -442,28 +406,8 @@ const App = () => (
                   </AppRouteGuard>
                 }
               />
-              <Route
-                path="/upward-reviews"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations" replace />
-                  </AppRouteGuard>
-                }
-              />
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
               <Route path="/survey/:token" element={<ClientEvaluation />} />
-              
-              {/* KPIs & Goals */}
-              <Route
-                path="/kpi-management"
-                element={
-                  <AppRouteGuard>
-                    <KPIManagement />
-                  </AppRouteGuard>
-                }
-              />
-              <Route path="/goals" element={<AppRouteGuard><Goals /></AppRouteGuard>} />
-              <Route path="/scorecard" element={<AppRouteGuard><Scorecard /></AppRouteGuard>} />
               
               {/* Feedback */}
               <Route
@@ -483,7 +427,7 @@ const App = () => (
                 }
               />
               
-              {/* Analytics & Reports */}
+              {/* Analytics */}
               <Route
                 path="/analytics/employee"
                 element={
@@ -537,15 +481,6 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <ModuleAnalytics module="gmp" />
-                  </AppRouteGuard>
-                }
-              />
-              <Route path="/reports" element={<AppRouteGuard><Reports /></AppRouteGuard>} />
-              <Route
-                path="/non-financial-analytics"
-                element={
-                  <AppRouteGuard>
-                    <NonFinancialAnalytics />
                   </AppRouteGuard>
                 }
               />
@@ -656,6 +591,14 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <WorkloadManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/workload-management/jobs/:jobId"
+                element={
+                  <AppRouteGuard>
+                    <LegacyJobTrackingRedirect />
                   </AppRouteGuard>
                 }
               />

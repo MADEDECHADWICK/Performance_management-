@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import JobOperationsOverview from '@/components/jobs/JobOperationsOverview';
 import PageLoader from '@/components/ui/page-loader';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch, surveysAPI, timeEntriesAPI } from '@/lib/api';
@@ -12,22 +13,12 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import MiniStatGraph from '@/components/ui/mini-stat-graph';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  BarChart3,
-  TrendingUp,
-  DollarSign,
-  Users,
-  Clock,
-  CheckCircle2,
-  AlertCircle,
-  Briefcase,
-} from 'lucide-react';
+import { TrendingUp, DollarSign, AlertCircle, Briefcase } from 'lucide-react';
 
 interface PortfolioMetrics {
   totalJobs: number;
@@ -538,6 +529,45 @@ const PartnerDashboard = () => {
   const lossJobsCount = topJobs.filter((job) => job.profit < 0).length;
   const atRiskJobsCount = topJobs.filter((job) => job.marginPercentage < 10).length;
   const totalLossExposure = allocationAudit?.totals?.totalLoss ?? 0;
+  const partnerJobMetrics = [
+    {
+      label: 'Portfolio jobs',
+      value: String(portfolio?.totalJobs || 0),
+      hint: `${portfolio?.activeJobs || 0} active engagements`,
+      icon: Briefcase,
+      tone: 'primary' as const,
+      graphValue: portfolio?.totalJobs || 0,
+      graphBaseline: portfolio?.activeJobs || 0,
+    },
+    {
+      label: 'Contracted fee',
+      value: formatCompactCurrency(portfolio?.totalFee || 0),
+      hint: `Collected ${formatCompactCurrency(portfolio?.totalRevenueCollected || 0)}`,
+      icon: DollarSign,
+      tone: 'positive' as const,
+      graphValue: portfolio?.totalFee || 0,
+      graphBaseline: portfolio?.totalRevenueCollected || 0,
+    },
+    {
+      label: 'Portfolio profit',
+      value: formatCompactCurrency(portfolio?.totalProfit || 0),
+      hint: `Avg margin ${(portfolio?.averageMargin || 0).toFixed(1)}%`,
+      icon: TrendingUp,
+      tone: 'warning' as const,
+      graphValue: portfolio?.totalProfit || 0,
+      graphBaseline: 0,
+    },
+    {
+      label: 'Partner approvals',
+      value: String(portfolio?.jobsAwaitingPartner || 0),
+      hint: `${summary?.pendingTimeEntriesCount || 0} pending time-entry approvals`,
+      icon: AlertCircle,
+      tone: 'danger' as const,
+      graphValue: portfolio?.jobsAwaitingPartner || 0,
+      graphBaseline: 0,
+      inverse: true,
+    },
+  ];
 
   return (
     <DashboardLayout>
@@ -558,6 +588,13 @@ const PartnerDashboard = () => {
           </div>
         </div>
 
+        <JobOperationsOverview
+          title="Partner portfolio command"
+          description="Trace fee, cash, profit, and partner approvals from one cleaner job-operations surface before moving into portfolio detail."
+          metrics={partnerJobMetrics}
+          showLocator={false}
+        />
+
         {!summary && (
           <Card className="border-dashed">
             <CardHeader>
@@ -568,226 +605,6 @@ const PartnerDashboard = () => {
             </CardHeader>
           </Card>
         )}
-
-        {/* Key Metrics Grid */}
-        {personalPerformance && (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">My Overall Score</CardTitle>
-                <div className="flex items-center gap-2">
-                  {personalPerformance.lossAlert && (
-                    <Badge variant="destructive">Loss alert</Badge>
-                  )}
-                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="metric-value">{personalPerformance.overallScore}</div>
-                <p className="text-xs text-muted-foreground">Financial + non-financial</p>
-                <MiniStatGraph
-                  value={personalPerformance.overallScore}
-                  baseline={personalPerformance.utilizationRate}
-                />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">My Revenue</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="metric-value" title={formatCurrency(personalPerformance.revenue)}>
-                  {formatCompactCurrency(personalPerformance.revenue)}
-                </div>
-                <MiniStatGraph value={personalPerformance.revenue} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">My Net Profit</CardTitle>
-                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="metric-value" title={formatCurrency(personalPerformance.netProfit)}>
-                  {formatCompactCurrency(personalPerformance.netProfit)}
-                </div>
-                <MiniStatGraph value={personalPerformance.netProfit} baseline={0} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Utilization</CardTitle>
-                <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="metric-value">{personalPerformance.utilizationRate}%</div>
-                <p className="text-xs text-muted-foreground">Billable vs allocated</p>
-                <MiniStatGraph value={personalPerformance.utilizationRate} baseline={75} />
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Jobs</CardTitle>
-              <Briefcase className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">{portfolio?.totalJobs || 0}</div>
-              <p className="text-xs text-muted-foreground">
-                {portfolio?.activeJobs || 0} active
-              </p>
-              <MiniStatGraph
-                value={portfolio?.totalJobs || 0}
-                baseline={portfolio?.activeJobs || 0}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Fee</CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(portfolio?.totalFee || 0)}>
-                {formatCompactCurrency(portfolio?.totalFee || 0)}
-              </div>
-              <MiniStatGraph value={portfolio?.totalFee || 0} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Collected</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(portfolio?.totalRevenueCollected || 0)}>
-                {formatCompactCurrency(portfolio?.totalRevenueCollected || 0)}
-              </div>
-              <MiniStatGraph value={portfolio?.totalRevenueCollected || 0} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Cost</CardTitle>
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(portfolio?.totalCost || 0)}>
-                {formatCompactCurrency(portfolio?.totalCost || 0)}
-              </div>
-              <MiniStatGraph value={portfolio?.totalCost || 0} inverse />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Profit</CardTitle>
-              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value" title={formatCurrency(portfolio?.totalProfit || 0)}>
-                {formatCompactCurrency(portfolio?.totalProfit || 0)}
-              </div>
-              <MiniStatGraph value={portfolio?.totalProfit || 0} baseline={0} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Avg Margin</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">{(portfolio?.averageMargin || 0).toFixed(1)}%</div>
-              <MiniStatGraph value={portfolio?.averageMargin || 0} baseline={25} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Team Size</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">{portfolio?.totalTeamSize || 0}</div>
-              <MiniStatGraph value={portfolio?.totalTeamSize || 0} />
-            </CardContent>
-          </Card>
-
-          <Card className="md:col-span-2 xl:col-span-2">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
-              <Clock className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">
-                {approvalRequests.length +
-                  overBudgetRequests.length +
-                  Number(summary?.portfolio?.jobsAwaitingPartner || 0)}
-              </div>
-              <p className="text-xs text-muted-foreground">Awaiting action</p>
-              <MiniStatGraph
-                value={
-                  approvalRequests.length +
-                  overBudgetRequests.length +
-                  Number(summary?.portfolio?.jobsAwaitingPartner || 0)
-                }
-                baseline={0}
-                inverse
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Cost Variance</CardTitle>
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div
-                className={`metric-value ${
-                  Number(portfolio?.totalCostVariance || 0) > 0 ? 'text-destructive' : ''
-                }`}
-                title={formatCurrency(Number(portfolio?.totalCostVariance || 0))}
-              >
-                {formatCompactCurrency(Number(portfolio?.totalCostVariance || 0))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Planned vs actual cost
-              </p>
-              <MiniStatGraph
-                value={Number(portfolio?.totalCostVariance || 0)}
-                baseline={0}
-                inverse
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Awaiting Partner</CardTitle>
-              <AlertCircle className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="metric-value">{Number(portfolio?.jobsAwaitingPartner || 0)}</div>
-              <p className="text-xs text-muted-foreground">
-                Jobs with manager-approved overage
-              </p>
-              <MiniStatGraph value={Number(portfolio?.jobsAwaitingPartner || 0)} baseline={0} inverse />
-            </CardContent>
-          </Card>
-        </div>
 
         <div className="grid gap-4 md:grid-cols-2">
           <Card>
@@ -827,42 +644,6 @@ const PartnerDashboard = () => {
               </Button>
             </CardContent>
           </Card>
-
-          {summary?.clientFeedback && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle>Client Feedback Snapshot</CardTitle>
-                  <CardDescription>Survey sentiment tied to your portfolio.</CardDescription>
-                </div>
-                <Badge variant="secondary">
-                  {summary.clientFeedback.responseRate.toFixed(0)}% response
-                </Badge>
-              </CardHeader>
-              <CardContent className="grid gap-3 sm:grid-cols-3">
-                <div>
-                  <p className="text-sm text-muted-foreground">Completed surveys</p>
-                  <p className="metric-value">
-                    {summary.clientFeedback.completedSurveys}/{summary.clientFeedback.totalSurveys}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Avg satisfaction</p>
-                  <p className="metric-value">
-                    {summary.clientFeedback.avgOverallSatisfaction.toFixed(1)} / 5
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Survey status</p>
-                  <p className="text-sm text-muted-foreground">
-                    {summary.clientFeedback.totalSurveys === 0
-                      ? 'No surveys routed yet.'
-                      : 'Survey ratings feed into client health.'}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
         </div>
 
         {summary?.clientFeedback && (

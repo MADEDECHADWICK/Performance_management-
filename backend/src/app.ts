@@ -13,6 +13,7 @@ import cors from 'cors';
 import { errorHandler } from './middleware/error';
 import routes from './routes';
 import {
+  buildFrameAncestorsDirective,
   buildCorsOptions,
   getJsonBodyLimit,
   getUrlEncodedParameterLimit,
@@ -22,6 +23,7 @@ import {
 import { runtimeConfig } from './config/env';
 import { getUploadRoot } from './config/uploads';
 import { logger, requestLoggingMiddleware } from './lib/logger';
+import { httpRateLimitMiddleware } from './middleware/httpRateLimit';
 import { requestMetricsMiddleware } from './middleware/observability';
 
 const app = express();
@@ -88,6 +90,7 @@ app.use(cors(buildCorsOptions()));
 app.use(securityHeadersMiddleware);
 app.use(requestLoggingMiddleware);
 app.use(requestMetricsMiddleware);
+app.use(httpRateLimitMiddleware);
 
 // Bound request payload sizes to reduce abuse and accidental oversized payloads.
 app.use(express.json({ limit: getJsonBodyLimit() }));
@@ -129,6 +132,7 @@ app.use((_req, res, next) => {
 
 // Serve uploaded files
 if (runtimeConfig.serveLocalUploads) {
+  const uploadPreviewFrameAncestors = buildFrameAncestorsDirective();
   app.use(
     runtimeConfig.uploadPublicBasePath,
     express.static(getUploadRoot(), {
@@ -136,6 +140,12 @@ if (runtimeConfig.serveLocalUploads) {
       fallthrough: false,
       index: false,
       maxAge: '1d',
+      setHeaders: (res) => {
+        // Upload previews are embedded by the frontend in an iframe, so override
+        // the global frame deny header only for static upload responses.
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Security-Policy', uploadPreviewFrameAncestors);
+      },
     })
   );
 } else {

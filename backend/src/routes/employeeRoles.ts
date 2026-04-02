@@ -1,3 +1,5 @@
+// This file defines the API routes for managing employee roles. It includes endpoints for listing all employees with their current roles, retrieving a single employee's role, assigning or updating an employee's role, and fetching the role change history for an employee. The routes are protected with authentication and role-based access control middleware to ensure that only authorized users can perform these actions. The implementation also includes error handling and audit logging to track changes to employee roles. By organizing these routes in a dedicated file, we can maintain a clear structure for our API and facilitate the management of employee roles within the application.
+
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';

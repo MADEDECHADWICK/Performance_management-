@@ -2,7 +2,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -10,18 +9,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from 'react-router-dom';
 import { 
   BarChart3,
   Users,
   AlertTriangle,
   Clock,
-  Target,
   TrendingUp,
   TrendingDown,
   Calendar,
-  UserCheck,
-  UserX,
-  Timer,
   Briefcase,
   PieChart,
   Activity
@@ -130,15 +126,17 @@ const WorkloadManagement = () => {
     try {
       setLoading(true);
       setErrorMessage(null);
-      
-      const [workloadRes, assignmentsRes, metricsRes, recommendationsRes] = await Promise.all([
-        apiFetch("GET", `/team-management/workload-analysis?period=${selectedPeriod}`),
-        apiFetch("GET", "/team-management/project-assignments"),
-        apiFetch("GET", "/team-management/workload-metrics"),
-        apiFetch("GET", "/team-management/capacity-recommendations"),
-      ]);
 
-      const assignmentItems = extractItems(assignmentsRes);
+      const [workloadRes, assignmentsRes, metricsRes, recommendationsRes] =
+        await Promise.allSettled([
+          apiFetch("GET", `/team-management/workload-analysis?period=${selectedPeriod}`),
+          apiFetch("GET", "/team-management/project-assignments"),
+          apiFetch("GET", "/team-management/workload-metrics"),
+          apiFetch("GET", "/team-management/capacity-recommendations"),
+        ]);
+
+      const assignmentItems =
+        assignmentsRes.status === "fulfilled" ? extractItems(assignmentsRes.value) : [];
       const normalizedAssignments = Array.isArray(assignmentItems)
         ? assignmentItems
             .filter(Boolean)
@@ -160,7 +158,8 @@ const WorkloadManagement = () => {
           }))
         : [];
 
-      const workloadItems = extractItems(workloadRes);
+      const workloadItems =
+        workloadRes.status === "fulfilled" ? extractItems(workloadRes.value) : [];
       const normalizedWorkload = Array.isArray(workloadItems)
         ? workloadItems
             .filter(Boolean)
@@ -201,7 +200,10 @@ const WorkloadManagement = () => {
             };
           })
         : [];
-      const recommendationItems = extractItems(recommendationsRes);
+      const recommendationItems =
+        recommendationsRes.status === "fulfilled"
+          ? extractItems(recommendationsRes.value)
+          : [];
       const normalizedRecommendations = Array.isArray(recommendationItems)
         ? recommendationItems.map((rec: any) => ({
             type: rec.type ?? 'redistribute',
@@ -220,27 +222,26 @@ const WorkloadManagement = () => {
 
       setWorkloadData(normalizedWorkload);
       setProjectAssignments(normalizedAssignments);
-      setMetrics(metricsRes && typeof metricsRes === "object" ? metricsRes : null);
+      setMetrics(
+        metricsRes.status === "fulfilled" && metricsRes.value && typeof metricsRes.value === "object"
+          ? metricsRes.value
+          : null
+      );
       setRecommendations(normalizedRecommendations);
+
+      const analyticsFailures = [workloadRes, assignmentsRes, metricsRes, recommendationsRes].filter(
+        (result) => result.status === "rejected"
+      ) as PromiseRejectedResult[];
+      if (analyticsFailures.length > 0) {
+        const firstError = analyticsFailures[0]?.reason;
+        setErrorMessage(
+          firstError?.message ||
+            'Some workload analytics are unavailable for this role right now.'
+        );
+      }
     } catch (error: any) {
       if (error?.status === 401) {
         window.location.href = "/auth";
-        return;
-      }
-      if (error?.status === 403) {
-        setWorkloadData([]);
-        setProjectAssignments([]);
-        setMetrics(null);
-        setRecommendations([]);
-        setErrorMessage("You don't have permission to view workload analytics.");
-        return;
-      }
-      if (error?.status === 404) {
-        setWorkloadData([]);
-        setProjectAssignments([]);
-        setMetrics(null);
-        setRecommendations([]);
-        setErrorMessage(null);
         return;
       }
       console.error('Error fetching workload data:', error);
@@ -416,6 +417,12 @@ const WorkloadManagement = () => {
             <p className="text-gray-600 mt-1">Monitor team capacity and optimize resource allocation</p>
           </div>
           <div className="flex gap-3">
+            <Button asChild variant="outline">
+              <Link to="/job-workflow-dashboard">
+                <Briefcase className="w-4 h-4 mr-2" />
+                Open Job Operations
+              </Link>
+            </Button>
             <Button variant="outline" onClick={() => setCapacityOpen(true)}>
               <PieChart className="w-4 h-4 mr-2" />
               Capacity Planning
@@ -469,7 +476,7 @@ const WorkloadManagement = () => {
 
         {(errorMessage || (workloadData.length === 0 && projectAssignments.length === 0 && !metrics)) && (
           <Alert>
-            <AlertTitle>{errorMessage ? "Access limited" : "No workload data yet"}</AlertTitle>
+            <AlertTitle>{errorMessage ? "Workload data limited" : "No workload data yet"}</AlertTitle>
             <AlertDescription>
               {errorMessage
                 ? errorMessage

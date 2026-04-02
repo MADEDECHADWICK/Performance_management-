@@ -424,11 +424,6 @@ export const dashboardsAPI = {
       pending: number;
       submitted: number;
     };
-    kpiSummary: {
-      financial: number;
-      nonFinancial: number;
-      overall: number;
-    };
     pendingEvaluations: number;
     notifications: unknown[];
   }> => {
@@ -498,24 +493,6 @@ export const dashboardsAPI = {
     return api.get('/analytics/utilization');
   },
 
-  /**
-   * Get non-financial performance analytics
-   */
-  getNonFinancialAnalytics: async (): Promise<{
-    averageScore: number;
-    byPillar: {
-      customer: number;
-      process: number;
-      learning: number;
-    };
-    topPerformers: Array<{
-      employeeId: number;
-      name: string;
-      score: number;
-    }>;
-  }> => {
-    return api.get('/non-financial-performance');
-  },
 };
 
 export default dashboardsAPI;

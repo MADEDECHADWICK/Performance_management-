@@ -2,6 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import PageLoader from "@/components/ui/page-loader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AnalyticsChartShell,
+  AnalyticsGradientDefs,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGradientFill,
+  analyticsGridProps,
+} from "@/components/ui/analytics-chart";
 import { apiFetch } from "@/lib/api";
 import {
   Bar,
@@ -122,22 +133,17 @@ const getStatusBucket = (rawStatus: unknown) => {
 const loadModuleData = async (module: AnalyticsModule) => {
   switch (module) {
     case "employee": {
-      const [performanceResult, goalsResult, unreadResult] = await Promise.allSettled([
+      const [performanceResult, unreadResult] = await Promise.allSettled([
         apiFetch("GET", "/performance-scores/me"),
-        apiFetch("GET", "/goals"),
         apiFetch("GET", "/notifications/unread-count"),
       ]);
 
       const performance =
         performanceResult.status === "fulfilled" ? unwrap(performanceResult.value) : null;
-      const goalsPayload = goalsResult.status === "fulfilled" ? unwrap(goalsResult.value) : [];
       const unreadPayload = unreadResult.status === "fulfilled" ? unwrap(unreadResult.value) : {};
 
       return {
         performance,
-        goals: Array.isArray(goalsPayload)
-          ? goalsPayload
-          : asArray((goalsPayload as any)?.data),
         unreadCount: toNumber((unreadPayload as any)?.unreadCount ?? (unreadPayload as any)?.unread),
       };
     }
@@ -185,7 +191,7 @@ const loadModuleData = async (module: AnalyticsModule) => {
     case "manager": {
       const [overviewResult, workloadResult, jobsResult] = await Promise.allSettled([
         apiFetch("GET", "/manager-dashboard/overview"),
-        apiFetch("GET", "/manager/workload-metrics"),
+        apiFetch("GET", "/team-management/workload-metrics"),
         apiFetch("GET", "/manager-dashboard/jobs"),
       ]);
 
@@ -240,15 +246,6 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
       const nonFinancial = performance?.nonFinancial ?? {};
       const efficiency = performance?.efficiency ?? {};
       const overall = performance?.overall ?? {};
-      const goals = asArray(payload?.goals);
-
-      const completedGoals = goals.filter((goal: any) =>
-        ["completed", "done"].includes(String(goal?.status || "").toLowerCase())
-      ).length;
-      const activeGoals = goals.filter((goal: any) =>
-        ["active", "in_progress", "ongoing", "pending"].includes(String(goal?.status || "").toLowerCase())
-      ).length;
-
       const pieData = normalizePie([
         { name: "Financial", value: toNumber(financial?.financialWeighted) },
         { name: "Non-financial", value: toNumber(nonFinancial?.overallNonFinancialScore) },
@@ -282,9 +279,9 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
             description: "Billable vs allocated",
           },
           {
-            label: "Goals",
-            value: `${completedGoals}/${goals.length}`,
-            description: `${activeGoals} active goals`,
+            label: "Unread Alerts",
+            value: String(payload?.unreadCount || 0),
+            description: "Notifications needing review",
           },
         ],
         pieTitle: "Score Composition",
@@ -296,7 +293,7 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
         barSeries: [{ key: "score", label: "Score", color: CHART_COLORS[0] }],
         insights: [
           `${payload?.unreadCount || 0} unread notifications need review.`,
-          "Update goals and evaluations to improve non-financial signals.",
+          "Stay current on evaluations and delivery metrics to improve non-financial signals.",
         ],
       };
     }
@@ -752,17 +749,25 @@ export default function ModuleAnalytics({ module }: ModuleAnalyticsProps) {
             </CardHeader>
             <CardContent className="h-72">
               {hasPieData ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={model.pieData} dataKey="value" nameKey="name" outerRadius={98}>
-                      {model.pieData.map((entry, index) => (
-                        <Cell key={`${entry.name}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: unknown) => toNumber(value).toLocaleString("en-KE")} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={model.pieData} dataKey="value" nameKey="name" {...analyticsDonutProps}>
+                        {model.pieData.map((entry, index) => (
+                          <Cell key={`${entry.name}-${index}`} fill={analyticsColorAt(index)} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value: unknown) => toNumber(value).toLocaleString("en-KE")}
+                          />
+                        }
+                      />
+                      <Legend content={<AnalyticsLegendContent />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   No chart data yet.
@@ -781,24 +786,38 @@ export default function ModuleAnalytics({ module }: ModuleAnalyticsProps) {
             </CardHeader>
             <CardContent className="h-72">
               {hasBarData ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={model.barData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" />
-                    <YAxis />
-                    <Tooltip formatter={(value: unknown) => toNumber(value).toLocaleString("en-KE")} />
-                    <Legend />
-                    {model.barSeries.map((series) => (
-                      <Bar
-                        key={series.key}
-                        dataKey={series.key}
-                        name={series.label}
-                        fill={series.color}
-                        radius={[4, 4, 0, 0]}
+                <AnalyticsChartShell>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={model.barData}>
+                      <AnalyticsGradientDefs
+                        items={model.barSeries.map((series) => ({
+                          id: `module-analytics-${series.key}`,
+                          color: series.color,
+                        }))}
                       />
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
+                      <CartesianGrid {...analyticsGridProps} />
+                      <XAxis dataKey="label" {...analyticsAxisProps} />
+                      <YAxis {...analyticsAxisProps} />
+                      <Tooltip
+                        content={
+                          <AnalyticsTooltipContent
+                            valueFormatter={(value: unknown) => toNumber(value).toLocaleString("en-KE")}
+                          />
+                        }
+                      />
+                      <Legend content={<AnalyticsLegendContent />} />
+                      {model.barSeries.map((series) => (
+                        <Bar
+                          key={series.key}
+                          dataKey={series.key}
+                          name={series.label}
+                          fill={analyticsGradientFill(`module-analytics-${series.key}`)}
+                          radius={[10, 10, 4, 4]}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </AnalyticsChartShell>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   No chart data yet.

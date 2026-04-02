@@ -25,7 +25,7 @@ The platform is an internal operations system for audit and tax firms. It connec
 - employee lifecycle management
 - job delivery and staffing
 - timesheets and approvals
-- KPI and goal tracking
+- performance reviews and development tracking
 - evaluations and feedback
 - finance and reporting
 
@@ -104,8 +104,6 @@ Actions:
   - create evaluation cycle
   - assign evaluators
   - submit evaluation
-  - create KPI
-  - update KPI progress
   - receive notification
 
 Success criteria:
@@ -128,7 +126,7 @@ Actions:
 Success criteria:
 - A failed rollout or worker issue can be traced quickly from logs and metrics.
 
-### P1.2 Evaluation and KPI Module Refactor
+### P1.2 Evaluation Module Refactor
 
 Problem:
 - Some core files are too large and risky to change safely.
@@ -140,11 +138,6 @@ Actions:
   - scoring
   - reporting
   - templates
-- Split KPI service by concern:
-  - CRUD
-  - progress updates
-  - dashboard queries
-  - history/snapshots
 - Break large frontend pages into smaller sections and hooks.
 
 Success criteria:
@@ -176,7 +169,7 @@ Actions:
 ### P2.2 Data and Reporting Maturity
 
 Actions:
-- Add stronger historical reporting and trend snapshots for evaluations, KPIs, and staffing.
+- Add stronger historical reporting and trend snapshots for evaluations, staffing, and finance.
 - Add exportable audit-friendly reports for HR and leadership.
 
 ### P2.3 Operational Scale Readiness
@@ -193,12 +186,12 @@ Actions:
 1. Enforce typecheck and CI gates.
 2. Lock down production CORS and add security headers.
 3. Remove remaining evaluation-flow ambiguity.
-4. Add smoke coverage for evaluations and KPIs.
+4. Add smoke coverage for evaluations and staffing workflows.
 
 ### Next
 
 1. Add observability.
-2. Refactor oversized evaluation and KPI modules.
+2. Refactor oversized evaluation modules and dashboards.
 3. Unify access definitions.
 
 ### Later
@@ -212,7 +205,7 @@ Actions:
 Pick these in order:
 
 1. Add backend security hardening: `helmet`, body limits, production-safe CORS.
-2. Add Playwright smoke tests for the evaluation and KPI workflows.
+2. Add Playwright smoke tests for the evaluation and staffing workflows.
 3. Remove the old evaluation management and advanced builder pages completely.
 4. Split `evaluation.service.ts` into smaller service modules.
 
@@ -222,7 +215,6 @@ The system is ready for a broader internal rollout when:
 
 - CI blocks bad types and failing tests
 - there is one clear evaluation workflow
-- core evaluation and KPI journeys have smoke coverage
+- core evaluation journeys have smoke coverage
 - production config is locked down
 - runtime failures are observable within minutes
-

@@ -3,17 +3,14 @@ import prisma from '../prisma';
 import { nonFinancialPerformanceService } from '../services/nonFinancialPerformance.service';
 import { mergeWithDefaultScoringConfig } from '../services/performanceFramework.service';
 import { authMiddleware } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { loadProfile } from '../middleware/loadProfile';
 import { Decimal } from '@prisma/client/runtime/library';
 
 const router = Router();
 
 const resolveRoles = (req: any) => {
-  const roles = new Set<string>();
-  (req.userRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
-  (req.userRoles || []).forEach((role: string) => roles.add(role.toLowerCase()));
-  if (req.profile?.role?.name) roles.add(req.profile.role.name.toLowerCase());
-  return Array.from(roles);
+  return resolveRequestAccessRoles(req).map((role) => String(role).toLowerCase());
 };
 
 const isPrivileged = (roles: string[]) =>
@@ -67,15 +64,11 @@ const buildWeightConfig = (scoringConfig: Record<string, any>) => {
     ),
     evaluationWeight: normalizeWeightValue(
       resolved?.learningGrowthBreakdown?.evaluation,
-      0.5
-    ),
-    okrWeight: normalizeWeightValue(
-      resolved?.learningGrowthBreakdown?.okr,
-      0.3
+      0.7
     ),
     feedbackWeight: normalizeWeightValue(
       resolved?.learningGrowthBreakdown?.feedback,
-      0.2
+      0.3
     ),
   };
 };
@@ -457,7 +450,6 @@ router.get('/non-financial-scores/:employeeId', authMiddleware, loadProfile, asy
         customerWeight: weightConfig.customerWeight,
         internalWeight: weightConfig.internalWeight,
         evaluationWeight: weightConfig.evaluationWeight,
-        okrWeight: weightConfig.okrWeight,
         feedbackWeight: weightConfig.feedbackWeight,
       },
     });
@@ -468,7 +460,7 @@ router.get('/non-financial-scores/:employeeId', authMiddleware, loadProfile, asy
 });
 
 /**
- * GET /non-financial-breakdown/:employeeId - Get detailed BSC breakdown with all KPIs
+ * GET /non-financial-breakdown/:employeeId - Get detailed BSC breakdown with all score signals
  */
 router.get('/non-financial-breakdown/:employeeId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
   try {
@@ -502,7 +494,6 @@ router.get('/non-financial-breakdown/:employeeId', authMiddleware, loadProfile, 
         customerWeight: weightConfig.customerWeight,
         internalWeight: weightConfig.internalWeight,
         evaluationWeight: weightConfig.evaluationWeight,
-        okrWeight: weightConfig.okrWeight,
         feedbackWeight: weightConfig.feedbackWeight,
       },
     });
@@ -541,33 +532,6 @@ router.post('/non-financial-scores/:evaluationId/update', authMiddleware, loadPr
   } catch (error) {
     console.error('Error updating evaluation with BSC scores:', error);
     res.status(500).json({ error: 'Failed to update evaluation' });
-  }
-});
-
-/**
- * GET /kpi-scores/:employeeId - Get stored KPI scores from employee_kpi_scores table
- */
-router.get('/kpi-scores/:employeeId', authMiddleware, loadProfile, async (req: Request, res: Response) => {
-  try {
-    const { employeeId } = req.params;
-    const { evaluationCycleId } = req.query;
-
-    const employeeIdNumber = parseInt(employeeId);
-    if (!(await canAccessEmployee(req, employeeIdNumber))) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const kpiScores = await prisma.employeeKpiScore.findMany({
-      where: {
-        employeeProfileId: employeeIdNumber,
-      },
-      orderBy: { calculatedAt: 'desc' }
-    });
-
-    res.json(kpiScores);
-  } catch (error) {
-    console.error('Error fetching KPI scores:', error);
-    res.status(500).json({ error: 'Failed to fetch KPI scores' });
   }
 });
 
@@ -618,7 +582,6 @@ router.get('/team-non-financial-scores/:managerId', authMiddleware, loadProfile,
             customerWeight: weightConfig.customerWeight,
             internalWeight: weightConfig.internalWeight,
             evaluationWeight: weightConfig.evaluationWeight,
-            okrWeight: weightConfig.okrWeight,
             feedbackWeight: weightConfig.feedbackWeight,
           },
         };

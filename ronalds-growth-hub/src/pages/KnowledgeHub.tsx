@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  CheckCircle2,
   Download,
   Eye,
   Filter,
@@ -19,7 +20,10 @@ import { useToast } from "@/hooks/use-toast";
 import knowledgeHubAPI, {
   KnowledgeHubMeta,
   KnowledgeHubResource,
+  KnowledgeHubQuiz,
+  KnowledgeHubQuizQuestion,
   UpsertKnowledgeHubResourceInput,
+  UpsertKnowledgeHubQuizInput,
 } from "@/lib/api/knowledgeHub";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +40,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import PageLoader from "@/components/ui/page-loader";
+import type { TrackedContentProgress } from "@/components/learning/TrackedContentViewer";
+
+const TrackedContentViewer = lazy(() => import("@/components/learning/TrackedContentViewer"));
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -59,6 +67,36 @@ type ResourceFormState = {
   allowDownload: boolean;
   isFeatured: boolean;
   isPublished: boolean;
+  estimatedDurationMinutes: string;
+  completionMode: KnowledgeHubResource["completionMode"];
+  completionThresholdPercent: string;
+  minReadSeconds: string;
+  pointsOnCompletion: string;
+};
+
+type QuizOptionFormState = {
+  id: string;
+  label: string;
+  isCorrect: boolean;
+};
+
+type QuizQuestionFormState = {
+  id: string;
+  questionType: KnowledgeHubQuizQuestion["questionType"];
+  prompt: string;
+  required: boolean;
+  explanation: string;
+  options: QuizOptionFormState[];
+};
+
+type QuizFormState = {
+  enabled: boolean;
+  title: string;
+  passMark: string;
+  pointsOnPass: string;
+  attemptLimit: string;
+  isActive: boolean;
+  questions: QuizQuestionFormState[];
 };
 
 const parseTags = (value: string) =>
@@ -73,6 +111,87 @@ const parseTags = (value: string) =>
 
 const isLocalUploadUrl = (value: string | null | undefined) =>
   typeof value === "string" && value.startsWith("/uploads/knowledge-hub/");
+
+const createFormId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const createQuizOption = (label = "", isCorrect = false): QuizOptionFormState => ({
+  id: createFormId(),
+  label,
+  isCorrect,
+});
+
+const getDefaultOptionsForQuestionType = (
+  questionType: KnowledgeHubQuizQuestion["questionType"]
+): QuizOptionFormState[] => {
+  if (questionType === "true_false") {
+    return [createQuizOption("True", true), createQuizOption("False", false)];
+  }
+
+  if (questionType === "short_text") {
+    return [];
+  }
+
+  return [createQuizOption(), createQuizOption()];
+};
+
+const createQuizQuestion = (
+  questionType: KnowledgeHubQuizQuestion["questionType"] = "single_choice"
+): QuizQuestionFormState => ({
+  id: createFormId(),
+  questionType,
+  prompt: "",
+  required: true,
+  explanation: "",
+  options: getDefaultOptionsForQuestionType(questionType),
+});
+
+const createQuizFormState = (): QuizFormState => ({
+  enabled: false,
+  title: "Knowledge Check",
+  passMark: "70",
+  pointsOnPass: "0",
+  attemptLimit: "",
+  isActive: true,
+  questions: [createQuizQuestion()],
+});
+
+const toQuizFormState = (quiz: KnowledgeHubQuiz | null | undefined): QuizFormState => {
+  if (!quiz) {
+    return createQuizFormState();
+  }
+
+  return {
+    enabled: true,
+    title: quiz.title || "Knowledge Check",
+    passMark: String(quiz.passMark ?? 70),
+    pointsOnPass: String(quiz.pointsOnPass ?? 0),
+    attemptLimit: quiz.attemptLimit ? String(quiz.attemptLimit) : "",
+    isActive: quiz.isActive,
+    questions:
+      quiz.questions.length > 0
+        ? quiz.questions.map((question) => ({
+            id: String(question.id),
+            questionType: question.questionType,
+            prompt: question.prompt,
+            required: question.required,
+            explanation: question.explanation || "",
+            options:
+              question.options.length > 0
+                ? question.options.map((option) => ({
+                    id: String(option.id),
+                    label: option.label,
+                    isCorrect: Boolean(option.isCorrect),
+                  }))
+                : getDefaultOptionsForQuestionType(question.questionType),
+          }))
+        : [createQuizQuestion()],
+  };
+};
+
+const formatEnumLabel = (value: string) => value.replace(/_/g, " ");
+
+const formatCompletionModeLabel = (value: KnowledgeHubResource["completionMode"]) =>
+  formatEnumLabel(value);
 
 const resolveAssetUrl = (value: string | null | undefined) => {
   if (!value) return null;
@@ -136,6 +255,20 @@ const toFormState = (meta: KnowledgeHubMeta, resource?: KnowledgeHubResource | n
   allowDownload: resource?.allowDownload ?? true,
   isFeatured: resource?.isFeatured || false,
   isPublished: resource?.isPublished ?? true,
+  estimatedDurationMinutes:
+    resource?.estimatedDurationMinutes !== null && resource?.estimatedDurationMinutes !== undefined
+      ? String(resource.estimatedDurationMinutes)
+      : "",
+  completionMode: resource?.completionMode || "manual",
+  completionThresholdPercent:
+    resource?.completionThresholdPercent !== null && resource?.completionThresholdPercent !== undefined
+      ? String(resource.completionThresholdPercent)
+      : "",
+  minReadSeconds:
+    resource?.minReadSeconds !== null && resource?.minReadSeconds !== undefined
+      ? String(resource.minReadSeconds)
+      : "",
+  pointsOnCompletion: String(resource?.pointsOnCompletion ?? 0),
 });
 
 const createDownloadFilename = (resource: KnowledgeHubResource) => {
@@ -172,14 +305,6 @@ const formatRelativeTime = (value: string | null) => {
 const canPreviewResource = (resource: KnowledgeHubResource) =>
   Boolean(resource.linkUrl || resource.content);
 
-const getPreviewSandbox = (resource: KnowledgeHubResource) => {
-  if (!resource.linkUrl || isLocalUploadUrl(resource.linkUrl)) {
-    return undefined;
-  }
-
-  return "allow-same-origin allow-scripts allow-forms allow-popups";
-};
-
 export default function KnowledgeHub() {
   const { hasModuleAccess } = useAuth();
   const { toast } = useToast();
@@ -199,10 +324,23 @@ export default function KnowledgeHub() {
   const [previewResource, setPreviewResource] = useState<KnowledgeHubResource | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formState, setFormState] = useState<ResourceFormState>(toFormState(DEFAULT_META, null));
+  const [quizForm, setQuizForm] = useState<QuizFormState>(createQuizFormState());
+  const [quizAnswers, setQuizAnswers] = useState<
+    Record<number, { optionIds: number[]; freeTextAnswer: string }>
+  >({});
+  const [previewOpenedAt, setPreviewOpenedAt] = useState<number | null>(null);
+  const [completionQuizOpen, setCompletionQuizOpen] = useState(false);
+  const [pendingCompletionQuizResourceId, setPendingCompletionQuizResourceId] = useState<number | null>(null);
+  const [previewTrackingSupported, setPreviewTrackingSupported] = useState<boolean | null>(null);
 
   const { data: metaData } = useQuery({
     queryKey: ["knowledge-hub-meta"],
     queryFn: () => knowledgeHubAPI.meta(),
+  });
+
+  const { data: pointsSummary } = useQuery({
+    queryKey: ["knowledge-hub-points"],
+    queryFn: () => knowledgeHubAPI.points(),
   });
 
   const meta = metaData || DEFAULT_META;
@@ -230,22 +368,50 @@ export default function KnowledgeHub() {
       }),
   });
 
+  const previewResourceId = previewResource?.id ?? null;
+  const editorResourceId = editorOpen ? editingResource?.id ?? null : null;
+
+  const { data: previewProgressData, refetch: refetchPreviewProgress } = useQuery({
+    queryKey: ["knowledge-hub-progress", previewResourceId],
+    enabled: Boolean(previewResourceId),
+    queryFn: async () => {
+      if (!previewResourceId) return null;
+      return knowledgeHubAPI.getProgress(previewResourceId);
+    },
+  });
+
+  const { data: previewQuizData, refetch: refetchPreviewQuiz } = useQuery({
+    queryKey: ["knowledge-hub-quiz", previewResourceId],
+    enabled: Boolean(previewResourceId),
+    retry: false,
+    queryFn: async () => {
+      if (!previewResourceId) return null;
+      try {
+        return await knowledgeHubAPI.getQuiz(previewResourceId);
+      } catch (error: any) {
+        if (error?.status === 404) return null;
+        throw error;
+      }
+    },
+  });
+
+  const { data: editorQuizData } = useQuery({
+    queryKey: ["knowledge-hub-editor-quiz", editorResourceId],
+    enabled: canWrite && editorOpen && Boolean(editorResourceId),
+    retry: false,
+    queryFn: async () => {
+      if (!editorResourceId) return null;
+      try {
+        return await knowledgeHubAPI.getQuiz(editorResourceId);
+      } catch (error: any) {
+        if (error?.status === 404) return null;
+        throw error;
+      }
+    },
+  });
+
   const createMutation = useMutation({
     mutationFn: (payload: UpsertKnowledgeHubResourceInput | FormData) => knowledgeHubAPI.create(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["knowledge-hub-resources"] });
-      toast({ title: "Resource created", description: "Knowledge resource was added." });
-      setEditorOpen(false);
-      setEditingResource(null);
-      setSelectedFile(null);
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Create failed",
-        description: error?.message || "Unable to create resource.",
-        variant: "destructive",
-      });
-    },
   });
 
   const updateMutation = useMutation({
@@ -256,20 +422,20 @@ export default function KnowledgeHub() {
       resourceId: number;
       payload: Partial<UpsertKnowledgeHubResourceInput> | FormData;
     }) => knowledgeHubAPI.update(resourceId, payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["knowledge-hub-resources"] });
-      toast({ title: "Resource updated", description: "Knowledge resource was updated." });
-      setEditorOpen(false);
-      setEditingResource(null);
-      setSelectedFile(null);
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Update failed",
-        description: error?.message || "Unable to update resource.",
-        variant: "destructive",
-      });
-    },
+  });
+
+  const upsertEditorQuizMutation = useMutation({
+    mutationFn: ({
+      resourceId,
+      payload,
+    }: {
+      resourceId: number;
+      payload: UpsertKnowledgeHubQuizInput;
+    }) => knowledgeHubAPI.upsertQuiz(resourceId, payload),
+  });
+
+  const deleteEditorQuizMutation = useMutation({
+    mutationFn: (resourceId: number) => knowledgeHubAPI.deleteQuiz(resourceId),
   });
 
   const deleteMutation = useMutation({
@@ -287,15 +453,128 @@ export default function KnowledgeHub() {
     },
   });
 
+  const progressMutation = useMutation({
+    mutationFn: (payload: {
+      resourceId: number;
+      timeSpentSeconds?: number | null;
+      scrollPercent?: number | null;
+      watchSeconds?: number | null;
+      watchPercent?: number | null;
+      completed?: boolean;
+    }) =>
+      knowledgeHubAPI.updateProgress(payload.resourceId, {
+        timeSpentSeconds: payload.timeSpentSeconds,
+        scrollPercent: payload.scrollPercent,
+        watchSeconds: payload.watchSeconds,
+        watchPercent: payload.watchPercent,
+        completed: payload.completed,
+      }),
+    onSuccess: async (result: any, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-progress"] }),
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-points"] }),
+      ]);
+      refetchPreviewProgress();
+      if (result?.completedNow) {
+        setPendingCompletionQuizResourceId(variables.resourceId);
+      }
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Progress update failed",
+        description: error?.message || "Unable to update resource progress.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const submitQuizMutation = useMutation({
+    mutationFn: (payload: { resourceId: number; answers: Array<{ questionId: number; optionIds?: number[]; freeTextAnswer?: string | null }> }) =>
+      knowledgeHubAPI.submitQuizAttempt(payload.resourceId, {
+        answers: payload.answers,
+      }),
+    onSuccess: async (result: any) => {
+      toast({
+        title: result?.passed ? "Quiz passed" : "Quiz submitted",
+        description: result?.passed ? "You passed the knowledge check." : "Your answers were recorded.",
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-quiz"] }),
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-progress"] }),
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-points"] }),
+      ]);
+      refetchPreviewQuiz();
+      refetchPreviewProgress();
+      if (result?.passed) {
+        setCompletionQuizOpen(false);
+      }
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Quiz submission failed",
+        description: error?.message || "Unable to submit the quiz.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const resources = data?.resources || [];
   const isMutating =
     createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
   const usesFileUpload = formState.assetKind === "document" || formState.assetKind === "image";
   const previewResourceUrl = previewResource ? resolveAssetUrl(previewResource.linkUrl) : null;
   const previewVideoEmbedUrl = previewResource ? resolveVideoEmbedUrl(previewResource.linkUrl) : null;
-  const previewSandbox = previewResource ? getPreviewSandbox(previewResource) : undefined;
   const existingStoredFileName =
     selectedFile?.name || editingResource?.assetFileName || null;
+  const previewProgress = previewProgressData?.progress || null;
+  const previewPoints = previewProgressData?.points || [];
+  const previewQuiz = previewQuizData || null;
+  const previewCompletionPointsAwarded = previewPoints.some(
+    (entry) => entry.eventType === "knowledge_resource_completed"
+  );
+  const previewQuizPointsAwarded = previewPoints.some(
+    (entry) => entry.eventType === "knowledge_quiz_passed"
+  );
+  const previewPointsEarned = previewPoints.reduce((sum, entry) => sum + Number(entry.points || 0), 0);
+  const isPreviewCompleted = Boolean(previewProgress?.completedAt);
+  const showQuizPanel = Boolean(previewQuiz && isPreviewCompleted);
+  const showManualPreviewCompletion =
+    Boolean(previewResource) &&
+    (previewResource.completionMode === "manual" || previewTrackingSupported === false);
+  const getPreviewElapsedSeconds = () =>
+    previewOpenedAt ? Math.max(1, Math.floor((Date.now() - previewOpenedAt) / 1000)) : undefined;
+
+  useEffect(() => {
+    if (!editorOpen) return;
+
+    if (!editingResource) {
+      setQuizForm(createQuizFormState());
+      return;
+    }
+
+    if (editorQuizData !== undefined) {
+      setQuizForm(toQuizFormState(editorQuizData));
+    }
+  }, [editorOpen, editingResource, editorQuizData]);
+
+  useEffect(() => {
+    if (
+      pendingCompletionQuizResourceId &&
+      pendingCompletionQuizResourceId === previewResourceId &&
+      previewQuiz &&
+      isPreviewCompleted &&
+      !previewQuizPointsAwarded
+    ) {
+      setCompletionQuizOpen(true);
+      setPendingCompletionQuizResourceId(null);
+    }
+  }, [
+    pendingCompletionQuizResourceId,
+    previewResourceId,
+    previewQuiz,
+    isPreviewCompleted,
+    previewQuizPointsAwarded,
+  ]);
 
   const clearFilters = () => {
     setSearch("");
@@ -309,6 +588,7 @@ export default function KnowledgeHub() {
     setEditingResource(null);
     setFormState(toFormState(meta, null));
     setSelectedFile(null);
+    setQuizForm(createQuizFormState());
     setEditorOpen(true);
   };
 
@@ -316,10 +596,158 @@ export default function KnowledgeHub() {
     setEditingResource(resource);
     setFormState(toFormState(meta, resource));
     setSelectedFile(null);
+    setQuizForm(createQuizFormState());
     setEditorOpen(true);
   };
 
-  const handleSubmit = () => {
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setEditingResource(null);
+    setSelectedFile(null);
+    setQuizForm(createQuizFormState());
+  };
+
+  const validateQuizForm = () => {
+    if (!quizForm.enabled) return null;
+
+    if (!quizForm.title.trim()) {
+      return "Quiz title is required when a knowledge check is enabled.";
+    }
+
+    if (quizForm.questions.length === 0) {
+      return "Add at least one quiz question.";
+    }
+
+    for (const [index, question] of quizForm.questions.entries()) {
+      if (!question.prompt.trim()) {
+        return `Question ${index + 1} needs a prompt.`;
+      }
+
+      if (question.questionType === "short_text") {
+        continue;
+      }
+
+      const validOptions = question.options.filter((option) => option.label.trim());
+      if (validOptions.length < 2) {
+        return `Question ${index + 1} needs at least two answer options.`;
+      }
+
+      const correctOptions = validOptions.filter((option) => option.isCorrect);
+      if (question.questionType === "multiple_choice") {
+        if (correctOptions.length === 0) {
+          return `Question ${index + 1} needs at least one correct option.`;
+        }
+      } else if (correctOptions.length !== 1) {
+        return `Question ${index + 1} must have exactly one correct option.`;
+      }
+    }
+
+    return null;
+  };
+
+  const buildQuizPayload = (): UpsertKnowledgeHubQuizInput => ({
+    title: quizForm.title.trim(),
+    passMark: Number(quizForm.passMark || 0),
+    pointsOnPass: Number(quizForm.pointsOnPass || 0),
+    attemptLimit: quizForm.attemptLimit ? Number(quizForm.attemptLimit) : null,
+    isActive: quizForm.isActive,
+    questions: quizForm.questions.map((question, index) => ({
+      questionType: question.questionType,
+      prompt: question.prompt.trim(),
+      displayOrder: index + 1,
+      required: question.required,
+      explanation: question.explanation.trim() || null,
+      options:
+        question.questionType === "short_text"
+          ? []
+          : question.options
+              .filter((option) => option.label.trim())
+              .map((option, optionIndex) => ({
+                label: option.label.trim(),
+                isCorrect: option.isCorrect,
+                displayOrder: optionIndex + 1,
+              })),
+    })),
+  });
+
+  const updateQuizQuestion = (
+    questionId: string,
+    updater: (question: QuizQuestionFormState) => QuizQuestionFormState
+  ) => {
+    setQuizForm((prev) => ({
+      ...prev,
+      questions: prev.questions.map((question) =>
+        question.id === questionId ? updater(question) : question
+      ),
+    }));
+  };
+
+  const addQuizQuestion = () => {
+    setQuizForm((prev) => ({
+      ...prev,
+      questions: [...prev.questions, createQuizQuestion()],
+    }));
+  };
+
+  const removeQuizQuestion = (questionId: string) => {
+    setQuizForm((prev) => ({
+      ...prev,
+      questions:
+        prev.questions.length > 1
+          ? prev.questions.filter((question) => question.id !== questionId)
+          : prev.questions,
+    }));
+  };
+
+  const changeQuizQuestionType = (
+    questionId: string,
+    questionType: KnowledgeHubQuizQuestion["questionType"]
+  ) => {
+    updateQuizQuestion(questionId, (question) => ({
+      ...question,
+      questionType,
+      options:
+        questionType === question.questionType
+          ? question.options
+          : getDefaultOptionsForQuestionType(questionType),
+    }));
+  };
+
+  const addQuizOption = (questionId: string) => {
+    updateQuizQuestion(questionId, (question) => ({
+      ...question,
+      options: [...question.options, createQuizOption()],
+    }));
+  };
+
+  const removeQuizOption = (questionId: string, optionId: string) => {
+    updateQuizQuestion(questionId, (question) => {
+      if (question.options.length <= 2 || question.questionType === "true_false") {
+        return question;
+      }
+
+      return {
+        ...question,
+        options: question.options.filter((option) => option.id !== optionId),
+      };
+    });
+  };
+
+  const updateQuizOption = (
+    questionId: string,
+    optionId: string,
+    updater: (option: QuizOptionFormState, options: QuizOptionFormState[]) => QuizOptionFormState[]
+  ) => {
+    updateQuizQuestion(questionId, (question) => ({
+      ...question,
+      options: updater(
+        question.options.find((option) => option.id === optionId) || createQuizOption(),
+        question.options
+      ),
+    }));
+  };
+
+  const handleSubmit = async () => {
     const title = formState.title.trim();
     const summary = formState.summary.trim();
     const linkUrl = formState.linkUrl.trim();
@@ -355,6 +783,16 @@ export default function KnowledgeHub() {
       return;
     }
 
+    const quizValidationError = validateQuizForm();
+    if (quizValidationError) {
+      toast({
+        title: "Knowledge check incomplete",
+        description: quizValidationError,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const payload: UpsertKnowledgeHubResourceInput = {
       title,
       summary: summary || null,
@@ -367,45 +805,102 @@ export default function KnowledgeHub() {
       allowDownload: formState.allowDownload,
       isFeatured: formState.isFeatured,
       isPublished: formState.isPublished,
+      estimatedDurationMinutes: formState.estimatedDurationMinutes
+        ? Number(formState.estimatedDurationMinutes)
+        : null,
+      completionMode: formState.completionMode,
+      completionThresholdPercent: formState.completionThresholdPercent
+        ? Number(formState.completionThresholdPercent)
+        : null,
+      minReadSeconds: formState.minReadSeconds ? Number(formState.minReadSeconds) : null,
+      pointsOnCompletion: Number(formState.pointsOnCompletion || 0),
     };
 
-    if (selectedFile) {
-      const formData = new FormData();
-      formData.append("title", payload.title);
-      formData.append("summary", summary);
-      formData.append("domain", payload.domain);
-      formData.append("resourceType", payload.resourceType);
-      formData.append("assetKind", payload.assetKind || "document");
-      formData.append("submodules", JSON.stringify([]));
-      formData.append("tags", JSON.stringify(payload.tags || []));
-      formData.append("content", content);
-      formData.append("allowDownload", String(payload.allowDownload ?? true));
-      formData.append("isFeatured", String(payload.isFeatured ?? false));
-      formData.append("isPublished", String(payload.isPublished ?? true));
-      formData.append("file", selectedFile);
+    try {
+      let savedResource: KnowledgeHubResource;
 
-      if (linkUrl) {
-        formData.append("linkUrl", linkUrl);
-      }
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append("title", payload.title);
+        formData.append("summary", summary);
+        formData.append("domain", payload.domain);
+        formData.append("resourceType", payload.resourceType);
+        formData.append("assetKind", payload.assetKind || "document");
+        formData.append("submodules", JSON.stringify([]));
+        formData.append("tags", JSON.stringify(payload.tags || []));
+        formData.append("content", content);
+        formData.append("allowDownload", String(payload.allowDownload ?? true));
+        formData.append("isFeatured", String(payload.isFeatured ?? false));
+        formData.append("isPublished", String(payload.isPublished ?? true));
+        formData.append(
+          "estimatedDurationMinutes",
+          payload.estimatedDurationMinutes !== null && payload.estimatedDurationMinutes !== undefined
+            ? String(payload.estimatedDurationMinutes)
+            : ""
+        );
+        formData.append("completionMode", String(payload.completionMode || "manual"));
+        formData.append(
+          "completionThresholdPercent",
+          payload.completionThresholdPercent !== null && payload.completionThresholdPercent !== undefined
+            ? String(payload.completionThresholdPercent)
+            : ""
+        );
+        formData.append(
+          "minReadSeconds",
+          payload.minReadSeconds !== null && payload.minReadSeconds !== undefined
+            ? String(payload.minReadSeconds)
+            : ""
+        );
+        formData.append("pointsOnCompletion", String(payload.pointsOnCompletion || 0));
+        formData.append("file", selectedFile);
 
-      if (editingResource) {
-        updateMutation.mutate({ resourceId: editingResource.id, payload: formData });
+        if (linkUrl) {
+          formData.append("linkUrl", linkUrl);
+        }
+
+        savedResource = editingResource
+          ? await updateMutation.mutateAsync({ resourceId: editingResource.id, payload: formData })
+          : await createMutation.mutateAsync(formData);
       } else {
-        createMutation.mutate(formData);
+        if (linkUrl) {
+          payload.linkUrl = linkUrl;
+        } else if (!preservesExistingLocalUpload) {
+          payload.linkUrl = null;
+        }
+
+        savedResource = editingResource
+          ? await updateMutation.mutateAsync({ resourceId: editingResource.id, payload })
+          : await createMutation.mutateAsync(payload);
       }
-      return;
-    }
 
-    if (linkUrl) {
-      payload.linkUrl = linkUrl;
-    } else if (!preservesExistingLocalUpload) {
-      payload.linkUrl = null;
-    }
+      if (quizForm.enabled) {
+        await upsertEditorQuizMutation.mutateAsync({
+          resourceId: savedResource.id,
+          payload: buildQuizPayload(),
+        });
+      } else if (editingResource && editorQuizData) {
+        await deleteEditorQuizMutation.mutateAsync(savedResource.id);
+      }
 
-    if (editingResource) {
-      updateMutation.mutate({ resourceId: editingResource.id, payload });
-    } else {
-      createMutation.mutate(payload);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-resources"] }),
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-editor-quiz"] }),
+        queryClient.invalidateQueries({ queryKey: ["knowledge-hub-quiz"] }),
+      ]);
+
+      toast({
+        title: editingResource ? "Resource updated" : "Resource created",
+        description: quizForm.enabled
+          ? "Knowledge resource and quiz were saved."
+          : "Knowledge resource was saved.",
+      });
+      closeEditor();
+    } catch (error: any) {
+      toast({
+        title: editingResource ? "Save failed" : "Create failed",
+        description: error?.message || "Unable to save the knowledge resource.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -418,12 +913,94 @@ export default function KnowledgeHub() {
 
   const openPreview = (resource: KnowledgeHubResource) => {
     setPreviewResource(resource);
+    setQuizAnswers({});
+    setPreviewOpenedAt(Date.now());
+    setCompletionQuizOpen(false);
+    setPendingCompletionQuizResourceId(null);
+    setPreviewTrackingSupported(null);
   };
 
   const handlePreviewOpenChange = (open: boolean) => {
     if (!open) {
       setPreviewResource(null);
+      setQuizAnswers({});
+      setPreviewOpenedAt(null);
+      setCompletionQuizOpen(false);
+      setPendingCompletionQuizResourceId(null);
+      setPreviewTrackingSupported(null);
     }
+  };
+
+  const handleMarkComplete = () => {
+    if (!previewResource) return;
+    progressMutation.mutate({
+      resourceId: previewResource.id,
+      timeSpentSeconds: getPreviewElapsedSeconds(),
+      completed: true,
+      scrollPercent: 100,
+      watchPercent: 100,
+    });
+  };
+
+  const handleTrackedPreviewProgress = (progress: TrackedContentProgress) => {
+    if (!previewResource || isPreviewCompleted) return;
+
+    progressMutation.mutate({
+      resourceId: previewResource.id,
+      timeSpentSeconds: getPreviewElapsedSeconds(),
+      scrollPercent: progress.scrollPercent,
+      watchSeconds: progress.watchSeconds,
+      watchPercent: progress.watchPercent,
+      completed: progress.completed,
+    });
+  };
+
+  const updateSingleChoiceAnswer = (questionId: number, optionId: number) => {
+    setQuizAnswers((prev) => ({
+      ...prev,
+      [questionId]: {
+        optionIds: [optionId],
+        freeTextAnswer: prev[questionId]?.freeTextAnswer || "",
+      },
+    }));
+  };
+
+  const updateMultipleChoiceAnswer = (questionId: number, optionId: number, checked: boolean) => {
+    setQuizAnswers((prev) => {
+      const current = prev[questionId]?.optionIds || [];
+      const optionIds = checked
+        ? Array.from(new Set([...current, optionId]))
+        : current.filter((value) => value !== optionId);
+      return {
+        ...prev,
+        [questionId]: {
+          optionIds,
+          freeTextAnswer: prev[questionId]?.freeTextAnswer || "",
+        },
+      };
+    });
+  };
+
+  const updateTextAnswer = (questionId: number, value: string) => {
+    setQuizAnswers((prev) => ({
+      ...prev,
+      [questionId]: {
+        optionIds: prev[questionId]?.optionIds || [],
+        freeTextAnswer: value,
+      },
+    }));
+  };
+
+  const handleSubmitQuiz = () => {
+    if (!previewResource || !previewQuiz) return;
+    submitQuizMutation.mutate({
+      resourceId: previewResource.id,
+      answers: previewQuiz.questions.map((question) => ({
+        questionId: question.id,
+        optionIds: quizAnswers[question.id]?.optionIds || [],
+        freeTextAnswer: quizAnswers[question.id]?.freeTextAnswer || null,
+      })),
+    });
   };
 
   const handleDownload = (resource: KnowledgeHubResource) => {
@@ -467,6 +1044,9 @@ export default function KnowledgeHub() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="px-3 py-1 text-sm">
+              {pointsSummary?.totalPoints ?? 0} CPD points
+            </Badge>
             <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
               Refresh
@@ -577,6 +1157,7 @@ export default function KnowledgeHub() {
                         <Badge variant="outline">{resource.domain}</Badge>
                         <Badge variant="secondary">{resource.resourceType}</Badge>
                         <Badge variant="outline">{resource.assetKind}</Badge>
+                        <Badge variant="outline">{resource.pointsOnCompletion} pts</Badge>
                         {resource.isFeatured && (
                           <Badge>
                             <Star className="mr-1 h-3 w-3" />
@@ -612,6 +1193,11 @@ export default function KnowledgeHub() {
                       ))}
                     </div>
                   )}
+
+                  <p className="text-xs text-muted-foreground">
+                    Completion: {formatCompletionModeLabel(resource.completionMode)}
+                    {resource.estimatedDurationMinutes ? ` • ${resource.estimatedDurationMinutes} min` : ""}
+                  </p>
 
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                     <p className="text-xs text-muted-foreground">
@@ -703,46 +1289,126 @@ export default function KnowledgeHub() {
                         className="max-h-full w-auto rounded-md object-contain shadow-sm"
                       />
                     </div>
-                  ) : previewResource.assetKind === "video" && (previewVideoEmbedUrl || previewResourceUrl) ? (
-                    previewVideoEmbedUrl ? (
-                      <iframe
-                        key={`${previewResource.id}-${previewVideoEmbedUrl}`}
-                        src={previewVideoEmbedUrl}
-                        title={previewResource.title}
-                        className="h-full w-full border-0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center bg-black">
-                        <video
-                          controls
-                          className="h-full w-full"
-                          src={previewResourceUrl || undefined}
-                        >
-                          Your browser does not support video playback.
-                        </video>
-                      </div>
-                    )
-                  ) : previewResourceUrl ? (
-                    <iframe
-                      key={`${previewResource.id}-${previewResourceUrl}`}
-                      src={previewResourceUrl}
-                      title={previewResource.title}
-                      className="h-full w-full border-0"
-                      sandbox={previewSandbox}
-                    />
-                  ) : previewResource.content ? (
-                    <div className="h-full overflow-y-auto p-6">
-                      <article className="whitespace-pre-wrap text-sm leading-7 text-foreground">
-                        {previewResource.content}
-                      </article>
-                    </div>
                   ) : (
-                    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-                      No preview is available for this resource yet.
-                    </div>
+                    <Suspense
+                      fallback={
+                        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                          Loading tracked preview...
+                        </div>
+                      }
+                    >
+                      <TrackedContentViewer
+                        title={previewResource.title}
+                        sourceUrl={previewResourceUrl}
+                        fileName={previewResource.assetFileName}
+                        mimeType={previewResource.assetMimeType}
+                        textContent={previewResource.content}
+                        completionMode={previewResource.completionMode}
+                        completionThresholdPercent={previewResource.completionThresholdPercent}
+                        onProgress={handleTrackedPreviewProgress}
+                        onTrackingSupportChange={setPreviewTrackingSupported}
+                      />
+                    </Suspense>
                   )}
+                </div>
+
+                <div className="grid gap-4 border-t pt-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={isPreviewCompleted ? "default" : "secondary"}>
+                        {isPreviewCompleted ? "Completed" : "In progress"}
+                      </Badge>
+                      <Badge variant="outline">{previewResource.pointsOnCompletion} completion pts</Badge>
+                      {previewQuiz ? <Badge variant="outline">{previewQuiz.pointsOnPass} quiz pts</Badge> : null}
+                      <Badge variant="outline">{previewPointsEarned} earned</Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {previewResource.completionMode === "video_end" &&
+                        (previewVideoEmbedUrl
+                          ? "External video embeds cannot report the end event reliably here. Use Mark Complete after viewing."
+                          : "This video will mark complete when playback ends.")}
+                      {previewResource.completionMode === "document_scroll" &&
+                        `Scroll to the end${
+                          previewResource.minReadSeconds
+                            ? ` and spend at least ${previewResource.minReadSeconds} seconds`
+                            : ""
+                        } to mark this reading complete.`}
+                      {previewResource.completionMode === "watch_percent" &&
+                        previewVideoEmbedUrl
+                          ? `External video embeds cannot report watch progress here. Use Mark Complete after viewing ${previewResource.completionThresholdPercent ?? 95}% of the video.`
+                          : `Watch progress target: ${previewResource.completionThresholdPercent ?? 95}%.`}
+                      {previewResource.completionMode === "manual" &&
+                        "Use the completion button when you finish this resource."}
+                      {previewResource.completionMode !== "manual" &&
+                        previewTrackingSupported === false &&
+                        " Automatic tracking is not available for this asset source, so manual completion is enabled instead."}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {showManualPreviewCompletion && (
+                        <Button
+                          variant={isPreviewCompleted ? "outline" : "default"}
+                          onClick={handleMarkComplete}
+                          disabled={progressMutation.isPending || isPreviewCompleted}
+                        >
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          {isPreviewCompleted ? "Completed" : "Mark Complete"}
+                        </Button>
+                      )}
+                      {previewCompletionPointsAwarded ? (
+                        <Badge variant="secondary" className="px-3 py-2">
+                          Completion points awarded
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">Knowledge Check</CardTitle>
+                      <CardDescription>
+                        {previewQuiz
+                          ? "Answer the attached quiz after completing the resource."
+                          : "No quiz is attached to this resource yet."}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {previewQuiz && showQuizPanel ? (
+                        <>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>Pass mark: {previewQuiz.passMark}%</span>
+                            {previewQuiz.attemptLimit ? <span>Attempt limit: {previewQuiz.attemptLimit}</span> : null}
+                            {previewQuiz.attempts?.[0] ? (
+                              <span>
+                                Latest: {previewQuiz.attempts[0].score}% ({previewQuiz.attempts[0].status.replace(/_/g, " ")})
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">
+                            The quiz opens automatically when you finish the resource. You can also
+                            reopen it here.
+                          </div>
+                          <Button
+                            onClick={() => setCompletionQuizOpen(true)}
+                            disabled={previewQuizPointsAwarded}
+                            className="w-full"
+                          >
+                            {previewQuizPointsAwarded ? "Quiz Passed" : "Open Quiz"}
+                          </Button>
+                        </>
+                      ) : previewQuiz ? (
+                        <div className="space-y-2 text-sm text-muted-foreground">
+                          <p>Finish the resource first to unlock the quiz.</p>
+                          {previewQuiz.attempts?.[0] ? (
+                            <p>
+                              Latest score: {previewQuiz.attempts[0].score}% ({previewQuiz.attempts[0].status.replace(/_/g, " ")})
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No quiz configured for this resource.</p>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
 
                 {previewResource.assetFileName && (
@@ -769,13 +1435,105 @@ export default function KnowledgeHub() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={completionQuizOpen} onOpenChange={setCompletionQuizOpen}>
+          <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{previewQuiz?.title || "Knowledge Check"}</DialogTitle>
+            </DialogHeader>
+
+            {previewQuiz ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <span>Pass mark: {previewQuiz.passMark}%</span>
+                  {previewQuiz.attemptLimit ? <span>Attempt limit: {previewQuiz.attemptLimit}</span> : null}
+                  {previewQuiz.attempts?.[0] ? (
+                    <span>
+                      Latest: {previewQuiz.attempts[0].score}% ({previewQuiz.attempts[0].status.replace(/_/g, " ")})
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="space-y-4">
+                  {previewQuiz.questions.map((question) => (
+                    <div key={question.id} className="space-y-3 rounded-lg border p-3">
+                      <div>
+                        <p className="text-sm font-medium">{question.prompt}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {question.questionType.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                      {question.questionType === "single_choice" || question.questionType === "true_false" ? (
+                        <RadioGroup
+                          value={String(quizAnswers[question.id]?.optionIds?.[0] || "")}
+                          onValueChange={(value) => updateSingleChoiceAnswer(question.id, Number(value))}
+                        >
+                          {question.options.map((option) => (
+                            <label
+                              key={option.id}
+                              className="flex cursor-pointer items-center gap-3 rounded-md border p-2"
+                            >
+                              <RadioGroupItem value={String(option.id)} />
+                              <span className="text-sm">{option.label}</span>
+                            </label>
+                          ))}
+                        </RadioGroup>
+                      ) : question.questionType === "multiple_choice" ? (
+                        <div className="space-y-2">
+                          {question.options.map((option) => {
+                            const checked = quizAnswers[question.id]?.optionIds?.includes(option.id) ?? false;
+                            return (
+                              <label
+                                key={option.id}
+                                className="flex cursor-pointer items-center gap-3 rounded-md border p-2"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(value) =>
+                                    updateMultipleChoiceAnswer(question.id, option.id, value === true)
+                                  }
+                                />
+                                <span className="text-sm">{option.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <Textarea
+                          value={quizAnswers[question.id]?.freeTextAnswer || ""}
+                          onChange={(event) => updateTextAnswer(question.id, event.target.value)}
+                          rows={3}
+                          placeholder="Type your answer"
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setCompletionQuizOpen(false)}>
+                    Close
+                  </Button>
+                  <Button
+                    onClick={handleSubmitQuiz}
+                    disabled={submitQuizMutation.isPending || previewQuizPointsAwarded}
+                  >
+                    {previewQuizPointsAwarded ? "Quiz Passed" : "Submit Quiz"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No quiz configured for this resource.</p>
+            )}
+          </DialogContent>
+        </Dialog>
+
         <Dialog
           open={editorOpen}
           onOpenChange={(open) => {
-            setEditorOpen(open);
             if (!open) {
-              setEditingResource(null);
-              setSelectedFile(null);
+              closeEditor();
+            } else {
+              setEditorOpen(true);
             }
           }}
         >
@@ -879,6 +1637,109 @@ export default function KnowledgeHub() {
                 </div>
               </div>
 
+              <Card className="border-dashed">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Completion Rules</CardTitle>
+                  <CardDescription>
+                    Control how learners finish this resource and how many CPD points it awards.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="estimated-duration">Estimated Duration (minutes)</Label>
+                    <Input
+                      id="estimated-duration"
+                      type="number"
+                      min="0"
+                      value={formState.estimatedDurationMinutes}
+                      onChange={(event) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          estimatedDurationMinutes: event.target.value,
+                        }))
+                      }
+                      placeholder="15"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="points-on-completion">Completion Points</Label>
+                    <Input
+                      id="points-on-completion"
+                      type="number"
+                      min="0"
+                      value={formState.pointsOnCompletion}
+                      onChange={(event) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          pointsOnCompletion: event.target.value,
+                        }))
+                      }
+                      placeholder="5"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Completion Mode</Label>
+                    <Select
+                      value={formState.completionMode}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          completionMode: value as ResourceFormState["completionMode"],
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manual">Manual</SelectItem>
+                        <SelectItem value="document_scroll">Document Scroll</SelectItem>
+                        <SelectItem value="video_end">Video End</SelectItem>
+                        <SelectItem value="watch_percent">Watch Percent</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="completion-threshold">Watch Threshold (%)</Label>
+                    <Input
+                      id="completion-threshold"
+                      type="number"
+                      min="0"
+                      max="100"
+                      disabled={formState.completionMode !== "watch_percent"}
+                      value={formState.completionThresholdPercent}
+                      onChange={(event) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          completionThresholdPercent: event.target.value,
+                        }))
+                      }
+                      placeholder="95"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="min-read-seconds">Minimum Read Time (seconds)</Label>
+                    <Input
+                      id="min-read-seconds"
+                      type="number"
+                      min="0"
+                      disabled={formState.completionMode !== "document_scroll"}
+                      value={formState.minReadSeconds}
+                      onChange={(event) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          minReadSeconds: event.target.value,
+                        }))
+                      }
+                      placeholder="30"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Used with document scroll mode to avoid awarding points on instant scroll-throughs.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
               {usesFileUpload && (
                 <div className="space-y-2">
                   <Label htmlFor="resource-file">
@@ -959,6 +1820,286 @@ export default function KnowledgeHub() {
                   placeholder="Optional summary notes, usage guidance, or instructions."
                 />
               </div>
+
+              <Card className="border-dashed">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Knowledge Check</CardTitle>
+                  <CardDescription>
+                    Configure the short quiz that appears after learners complete this resource.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    <Checkbox
+                      checked={quizForm.enabled}
+                      onCheckedChange={(checked) =>
+                        setQuizForm((prev) => ({
+                          ...prev,
+                          enabled: checked === true,
+                          questions:
+                            checked === true && prev.questions.length === 0
+                              ? [createQuizQuestion()]
+                              : prev.questions,
+                        }))
+                      }
+                    />
+                    <span>Attach a knowledge check to this resource</span>
+                  </label>
+
+                  {quizForm.enabled && (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="quiz-title">Quiz Title</Label>
+                          <Input
+                            id="quiz-title"
+                            value={quizForm.title}
+                            onChange={(event) =>
+                              setQuizForm((prev) => ({ ...prev, title: event.target.value }))
+                            }
+                            placeholder="Knowledge Check"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="quiz-pass-mark">Pass Mark (%)</Label>
+                          <Input
+                            id="quiz-pass-mark"
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={quizForm.passMark}
+                            onChange={(event) =>
+                              setQuizForm((prev) => ({ ...prev, passMark: event.target.value }))
+                            }
+                            placeholder="70"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="quiz-points-on-pass">Quiz Points</Label>
+                          <Input
+                            id="quiz-points-on-pass"
+                            type="number"
+                            min="0"
+                            value={quizForm.pointsOnPass}
+                            onChange={(event) =>
+                              setQuizForm((prev) => ({
+                                ...prev,
+                                pointsOnPass: event.target.value,
+                              }))
+                            }
+                            placeholder="3"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="quiz-attempt-limit">Attempt Limit</Label>
+                          <Input
+                            id="quiz-attempt-limit"
+                            type="number"
+                            min="1"
+                            value={quizForm.attemptLimit}
+                            onChange={(event) =>
+                              setQuizForm((prev) => ({
+                                ...prev,
+                                attemptLimit: event.target.value,
+                              }))
+                            }
+                            placeholder="Leave blank for unlimited"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={quizForm.isActive}
+                          onCheckedChange={(checked) =>
+                            setQuizForm((prev) => ({ ...prev, isActive: checked === true }))
+                          }
+                        />
+                        <span>Quiz is active</span>
+                      </label>
+
+                      <div className="space-y-4">
+                        {quizForm.questions.map((question, index) => (
+                          <div key={question.id} className="space-y-4 rounded-lg border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium">Question {index + 1}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatEnumLabel(question.questionType)}
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeQuizQuestion(question.id)}
+                                disabled={quizForm.questions.length <= 1}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Remove
+                              </Button>
+                            </div>
+
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <div className="space-y-2 md:col-span-2">
+                                <Label>Prompt</Label>
+                                <Textarea
+                                  value={question.prompt}
+                                  onChange={(event) =>
+                                    updateQuizQuestion(question.id, (current) => ({
+                                      ...current,
+                                      prompt: event.target.value,
+                                    }))
+                                  }
+                                  rows={2}
+                                  placeholder="Enter the question prompt"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Question Type</Label>
+                                <Select
+                                  value={question.questionType}
+                                  onValueChange={(value) =>
+                                    changeQuizQuestionType(
+                                      question.id,
+                                      value as KnowledgeHubQuizQuestion["questionType"]
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="single_choice">Single Choice</SelectItem>
+                                    <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                                    <SelectItem value="true_false">True / False</SelectItem>
+                                    <SelectItem value="short_text">Short Text</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="flex items-end">
+                                <label className="flex items-center gap-2 text-sm">
+                                  <Checkbox
+                                    checked={question.required}
+                                    onCheckedChange={(checked) =>
+                                      updateQuizQuestion(question.id, (current) => ({
+                                        ...current,
+                                        required: checked === true,
+                                      }))
+                                    }
+                                  />
+                                  <span>Required</span>
+                                </label>
+                              </div>
+                              <div className="space-y-2 md:col-span-2">
+                                <Label>Explanation (optional)</Label>
+                                <Textarea
+                                  value={question.explanation}
+                                  onChange={(event) =>
+                                    updateQuizQuestion(question.id, (current) => ({
+                                      ...current,
+                                      explanation: event.target.value,
+                                    }))
+                                  }
+                                  rows={2}
+                                  placeholder="Optional explanation shown in reporting or future review"
+                                />
+                              </div>
+                            </div>
+
+                            {question.questionType !== "short_text" && (
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium">Answer Options</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {question.questionType === "multiple_choice"
+                                        ? "Mark every correct option."
+                                        : "Mark exactly one correct option."}
+                                    </p>
+                                  </div>
+                                  {question.questionType !== "true_false" && (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addQuizOption(question.id)}
+                                    >
+                                      <Plus className="mr-2 h-4 w-4" />
+                                      Add Option
+                                    </Button>
+                                  )}
+                                </div>
+
+                                <div className="space-y-2">
+                                  {question.options.map((option) => (
+                                    <div
+                                      key={option.id}
+                                      className="flex flex-col gap-3 rounded-md border p-3 md:flex-row md:items-center"
+                                    >
+                                      <Input
+                                        value={option.label}
+                                        disabled={question.questionType === "true_false"}
+                                        onChange={(event) =>
+                                          updateQuizOption(question.id, option.id, (_current, options) =>
+                                            options.map((item) =>
+                                              item.id === option.id
+                                                ? { ...item, label: event.target.value }
+                                                : item
+                                            )
+                                          )
+                                        }
+                                        placeholder="Option label"
+                                      />
+                                      <label className="flex items-center gap-2 text-sm">
+                                        <Checkbox
+                                          checked={option.isCorrect}
+                                          onCheckedChange={(checked) =>
+                                            updateQuizQuestion(question.id, (current) => ({
+                                              ...current,
+                                              options: current.options.map((item) => ({
+                                                ...item,
+                                                isCorrect:
+                                                  item.id === option.id
+                                                    ? checked === true
+                                                    : current.questionType === "multiple_choice"
+                                                      ? item.isCorrect
+                                                      : false,
+                                              })),
+                                            }))
+                                          }
+                                        />
+                                        <span>Correct</span>
+                                      </label>
+                                      {question.questionType !== "true_false" && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => removeQuizOption(question.id, option.id)}
+                                          disabled={question.options.length <= 2}
+                                        >
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Remove
+                                        </Button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      <Button type="button" variant="outline" onClick={addQuizQuestion}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Question
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
 
               <div className="flex flex-wrap items-center gap-6">
                 <label className="flex items-center gap-2 text-sm">

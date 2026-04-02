@@ -1,3 +1,5 @@
+// This file defines the authentication routes for the application, including user registration, login, logout, token refresh, and password setup. It implements an onboarding flow for new users, allowing HR to create accounts with temporary passwords and send onboarding emails. The routes also handle access token generation, session management, and enforce security measures such as checking for inactive accounts and expired temporary passwords. By providing these endpoints, we enable secure authentication and onboarding processes for users of the application. The routes are protected with appropriate middleware to ensure that only authorized users can perform certain actions, such as onboarding new users. Additionally, the implementation includes error handling to provide meaningful responses in case of issues during authentication or onboarding. Overall, this file serves as the central point for managing user authentication and onboarding-related functionality in the backend API.
+
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -12,6 +14,10 @@ import { sendEmail } from "../services/emailService";
 import { getJwtSecret } from "../config/jwt";
 import { ensureOnboardingProvisioning } from "../services/onboardingProvisioning.service";
 import {
+  resolvePreferredHomeViewKey,
+  resolveViewAccessKeysForRoleEntries,
+} from "../services/viewAccess.service";
+import {
   CANONICAL_ROLES,
   type CanonicalRole,
   canonicalizeRoleName,
@@ -23,7 +29,7 @@ import {
 const router = Router();
 
 const ONBOARDING_MARKER_PREFIX = "onboarding";
-const TEMP_PASSWORD_VALID_HOURS = Number(process.env.TEMP_PASSWORD_VALID_HOURS || 72);
+const TEMP_PASSWORD_VALID_HOURS = Number(process.env.TEMP_PASSWORD_VALID_HOURS || 12);
 const SETUP_TOKEN_VALID_MINUTES = Number(process.env.SETUP_TOKEN_VALID_MINUTES || 15);
 const MIN_PASSWORD_LENGTH = 8;
 const ACCESS_TOKEN_VALID_HOURS = Math.max(
@@ -41,8 +47,8 @@ type PasswordSetupTokenPayload = {
 };
 
 type AccessTokenPayload = {
-  userId?: number;
-  sub?: number;
+  userId?: number | string;
+  sub?: number | string;
   email?: string;
   authRoles?: CanonicalRole[];
   sessionToken?: string;
@@ -115,10 +121,6 @@ const parseOnboardingMarker = (value: string | null | undefined): { expiresAt: D
 
 const isExpired = (date: Date) => date.getTime() < Date.now();
 
-const allowTemporaryPasswordPreview = (emailDeliveryReason?: string) =>
-  process.env.NODE_ENV !== "production" ||
-  process.env.ALLOW_TEMP_PASSWORD_PREVIEW === "true";
-
 const createPasswordSetupToken = (userId: number, email: string) =>
   jwt.sign(
     {
@@ -162,19 +164,28 @@ const revokeSession = async (sessionToken?: string) => {
   });
 };
 
-const buildAuthSnapshot = (user: any) => {
+const resolveUserRoleAssignments = (user: any) => {
   const activeRoleEntries = (user.roles || []).filter((entry: any) => entry.role?.isActive);
   const overrideRoleName = `user_override_${user.id}`.toLowerCase();
   const overrideEntry = activeRoleEntries.find(
     (entry: any) => normalizeRoleName(entry.role?.name) === overrideRoleName
   );
   const effectiveRoleEntries = overrideEntry ? [overrideEntry] : activeRoleEntries;
-
   const authRoles = canonicalizeRoles(
     activeRoleEntries
       .map((entry: any) => entry.role.name)
       .filter((roleName: string) => normalizeRoleName(roleName) !== overrideRoleName)
   );
+
+  return {
+    activeRoleEntries,
+    effectiveRoleEntries,
+    authRoles,
+  };
+};
+
+const buildAuthSnapshot = (user: any) => {
+  const { authRoles, effectiveRoleEntries } = resolveUserRoleAssignments(user);
 
   const rolePolicies = effectiveRoleEntries.map((entry: any) => ({
     roleName: canonicalizeRoleName(entry.role.name),
@@ -198,7 +209,29 @@ const buildAuthSnapshot = (user: any) => {
 };
 
 const buildAuthUserPayload = (user: any) => {
-  const { authRoles, moduleAccess, jobRole } = buildAuthSnapshot(user);
+  const { authRoles, effectiveRoleEntries } = resolveUserRoleAssignments(user);
+  const { moduleAccess, jobRole } = buildAuthSnapshot(user);
+  const viewAccessKeys = resolveViewAccessKeysForRoleEntries(
+    effectiveRoleEntries,
+    authRoles
+  );
+  const allowedModuleActions = Array.isArray(moduleAccess?.reports)
+    ? moduleAccess.reports.map((action: unknown) => String(action).toLowerCase())
+    : [];
+  const shouldExposeReportsWorkspace =
+    authRoles.some((role) =>
+      ["hr", "gmp", "partner", "manager", "employee"].includes(role)
+    ) &&
+    (
+      allowedModuleActions.includes("admin") ||
+      allowedModuleActions.includes("read") ||
+      allowedModuleActions.includes("write") ||
+      allowedModuleActions.includes("approve")
+    );
+  const effectiveViewAccessKeys = shouldExposeReportsWorkspace
+    ? Array.from(new Set([...viewAccessKeys, "reports.workspace"]))
+    : viewAccessKeys;
+  const homeViewKey = resolvePreferredHomeViewKey(authRoles, effectiveViewAccessKeys);
 
   return {
     id: user.id,
@@ -209,6 +242,8 @@ const buildAuthUserPayload = (user: any) => {
     roles: authRoles,
     authRoles,
     moduleAccess,
+    viewAccessKeys: effectiveViewAccessKeys,
+    homeViewKey,
     jobRole,
     profile: user.profile ?? null,
     isPartner: authRoles.includes("partner") || !!user.profile?.isPartner,
@@ -233,6 +268,13 @@ const loadAuthUser = async (email: string) =>
               permissions: {
                 include: {
                   permission: {
+                    select: { key: true },
+                  },
+                },
+              },
+              viewPermissions: {
+                include: {
+                  viewPermission: {
                     select: { key: true },
                   },
                 },
@@ -442,9 +484,6 @@ const onboardUser = async (req: AuthRequest, res: any) => {
 
     if (!emailResult.delivered) {
       responsePayload.emailDeliveryReason = emailResult.reason || "unknown";
-      if (allowTemporaryPasswordPreview(emailResult.reason)) {
-        responsePayload.temporaryPasswordPreview = temporaryPassword;
-      }
     }
 
     return res.status(201).json(responsePayload);
@@ -560,15 +599,21 @@ router.post("/refresh", async (req, res) => {
   }
 
   try {
-    const decoded = jwt.verify(providedToken, getJwtSecret(), {
+    const verifiedPayload = jwt.verify(providedToken, getJwtSecret(), {
       ignoreExpiration: true,
-    }) as AccessTokenPayload;
+    });
+
+    if (!verifiedPayload || typeof verifiedPayload === "string") {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const decoded = verifiedPayload as AccessTokenPayload;
 
     if ((decoded as any).purpose) {
       return res.status(401).json({ error: "Invalid refresh token" });
     }
 
-    const userId = decoded.userId ?? decoded.sub;
+    const userId = parsePositiveInt(decoded.userId ?? decoded.sub);
     const email = String(decoded.email || "").toLowerCase();
     const sessionToken = String(decoded.sessionToken || "");
 
@@ -772,6 +817,13 @@ router.get("/me", authMiddleware, async (req: AuthRequest, res) => {
                 permissions: {
                   include: {
                     permission: {
+                      select: { key: true },
+                    },
+                  },
+                },
+                viewPermissions: {
+                  include: {
+                    viewPermission: {
                       select: { key: true },
                     },
                   },

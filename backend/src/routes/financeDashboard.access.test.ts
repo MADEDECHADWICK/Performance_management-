@@ -68,7 +68,7 @@ const createToken = (userId = 1, email = "finance@ronalds.local") =>
 
 const roleRow = (permissionKeys: string[]) => ({
   role: {
-    name: "finance_custom",
+    name: "finance",
     isActive: true,
     permissions: permissionKeys.map((key) => ({
       permission: { key },

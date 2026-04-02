@@ -35,7 +35,7 @@ export const DEFAULT_TEMPLATE_QUESTIONS: Array<{
   },
   {
     text: "Consistently delivers against agreed goals and commitments.",
-    category: "goal",
+    category: "competency",
     weight: 1.3,
     order: 3,
   },
@@ -142,7 +142,6 @@ const inferQuestionCategory = (
     .replace(/[\s-]+/g, "_");
 
   if (!normalized) return fallback;
-  if (normalized.includes("goal")) return "goal";
   if (normalized.includes("culture") || normalized.includes("value")) return "culture";
   if (
     normalized.includes("behavior") ||
@@ -339,8 +338,6 @@ export const mapPerformanceScoreToReport = (score: {
     overall: roundTo(toNumber(score.evaluationScore) / 20),
     byCategory: toNumberRecord(breakdown.byCategory),
     ratingBand: String(score.grade || breakdown.ratingBand || ""),
-    kpiCompletionPercent: roundTo(toNumber(breakdown.kpiCompletionPercent)),
-    developmentGoalProgress: roundTo(toNumber(breakdown.developmentGoalProgress)),
     peerVsManagerVariance: roundTo(toNumber(breakdown.peerVsManagerVariance)),
     averageByRelationship: toNumberRecord(breakdown.averageByRelationship),
     totalScore: roundTo(toNumber(score.totalScore)),

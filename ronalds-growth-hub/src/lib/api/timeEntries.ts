@@ -149,7 +149,7 @@ export const timeEntriesAPI = {
    * Submit multiple time entries for approval
    */
   submitBulk: async (ids: number[]): Promise<{ submitted: number; errors: string[] }> => {
-    return api.post('/time-entries/batch/submit', { timeEntryIds: ids, time_entry_ids: ids });
+    return api.post('/time-entries/batch/submit', { timeEntryIds: ids });
   },
 
   // ==================
@@ -185,22 +185,22 @@ export const timeEntriesAPI = {
   /**
    * Approve a time entry
    */
-  approve: async (id: number): Promise<TimeEntry> => {
-    return api.patch(`/time-entries/${id}/approve`, { approval_notes: '' });
+  approve: async (id: number, approvalNotes = ''): Promise<TimeEntry> => {
+    return api.patch(`/time-entries/${id}/approve`, { approvalNotes });
   },
 
   /**
    * Approve multiple time entries
    */
   approveBulk: async (ids: number[]): Promise<{ approved: number; errors: string[] }> => {
-    return api.post('/time-entries/batch/approve', { timeEntryIds: ids, time_entry_ids: ids });
+    return api.post('/time-entries/batch/approve', { timeEntryIds: ids });
   },
 
   /**
    * Reject a time entry
    */
-  reject: async (id: number, reason: string): Promise<TimeEntry> => {
-    return api.patch(`/time-entries/${id}/reject`, { reason, rejection_reason: reason });
+  reject: async (id: number, rejectionReason: string): Promise<TimeEntry> => {
+    return api.patch(`/time-entries/${id}/reject`, { rejectionReason });
   },
 
   // ==================

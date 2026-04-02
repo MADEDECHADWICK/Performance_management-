@@ -1,3 +1,5 @@
+// This file defines the API routes for managing employee onboarding cases and their associated policies. It includes endpoints for listing, creating, retrieving, and updating onboarding cases, as well as managing the stages and policies associated with each case. The routes are protected with authentication and role-based access control middleware to ensure that only authorized users can perform certain actions. Validation middleware is also used to ensure that incoming requests meet the required criteria before being processed by the corresponding controller methods. By organizing these routes in a dedicated file, we can maintain a clear structure for our API and facilitate the management of employee onboarding processes within the application.
+
 import { Router } from "express";
 import { authenticated, withRoles } from "../utils/middleware";
 import { validateRequest, handleValidationErrors } from "../middleware/validate";

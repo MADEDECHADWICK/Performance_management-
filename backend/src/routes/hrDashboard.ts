@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 
 const router = Router();
@@ -29,13 +30,8 @@ const getHrContext = async (req: AuthRequest) => {
     return { error: { status: 404, message: 'User not found' } };
   }
 
-  const roleNames = user.roles.map((r) => r.role.name.toLowerCase());
-  const positionTitle = user.profile?.positionTitle?.toLowerCase() || '';
-  const isHr =
-    roleNames.some((role) => hrRoles.has(role)) ||
-    positionTitle.includes('hr') ||
-    positionTitle.includes('human resource') ||
-    positionTitle.includes('group managing partner');
+  const roleNames = resolveRequestAccessRoles(req);
+  const isHr = roleNames.some((role) => hrRoles.has(role));
 
   if (!isHr) {
     return { error: { status: 403, message: 'Access denied. HR role required.' } };

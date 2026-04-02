@@ -1,8 +1,16 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import createAudit from '../utils/audit';
+import {
+  awardAttendancePoints,
+  issueCertificateIfEligible,
+  recalculateLearningAssignment,
+  submitLearningQuizAttempt,
+  submitTrainingFeedbackEntry,
+} from '../services/learningDevelopment.service';
 
 const router = Router();
 
@@ -16,9 +24,43 @@ const requireUser = (req: AuthRequest, res: any) => {
 
 const TRAINING_TYPES = new Set(['internal', 'external', 'certification', 'workshop']);
 const TRAINING_STATUSES = new Set(['planned', 'in_progress', 'completed', 'cancelled']);
-const DEVELOPMENT_GOAL_STATUSES = new Set(['active', 'completed', 'paused', 'cancelled']);
+const LEARNING_PROGRAM_STATUSES = new Set(['draft', 'published', 'archived']);
+const LEARNING_PROGRAM_VERSION_STATUSES = new Set(['draft', 'published', 'retired']);
+const LEARNING_MODULE_CONTENT_TYPES = new Set([
+  'video',
+  'document',
+  'link',
+  'knowledge_resource',
+  'live_session',
+]);
+const LEARNING_QUESTION_TYPES = new Set([
+  'single_choice',
+  'multiple_choice',
+  'true_false',
+  'short_text',
+]);
+const LEARNING_ATTENDANCE_STATUSES = new Set(['invited', 'attended', 'missed', 'excused']);
 const MIN_SKILL_LEVEL = 1;
 const MAX_SKILL_LEVEL = 5;
+const FRONTEND_APP_URL = String(
+  process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:8080'
+)
+  .trim()
+  .replace(/\/+$/, '');
+
+const learningKnowledgeResourceSelect = {
+  id: true,
+  title: true,
+  assetKind: true,
+  linkUrl: true,
+  assetFileName: true,
+  assetMimeType: true,
+  content: true,
+  completionMode: true,
+  completionThresholdPercent: true,
+  minReadSeconds: true,
+  estimatedDurationMinutes: true,
+} satisfies Prisma.KnowledgeHubResourceSelect;
 
 const toIsoStringOrNull = (value: Date | string | null | undefined) => {
   if (!value) return null;
@@ -39,6 +81,44 @@ const parseOptionalPositiveInt = (value: unknown) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
+const parseOptionalNonNegativeInt = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const parseOptionalPercentage = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0) return 0;
+  if (parsed > 100) return 100;
+  return Math.round(parsed * 100) / 100;
+};
+
+const toNullableTrimmedString = (value: unknown) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const clampRating = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return 0;
+  if (parsed < 1) return 1;
+  if (parsed > 5) return 5;
+  return parsed;
+};
+
+const withStatusCode = (message: string, statusCode: number) => {
+  const error = new Error(message) as Error & { statusCode?: number };
+  error.statusCode = statusCode;
+  return error;
+};
+
+const buildCertificateVerificationUrl = (verificationCode: string | null | undefined) =>
+  verificationCode ? `${FRONTEND_APP_URL}/certificates/verify/${encodeURIComponent(String(verificationCode))}` : null;
+
 const normalizeTrainingType = (value: unknown): 'internal' | 'external' | 'certification' | 'workshop' => {
   const normalized = String(value || 'internal').trim().toLowerCase();
   if (TRAINING_TYPES.has(normalized)) {
@@ -53,16 +133,6 @@ const normalizeTrainingStatus = (value: unknown): 'planned' | 'in_progress' | 'c
     return normalized as 'planned' | 'in_progress' | 'completed' | 'cancelled';
   }
   return 'planned';
-};
-
-const normalizeDevelopmentGoalStatus = (
-  value: unknown
-): 'active' | 'completed' | 'paused' | 'cancelled' => {
-  const normalized = String(value || 'active').trim().toLowerCase();
-  if (DEVELOPMENT_GOAL_STATUSES.has(normalized)) {
-    return normalized as 'active' | 'completed' | 'paused' | 'cancelled';
-  }
-  return 'active';
 };
 
 const parseSkillLevel = (value: unknown, fallback = MIN_SKILL_LEVEL) => {
@@ -84,7 +154,7 @@ const parseOptionalProgress = (value: unknown) => {
 
 const roleSet = (req: AuthRequest) =>
   new Set(
-    [req.profile?.role?.name, ...(req.userRoles || [])]
+    resolveRequestAccessRoles(req)
       .filter(Boolean)
       .map((role) =>
         String(role || '')
@@ -105,7 +175,7 @@ const canManageTeamDevelopment = (req: AuthRequest) => {
       role === 'gmp' ||
       role === 'gmp' ||
       role === 'partner' ||
-      role.includes('manager')
+      role === 'manager'
     ) {
       return true;
     }
@@ -115,7 +185,7 @@ const canManageTeamDevelopment = (req: AuthRequest) => {
 
 const isPartnerRole = (req: AuthRequest) => roleSet(req).has('partner');
 
-// GET /manager/team-performance
+// GET /team-management/team-performance
 router.get('/team-performance', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -314,7 +384,7 @@ router.get('/team-performance', authMiddleware, async (req: AuthRequest, res) =>
   });
 });
 
-// GET /manager/training-records
+// GET /team-management/training-records
 router.get('/training-records', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -358,7 +428,7 @@ router.get('/training-records', authMiddleware, async (req: AuthRequest, res) =>
   res.json(records.map((record) => mapTrainingRecordResponse(record)));
 });
 
-// GET /manager/certifications
+// GET /team-management/certifications
 router.get('/certifications', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -382,6 +452,15 @@ router.get('/certifications', authMiddleware, async (req: AuthRequest, res) => {
     include: {
       employee: {
         select: { firstName: true, lastName: true },
+      },
+      learningAssignment: {
+        include: {
+          certificate: {
+            select: {
+              verificationCode: true,
+            },
+          },
+        },
       },
     },
     orderBy: [{ endDate: 'asc' }, { startDate: 'desc' }],
@@ -409,14 +488,17 @@ router.get('/certifications', authMiddleware, async (req: AuthRequest, res) => {
       expiry_date: toIsoStringOrNull(record.endDate),
       status,
       certificate_number: `CERT-${record.id}`,
-      verification_url: record.certificateUrl || undefined,
+      verification_url:
+        buildCertificateVerificationUrl(record.learningAssignment?.certificate?.verificationCode) ||
+        record.certificateUrl ||
+        undefined,
     };
   });
 
   res.json(payload);
 });
 
-// GET /manager/skill-assessments
+// GET /team-management/skill-assessments
 router.get('/skill-assessments', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -459,50 +541,7 @@ router.get('/skill-assessments', authMiddleware, async (req: AuthRequest, res) =
   res.json(assessments.map((assessment) => mapSkillAssessmentResponse(assessment)));
 });
 
-// GET /manager/development-goals
-router.get('/development-goals', authMiddleware, async (req: AuthRequest, res) => {
-  const userId = requireUser(req, res);
-  if (!userId) return;
-  const profileId = req.user?.profileId;
-  if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
-  if (!canManageTeamDevelopment(req)) {
-    return res
-      .status(403)
-      .json({ error: 'Only managers, partners, or HR can access development goals' });
-  }
-
-  const teamMemberIds = await getScopedTeamMemberIds(req, profileId);
-  const employeeFilterRaw = String(req.query.employee || '').trim().toLowerCase();
-  const employeeFilter =
-    !employeeFilterRaw || employeeFilterRaw === 'all'
-      ? null
-      : parseOptionalPositiveInt(employeeFilterRaw);
-
-  if (employeeFilter && !teamMemberIds.includes(employeeFilter)) {
-    return res.status(403).json({ error: 'Selected employee is outside your team scope' });
-  }
-
-  const where: Prisma.DevelopmentGoalWhereInput = {
-    OR: [{ createdByProfileId: profileId }, { employeeProfileId: { in: teamMemberIds } }],
-  };
-  if (employeeFilter) {
-    where.employeeProfileId = employeeFilter;
-  }
-
-  const goals = await prisma.developmentGoal.findMany({
-    where,
-    include: {
-      employee: { select: { firstName: true, lastName: true } },
-      assignedMentor: { select: { firstName: true, lastName: true } },
-    },
-    orderBy: [{ targetCompletion: 'asc' }, { id: 'desc' }],
-    take: 500,
-  });
-
-  res.json(goals.map((goal) => mapDevelopmentGoalResponse(goal)));
-});
-
-// GET /manager/development-metrics
+// GET /team-management/development-metrics
 router.get('/development-metrics', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -515,7 +554,7 @@ router.get('/development-metrics', authMiddleware, async (req: AuthRequest, res)
   }
 
   const teamMemberIds = await getScopedTeamMemberIds(req, profileId);
-  const [trainingRecords, skillAssessments, developmentGoals] = await Promise.all([
+  const [trainingRecords, skillAssessments] = await Promise.all([
     prisma.trainingRecord.findMany({
       where: {
         OR: [{ createdByProfileId: profileId }, { employeeProfileId: { in: teamMemberIds } }],
@@ -535,15 +574,6 @@ router.get('/development-metrics', authMiddleware, async (req: AuthRequest, res)
       select: {
         id: true,
         currentLevel: true,
-      },
-    }),
-    prisma.developmentGoal.findMany({
-      where: {
-        OR: [{ createdByProfileId: profileId }, { employeeProfileId: { in: teamMemberIds } }],
-      },
-      select: {
-        id: true,
-        status: true,
       },
     }),
   ]);
@@ -567,7 +597,6 @@ router.get('/development-metrics', authMiddleware, async (req: AuthRequest, res)
       ? skillAssessments.reduce((sum, assessment) => sum + toNumber(assessment.currentLevel), 0) /
         skillAssessments.length
       : 0;
-  const completedGoals = developmentGoals.filter((goal) => goal.status === 'completed').length;
 
   res.json({
     total_employees: Math.max(0, teamMemberIds.length - 1),
@@ -577,7 +606,6 @@ router.get('/development-metrics', authMiddleware, async (req: AuthRequest, res)
     avg_skill_level: avgSkillLevel,
     training_budget_used: trainingBudgetUsed,
     training_budget_total: trainingBudgetUsed,
-    development_goals_completed: completedGoals,
   });
 });
 
@@ -660,34 +688,6 @@ const mapSkillAssessmentResponse = (assessment: {
   notes: assessment.notes || undefined,
 });
 
-const mapDevelopmentGoalResponse = (goal: {
-  id: number;
-  employeeProfileId: number;
-  goalTitle: string;
-  goalDescription: string;
-  targetCompletion: Date;
-  currentProgress: Prisma.Decimal | number;
-  status: string;
-  createdAt: Date;
-  employee?: { firstName: string; lastName: string } | null;
-  assignedMentor?: { firstName: string; lastName: string } | null;
-}) => ({
-  id: goal.id,
-  employee_id: goal.employeeProfileId,
-  employee_name: goal.employee
-    ? `${goal.employee.firstName} ${goal.employee.lastName}`.trim()
-    : `Employee #${goal.employeeProfileId}`,
-  goal_title: goal.goalTitle,
-  goal_description: goal.goalDescription,
-  target_completion: toIsoStringOrNull(goal.targetCompletion),
-  current_progress: toNumber(goal.currentProgress),
-  status: goal.status,
-  assigned_mentor: goal.assignedMentor
-    ? `${goal.assignedMentor.firstName} ${goal.assignedMentor.lastName}`.trim()
-    : undefined,
-  created_date: toIsoStringOrNull(goal.createdAt),
-});
-
 const getManagerJobData = async (managerProfileId: number) => {
   const jobs = await prisma.job.findMany({
     where: { managerProfileId },
@@ -755,7 +755,497 @@ const getScopedTeamMemberIds = async (req: AuthRequest, actorProfileId: number) 
   return Array.from(scopedIds);
 };
 
-// GET /manager/workload-analysis
+const ensureAssignmentAccess = async (
+  req: AuthRequest,
+  assignmentId: number,
+  profileId: number
+) => {
+  const assignment = await prisma.learningAssignment.findUnique({
+    where: { id: assignmentId },
+    include: {
+      employee: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          managerId: true,
+        },
+      },
+      programVersion: {
+        include: {
+          program: {
+            select: {
+              id: true,
+              title: true,
+            },
+          },
+          trainer: {
+            select: {
+              firstName: true,
+              lastName: true,
+            },
+          },
+          modules: {
+            orderBy: { sequenceNo: 'asc' },
+            include: {
+              knowledgeHubResource: {
+                select: learningKnowledgeResourceSelect,
+              },
+            },
+          },
+          sessions: {
+            orderBy: { startsAt: 'asc' },
+          },
+          quizzes: {
+            orderBy: { id: 'asc' },
+            include: {
+              questions: {
+                orderBy: { displayOrder: 'asc' },
+                include: {
+                  options: {
+                    orderBy: { displayOrder: 'asc' },
+                  },
+                },
+              },
+            },
+          },
+          certificateTemplates: {
+            orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+          },
+        },
+      },
+      moduleProgressEntries: {
+        orderBy: { moduleId: 'asc' },
+      },
+      attendanceRecords: {
+        orderBy: { sessionId: 'asc' },
+      },
+      quizAttempts: {
+        orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+      },
+      trainingFeedback: true,
+      certificate: {
+        include: {
+          document: true,
+        },
+      },
+      impactAssessmentTask: {
+        include: {
+          response: true,
+        },
+      },
+    },
+  });
+
+  if (!assignment) {
+    throw withStatusCode('Learning assignment not found', 404);
+  }
+
+  if (assignment.employeeProfileId === profileId) {
+    return assignment;
+  }
+
+  if (!canManageTeamDevelopment(req)) {
+    throw withStatusCode('You do not have access to this learning assignment', 403);
+  }
+
+  const scopedIds = await getScopedTeamMemberIds(req, profileId);
+  if (!scopedIds.includes(assignment.employeeProfileId)) {
+    throw withStatusCode('Learning assignment is outside your team scope', 403);
+  }
+
+  return assignment;
+};
+
+const serializeLearningAssignment = (assignment: any) => ({
+  ...assignment,
+  progressPercent: toNumber(assignment.progressPercent),
+  programVersion: assignment.programVersion
+    ? serializeLearningProgramVersion(assignment.programVersion)
+    : null,
+  moduleProgressEntries: Array.isArray(assignment.moduleProgressEntries)
+    ? assignment.moduleProgressEntries.map((entry: any) => ({
+        ...entry,
+        completionPercent: toNumber(entry.completionPercent),
+        watchPercent: toNumber(entry.watchPercent),
+        scrollPercent: toNumber(entry.scrollPercent),
+      }))
+    : [],
+  quizAttempts: Array.isArray(assignment.quizAttempts)
+    ? assignment.quizAttempts.map((attempt: any) => ({
+        ...attempt,
+        score: toNumber(attempt.score),
+      }))
+    : [],
+  certificate: assignment.certificate
+    ? {
+        ...assignment.certificate,
+        verificationUrl: buildCertificateVerificationUrl(assignment.certificate.verificationCode),
+      }
+    : null,
+});
+
+const serializeLearningProgramVersion = (version: any) => ({
+  ...version,
+  cost: toNumber(version.cost),
+  modules: Array.isArray(version.modules)
+    ? version.modules.map((module: any) => ({
+        ...module,
+        knowledgeHubResource: module.knowledgeHubResource
+          ? {
+              ...module.knowledgeHubResource,
+              completionThresholdPercent: toNumber(
+                module.knowledgeHubResource.completionThresholdPercent
+              ),
+            }
+          : null,
+      }))
+    : [],
+});
+
+const serializeLearningProgram = (program: any) => ({
+  ...program,
+  versions: Array.isArray(program.versions)
+    ? program.versions.map(serializeLearningProgramVersion)
+    : [],
+});
+
+const normalizeLearningQuestionInput = (question: any, index: number) => {
+  const questionType = String(question?.questionType || '').trim();
+  if (!LEARNING_QUESTION_TYPES.has(questionType)) {
+    throw withStatusCode(`Invalid questionType at question ${index + 1}`, 400);
+  }
+
+  const prompt = String(question?.prompt || '').trim();
+  if (!prompt) {
+    throw withStatusCode(`Question prompt is required at question ${index + 1}`, 400);
+  }
+
+  const options = Array.isArray(question?.options) ? question.options : [];
+  const normalizedOptions = options.map((option: any, optionIndex: number) => {
+    const label = String(option?.label || '').trim();
+    if (!label) {
+      throw withStatusCode(`Option label is required at question ${index + 1}`, 400);
+    }
+    return {
+      label,
+      isCorrect: Boolean(option?.isCorrect),
+      displayOrder: Number(option?.displayOrder || optionIndex + 1),
+    };
+  });
+
+  return {
+    questionType,
+    prompt,
+    displayOrder: Number(question?.displayOrder || index + 1),
+    required: question?.required === undefined ? true : Boolean(question.required),
+    explanation: toNullableTrimmedString(question?.explanation),
+    options: normalizedOptions,
+  };
+};
+
+const normalizeLearningVersionInput = (input: any) => {
+  const title = String(input?.title || '').trim();
+  if (!title) {
+    throw withStatusCode('Version title is required', 400);
+  }
+
+  const trainingType = normalizeTrainingType(input?.trainingType ?? input?.training_type);
+  const status = String(input?.status || 'draft').trim().toLowerCase();
+  if (!LEARNING_PROGRAM_VERSION_STATUSES.has(status)) {
+    throw withStatusCode('Invalid version status', 400);
+  }
+
+  const modulesInput = Array.isArray(input?.modules) ? input.modules : [];
+  const sessionsInput = Array.isArray(input?.sessions) ? input.sessions : [];
+  const quizzesInput = Array.isArray(input?.quizzes) ? input.quizzes : [];
+  const certificateTemplateInput = input?.certificateTemplate || input?.certificate_template || null;
+
+  const modules = modulesInput.map((module: any, index: number) => {
+    const contentType = String(module?.contentType || module?.content_type || '').trim();
+    if (!LEARNING_MODULE_CONTENT_TYPES.has(contentType)) {
+      throw withStatusCode(`Invalid module contentType at module ${index + 1}`, 400);
+    }
+
+    const title = String(module?.title || '').trim();
+    if (!title) {
+      throw withStatusCode(`Module title is required at module ${index + 1}`, 400);
+    }
+
+    return {
+      title,
+      description: toNullableTrimmedString(module?.description),
+      contentType,
+      knowledgeHubResourceId: parseOptionalPositiveInt(
+        module?.knowledgeHubResourceId ?? module?.knowledge_hub_resource_id
+      ),
+      documentId: parseOptionalPositiveInt(module?.documentId ?? module?.document_id),
+      contentUrl: toNullableTrimmedString(module?.contentUrl ?? module?.content_url),
+      sequenceNo: Number(module?.sequenceNo || module?.sequence_no || index + 1),
+      required: module?.required === undefined ? true : Boolean(module.required),
+      estimatedMinutes: parseOptionalNonNegativeInt(module?.estimatedMinutes ?? module?.estimated_minutes),
+    };
+  });
+
+  const moduleSequenceSet = new Set(modules.map((module: { sequenceNo: number }) => module.sequenceNo));
+  const sessions = sessionsInput.map((session: any, index: number) => {
+    const startsAt = parseDateOrNull(session?.startsAt ?? session?.starts_at);
+    const endsAt = parseDateOrNull(session?.endsAt ?? session?.ends_at);
+    if (!startsAt || !endsAt) {
+      throw withStatusCode(`Session startsAt and endsAt are required at session ${index + 1}`, 400);
+    }
+    const moduleSequenceNo = parseOptionalPositiveInt(
+      session?.moduleSequenceNo ?? session?.module_sequence_no
+    );
+    if (moduleSequenceNo && !moduleSequenceSet.has(moduleSequenceNo)) {
+      throw withStatusCode(`Session ${index + 1} references an unknown moduleSequenceNo`, 400);
+    }
+
+    return {
+      title: String(session?.title || '').trim(),
+      startsAt,
+      endsAt,
+      location: toNullableTrimmedString(session?.location),
+      trainerProfileId: parseOptionalPositiveInt(session?.trainerProfileId ?? session?.trainer_profile_id),
+      externalTrainerName: toNullableTrimmedString(
+        session?.externalTrainerName ?? session?.external_trainer_name
+      ),
+      attendancePoints: Math.max(
+        0,
+        parseOptionalNonNegativeInt(session?.attendancePoints ?? session?.attendance_points) ?? 0
+      ),
+      attendanceRequired:
+        session?.attendanceRequired === undefined ? true : Boolean(session.attendanceRequired),
+      moduleSequenceNo,
+    };
+  });
+
+  const quizzes = quizzesInput.map((quiz: any, index: number) => {
+    const passMark = parseOptionalPercentage(quiz?.passMark ?? quiz?.pass_mark);
+    if (!quiz?.title || passMark === null) {
+      throw withStatusCode(`Quiz title and passMark are required at quiz ${index + 1}`, 400);
+    }
+
+    const moduleSequenceNo = parseOptionalPositiveInt(
+      quiz?.moduleSequenceNo ?? quiz?.module_sequence_no
+    );
+    if (moduleSequenceNo && !moduleSequenceSet.has(moduleSequenceNo)) {
+      throw withStatusCode(`Quiz ${index + 1} references an unknown moduleSequenceNo`, 400);
+    }
+
+    return {
+      title: String(quiz.title).trim(),
+      instructions: toNullableTrimmedString(quiz?.instructions),
+      passMark,
+      pointsOnPass: Math.max(0, parseOptionalNonNegativeInt(quiz?.pointsOnPass ?? quiz?.points_on_pass) ?? 0),
+      attemptLimit: parseOptionalPositiveInt(quiz?.attemptLimit ?? quiz?.attempt_limit),
+      isMandatory: quiz?.isMandatory === undefined ? true : Boolean(quiz.isMandatory),
+      isActive: quiz?.isActive === undefined ? true : Boolean(quiz.isActive),
+      moduleSequenceNo,
+      questions: (Array.isArray(quiz?.questions) ? quiz.questions : []).map(normalizeLearningQuestionInput),
+    };
+  });
+
+  return {
+    title,
+    description: toNullableTrimmedString(input?.description),
+    trainingType,
+    deliveryMode: toNullableTrimmedString(input?.deliveryMode ?? input?.delivery_mode),
+    provider: toNullableTrimmedString(input?.provider),
+    cost: Math.max(0, Number(input?.cost || 0) || 0),
+    trainerProfileId: parseOptionalPositiveInt(input?.trainerProfileId ?? input?.trainer_profile_id),
+    externalTrainerName: toNullableTrimmedString(
+      input?.externalTrainerName ?? input?.external_trainer_name
+    ),
+    isMandatory: input?.isMandatory === undefined ? true : Boolean(input.isMandatory),
+    feedbackPoints: Math.max(0, parseOptionalNonNegativeInt(input?.feedbackPoints ?? input?.feedback_points) ?? 0),
+    impactAssessmentDelayDays: parseOptionalNonNegativeInt(
+      input?.impactAssessmentDelayDays ?? input?.impact_assessment_delay_days
+    ),
+    status,
+    publishedAt: parseDateOrNull(input?.publishedAt ?? input?.published_at),
+    modules,
+    sessions,
+    quizzes,
+    certificateTemplate: certificateTemplateInput
+      ? {
+          name: String(certificateTemplateInput?.name || '').trim() || 'Completion Certificate',
+          templateDefinition:
+            certificateTemplateInput?.templateDefinition ??
+            certificateTemplateInput?.template_definition ??
+            {},
+          backgroundDocumentId: parseOptionalPositiveInt(
+            certificateTemplateInput?.backgroundDocumentId ??
+              certificateTemplateInput?.background_document_id
+          ),
+          signatureDocumentId: parseOptionalPositiveInt(
+            certificateTemplateInput?.signatureDocumentId ??
+              certificateTemplateInput?.signature_document_id
+          ),
+          issuedByLabel: toNullableTrimmedString(
+            certificateTemplateInput?.issuedByLabel ?? certificateTemplateInput?.issued_by_label
+          ),
+          isDefault:
+            certificateTemplateInput?.isDefault === undefined
+              ? true
+              : Boolean(certificateTemplateInput.isDefault),
+        }
+      : null,
+  };
+};
+
+const createLearningProgramVersionGraph = async (
+  tx: Prisma.TransactionClient,
+  programId: number,
+  createdByProfileId: number,
+  input: ReturnType<typeof normalizeLearningVersionInput>
+) => {
+  const nextVersion = await tx.learningProgramVersion.aggregate({
+    where: { programId },
+    _max: { versionNo: true },
+  });
+
+  const programVersion = await tx.learningProgramVersion.create({
+    data: {
+      programId,
+      versionNo: (nextVersion._max.versionNo ?? 0) + 1,
+      title: input.title,
+      description: input.description,
+      trainingType: input.trainingType,
+      deliveryMode: input.deliveryMode,
+      provider: input.provider,
+      cost: input.cost,
+      trainerProfileId: input.trainerProfileId,
+      externalTrainerName: input.externalTrainerName,
+      isMandatory: input.isMandatory,
+      feedbackPoints: input.feedbackPoints,
+      impactAssessmentDelayDays: input.impactAssessmentDelayDays,
+      status: input.status as any,
+      publishedAt: input.status === 'published' ? input.publishedAt ?? new Date() : input.publishedAt,
+      createdByProfileId,
+    },
+  });
+
+  const moduleIdBySequence = new Map<number, number>();
+  for (const module of input.modules) {
+    const createdModule = await tx.learningModule.create({
+      data: {
+        programVersionId: programVersion.id,
+        title: module.title,
+        description: module.description,
+        contentType: module.contentType as any,
+        knowledgeHubResourceId: module.knowledgeHubResourceId,
+        documentId: module.documentId,
+        contentUrl: module.contentUrl,
+        sequenceNo: module.sequenceNo,
+        required: module.required,
+        estimatedMinutes: module.estimatedMinutes,
+      },
+    });
+    moduleIdBySequence.set(module.sequenceNo, createdModule.id);
+  }
+
+  for (const session of input.sessions) {
+    await tx.learningSession.create({
+      data: {
+        programVersionId: programVersion.id,
+        moduleId: session.moduleSequenceNo ? moduleIdBySequence.get(session.moduleSequenceNo) ?? null : null,
+        title: session.title,
+        startsAt: session.startsAt,
+        endsAt: session.endsAt,
+        location: session.location,
+        trainerProfileId: session.trainerProfileId,
+        externalTrainerName: session.externalTrainerName,
+        attendancePoints: session.attendancePoints,
+        attendanceRequired: session.attendanceRequired,
+      },
+    });
+  }
+
+  for (const quiz of input.quizzes) {
+    await tx.learningQuiz.create({
+      data: {
+        programVersionId: programVersion.id,
+        moduleId: quiz.moduleSequenceNo ? moduleIdBySequence.get(quiz.moduleSequenceNo) ?? null : null,
+        title: quiz.title,
+        instructions: quiz.instructions,
+        passMark: quiz.passMark,
+        pointsOnPass: quiz.pointsOnPass,
+        attemptLimit: quiz.attemptLimit,
+        isMandatory: quiz.isMandatory,
+        isActive: quiz.isActive,
+        questions: {
+          create: quiz.questions.map((question: { questionType: string; prompt: string; displayOrder: number; required: boolean; explanation: string | null; options: Array<{ label: string; isCorrect: boolean; displayOrder: number }> }) => ({
+            questionType: question.questionType as any,
+            prompt: question.prompt,
+            displayOrder: question.displayOrder,
+            required: question.required,
+            explanation: question.explanation,
+            options:
+              question.options.length > 0
+                ? {
+                    create: question.options.map((option: { label: string; isCorrect: boolean; displayOrder: number }) => ({
+                      label: option.label,
+                      isCorrect: option.isCorrect,
+                      displayOrder: option.displayOrder,
+                    })),
+                  }
+                : undefined,
+          })),
+        },
+      },
+    });
+  }
+
+  if (input.certificateTemplate) {
+    await tx.certificateTemplate.create({
+      data: {
+        programVersionId: programVersion.id,
+        name: input.certificateTemplate.name,
+        templateDefinition: input.certificateTemplate.templateDefinition as Prisma.InputJsonValue,
+        backgroundDocumentId: input.certificateTemplate.backgroundDocumentId,
+        signatureDocumentId: input.certificateTemplate.signatureDocumentId,
+        issuedByLabel: input.certificateTemplate.issuedByLabel,
+        isDefault: input.certificateTemplate.isDefault,
+      },
+    });
+  }
+
+  return tx.learningProgramVersion.findUniqueOrThrow({
+    where: { id: programVersion.id },
+    include: {
+      program: true,
+      trainer: { select: { firstName: true, lastName: true } },
+      modules: {
+        orderBy: { sequenceNo: 'asc' },
+        include: {
+          knowledgeHubResource: {
+            select: learningKnowledgeResourceSelect,
+          },
+        },
+      },
+      sessions: { orderBy: { startsAt: 'asc' } },
+      quizzes: {
+        orderBy: { id: 'asc' },
+        include: {
+          questions: {
+            orderBy: { displayOrder: 'asc' },
+            include: {
+              options: {
+                orderBy: { displayOrder: 'asc' },
+              },
+            },
+          },
+        },
+      },
+      certificateTemplates: {
+        orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+      },
+    },
+  });
+};
+
+// GET /team-management/workload-analysis
 router.get('/workload-analysis', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -844,7 +1334,7 @@ router.get('/workload-analysis', authMiddleware, async (req: AuthRequest, res) =
   res.json(analysis);
 });
 
-// GET /manager/workload-metrics
+// GET /team-management/workload-metrics
 router.get('/workload-metrics', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -929,7 +1419,7 @@ router.get('/workload-metrics', authMiddleware, async (req: AuthRequest, res) =>
   });
 });
 
-// GET /manager/project-assignments
+// GET /team-management/project-assignments
 router.get('/project-assignments', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -1008,7 +1498,7 @@ router.get('/project-assignments', authMiddleware, async (req: AuthRequest, res)
   res.json(response);
 });
 
-// GET /manager/capacity-recommendations
+// GET /team-management/capacity-recommendations
 router.get('/capacity-recommendations', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -1065,7 +1555,7 @@ router.get('/capacity-recommendations', authMiddleware, async (req: AuthRequest,
   res.json(recommendations);
 });
 
-// POST /manager/training-records
+// POST /team-management/training-records
 router.post('/training-records', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -1168,7 +1658,7 @@ router.post('/training-records', authMiddleware, async (req: AuthRequest, res) =
   });
 });
 
-// POST /manager/skill-assessments
+// POST /team-management/skill-assessments
 router.post('/skill-assessments', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -1253,240 +1743,7 @@ router.post('/skill-assessments', authMiddleware, async (req: AuthRequest, res) 
   });
 });
 
-// POST /manager/development-goals
-router.post('/development-goals', authMiddleware, async (req: AuthRequest, res) => {
-  const userId = requireUser(req, res);
-  if (!userId) return;
-  const profileId = req.user?.profileId;
-  if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
-  if (!canManageTeamDevelopment(req)) {
-    return res
-      .status(403)
-      .json({ error: 'Only managers, partners, or HR can add development goals' });
-  }
-
-  const teamMemberIds = await getScopedTeamMemberIds(req, profileId);
-  const employeeId = parseOptionalPositiveInt(req.body?.employeeId ?? req.body?.employee_id);
-  if (!employeeId) {
-    return res.status(400).json({ error: 'employeeId is required' });
-  }
-  if (!teamMemberIds.includes(employeeId)) {
-    return res.status(403).json({ error: 'Selected employee is outside your team scope' });
-  }
-
-  const goalTitle = String(req.body?.goalTitle ?? req.body?.goal_title ?? '').trim();
-  const goalDescription = String(
-    req.body?.goalDescription ?? req.body?.goal_description ?? ''
-  ).trim();
-  if (!goalTitle) {
-    return res.status(400).json({ error: 'goalTitle is required' });
-  }
-  if (!goalDescription) {
-    return res.status(400).json({ error: 'goalDescription is required' });
-  }
-
-  const targetCompletion = parseDateOrNull(
-    req.body?.targetCompletion ?? req.body?.target_completion
-  );
-  if (!targetCompletion) {
-    return res.status(400).json({ error: 'targetCompletion must be a valid date' });
-  }
-
-  const progress = parseOptionalProgress(
-    req.body?.currentProgress ?? req.body?.current_progress
-  );
-  const status = normalizeDevelopmentGoalStatus(req.body?.status);
-  const assignedMentorId = parseOptionalPositiveInt(
-    req.body?.assignedMentorId ?? req.body?.assigned_mentor_id
-  );
-  if (assignedMentorId) {
-    const mentor = await prisma.profile.findUnique({
-      where: { id: assignedMentorId },
-      select: { id: true, status: true },
-    });
-    if (!mentor || mentor.status !== 'active') {
-      return res.status(400).json({ error: 'Assigned mentor was not found or is inactive' });
-    }
-  }
-
-  const employee = await prisma.profile.findUnique({
-    where: { id: employeeId },
-    select: { id: true, departmentId: true },
-  });
-  if (!employee) {
-    return res.status(404).json({ error: 'Selected employee was not found' });
-  }
-
-  const created = await prisma.developmentGoal.create({
-    data: {
-      employeeProfileId: employeeId,
-      createdByProfileId: profileId,
-      assignedMentorProfileId: assignedMentorId ?? null,
-      departmentId: employee.departmentId ?? null,
-      goalTitle,
-      goalDescription,
-      targetCompletion,
-      currentProgress: new Prisma.Decimal(progress ?? 0),
-      status,
-    },
-    include: {
-      employee: { select: { firstName: true, lastName: true } },
-      assignedMentor: { select: { firstName: true, lastName: true } },
-    },
-  });
-
-  await createAudit({
-    action: 'development_goal_created',
-    entity_type: 'development_goal',
-    entity_id: created.id,
-    user_id: userId,
-    metadata: {
-      actorProfileId: profileId,
-      employeeProfileId: created.employeeProfileId,
-      goalTitle: created.goalTitle,
-      status: created.status,
-      currentProgress: toNumber(created.currentProgress),
-    },
-  });
-
-  res.status(201).json({
-    message: 'Development goal created successfully',
-    ...mapDevelopmentGoalResponse(created),
-  });
-});
-
-// PATCH /manager/development-goals/:goalId
-router.patch('/development-goals/:goalId', authMiddleware, async (req: AuthRequest, res) => {
-  const userId = requireUser(req, res);
-  if (!userId) return;
-  const profileId = req.user?.profileId;
-  if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
-  if (!canManageTeamDevelopment(req)) {
-    return res
-      .status(403)
-      .json({ error: 'Only managers, partners, or HR can update development goals' });
-  }
-
-  const goalId = parseOptionalPositiveInt(req.params.goalId);
-  if (!goalId) {
-    return res.status(400).json({ error: 'Valid goalId is required' });
-  }
-
-  const existing = await prisma.developmentGoal.findUnique({
-    where: { id: goalId },
-    include: {
-      employee: { select: { firstName: true, lastName: true } },
-      assignedMentor: { select: { firstName: true, lastName: true } },
-    },
-  });
-  if (!existing) {
-    return res.status(404).json({ error: 'Development goal was not found' });
-  }
-
-  const teamMemberIds = await getScopedTeamMemberIds(req, profileId);
-  const hasScope =
-    existing.createdByProfileId === profileId || teamMemberIds.includes(existing.employeeProfileId);
-  if (!hasScope) {
-    return res.status(403).json({ error: 'Selected goal is outside your team scope' });
-  }
-
-  const nextGoalTitle =
-    req.body?.goalTitle !== undefined || req.body?.goal_title !== undefined
-      ? String(req.body?.goalTitle ?? req.body?.goal_title ?? '').trim()
-      : undefined;
-  const nextGoalDescription =
-    req.body?.goalDescription !== undefined || req.body?.goal_description !== undefined
-      ? String(req.body?.goalDescription ?? req.body?.goal_description ?? '').trim()
-      : undefined;
-  if (nextGoalTitle !== undefined && !nextGoalTitle) {
-    return res.status(400).json({ error: 'goalTitle cannot be empty' });
-  }
-  if (nextGoalDescription !== undefined && !nextGoalDescription) {
-    return res.status(400).json({ error: 'goalDescription cannot be empty' });
-  }
-
-  const nextTargetCompletion =
-    req.body?.targetCompletion !== undefined || req.body?.target_completion !== undefined
-      ? parseDateOrNull(req.body?.targetCompletion ?? req.body?.target_completion)
-      : undefined;
-  if (
-    (req.body?.targetCompletion !== undefined || req.body?.target_completion !== undefined) &&
-    !nextTargetCompletion
-  ) {
-    return res.status(400).json({ error: 'targetCompletion must be a valid date' });
-  }
-
-  const nextStatus =
-    req.body?.status !== undefined
-      ? normalizeDevelopmentGoalStatus(req.body?.status)
-      : undefined;
-  const progress = parseOptionalProgress(
-    req.body?.currentProgress ?? req.body?.current_progress
-  );
-  const mentorIdProvided =
-    req.body?.assignedMentorId !== undefined || req.body?.assigned_mentor_id !== undefined;
-  const nextMentorId = mentorIdProvided
-    ? parseOptionalPositiveInt(req.body?.assignedMentorId ?? req.body?.assigned_mentor_id)
-    : undefined;
-  if (mentorIdProvided && nextMentorId) {
-    const mentor = await prisma.profile.findUnique({
-      where: { id: nextMentorId },
-      select: { id: true, status: true },
-    });
-    if (!mentor || mentor.status !== 'active') {
-      return res.status(400).json({ error: 'Assigned mentor was not found or is inactive' });
-    }
-  }
-
-  const updateData: Prisma.DevelopmentGoalUncheckedUpdateInput = {};
-  if (nextGoalTitle !== undefined) {
-    updateData.goalTitle = nextGoalTitle;
-  }
-  if (nextGoalDescription !== undefined) {
-    updateData.goalDescription = nextGoalDescription;
-  }
-  if (nextTargetCompletion !== undefined && nextTargetCompletion !== null) {
-    updateData.targetCompletion = nextTargetCompletion;
-  }
-  if (nextStatus !== undefined) {
-    updateData.status = nextStatus;
-  }
-  if (progress !== null) {
-    updateData.currentProgress = new Prisma.Decimal(progress);
-  }
-  if (mentorIdProvided) {
-    updateData.assignedMentorProfileId = nextMentorId ?? null;
-  }
-
-  const updated = await prisma.developmentGoal.update({
-    where: { id: goalId },
-    data: updateData,
-    include: {
-      employee: { select: { firstName: true, lastName: true } },
-      assignedMentor: { select: { firstName: true, lastName: true } },
-    },
-  });
-
-  await createAudit({
-    action: 'development_goal_updated',
-    entity_type: 'development_goal',
-    entity_id: updated.id,
-    user_id: userId,
-    metadata: {
-      actorProfileId: profileId,
-      employeeProfileId: updated.employeeProfileId,
-      status: updated.status,
-      currentProgress: toNumber(updated.currentProgress),
-    },
-  });
-
-  res.json({
-    message: 'Development goal updated successfully',
-    ...mapDevelopmentGoalResponse(updated),
-  });
-});
-
-// POST /manager/redistribute-workload
+// POST /team-management/redistribute-workload
 router.post('/redistribute-workload', authMiddleware, async (req: AuthRequest, res) => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -1586,6 +1843,1387 @@ router.post('/redistribute-workload', authMiddleware, async (req: AuthRequest, r
     toEmployeeId: Number(toEmployeeId),
     notes: notes || null,
   });
+});
+
+router.get('/learning-programs', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can access learning programs' });
+    }
+
+    const status = String(req.query.status || '').trim().toLowerCase();
+    if (status && !LEARNING_PROGRAM_STATUSES.has(status)) {
+      return res.status(400).json({ error: 'Invalid learning program status' });
+    }
+
+    const programs = await prisma.learningProgram.findMany({
+      where: status ? { status: status as any } : undefined,
+      include: {
+        department: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+        versions: {
+          orderBy: [{ versionNo: 'desc' }],
+          include: {
+            trainer: { select: { id: true, firstName: true, lastName: true } },
+            modules: {
+              orderBy: { sequenceNo: 'asc' },
+              include: {
+                knowledgeHubResource: {
+                  select: learningKnowledgeResourceSelect,
+                },
+              },
+            },
+            sessions: { orderBy: { startsAt: 'asc' } },
+            quizzes: {
+              include: {
+                questions: {
+                  include: {
+                    options: true,
+                  },
+                },
+              },
+            },
+            certificateTemplates: {
+              orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+            },
+            _count: {
+              select: {
+                assignments: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    });
+
+    return res.json(programs.map(serializeLearningProgram));
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to load learning programs' });
+  }
+});
+
+router.post('/learning-programs', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can create learning programs' });
+    }
+
+    const title = String(req.body?.title || '').trim();
+    if (!title) {
+      return res.status(400).json({ error: 'Program title is required' });
+    }
+
+    const status = String(req.body?.status || 'draft').trim().toLowerCase();
+    if (!LEARNING_PROGRAM_STATUSES.has(status)) {
+      return res.status(400).json({ error: 'Invalid learning program status' });
+    }
+
+    const versionInput = normalizeLearningVersionInput(req.body?.version || req.body);
+
+    const program = await prisma.$transaction(async (tx) => {
+      const createdProgram = await tx.learningProgram.create({
+        data: {
+          title,
+          description: toNullableTrimmedString(req.body?.description),
+          departmentId: parseOptionalPositiveInt(req.body?.departmentId ?? req.body?.department_id),
+          createdByProfileId: profileId,
+          status: status as any,
+        },
+      });
+
+      const version = await createLearningProgramVersionGraph(tx, createdProgram.id, profileId, versionInput);
+      return { createdProgram, version };
+    });
+
+    await createAudit({
+      action: 'learning_program_created',
+      entity_type: 'learning_program',
+      entity_id: program.createdProgram.id,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        learningProgramId: program.createdProgram.id,
+        learningProgramVersionId: program.version.id,
+      },
+    });
+
+    return res.status(201).json({
+      ...program.createdProgram,
+      version: serializeLearningProgramVersion(program.version),
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to create learning program' : error.message,
+    });
+  }
+});
+
+router.get('/learning-programs/:programId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can access learning programs' });
+    }
+
+    const programId = parseOptionalPositiveInt(req.params.programId);
+    if (!programId) {
+      return res.status(400).json({ error: 'Invalid programId' });
+    }
+
+    const program = await prisma.learningProgram.findUnique({
+      where: { id: programId },
+      include: {
+        department: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+        versions: {
+          orderBy: [{ versionNo: 'desc' }],
+          include: {
+            trainer: { select: { id: true, firstName: true, lastName: true } },
+            modules: {
+              orderBy: { sequenceNo: 'asc' },
+              include: {
+                knowledgeHubResource: {
+                  select: learningKnowledgeResourceSelect,
+                },
+              },
+            },
+            sessions: { orderBy: { startsAt: 'asc' } },
+            quizzes: {
+              include: {
+                questions: {
+                  orderBy: { displayOrder: 'asc' },
+                  include: {
+                    options: {
+                      orderBy: { displayOrder: 'asc' },
+                    },
+                  },
+                },
+              },
+            },
+            certificateTemplates: {
+              orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+            },
+            assignments: {
+              take: 10,
+              orderBy: [{ createdAt: 'desc' }],
+              include: {
+                employee: { select: { id: true, firstName: true, lastName: true } },
+              },
+            },
+            _count: {
+              select: {
+                assignments: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!program) {
+      return res.status(404).json({ error: 'Learning program not found' });
+    }
+
+    return res.json(serializeLearningProgram(program));
+  } catch {
+    return res.status(500).json({ error: 'Failed to load learning program' });
+  }
+});
+
+router.post('/learning-programs/:programId/versions', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can create learning versions' });
+    }
+
+    const programId = parseOptionalPositiveInt(req.params.programId);
+    if (!programId) {
+      return res.status(400).json({ error: 'Invalid programId' });
+    }
+
+    const program = await prisma.learningProgram.findUnique({
+      where: { id: programId },
+      select: { id: true },
+    });
+    if (!program) {
+      return res.status(404).json({ error: 'Learning program not found' });
+    }
+
+    const versionInput = normalizeLearningVersionInput(req.body);
+    const version = await prisma.$transaction((tx) =>
+      createLearningProgramVersionGraph(tx, programId, profileId, versionInput)
+    );
+
+    await createAudit({
+      action: 'learning_program_version_created',
+      entity_type: 'learning_program_version',
+      entity_id: version.id,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        learningProgramId: programId,
+        learningProgramVersionId: version.id,
+      },
+    });
+
+    return res.status(201).json({
+      ...serializeLearningProgramVersion(version),
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to create learning version' : error.message,
+    });
+  }
+});
+
+router.patch('/learning-program-versions/:versionId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can update learning versions' });
+    }
+
+    const versionId = parseOptionalPositiveInt(req.params.versionId);
+    if (!versionId) {
+      return res.status(400).json({ error: 'Invalid versionId' });
+    }
+
+    const existingVersion = await prisma.learningProgramVersion.findUnique({
+      where: { id: versionId },
+      include: {
+        _count: {
+          select: {
+            assignments: true,
+          },
+        },
+      },
+    });
+
+    if (!existingVersion) {
+      return res.status(404).json({ error: 'Learning version not found' });
+    }
+
+    if (existingVersion._count.assignments > 0) {
+      return res.status(409).json({
+        error: 'Learning versions with assignments cannot be edited in place; create a new version instead',
+      });
+    }
+
+    const versionInput = normalizeLearningVersionInput({
+      ...existingVersion,
+      ...req.body,
+    });
+
+    const updatedVersion = await prisma.$transaction(async (tx) => {
+      await tx.certificateTemplate.deleteMany({
+        where: { programVersionId: versionId },
+      });
+      await tx.learningQuiz.deleteMany({
+        where: { programVersionId: versionId },
+      });
+      await tx.learningSession.deleteMany({
+        where: { programVersionId: versionId },
+      });
+      await tx.learningModule.deleteMany({
+        where: { programVersionId: versionId },
+      });
+
+      await tx.learningProgramVersion.update({
+        where: { id: versionId },
+        data: {
+          title: versionInput.title,
+          description: versionInput.description,
+          trainingType: versionInput.trainingType,
+          deliveryMode: versionInput.deliveryMode,
+          provider: versionInput.provider,
+          cost: versionInput.cost,
+          trainerProfileId: versionInput.trainerProfileId,
+          externalTrainerName: versionInput.externalTrainerName,
+          isMandatory: versionInput.isMandatory,
+          feedbackPoints: versionInput.feedbackPoints,
+          impactAssessmentDelayDays: versionInput.impactAssessmentDelayDays,
+          status: versionInput.status as any,
+          publishedAt:
+            versionInput.status === 'published'
+              ? versionInput.publishedAt ?? existingVersion.publishedAt ?? new Date()
+              : versionInput.publishedAt,
+          createdByProfileId: profileId,
+        },
+      });
+
+      const moduleIdBySequence = new Map<number, number>();
+      for (const module of versionInput.modules) {
+        const createdModule = await tx.learningModule.create({
+          data: {
+            programVersionId: versionId,
+            title: module.title,
+            description: module.description,
+            contentType: module.contentType as any,
+            knowledgeHubResourceId: module.knowledgeHubResourceId,
+            documentId: module.documentId,
+            contentUrl: module.contentUrl,
+            sequenceNo: module.sequenceNo,
+            required: module.required,
+            estimatedMinutes: module.estimatedMinutes,
+          },
+        });
+        moduleIdBySequence.set(module.sequenceNo, createdModule.id);
+      }
+
+      for (const session of versionInput.sessions) {
+        await tx.learningSession.create({
+          data: {
+            programVersionId: versionId,
+            moduleId: session.moduleSequenceNo ? moduleIdBySequence.get(session.moduleSequenceNo) ?? null : null,
+            title: session.title,
+            startsAt: session.startsAt,
+            endsAt: session.endsAt,
+            location: session.location,
+            trainerProfileId: session.trainerProfileId,
+            externalTrainerName: session.externalTrainerName,
+            attendancePoints: session.attendancePoints,
+            attendanceRequired: session.attendanceRequired,
+          },
+        });
+      }
+
+      for (const quiz of versionInput.quizzes) {
+        await tx.learningQuiz.create({
+          data: {
+            programVersionId: versionId,
+            moduleId: quiz.moduleSequenceNo ? moduleIdBySequence.get(quiz.moduleSequenceNo) ?? null : null,
+            title: quiz.title,
+            instructions: quiz.instructions,
+            passMark: quiz.passMark,
+            pointsOnPass: quiz.pointsOnPass,
+            attemptLimit: quiz.attemptLimit,
+            isMandatory: quiz.isMandatory,
+            isActive: quiz.isActive,
+            questions: {
+              create: quiz.questions.map((question: { questionType: string; prompt: string; displayOrder: number; required: boolean; explanation: string | null; options: Array<{ label: string; isCorrect: boolean; displayOrder: number }> }) => ({
+                questionType: question.questionType as any,
+                prompt: question.prompt,
+                displayOrder: question.displayOrder,
+                required: question.required,
+                explanation: question.explanation,
+                options:
+                  question.options.length > 0
+                    ? {
+                        create: question.options.map((option: { label: string; isCorrect: boolean; displayOrder: number }) => ({
+                          label: option.label,
+                          isCorrect: option.isCorrect,
+                          displayOrder: option.displayOrder,
+                        })),
+                      }
+                    : undefined,
+              })),
+            },
+          },
+        });
+      }
+
+      if (versionInput.certificateTemplate) {
+        await tx.certificateTemplate.create({
+          data: {
+            programVersionId: versionId,
+            name: versionInput.certificateTemplate.name,
+            templateDefinition: versionInput.certificateTemplate.templateDefinition as Prisma.InputJsonValue,
+            backgroundDocumentId: versionInput.certificateTemplate.backgroundDocumentId,
+            signatureDocumentId: versionInput.certificateTemplate.signatureDocumentId,
+            issuedByLabel: versionInput.certificateTemplate.issuedByLabel,
+            isDefault: versionInput.certificateTemplate.isDefault,
+          },
+        });
+      }
+
+      return tx.learningProgramVersion.findUniqueOrThrow({
+        where: { id: versionId },
+        include: {
+          program: true,
+          trainer: { select: { id: true, firstName: true, lastName: true } },
+          modules: {
+            orderBy: { sequenceNo: 'asc' },
+            include: {
+              knowledgeHubResource: {
+                select: learningKnowledgeResourceSelect,
+              },
+            },
+          },
+          sessions: { orderBy: { startsAt: 'asc' } },
+          quizzes: {
+            include: {
+              questions: {
+                orderBy: { displayOrder: 'asc' },
+                include: {
+                  options: {
+                    orderBy: { displayOrder: 'asc' },
+                  },
+                },
+              },
+            },
+          },
+          certificateTemplates: {
+            orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
+          },
+        },
+      });
+    });
+
+    await createAudit({
+      action: 'learning_program_version_updated',
+      entity_type: 'learning_program_version',
+      entity_id: versionId,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        learningProgramVersionId: versionId,
+      },
+    });
+
+    return res.json(serializeLearningProgramVersion(updatedVersion));
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to update learning version' : error.message,
+    });
+  }
+});
+
+router.get('/global-certificate-template', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can access the global certificate template' });
+    }
+
+    const template = await prisma.globalCertificateTemplate.findFirst({
+      where: {
+        key: 'default',
+      },
+      include: {
+        backgroundDocument: true,
+        signatureDocument: true,
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    });
+
+    if (!template) {
+      return res.json({
+        key: 'default',
+        name: 'Standard Completion Certificate',
+        templateDefinition: {
+          title: 'Certificate of Completion',
+          body: 'has successfully completed the training "{{trainingName}}".',
+          titleColor: '#0f172a',
+          textColor: '#334155',
+          accentColor: '#0f766e',
+        },
+        backgroundDocumentId: null,
+        signatureDocumentId: null,
+        issuedByLabel: null,
+        isActive: true,
+      });
+    }
+
+    return res.json(template);
+  } catch {
+    return res.status(500).json({ error: 'Failed to load the global certificate template' });
+  }
+});
+
+router.put('/global-certificate-template', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can update the global certificate template' });
+    }
+
+    const name = String(req.body?.name || '').trim() || 'Standard Completion Certificate';
+    const templateDefinitionRaw = req.body?.templateDefinition ?? req.body?.template_definition ?? {};
+    const templateDefinition =
+      templateDefinitionRaw && typeof templateDefinitionRaw === 'object' && !Array.isArray(templateDefinitionRaw)
+        ? templateDefinitionRaw
+        : {};
+
+    const saved = await prisma.globalCertificateTemplate.upsert({
+      where: {
+        key: 'default',
+      },
+      update: {
+        name,
+        templateDefinition: templateDefinition as Prisma.InputJsonValue,
+        backgroundDocumentId: parseOptionalPositiveInt(
+          req.body?.backgroundDocumentId ?? req.body?.background_document_id
+        ),
+        signatureDocumentId: parseOptionalPositiveInt(
+          req.body?.signatureDocumentId ?? req.body?.signature_document_id
+        ),
+        issuedByLabel: toNullableTrimmedString(req.body?.issuedByLabel ?? req.body?.issued_by_label),
+        isActive: req.body?.isActive === undefined ? true : Boolean(req.body.isActive),
+        updatedByProfileId: profileId,
+      },
+      create: {
+        key: 'default',
+        name,
+        templateDefinition: templateDefinition as Prisma.InputJsonValue,
+        backgroundDocumentId: parseOptionalPositiveInt(
+          req.body?.backgroundDocumentId ?? req.body?.background_document_id
+        ),
+        signatureDocumentId: parseOptionalPositiveInt(
+          req.body?.signatureDocumentId ?? req.body?.signature_document_id
+        ),
+        issuedByLabel: toNullableTrimmedString(req.body?.issuedByLabel ?? req.body?.issued_by_label),
+        isActive: req.body?.isActive === undefined ? true : Boolean(req.body.isActive),
+        createdByProfileId: profileId,
+        updatedByProfileId: profileId,
+      },
+      include: {
+        backgroundDocument: true,
+        signatureDocument: true,
+      },
+    });
+
+    await createAudit({
+      action: 'global_certificate_template_updated',
+      entity_type: 'global_certificate_template',
+      entity_id: saved.id,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        globalCertificateTemplateId: saved.id,
+      },
+    });
+
+    return res.json(saved);
+  } catch {
+    return res.status(500).json({ error: 'Failed to update the global certificate template' });
+  }
+});
+
+router.post('/learning-assignments', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can assign learning' });
+    }
+
+    const programVersionId = parseOptionalPositiveInt(req.body?.programVersionId ?? req.body?.program_version_id);
+    const employeeIds = Array.isArray(req.body?.employeeIds ?? req.body?.employee_ids)
+      ? (req.body.employeeIds ?? req.body.employee_ids)
+          .map((value: unknown) => parseOptionalPositiveInt(value))
+          .filter((value: number | null): value is number => Boolean(value))
+      : [];
+    const dueAt = parseDateOrNull(req.body?.dueAt ?? req.body?.due_at);
+    if (!programVersionId || employeeIds.length === 0) {
+      return res.status(400).json({ error: 'programVersionId and at least one employeeId are required' });
+    }
+
+    const scopedIds = await getScopedTeamMemberIds(req, profileId);
+    const outOfScope = employeeIds.filter((employeeId: number) => !scopedIds.includes(employeeId));
+    if (outOfScope.length > 0) {
+      return res.status(403).json({ error: 'One or more employees are outside your team scope' });
+    }
+
+    const version = await prisma.learningProgramVersion.findUnique({
+      where: { id: programVersionId },
+      include: {
+        modules: true,
+        sessions: true,
+      },
+    });
+    if (!version) {
+      return res.status(404).json({ error: 'Learning version not found' });
+    }
+    if (version.status !== 'published') {
+      return res.status(400).json({ error: 'Only published learning versions can be assigned' });
+    }
+
+    const employees = await prisma.profile.findMany({
+      where: { id: { in: employeeIds } },
+      select: { id: true, managerId: true },
+    });
+    const employeesById = new Map(employees.map((employee) => [employee.id, employee]));
+
+    const assignments = await prisma.$transaction(async (tx) => {
+      const createdAssignments = [] as any[];
+
+      for (const employeeId of employeeIds) {
+        const employee = employeesById.get(employeeId);
+        const assignment = await tx.learningAssignment.upsert({
+          where: {
+            programVersionId_employeeProfileId: {
+              programVersionId,
+              employeeProfileId: employeeId,
+            },
+          },
+          update: {
+            assignedByProfileId: profileId,
+            managerProfileId: employee?.managerId ?? null,
+            dueAt,
+            status: 'assigned',
+          },
+          create: {
+            programVersionId,
+            employeeProfileId: employeeId,
+            assignedByProfileId: profileId,
+            managerProfileId: employee?.managerId ?? null,
+            dueAt,
+          },
+        });
+
+        if (version.modules.length > 0) {
+          await tx.learningModuleProgress.createMany({
+            data: version.modules.map((module) => ({
+              assignmentId: assignment.id,
+              moduleId: module.id,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        if (version.sessions.length > 0) {
+          await tx.learningAttendanceRecord.createMany({
+            data: version.sessions.map((session) => ({
+              assignmentId: assignment.id,
+              sessionId: session.id,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        const recalculated = await recalculateLearningAssignment(tx, assignment.id);
+        createdAssignments.push(recalculated.assignment);
+      }
+
+      return createdAssignments;
+    });
+
+    await createAudit({
+      action: 'learning_assignments_created',
+      entity_type: 'learning_assignment',
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        programVersionId,
+        employeeIds,
+      },
+    });
+
+    return res.status(201).json(assignments.map(serializeLearningAssignment));
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to create learning assignments' : error.message,
+    });
+  }
+});
+
+router.get('/learning-assignments', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const mineOnly = String(req.query.mine || '').trim().toLowerCase() === 'true';
+    const employeeId = parseOptionalPositiveInt(req.query.employeeId ?? req.query.employee_id);
+    const where: Prisma.LearningAssignmentWhereInput = {};
+
+    if (!canManageTeamDevelopment(req) || mineOnly) {
+      where.employeeProfileId = profileId;
+    } else if (employeeId) {
+      const scopedIds = await getScopedTeamMemberIds(req, profileId);
+      if (!scopedIds.includes(employeeId)) {
+        return res.status(403).json({ error: 'Selected employee is outside your team scope' });
+      }
+      where.employeeProfileId = employeeId;
+    } else {
+      const scopedIds = await getScopedTeamMemberIds(req, profileId);
+      where.employeeProfileId = { in: scopedIds };
+    }
+
+    const assignments = await prisma.learningAssignment.findMany({
+      where,
+      include: {
+        employee: { select: { id: true, firstName: true, lastName: true, managerId: true } },
+        assignedBy: { select: { id: true, firstName: true, lastName: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
+        programVersion: {
+          include: {
+            program: { select: { id: true, title: true } },
+            trainer: { select: { id: true, firstName: true, lastName: true } },
+            modules: {
+              orderBy: { sequenceNo: 'asc' },
+              include: {
+                knowledgeHubResource: {
+                  select: learningKnowledgeResourceSelect,
+                },
+              },
+            },
+            sessions: { orderBy: { startsAt: 'asc' } },
+            quizzes: {
+              orderBy: { id: 'asc' },
+              include: {
+                questions: {
+                  orderBy: { displayOrder: 'asc' },
+                  include: {
+                    options: {
+                      orderBy: { displayOrder: 'asc' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        moduleProgressEntries: {
+          orderBy: { moduleId: 'asc' },
+        },
+        attendanceRecords: {
+          orderBy: { sessionId: 'asc' },
+        },
+        quizAttempts: {
+          orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+        },
+        certificate: {
+          include: {
+            document: true,
+          },
+        },
+        trainingFeedback: true,
+        impactAssessmentTask: {
+          include: {
+            response: true,
+          },
+        },
+      },
+      orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    return res.json(assignments.map(serializeLearningAssignment));
+  } catch {
+    return res.status(500).json({ error: 'Failed to load learning assignments' });
+  }
+});
+
+router.get('/learning-assignments/:assignmentId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const assignmentId = parseOptionalPositiveInt(req.params.assignmentId);
+    if (!assignmentId) {
+      return res.status(400).json({ error: 'Invalid assignmentId' });
+    }
+
+    const assignment = await ensureAssignmentAccess(req, assignmentId, profileId);
+    return res.json(serializeLearningAssignment(assignment));
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to load learning assignment' : error.message,
+    });
+  }
+});
+
+router.post('/learning-assignments/:assignmentId/modules/:moduleId/progress', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const assignmentId = parseOptionalPositiveInt(req.params.assignmentId);
+    const moduleId = parseOptionalPositiveInt(req.params.moduleId);
+    if (!assignmentId || !moduleId) {
+      return res.status(400).json({ error: 'Invalid assignmentId or moduleId' });
+    }
+
+    const assignment = await ensureAssignmentAccess(req, assignmentId, profileId);
+    const module = assignment.programVersion.modules.find((item: any) => item.id === moduleId);
+    if (!module) {
+      return res.status(404).json({ error: 'Learning module not found on this assignment' });
+    }
+
+    if (assignment.employeeProfileId !== profileId && !canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only the assigned learner can update module progress' });
+    }
+
+    const completionPercent = parseOptionalPercentage(
+      req.body?.completionPercent ?? req.body?.completion_percent
+    );
+    const watchPercent = parseOptionalPercentage(req.body?.watchPercent ?? req.body?.watch_percent);
+    const scrollPercent = parseOptionalPercentage(req.body?.scrollPercent ?? req.body?.scroll_percent);
+    const timeSpentSeconds = parseOptionalNonNegativeInt(
+      req.body?.timeSpentSeconds ?? req.body?.time_spent_seconds
+    );
+    const completed = Boolean(req.body?.completed);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.learningModuleProgress.findUnique({
+        where: {
+          assignmentId_moduleId: {
+            assignmentId,
+            moduleId,
+          },
+        },
+      });
+
+      const now = new Date();
+      const progress = await tx.learningModuleProgress.upsert({
+        where: {
+          assignmentId_moduleId: {
+            assignmentId,
+            moduleId,
+          },
+        },
+        create: {
+          assignmentId,
+          moduleId,
+          status: completed ? 'completed' : 'in_progress',
+          startedAt: now,
+          lastInteractedAt: now,
+          completedAt: completed ? now : null,
+          completionPercent: completed ? 100 : completionPercent ?? 0,
+          watchPercent: watchPercent ?? 0,
+          scrollPercent: scrollPercent ?? 0,
+          timeSpentSeconds: timeSpentSeconds ?? 0,
+        },
+        update: {
+          status: completed ? 'completed' : ((completionPercent ?? 0) > 0 || (watchPercent ?? 0) > 0 || (scrollPercent ?? 0) > 0 || (timeSpentSeconds ?? 0) > 0 ? 'in_progress' : existing?.status ?? 'not_started'),
+          startedAt: existing?.startedAt ?? now,
+          lastInteractedAt: now,
+          completedAt: completed ? existing?.completedAt ?? now : existing?.completedAt,
+          completionPercent: Math.max(toNumber(existing?.completionPercent), completed ? 100 : completionPercent ?? 0),
+          watchPercent: Math.max(toNumber(existing?.watchPercent), watchPercent ?? 0),
+          scrollPercent: Math.max(toNumber(existing?.scrollPercent), scrollPercent ?? 0),
+          timeSpentSeconds: Math.max(existing?.timeSpentSeconds ?? 0, timeSpentSeconds ?? 0),
+        },
+      });
+
+      const assignmentState = await recalculateLearningAssignment(tx, assignmentId);
+      return { progress, assignment: assignmentState.assignment, completedNow: assignmentState.completedNow };
+    });
+
+    if (updated.completedNow) {
+      await issueCertificateIfEligible({
+        assignmentId,
+        actorProfileId: profileId,
+      });
+    }
+
+    return res.json({
+      progress: {
+        ...updated.progress,
+        completionPercent: toNumber(updated.progress.completionPercent),
+        watchPercent: toNumber(updated.progress.watchPercent),
+        scrollPercent: toNumber(updated.progress.scrollPercent),
+      },
+      assignment: serializeLearningAssignment(updated.assignment),
+      completedNow: updated.completedNow,
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to update learning module progress' : error.message,
+    });
+  }
+});
+
+router.post('/learning-sessions/:sessionId/attendance', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can mark attendance' });
+    }
+
+    const sessionId = parseOptionalPositiveInt(req.params.sessionId);
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Invalid sessionId' });
+    }
+
+    const recordsInput = Array.isArray(req.body?.records) ? req.body.records : [];
+    if (recordsInput.length === 0) {
+      return res.status(400).json({ error: 'At least one attendance record is required' });
+    }
+
+    const session = await prisma.learningSession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, attendancePoints: true },
+    });
+    if (!session) {
+      return res.status(404).json({ error: 'Learning session not found' });
+    }
+
+    const scopedIds = await getScopedTeamMemberIds(req, profileId);
+    const updatedRecords = [] as any[];
+
+    for (const record of recordsInput) {
+      const assignmentId = parseOptionalPositiveInt(record?.assignmentId ?? record?.assignment_id);
+      const attendanceStatus = String((record?.attendanceStatus ?? record?.attendance_status) || '')
+        .trim()
+        .toLowerCase();
+      if (!assignmentId || !LEARNING_ATTENDANCE_STATUSES.has(attendanceStatus)) {
+        return res.status(400).json({ error: 'Each record requires assignmentId and a valid attendanceStatus' });
+      }
+
+      const assignment = await prisma.learningAssignment.findUnique({
+        where: { id: assignmentId },
+        select: { id: true, employeeProfileId: true, programVersionId: true },
+      });
+      if (!assignment) {
+        return res.status(404).json({ error: `Learning assignment ${assignmentId} not found` });
+      }
+      if (!scopedIds.includes(assignment.employeeProfileId)) {
+        return res.status(403).json({ error: 'A learning assignment is outside your team scope' });
+      }
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const attendance = await tx.learningAttendanceRecord.upsert({
+          where: {
+            sessionId_assignmentId: {
+              sessionId,
+              assignmentId,
+            },
+          },
+          create: {
+            sessionId,
+            assignmentId,
+            attendanceStatus: attendanceStatus as any,
+            attendedAt: attendanceStatus === 'attended' ? new Date() : null,
+            markedByProfileId: profileId,
+            notes: toNullableTrimmedString(record?.notes),
+          },
+          update: {
+            attendanceStatus: attendanceStatus as any,
+            attendedAt: attendanceStatus === 'attended' ? new Date() : null,
+            markedByProfileId: profileId,
+            notes: toNullableTrimmedString(record?.notes),
+          },
+        });
+
+        if (attendanceStatus === 'attended') {
+          await awardAttendancePoints({
+            assignmentId,
+            sessionId,
+            employeeProfileId: assignment.employeeProfileId,
+            points: session.attendancePoints,
+            actorProfileId: profileId,
+          });
+        }
+
+        const assignmentState = await recalculateLearningAssignment(tx, assignmentId);
+        return {
+          attendance,
+          assignment: assignmentState.assignment,
+          completedNow: assignmentState.completedNow,
+        };
+      });
+
+      if (updated.completedNow) {
+        await issueCertificateIfEligible({
+          assignmentId,
+          actorProfileId: profileId,
+        });
+      }
+
+      updatedRecords.push({
+        attendance: updated.attendance,
+        assignment: serializeLearningAssignment(updated.assignment),
+        completedNow: updated.completedNow,
+      });
+    }
+
+    await createAudit({
+      action: 'learning_attendance_marked',
+      entity_type: 'learning_session',
+      entity_id: sessionId,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        sessionId,
+        assignmentIds: updatedRecords.map((item) => item.assignment.id),
+      },
+    });
+
+    return res.json(updatedRecords);
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to update attendance' : error.message,
+    });
+  }
+});
+
+router.post('/learning-quizzes/:quizId/attempts', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const quizId = parseOptionalPositiveInt(req.params.quizId);
+    const assignmentId = parseOptionalPositiveInt(req.body?.assignmentId ?? req.body?.assignment_id);
+    if (!quizId || !assignmentId) {
+      return res.status(400).json({ error: 'quizId and assignmentId are required' });
+    }
+
+    const assignment = await ensureAssignmentAccess(req, assignmentId, profileId);
+    if (assignment.employeeProfileId !== profileId && !canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only the assigned learner can submit this quiz' });
+    }
+
+    const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    const result = await submitLearningQuizAttempt({
+      quizId,
+      assignmentId,
+      actorProfileId: profileId,
+      answers: answers.map((answer: any) => ({
+        questionId: Number(answer?.questionId),
+        optionIds: Array.isArray(answer?.optionIds)
+          ? answer.optionIds.map((optionId: unknown) => Number(optionId))
+          : [],
+        freeTextAnswer: toNullableTrimmedString(answer?.freeTextAnswer),
+      })),
+    });
+
+    if (result.completedNow) {
+      await issueCertificateIfEligible({
+        assignmentId,
+        actorProfileId: profileId,
+      });
+    }
+
+    return res.status(201).json({
+      ...result,
+      attempt: {
+        ...result.attempt,
+        score: toNumber(result.attempt.score),
+      },
+      assignment: serializeLearningAssignment(result.assignment),
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to submit learning quiz' : error.message,
+    });
+  }
+});
+
+router.post('/learning-assignments/:assignmentId/feedback', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const assignmentId = parseOptionalPositiveInt(req.params.assignmentId);
+    if (!assignmentId) {
+      return res.status(400).json({ error: 'Invalid assignmentId' });
+    }
+
+    const assignment = await prisma.learningAssignment.findUnique({
+      where: { id: assignmentId },
+      select: {
+        id: true,
+        employeeProfileId: true,
+        status: true,
+        trainingFeedback: { select: { id: true } },
+      },
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ error: 'Learning assignment not found' });
+    }
+    if (assignment.employeeProfileId !== profileId) {
+      return res.status(403).json({ error: 'Only the assigned learner can submit training feedback' });
+    }
+    if (assignment.trainingFeedback) {
+      return res.status(409).json({ error: 'Training feedback has already been submitted' });
+    }
+    if (assignment.status !== 'completed') {
+      return res.status(400).json({ error: 'Training feedback can only be submitted after completion' });
+    }
+
+    const result = await submitTrainingFeedbackEntry({
+      assignmentId,
+      actorProfileId: profileId,
+      overallRating: clampRating(req.body?.overallRating ?? req.body?.overall_rating),
+      contentRating: clampRating(req.body?.contentRating ?? req.body?.content_rating),
+      deliveryRating: clampRating(req.body?.deliveryRating ?? req.body?.delivery_rating),
+      relevanceRating: clampRating(req.body?.relevanceRating ?? req.body?.relevance_rating),
+      comment: toNullableTrimmedString(req.body?.comment),
+    });
+    const certificate = await issueCertificateIfEligible({
+      assignmentId,
+      actorProfileId: profileId,
+    });
+
+    await createAudit({
+      action: 'training_feedback_submitted',
+      entity_type: 'learning_assignment',
+      entity_id: assignmentId,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        assignmentId,
+        feedbackId: result.feedback.id,
+      },
+    });
+
+    return res.status(201).json({
+      ...result,
+      certificate,
+    });
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to submit training feedback' : error.message,
+    });
+  }
+});
+
+router.get('/learning-impact-tasks', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'Only managers, partners, or HR can access impact assessments' });
+    }
+
+    const scopedIds = await getScopedTeamMemberIds(req, profileId);
+    const tasks = await prisma.impactAssessmentTask.findMany({
+      where: {
+        OR: [
+          { managerProfileId: profileId },
+          { assignment: { employeeProfileId: { in: scopedIds } } },
+        ],
+      },
+      include: {
+        manager: { select: { id: true, firstName: true, lastName: true } },
+        assignment: {
+          include: {
+            employee: { select: { id: true, firstName: true, lastName: true } },
+            programVersion: {
+              include: {
+                program: { select: { id: true, title: true } },
+              },
+            },
+          },
+        },
+        response: true,
+      },
+      orderBy: [{ dueAt: 'asc' }, { id: 'desc' }],
+    });
+
+    return res.json(tasks.map((task) => ({
+      ...task,
+      assignment: serializeLearningAssignment(task.assignment),
+    })));
+  } catch {
+    return res.status(500).json({ error: 'Failed to load impact assessment tasks' });
+  }
+});
+
+router.post('/learning-impact-tasks/:taskId/response', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const taskId = parseOptionalPositiveInt(req.params.taskId);
+    if (!taskId) {
+      return res.status(400).json({ error: 'Invalid taskId' });
+    }
+
+    const task = await prisma.impactAssessmentTask.findUnique({
+      where: { id: taskId },
+      include: {
+        assignment: {
+          select: {
+            employeeProfileId: true,
+          },
+        },
+        response: true,
+      },
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: 'Impact assessment task not found' });
+    }
+    if (task.response) {
+      return res.status(409).json({ error: 'Impact assessment response has already been submitted' });
+    }
+
+    const scopedIds = canManageTeamDevelopment(req) ? await getScopedTeamMemberIds(req, profileId) : [profileId];
+    if (task.managerProfileId !== profileId && !scopedIds.includes(task.assignment.employeeProfileId)) {
+      return res.status(403).json({ error: 'You do not have access to this impact assessment task' });
+    }
+
+    const response = await prisma.$transaction(async (tx) => {
+      const created = await tx.impactAssessmentResponse.create({
+        data: {
+          taskId,
+          submittedByProfileId: profileId,
+          behaviorChangeScore: parseOptionalNonNegativeInt(req.body?.behaviorChangeScore ?? req.body?.behavior_change_score),
+          productivityImpactScore: parseOptionalNonNegativeInt(req.body?.productivityImpactScore ?? req.body?.productivity_impact_score),
+          qualityImpactScore: parseOptionalNonNegativeInt(req.body?.qualityImpactScore ?? req.body?.quality_impact_score),
+          businessImpactScore: parseOptionalNonNegativeInt(req.body?.businessImpactScore ?? req.body?.business_impact_score),
+          comment: toNullableTrimmedString(req.body?.comment),
+        },
+      });
+
+      await tx.impactAssessmentTask.update({
+        where: { id: taskId },
+        data: {
+          status: 'submitted',
+        },
+      });
+
+      return created;
+    });
+
+    await createAudit({
+      action: 'impact_assessment_submitted',
+      entity_type: 'impact_assessment_task',
+      entity_id: taskId,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        taskId,
+      },
+    });
+
+    return res.status(201).json(response);
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to submit impact assessment' : error.message,
+    });
+  }
+});
+
+router.post('/learning-assignments/:assignmentId/certificate/issue', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const assignmentId = parseOptionalPositiveInt(req.params.assignmentId);
+    if (!assignmentId) {
+      return res.status(400).json({ error: 'Invalid assignmentId' });
+    }
+
+    const assignment = await ensureAssignmentAccess(req, assignmentId, profileId);
+    if (assignment.employeeProfileId !== profileId && !canManageTeamDevelopment(req)) {
+      return res.status(403).json({ error: 'You do not have access to issue this certificate' });
+    }
+
+    const certificate = await issueCertificateIfEligible({
+      assignmentId,
+      actorProfileId: profileId,
+    });
+
+    if (!certificate) {
+      return res.status(400).json({ error: 'Certificate is not available for this assignment yet' });
+    }
+
+    await createAudit({
+      action: 'learning_certificate_issued',
+      entity_type: 'issued_certificate',
+      entity_id: certificate.id,
+      user_id: userId,
+      metadata: {
+        actorProfileId: profileId,
+        assignmentId,
+      },
+    });
+
+    return res.json(certificate);
+  } catch (error: any) {
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Failed to issue certificate' : error.message,
+    });
+  }
+});
+
+router.get('/learning-points', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const profileId = req.user?.profileId;
+    if (!profileId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const requestedEmployeeId = parseOptionalPositiveInt(req.query.employeeId ?? req.query.employee_id);
+    let targetProfileId = profileId;
+
+    if (requestedEmployeeId && requestedEmployeeId !== profileId) {
+      if (!canManageTeamDevelopment(req)) {
+        return res.status(403).json({ error: 'Only managers, partners, or HR can view other employees learning points' });
+      }
+      const scopedIds = await getScopedTeamMemberIds(req, profileId);
+      if (!scopedIds.includes(requestedEmployeeId)) {
+        return res.status(403).json({ error: 'Selected employee is outside your team scope' });
+      }
+      targetProfileId = requestedEmployeeId;
+    }
+
+    const [entries, aggregate] = await Promise.all([
+      prisma.learningPointLedger.findMany({
+        where: { profileId: targetProfileId },
+        orderBy: [{ awardedAt: 'desc' }, { id: 'desc' }],
+        take: 100,
+      }),
+      prisma.learningPointLedger.aggregate({
+        where: { profileId: targetProfileId },
+        _sum: { points: true },
+      }),
+    ]);
+
+    return res.json({
+      profileId: targetProfileId,
+      totalPoints: aggregate._sum.points ?? 0,
+      entries,
+    });
+  } catch {
+    return res.status(500).json({ error: 'Failed to load learning points' });
+  }
 });
 
 export default router;

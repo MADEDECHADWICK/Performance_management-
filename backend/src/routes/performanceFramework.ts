@@ -15,6 +15,19 @@ import {
   PyramidLevel,
   resolveDashboardModuleForContext,
 } from "../services/performanceFramework.service";
+import {
+  getBalancedScorecardWorkspace,
+  WorkspaceRole,
+} from "../services/balancedScorecardWorkspace.service";
+import {
+  createBalancedScorecardGoal,
+  createBalancedScorecardInitiative,
+  createBalancedScorecardKpi,
+  createBalancedScorecardPerspective,
+  ensureBalancedScorecardSeed,
+  listBalancedScorecardMetricTemplates,
+  listBalancedScorecardStructure,
+} from "../services/balancedScorecardStructure.service";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, successResponse } from "../utils/response";
 
@@ -23,6 +36,14 @@ const router = Router();
 const parseIntSafe = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const normalizeUserRoles = (req: AuthRequest) =>
+  (req.userRoles || []).map((role) => role.toLowerCase());
+
+const canManageBalancedScorecard = (req: AuthRequest) => {
+  const roles = normalizeUserRoles(req);
+  return roles.includes("hr") || roles.includes("super_admin");
 };
 
 const isPyramidLevel = (value: string): value is PyramidLevel =>
@@ -35,6 +56,9 @@ const isPyramidLevel = (value: string): value is PyramidLevel =>
 
 const isBscPerspective = (value: string): value is BscPerspective =>
   ["financial", "customer", "internal_process", "learning_growth"].includes(value);
+
+const isWorkspaceRole = (value: string): value is WorkspaceRole =>
+  ["hr", "gmp", "partner", "manager", "finance", "marketing", "employee"].includes(value);
 
 const resolveDefinitionForProfile = async (
   departmentId: number | null | undefined,
@@ -199,6 +223,245 @@ router.get("/coverage", async (_req, res) => {
   } catch (error: any) {
     console.error("Error loading framework coverage:", error);
     return res.status(500).json(errorResponse("Failed to load framework coverage", 500));
+  }
+});
+
+router.get("/workspace", async (req: AuthRequest, res) => {
+  try {
+    const profileId = parseIntSafe(req.query.profileId) ?? parseIntSafe(req.user?.profileId);
+    const requestedRoleRaw = typeof req.query.role === "string" ? req.query.role.toLowerCase() : undefined;
+    const requestedRole = requestedRoleRaw && isWorkspaceRole(requestedRoleRaw) ? requestedRoleRaw : undefined;
+    const evaluationCycleId = parseIntSafe(req.query.evaluationCycleId);
+
+    let roles = (req.userRoles || []).map((role) => role.toLowerCase());
+    let positionTitle: string | null = null;
+
+    if (profileId) {
+      const profile = await prisma.profile.findUnique({
+        where: { id: profileId },
+        select: {
+          positionTitle: true,
+          role: { select: { name: true } },
+        },
+      });
+      if (profile?.role?.name) {
+        roles = Array.from(new Set([...roles, profile.role.name.toLowerCase()]));
+      }
+      positionTitle = profile?.positionTitle ?? null;
+    }
+
+    const resolvedRole = resolveDashboardModuleForContext({
+      roles,
+      positionTitle,
+    }) as WorkspaceRole;
+
+    const canPreviewAllRoles = roles.includes("hr") || roles.includes("super_admin");
+    if (requestedRole && requestedRole !== resolvedRole && !canPreviewAllRoles) {
+      return res.status(403).json(errorResponse("You cannot preview another KPI workspace role", 403));
+    }
+
+    const workspace = await getBalancedScorecardWorkspace({
+      role: requestedRole ?? resolvedRole,
+      profileId: profileId ?? null,
+      evaluationCycleId: evaluationCycleId ?? null,
+    });
+
+    return res.json(successResponse(workspace, "Balanced scorecard workspace loaded"));
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard workspace:", error);
+    return res.status(500).json(errorResponse("Failed to load balanced scorecard workspace", 500));
+  }
+});
+
+router.get("/scorecard-structure", async (_req, res) => {
+  try {
+    const structure = await listBalancedScorecardStructure();
+    return res.json(successResponse(structure, "Balanced scorecard structure loaded"));
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard structure:", error);
+    return res.status(500).json(errorResponse("Failed to load balanced scorecard structure", 500));
+  }
+});
+
+router.get("/kpi-templates", async (_req, res) => {
+  try {
+    return res.json(
+      successResponse(listBalancedScorecardMetricTemplates(), "Balanced scorecard KPI templates loaded")
+    );
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard KPI templates:", error);
+    return res.status(500).json(errorResponse("Failed to load balanced scorecard KPI templates", 500));
+  }
+});
+
+router.post("/scorecard-structure/bootstrap", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can bootstrap the balanced scorecard structure", 403));
+    }
+    await ensureBalancedScorecardSeed();
+    const structure = await listBalancedScorecardStructure();
+    return res.json(successResponse(structure, "Balanced scorecard structure bootstrapped"));
+  } catch (error: any) {
+    console.error("Error bootstrapping balanced scorecard structure:", error);
+    return res.status(500).json(errorResponse("Failed to bootstrap balanced scorecard structure", 500));
+  }
+});
+
+router.post("/perspectives", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create scorecard perspectives", 403));
+    }
+    const { name, ownerName, summary } = req.body || {};
+    if (!name || String(name).trim().length < 2) {
+      return res.status(400).json(errorResponse("Perspective name is required", 400));
+    }
+    const created = await createBalancedScorecardPerspective({
+      name: String(name),
+      ownerName: ownerName ? String(ownerName) : null,
+      summary: summary ? String(summary) : null,
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Perspective created"));
+  } catch (error: any) {
+    console.error("Error creating perspective:", error);
+    return res.status(500).json(errorResponse("Failed to create perspective", 500));
+  }
+});
+
+router.post("/goals", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create strategic goals", 403));
+    }
+    const { perspectiveId, title, description, ownerName } = req.body || {};
+    const resolvedPerspectiveId = parseIntSafe(perspectiveId);
+    if (!resolvedPerspectiveId) {
+      return res.status(400).json(errorResponse("Perspective is required", 400));
+    }
+    if (!title || String(title).trim().length < 3) {
+      return res.status(400).json(errorResponse("Goal title is required", 400));
+    }
+    const created = await createBalancedScorecardGoal({
+      perspectiveId: resolvedPerspectiveId,
+      title: String(title),
+      description: description ? String(description) : null,
+      ownerName: ownerName ? String(ownerName) : null,
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Strategic goal created"));
+  } catch (error: any) {
+    console.error("Error creating goal:", error);
+    return res.status(500).json(errorResponse("Failed to create strategic goal", 500));
+  }
+});
+
+router.post("/kpis", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create KPI contracts", 403));
+    }
+    const {
+      goalId,
+      metricKey,
+      name,
+      description,
+      formula,
+      frequency,
+      unit,
+      weight,
+      firmTarget,
+      ownerName,
+      statusLogic,
+      updateFrequency,
+    } = req.body || {};
+    const resolvedGoalId = parseIntSafe(goalId);
+    if (!resolvedGoalId) {
+      return res.status(400).json(errorResponse("Goal is required", 400));
+    }
+    if (!metricKey || !String(metricKey).trim()) {
+      return res.status(400).json(errorResponse("Metric template is required", 400));
+    }
+    if (!name || String(name).trim().length < 3) {
+      return res.status(400).json(errorResponse("KPI name is required", 400));
+    }
+    if (!frequency || !unit || !firmTarget) {
+      return res.status(400).json(errorResponse("Frequency, unit, and firm target are required", 400));
+    }
+    const created = await createBalancedScorecardKpi({
+      goalId: resolvedGoalId,
+      metricKey: String(metricKey),
+      name: String(name),
+      description: description ? String(description) : null,
+      formula: formula ? String(formula) : null,
+      frequency: String(frequency),
+      unit: String(unit),
+      weight: Number(weight ?? 0),
+      firmTarget: String(firmTarget),
+      ownerName: ownerName ? String(ownerName) : null,
+      statusLogic: statusLogic ? String(statusLogic) : null,
+      updateFrequency: updateFrequency ? String(updateFrequency) : null,
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "KPI contract created"));
+  } catch (error: any) {
+    console.error("Error creating KPI:", error);
+    return res.status(500).json(errorResponse("Failed to create KPI contract", 500));
+  }
+});
+
+router.post("/initiatives", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create firm initiatives", 403));
+    }
+    const {
+      goalId,
+      kpiId,
+      parentInitiativeId,
+      scopeRole,
+      title,
+      summary,
+      ownerName,
+      timeline,
+      dueDate,
+      status,
+      progress,
+    } = req.body || {};
+    const resolvedGoalId = parseIntSafe(goalId);
+    const resolvedKpiId = parseIntSafe(kpiId);
+    const resolvedParentInitiativeId = parseIntSafe(parentInitiativeId);
+    if (!resolvedGoalId || !resolvedKpiId) {
+      return res.status(400).json(errorResponse("Goal and KPI are required", 400));
+    }
+    if (!scopeRole || !String(scopeRole).trim()) {
+      return res.status(400).json(errorResponse("Scope role is required", 400));
+    }
+    if (!title || String(title).trim().length < 3) {
+      return res.status(400).json(errorResponse("Initiative title is required", 400));
+    }
+    const created = await createBalancedScorecardInitiative({
+      goalId: resolvedGoalId,
+      kpiId: resolvedKpiId,
+      parentInitiativeId: resolvedParentInitiativeId ?? null,
+      scopeRole: String(scopeRole),
+      title: String(title),
+      summary: summary ? String(summary) : null,
+      ownerName: ownerName ? String(ownerName) : null,
+      timeline: timeline ? String(timeline) : null,
+      dueDate: dueDate ? String(dueDate) : null,
+      status:
+        status === "on_track" || status === "at_risk" || status === "off_track"
+          ? status
+          : "at_risk",
+      progress: Number(progress ?? 0),
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Initiative created"));
+  } catch (error: any) {
+    console.error("Error creating initiative:", error);
+    return res.status(500).json(errorResponse("Failed to create initiative", 500));
   }
 });
 

@@ -101,15 +101,22 @@ interface ChecklistDocument {
   id: number;
   fileName?: string | null;
   filePath?: string | null;
+  verificationStatus?: "pending" | "verified" | "rejected" | null;
+  rejectionReason?: string | null;
+  verifiedAt?: string | null;
 }
 
 interface InductionChecklistItem {
   id: number;
   itemName: string;
   description?: string | null;
+  sectionKey?: string | null;
+  sectionLabel?: string | null;
+  ownerRole?: string | null;
   isCompleted: boolean;
   itemType?: string | null;
   resourceUrl?: string | null;
+  comments?: string | null;
   requiresDocument: boolean;
   documentId?: number | null;
   document?: ChecklistDocument | null;
@@ -121,6 +128,9 @@ interface InductionChecklistDetail {
   status?: string | null;
   completionPercent?: number | null;
   dueDate?: string | null;
+  employeeAcknowledgedAt?: string | null;
+  hrSignedOffAt?: string | null;
+  hrSignoffNotes?: string | null;
   items?: InductionChecklistItem[];
 }
 
@@ -160,6 +170,27 @@ interface ChecklistDraftItem {
   itemType: ChecklistItemType;
   resourceUrl: string;
   requiresDocument: boolean;
+  sectionKey: string;
+  sectionLabel: string;
+  ownerRole: "employee" | "hr";
+  comments: string;
+}
+
+interface InductionTemplateItemResponse {
+  itemName: string;
+  description?: string;
+  itemType?: ChecklistItemType;
+  resourceUrl?: string;
+  requiresDocument?: boolean;
+  sectionKey?: string;
+  sectionLabel?: string;
+  ownerRole?: "employee" | "hr";
+  comments?: string;
+}
+
+interface InductionTemplateResponse {
+  checklistName?: string;
+  items?: InductionTemplateItemResponse[];
 }
 
 const DEFAULT_ACCESS_ROLES = [...CANONICAL_ROLES];
@@ -206,27 +237,42 @@ const createChecklistDraftItem = (
       typeof overrides.requiresDocument === "boolean"
         ? overrides.requiresDocument
         : itemType === "document_upload",
+    sectionKey: overrides.sectionKey || "general",
+    sectionLabel: overrides.sectionLabel || "General",
+    ownerRole: overrides.ownerRole || "hr",
+    comments: overrides.comments || "",
   };
 };
 
 const defaultChecklistDraftItems = (): ChecklistDraftItem[] => [
   createChecklistDraftItem({
-    itemName: "Upload ID documents",
-    description: "Upload national ID or passport copy.",
+    itemName: "Application letter & CV",
+    description: "Employee file must contain the application letter and CV.",
     itemType: "document_upload",
     requiresDocument: true,
-  }),
-  createChecklistDraftItem({
-    itemName: "Complete induction briefing",
-    description: "Attend or review the induction briefing.",
-    itemType: "task",
-  }),
-  createChecklistDraftItem({
-    itemName: "Accept company policies",
-    description: "Review and acknowledge onboarding policies.",
-    itemType: "task",
+    sectionKey: "employee_file",
+    sectionLabel: "Employee File",
+    ownerRole: "hr",
   }),
 ];
+
+const mapTemplateItemToDraft = (
+  item: InductionTemplateItemResponse,
+): ChecklistDraftItem =>
+  createChecklistDraftItem({
+    itemName: item.itemName || "",
+    description: item.description || "",
+    itemType: item.itemType || "task",
+    resourceUrl: item.resourceUrl || "",
+    requiresDocument:
+      typeof item.requiresDocument === "boolean"
+        ? item.requiresDocument
+        : item.itemType === "document_upload",
+    sectionKey: item.sectionKey || "general",
+    sectionLabel: item.sectionLabel || "General",
+    ownerRole: item.ownerRole || "hr",
+    comments: item.comments || "",
+  });
 
 const formatShortDate = (value?: string) => {
   if (!value) return "--";
@@ -240,6 +286,38 @@ const statusBadgeVariant = (status?: string) => {
   if (status === "completed") return "default";
   if (status === "in_progress") return "outline";
   return "secondary";
+};
+
+const formatOwnerRoleLabel = (ownerRole?: string | null) => {
+  const normalized = String(ownerRole || "hr")
+    .trim()
+    .toLowerCase();
+  if (normalized === "employee") return "Employee";
+  return "HR";
+};
+
+const verificationBadgeVariant = (status?: string | null) => {
+  if (status === "verified") return "default";
+  if (status === "rejected") return "destructive";
+  return "outline";
+};
+
+const groupChecklistItemsBySection = (items: InductionChecklistItem[] = []) => {
+  const groups = new Map<
+    string,
+    { sectionKey: string; sectionLabel: string; items: InductionChecklistItem[] }
+  >();
+
+  items.forEach((item) => {
+    const sectionKey = String(item.sectionKey || "general");
+    const sectionLabel = String(item.sectionLabel || "General");
+    if (!groups.has(sectionKey)) {
+      groups.set(sectionKey, { sectionKey, sectionLabel, items: [] });
+    }
+    groups.get(sectionKey)!.items.push(item);
+  });
+
+  return Array.from(groups.values());
 };
 
 const isChecklistOverdue = (caseItem: OnboardingCase) => {
@@ -440,6 +518,7 @@ const EmployeeManagement = () => {
   const [checklistDraftItems, setChecklistDraftItems] = useState<ChecklistDraftItem[]>(
     defaultChecklistDraftItems
   );
+  const [checklistTemplateLoading, setChecklistTemplateLoading] = useState(false);
   const [checklistDueDate, setChecklistDueDate] = useState("");
   const [bulkChecklistDialogOpen, setBulkChecklistDialogOpen] = useState(false);
   const [bulkChecklistDueDate, setBulkChecklistDueDate] = useState("");
@@ -447,6 +526,9 @@ const EmployeeManagement = () => {
   const [activeChecklist, setActiveChecklist] = useState<InductionChecklistDetail | null>(null);
   const [checklistViewLoading, setChecklistViewLoading] = useState(false);
   const [checklistUploadBusy, setChecklistUploadBusy] = useState<number | null>(null);
+  const [checklistActionBusy, setChecklistActionBusy] = useState<string | null>(null);
+  const [checklistCommentDrafts, setChecklistCommentDrafts] = useState<Record<number, string>>({});
+  const [checklistSignoffNotes, setChecklistSignoffNotes] = useState("");
   const [offboardingDialogOpen, setOffboardingDialogOpen] = useState(false);
   const [remindingChecklistId, setRemindingChecklistId] = useState<number | null>(null);
   const [offboardingEmployeeId, setOffboardingEmployeeId] = useState<string>("");
@@ -632,6 +714,38 @@ const EmployeeManagement = () => {
     CHECKLIST_ITEM_TYPE_OPTIONS.find((option) => option.value === itemType) ||
     CHECKLIST_ITEM_TYPE_OPTIONS[0];
 
+  const hydrateChecklistDetail = (payload: any) => {
+    const detail = (payload?.data ?? payload) as InductionChecklistDetail;
+    setActiveChecklist(detail);
+    const nextComments = Object.fromEntries(
+      (detail.items || []).map((item) => [item.id, item.comments || ""])
+    );
+    setChecklistCommentDrafts(nextComments);
+    setChecklistSignoffNotes(detail.hrSignoffNotes || "");
+    return detail;
+  };
+
+  const loadDefaultChecklistTemplate = async () => {
+    try {
+      setChecklistTemplateLoading(true);
+      const response = await apiFetch("GET", "/induction-checklist/template/default");
+      const template = (response?.data ?? response) as InductionTemplateResponse;
+      const templateItems = Array.isArray(template.items)
+        ? template.items.map(mapTemplateItemToDraft)
+        : defaultChecklistDraftItems();
+      setChecklistDraftItems(templateItems.length ? templateItems : defaultChecklistDraftItems());
+    } catch (error: any) {
+      console.warn("Failed to load induction template:", error);
+      setChecklistDraftItems(defaultChecklistDraftItems());
+      toast({
+        title: "Default template unavailable",
+        description: "Loaded the local fallback checklist template instead.",
+      });
+    } finally {
+      setChecklistTemplateLoading(false);
+    }
+  };
+
   const updateChecklistDraftItem = (
     id: string,
     updates: Partial<ChecklistDraftItem>
@@ -649,6 +763,10 @@ const EmployeeManagement = () => {
           itemType: nextType,
           requiresDocument: isDocumentUpload,
           resourceUrl: keepResource ? updates.resourceUrl ?? item.resourceUrl : "",
+          comments: updates.comments ?? item.comments,
+          sectionKey: updates.sectionKey ?? item.sectionKey,
+          sectionLabel: updates.sectionLabel ?? item.sectionLabel,
+          ownerRole: updates.ownerRole ?? item.ownerRole,
         };
       })
     );
@@ -674,6 +792,7 @@ const EmployeeManagement = () => {
         const description = draft.description.trim();
         const itemType = draft.itemType;
         const resourceUrl = draft.resourceUrl.trim();
+        const comments = draft.comments.trim();
         return {
           itemName,
           description: description || undefined,
@@ -681,6 +800,10 @@ const EmployeeManagement = () => {
           itemType,
           resourceUrl: resourceUrl || undefined,
           requiresDocument: itemType === "document_upload",
+          sectionKey: draft.sectionKey,
+          sectionLabel: draft.sectionLabel,
+          ownerRole: draft.ownerRole,
+          comments: comments || undefined,
         };
       })
       .filter((item) => item.itemName.length > 0);
@@ -767,8 +890,7 @@ const EmployeeManagement = () => {
       setChecklistViewLoading(true);
       setChecklistViewOpen(true);
       const response = await apiFetch("GET", `/induction-checklist/${checklistId}`);
-      const data = (response as any)?.data ?? response;
-      setActiveChecklist(data);
+      hydrateChecklistDetail(response);
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -779,6 +901,11 @@ const EmployeeManagement = () => {
     } finally {
       setChecklistViewLoading(false);
     }
+  };
+
+  const refreshActiveChecklist = async (checklistId: number) => {
+    const refreshed = await apiFetch("GET", `/induction-checklist/${checklistId}`);
+    hydrateChecklistDetail(refreshed);
   };
 
   const attachChecklistDocument = async (checklistId: number, itemId: number, file: File) => {
@@ -802,8 +929,7 @@ const EmployeeManagement = () => {
         documentId,
       });
 
-      const refreshed = await apiFetch("GET", `/induction-checklist/${checklistId}`);
-      setActiveChecklist((refreshed as any)?.data ?? refreshed);
+      await refreshActiveChecklist(checklistId);
       toast({ title: "Document attached" });
     } catch (error: any) {
       toast({
@@ -813,6 +939,105 @@ const EmployeeManagement = () => {
       });
     } finally {
       setChecklistUploadBusy(null);
+    }
+  };
+
+  const completeChecklistItemAsHr = async (checklistId: number, itemId: number) => {
+    try {
+      setChecklistActionBusy(`complete:${itemId}`);
+      await apiFetch("PATCH", `/induction-checklist/${checklistId}/items/${itemId}/complete`);
+      await refreshActiveChecklist(checklistId);
+      toast({ title: "Checklist item completed" });
+    } catch (error: any) {
+      toast({
+        title: "Unable to complete item",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setChecklistActionBusy(null);
+    }
+  };
+
+  const verifyChecklistDocument = async (
+    checklistId: number,
+    itemId: number,
+    documentId: number,
+    verificationStatus: "verified" | "rejected"
+  ) => {
+    try {
+      setChecklistActionBusy(`${verificationStatus}:${documentId}`);
+      const rejectionReason =
+        verificationStatus === "rejected"
+          ? window.prompt("Enter a rejection reason for this document:", "") || ""
+          : undefined;
+      if (verificationStatus === "rejected" && !rejectionReason.trim()) {
+        setChecklistActionBusy(null);
+        return;
+      }
+      await documentsAPI.verify(documentId, {
+        verificationStatus,
+        rejectionReason: rejectionReason?.trim() || undefined,
+      });
+      await refreshActiveChecklist(checklistId);
+      toast({
+        title:
+          verificationStatus === "verified" ? "Document verified" : "Document rejected",
+        description:
+          verificationStatus === "verified"
+            ? "The checklist document is now approved for completion."
+            : "The employee will need to re-upload the document.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Unable to update document",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setChecklistActionBusy(null);
+    }
+  };
+
+  const saveChecklistItemComments = async (checklistId: number, itemId: number) => {
+    try {
+      setChecklistActionBusy(`comments:${itemId}`);
+      await apiFetch("PATCH", `/induction-checklist/${checklistId}/items/${itemId}/comments`, {
+        comments: checklistCommentDrafts[itemId] || "",
+      });
+      await refreshActiveChecklist(checklistId);
+      toast({ title: "Item comments saved" });
+    } catch (error: any) {
+      toast({
+        title: "Unable to save comments",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setChecklistActionBusy(null);
+    }
+  };
+
+  const signoffChecklistAsHr = async (checklistId: number) => {
+    try {
+      setChecklistActionBusy(`signoff:${checklistId}`);
+      await apiFetch("POST", `/induction-checklist/${checklistId}/hr-signoff`, {
+        notes: checklistSignoffNotes || undefined,
+      });
+      await refreshActiveChecklist(checklistId);
+      await loadLifecycleData();
+      toast({
+        title: "Checklist signed off",
+        description: "Induction is now fully completed for this employee.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Unable to sign off checklist",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setChecklistActionBusy(null);
     }
   };
 
@@ -1169,9 +1394,17 @@ const EmployeeManagement = () => {
     setEmployeeDialogOpen(true);
   };
 
-  const handleOpenChecklistDialog = (employeeId?: string, onboardingCaseId?: number) => {
+  const handleOpenBulkChecklistDialog = async () => {
+    setBulkChecklistDueDate("");
+    await loadDefaultChecklistTemplate();
+    setBulkChecklistDialogOpen(true);
+  };
+
+  const handleOpenChecklistDialog = async (employeeId?: string, onboardingCaseId?: number) => {
     setChecklistEmployeeId(employeeId || "");
     setChecklistOnboardingCaseId(onboardingCaseId ? String(onboardingCaseId) : "");
+    setChecklistDueDate("");
+    await loadDefaultChecklistTemplate();
     setChecklistDialogOpen(true);
   };
 
@@ -1464,7 +1697,6 @@ const EmployeeManagement = () => {
 
       const emailDelivery = (onboardingResponse as any)?.emailDelivery;
       const emailDeliveryReason = (onboardingResponse as any)?.emailDeliveryReason;
-      const fallbackPassword = (onboardingResponse as any)?.temporaryPasswordPreview;
       const onboardingCaseId =
         (onboardingResponse as any)?.onboarding?.onboardingCaseId ??
         (onboardingResponse as any)?.user?.onboardingCaseId;
@@ -1478,17 +1710,15 @@ const EmployeeManagement = () => {
         description:
           emailDelivery === "sent"
             ? checklistProvisioned
-              ? "Employee onboarded, checklist assigned, and temporary password sent by email."
-              : "Employee onboarded and temporary password sent by email."
-            : fallbackPassword
-              ? emailDeliveryReason === "dummy_mode"
-                ? checklistProvisioned
-                  ? `Employee onboarded with checklist assigned (dummy email mode); temporary password: ${fallbackPassword}`
-                  : `Employee onboarded in dummy email mode; temporary password: ${fallbackPassword}`
-                : checklistProvisioned
-                  ? `Employee onboarded with checklist assigned. SMTP is not configured; temporary password: ${fallbackPassword}`
-                  : `Employee onboarded. SMTP is not configured; temporary password: ${fallbackPassword}`
-              : "Employee onboarded. Email delivery failed; configure SMTP and resend invite.",
+              ? "Employee onboarded, checklist assigned, and the invite was sent by email."
+              : "Employee onboarded and the invite was sent by email."
+            : emailDeliveryReason === "dummy_mode"
+              ? checklistProvisioned
+                ? "Employee onboarded with checklist assigned. Email delivery is disabled in dummy mode, so no invite email was sent."
+                : "Employee onboarded. Email delivery is disabled in dummy mode, so no invite email was sent."
+              : checklistProvisioned
+                ? "Employee onboarded with checklist assigned. Email delivery failed; configure SMTP and resend the invite."
+                : "Employee onboarded. Email delivery failed; configure SMTP and resend the invite.",
       });
 
       setEmployeeDialogOpen(false);
@@ -1855,11 +2085,11 @@ const EmployeeManagement = () => {
                     <CardDescription>Use checklist assignment and completion as the onboarding flow.</CardDescription>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" onClick={() => setBulkChecklistDialogOpen(true)}>
+                    <Button variant="outline" onClick={() => void handleOpenBulkChecklistDialog()}>
                       <ClipboardCheck className="h-4 w-4 mr-2" />
                       Bulk Assign
                     </Button>
-                    <Button onClick={() => handleOpenChecklistDialog()}>
+                    <Button onClick={() => void handleOpenChecklistDialog()}>
                       <ClipboardCheck className="h-4 w-4 mr-2" />
                       Assign Checklist
                     </Button>
@@ -2008,7 +2238,7 @@ const EmployeeManagement = () => {
                                         <Button
                                           variant="outline"
                                           size="sm"
-                                          onClick={() => handleOpenChecklistDialog(String(oc.profileId), oc.id)}
+                                          onClick={() => void handleOpenChecklistDialog(String(oc.profileId), oc.id)}
                                         >
                                           Assign Checklist
                                         </Button>
@@ -2726,6 +2956,12 @@ const EmployeeManagement = () => {
             <div className="grid max-h-[calc(90vh-10rem)] gap-4 overflow-y-auto py-2 pr-1">
               <div className="grid gap-2">
                 <Label>Checklist Items</Label>
+                <p className="text-xs text-muted-foreground">
+                  The default induction template mirrors the current HR induction and employee-file checklist.
+                </p>
+                {checklistTemplateLoading && (
+                  <div className="text-xs text-muted-foreground">Loading default induction template...</div>
+                )}
                 <div className="space-y-3">
                   {checklistDraftItems.map((item, index) => {
                     const itemTypeOption = getChecklistItemTypeOption(item.itemType);
@@ -2756,6 +2992,61 @@ const EmployeeManagement = () => {
                               updateChecklistDraftItem(item.id, { itemName: event.target.value })
                             }
                             placeholder="e.g. Upload KRA PIN certificate"
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <Badge variant="outline">{item.sectionLabel}</Badge>
+                          <Badge variant="secondary">{formatOwnerRoleLabel(item.ownerRole)}</Badge>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="grid gap-2">
+                            <Label>Section</Label>
+                            <Input
+                              value={item.sectionLabel}
+                              onChange={(event) =>
+                                updateChecklistDraftItem(item.id, {
+                                  sectionLabel: event.target.value,
+                                  sectionKey: event.target.value
+                                    .trim()
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9]+/g, "_")
+                                    .replace(/^_+|_+$/g, "") || "general",
+                                })
+                              }
+                              placeholder="e.g. Employee File"
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>Owner</Label>
+                            <Select
+                              value={item.ownerRole}
+                              onValueChange={(value) =>
+                                updateChecklistDraftItem(item.id, {
+                                  ownerRole: value as ChecklistDraftItem["ownerRole"],
+                                })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="hr">HR</SelectItem>
+                                <SelectItem value="employee">Employee</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>HR comments / guidance (optional)</Label>
+                          <Textarea
+                            rows={2}
+                            value={item.comments}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, {
+                                comments: event.target.value,
+                              })
+                            }
+                            placeholder="Add verification notes or guidance for this induction step"
                           />
                         </div>
                         <div className="grid gap-2 md:grid-cols-2">
@@ -2891,6 +3182,12 @@ const EmployeeManagement = () => {
               </div>
               <div className="grid gap-2">
                 <Label>Checklist Items</Label>
+                <p className="text-xs text-muted-foreground">
+                  The default induction template mirrors the current HR induction and employee-file checklist.
+                </p>
+                {checklistTemplateLoading && (
+                  <div className="text-xs text-muted-foreground">Loading default induction template...</div>
+                )}
                 <div className="space-y-3">
                   {checklistDraftItems.map((item, index) => {
                     const itemTypeOption = getChecklistItemTypeOption(item.itemType);
@@ -2921,6 +3218,61 @@ const EmployeeManagement = () => {
                               updateChecklistDraftItem(item.id, { itemName: event.target.value })
                             }
                             placeholder="e.g. Upload ID card"
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <Badge variant="outline">{item.sectionLabel}</Badge>
+                          <Badge variant="secondary">{formatOwnerRoleLabel(item.ownerRole)}</Badge>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="grid gap-2">
+                            <Label>Section</Label>
+                            <Input
+                              value={item.sectionLabel}
+                              onChange={(event) =>
+                                updateChecklistDraftItem(item.id, {
+                                  sectionLabel: event.target.value,
+                                  sectionKey: event.target.value
+                                    .trim()
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9]+/g, "_")
+                                    .replace(/^_+|_+$/g, "") || "general",
+                                })
+                              }
+                              placeholder="e.g. Employee File"
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label>Owner</Label>
+                            <Select
+                              value={item.ownerRole}
+                              onValueChange={(value) =>
+                                updateChecklistDraftItem(item.id, {
+                                  ownerRole: value as ChecklistDraftItem["ownerRole"],
+                                })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="hr">HR</SelectItem>
+                                <SelectItem value="employee">Employee</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>HR comments / guidance (optional)</Label>
+                          <Textarea
+                            rows={2}
+                            value={item.comments}
+                            onChange={(event) =>
+                              updateChecklistDraftItem(item.id, {
+                                comments: event.target.value,
+                              })
+                            }
+                            placeholder="Add verification notes or guidance for this induction step"
                           />
                         </div>
                         <div className="grid gap-2 md:grid-cols-2">
@@ -3058,93 +3410,233 @@ const EmployeeManagement = () => {
                     <> · Due {new Date(activeChecklist.dueDate).toLocaleDateString()}</>
                   )}
                 </div>
-                <div className="space-y-3">
-                  {(activeChecklist.items || []).map((item) => {
-                    const filePath = item.document?.filePath;
-                    const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
-                    const itemTypeOption = getChecklistItemTypeOption(item.itemType);
-                    const rawResourceUrl = String(item.resourceUrl || "").trim();
-                    const resourceUrl = rawResourceUrl
-                      ? rawResourceUrl.startsWith("/uploads/")
-                        ? `${baseUrl}${rawResourceUrl}`
-                        : rawResourceUrl
-                      : "";
-                    return (
-                      <div key={item.id} className="rounded-lg border border-border p-3">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{item.itemName}</span>
-                              <Badge variant="outline" className="text-xs">
-                                {itemTypeOption.label}
-                              </Badge>
-                              {item.requiresDocument && (
-                                <Badge variant="outline" className="text-xs">
-                                  Document required
-                                </Badge>
-                              )}
-                              {item.isCompleted && (
-                                <Badge variant="secondary" className="text-xs">
-                                  Completed
-                                </Badge>
-                              )}
-                            </div>
-                            {item.description && (
-                              <p className="text-xs text-muted-foreground">{item.description}</p>
-                            )}
-                            {resourceUrl && (
-                              <div className="mt-2">
-                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                                  <a href={resourceUrl} target="_blank" rel="noreferrer">
-                                    Open resource
-                                  </a>
-                                </Button>
-                              </div>
-                            )}
-                            {filePath && (
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                <FileText className="h-4 w-4 text-emerald-500" />
-                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                                  <a href={`${baseUrl}${filePath}`} target="_blank" rel="noreferrer">
-                                    Preview
-                                  </a>
-                                </Button>
-                                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                                  <a href={`${baseUrl}${filePath}`} download>
-                                    Download
-                                  </a>
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {!item.documentId && item.requiresDocument && (
-                              <label className="inline-flex items-center">
-                                <input
-                                  type="file"
-                                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
-                                  className="hidden"
-                                  onChange={(event) => {
-                                    const file = event.target.files?.[0];
-                                    if (file) {
-                                      attachChecklistDocument(activeChecklist.id, item.id, file);
-                                    }
-                                    event.currentTarget.value = "";
-                                  }}
-                                />
-                                <Button size="sm" variant="outline" asChild disabled={checklistUploadBusy === item.id}>
-                                  <span>
-                                    <Upload className="mr-2 h-4 w-4" />
-                                    {checklistUploadBusy === item.id ? "Uploading..." : "Attach"}
-                                  </span>
-                                </Button>
-                              </label>
-                            )}
-                          </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border p-3 text-sm">
+                    <div className="font-medium">Employee acknowledgement</div>
+                    <div className="text-xs text-muted-foreground">
+                      {activeChecklist.employeeAcknowledgedAt
+                        ? `Acknowledged on ${new Date(activeChecklist.employeeAcknowledgedAt).toLocaleString()}`
+                        : "Pending employee acknowledgement after all items are complete."}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border p-3 text-sm">
+                    <div className="font-medium">HR signoff</div>
+                    <div className="text-xs text-muted-foreground">
+                      {activeChecklist.hrSignedOffAt
+                        ? `Signed off on ${new Date(activeChecklist.hrSignedOffAt).toLocaleString()}`
+                        : "Pending final HR signoff."}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  {groupChecklistItemsBySection(activeChecklist.items || []).map((section) => (
+                    <div key={section.sectionKey} className="space-y-3">
+                      <div className="rounded-lg bg-muted/30 px-3 py-2">
+                        <div className="font-medium">{section.sectionLabel}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {section.items.filter((item) => item.isCompleted).length}/{section.items.length} complete
                         </div>
                       </div>
-                    );
-                  })}
+                      {section.items.map((item) => {
+                        const filePath = item.document?.filePath;
+                        const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+                        const itemTypeOption = getChecklistItemTypeOption(item.itemType);
+                        const rawResourceUrl = String(item.resourceUrl || "").trim();
+                        const resourceUrl = rawResourceUrl
+                          ? rawResourceUrl.startsWith("/uploads/")
+                            ? `${baseUrl}${rawResourceUrl}`
+                            : rawResourceUrl
+                          : "";
+                        const documentVerified = item.document?.verificationStatus === "verified";
+                        const canComplete =
+                          !item.isCompleted &&
+                          (!item.requiresDocument || documentVerified);
+
+                        return (
+                          <div key={item.id} className="rounded-lg border border-border p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium">{item.itemName}</span>
+                                  <Badge variant="outline" className="text-xs">
+                                    {itemTypeOption.label}
+                                  </Badge>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {formatOwnerRoleLabel(item.ownerRole)}
+                                  </Badge>
+                                  {item.requiresDocument && (
+                                    <Badge variant="outline" className="text-xs">
+                                      Document required
+                                    </Badge>
+                                  )}
+                                  {item.document?.verificationStatus && (
+                                    <Badge
+                                      variant={verificationBadgeVariant(item.document.verificationStatus) as any}
+                                      className="text-xs"
+                                    >
+                                      {item.document.verificationStatus}
+                                    </Badge>
+                                  )}
+                                  {item.isCompleted && (
+                                    <Badge variant="default" className="text-xs">
+                                      Completed
+                                    </Badge>
+                                  )}
+                                </div>
+                                {item.description && (
+                                  <p className="text-xs text-muted-foreground">{item.description}</p>
+                                )}
+                                {resourceUrl && (
+                                  <div className="mt-2">
+                                    <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                      <a href={resourceUrl} target="_blank" rel="noreferrer">
+                                        Open resource
+                                      </a>
+                                    </Button>
+                                  </div>
+                                )}
+                                {filePath && (
+                                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                    <FileText className="h-4 w-4 text-emerald-500" />
+                                    <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                      <a href={`${baseUrl}${filePath}`} target="_blank" rel="noreferrer">
+                                        Preview
+                                      </a>
+                                    </Button>
+                                    <Button variant="link" className="h-auto p-0 text-xs" asChild>
+                                      <a href={`${baseUrl}${filePath}`} download>
+                                        Download
+                                      </a>
+                                    </Button>
+                                    {item.document?.rejectionReason && (
+                                      <span className="text-destructive">
+                                        Rejection reason: {item.document.rejectionReason}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {!item.documentId && item.requiresDocument && (
+                                  <label className="inline-flex items-center">
+                                    <input
+                                      type="file"
+                                      accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+                                      className="hidden"
+                                      onChange={(event) => {
+                                        const file = event.target.files?.[0];
+                                        if (file) {
+                                          attachChecklistDocument(activeChecklist.id, item.id, file);
+                                        }
+                                        event.currentTarget.value = "";
+                                      }}
+                                    />
+                                    <Button size="sm" variant="outline" asChild disabled={checklistUploadBusy === item.id}>
+                                      <span>
+                                        <Upload className="mr-2 h-4 w-4" />
+                                        {checklistUploadBusy === item.id ? "Uploading..." : "Attach"}
+                                      </span>
+                                    </Button>
+                                  </label>
+                                )}
+                                {item.documentId && item.document?.verificationStatus !== "verified" && (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={Boolean(checklistActionBusy)}
+                                      onClick={() =>
+                                        void verifyChecklistDocument(activeChecklist.id, item.id, item.documentId!, "verified")
+                                      }
+                                    >
+                                      Verify
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={Boolean(checklistActionBusy)}
+                                      onClick={() =>
+                                        void verifyChecklistDocument(activeChecklist.id, item.id, item.documentId!, "rejected")
+                                      }
+                                    >
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {!item.isCompleted && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!canComplete || Boolean(checklistActionBusy)}
+                                    onClick={() =>
+                                      void completeChecklistItemAsHr(activeChecklist.id, item.id)
+                                    }
+                                  >
+                                    Mark complete
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-2">
+                              <Label className="text-xs">HR / manager comments</Label>
+                              <Textarea
+                                rows={2}
+                                value={checklistCommentDrafts[item.id] || ""}
+                                onChange={(event) =>
+                                  setChecklistCommentDrafts((prev) => ({
+                                    ...prev,
+                                    [item.id]: event.target.value,
+                                  }))
+                                }
+                                placeholder="Record verification notes, induction comments, or follow-up actions"
+                              />
+                              <div className="flex justify-end">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={Boolean(checklistActionBusy)}
+                                  onClick={() =>
+                                    void saveChecklistItemComments(activeChecklist.id, item.id)
+                                  }
+                                >
+                                  Save comments
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-3 rounded-lg border border-border p-3">
+                  <div>
+                    <div className="font-medium">Final HR signoff</div>
+                    <div className="text-xs text-muted-foreground">
+                      Sign off once every induction item is complete and the employee has acknowledged the induction.
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>HR signoff notes</Label>
+                    <Textarea
+                      rows={3}
+                      value={checklistSignoffNotes}
+                      onChange={(event) => setChecklistSignoffNotes(event.target.value)}
+                      placeholder="Summarize any final induction remarks, exceptions, or observations"
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      disabled={
+                        Boolean(checklistActionBusy) ||
+                        !activeChecklist.employeeAcknowledgedAt ||
+                        (activeChecklist.items || []).some((item) => !item.isCompleted)
+                      }
+                      onClick={() => void signoffChecklistAsHr(activeChecklist.id)}
+                    >
+                      {activeChecklist.hrSignedOffAt ? "Re-sign off checklist" : "Sign off checklist"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}

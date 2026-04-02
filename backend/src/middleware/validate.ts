@@ -1,18 +1,4 @@
-/**
- * validator.ts
- * Central validation middleware + helpers using express-validator.
- *
- * Usage pattern:
- *   router.post(
- *     "/jobs",
- *     authMiddleware,
- *     loadProfile,
- *     requirePermission("job.create"),
- *     rejectUnknownFields(["jobName", "clientId", "startDate"]),
- *     validateRequest(createJobValidators),
- *     createJobHandler
- *   );
- */
+// This middleware provides functions to validate incoming HTTP requests using the express-validator library. It includes a standard error handler that formats validation errors into a consistent response structure, as well as helper functions to create validation chains for common patterns (e.g., validating integer parameters). The `validateRequest` function allows you to easily apply an array of validators to a route and automatically handle any validation errors that arise. Additionally, there is an optional `rejectUnknownFields` middleware that can be used to enforce strict validation by rejecting any fields in the request body that are not explicitly allowed. By using this middleware, we can ensure that incoming requests meet the expected format and constraints, improving the robustness and security of our API endpoints.
 
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import {

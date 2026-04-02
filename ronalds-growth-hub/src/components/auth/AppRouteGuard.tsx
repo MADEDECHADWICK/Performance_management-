@@ -17,6 +17,7 @@ export default function AppRouteGuard({ children }: AppRouteGuardProps) {
     isLoading,
     isAuthenticated,
     roles,
+    homeViewKey,
     profile,
     isAdmin,
     isHR,
@@ -74,7 +75,7 @@ export default function AppRouteGuard({ children }: AppRouteGuardProps) {
     hasRouteModuleFallback;
 
   if (!hasRouteViewAccess || !hasRouteModuleAccess) {
-    const redirectTarget = getPreferredHomeRoute(roles, hasViewAccess);
+    const redirectTarget = getPreferredHomeRoute(roles, hasViewAccess, homeViewKey);
     if (redirectTarget === location.pathname) {
       return <div className="p-6 text-sm text-muted-foreground">Access denied.</div>;
     }

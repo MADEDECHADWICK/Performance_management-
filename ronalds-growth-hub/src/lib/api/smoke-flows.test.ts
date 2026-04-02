@@ -162,24 +162,4 @@ describe("frontend smoke flows", () => {
       evaluatorSigned: true,
     });
   });
-
-  it("updates KPI progress with measurement metadata", async () => {
-    patchMock.mockResolvedValueOnce({
-      id: 15,
-      title: "Billable realization",
-      actual: 86,
-      status: "on_track",
-    });
-
-    await evaluationsAPI.updateKPIProgress(15, 86, {
-      note: "Updated after monthly finance close.",
-      measuredAt: "2026-03-12T09:00:00.000Z",
-    });
-
-    expect(patchMock).toHaveBeenCalledWith("/kpis/15/progress", {
-      actual: 86,
-      note: "Updated after monthly finance close.",
-      measuredAt: "2026-03-12T09:00:00.000Z",
-    });
-  });
 });

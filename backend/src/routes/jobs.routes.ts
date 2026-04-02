@@ -84,6 +84,39 @@ router.get(
 );
 
 /**
+ * GET /jobs/:jobId/invoices
+ * Get invoices generated for a job
+ */
+router.get(
+  "/:jobId/invoices",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.getJobInvoices
+);
+
+/**
+ * POST /jobs/:jobId/invoices/from-milestone/:milestoneTaskId
+ * Create or return a draft invoice for a milestone
+ */
+router.post(
+  "/:jobId/invoices/from-milestone/:milestoneTaskId",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.createJobInvoiceDraft
+);
+
+/**
+ * PATCH /jobs/:jobId/invoices/:invoiceId/issue
+ * Issue an invoice for client billing
+ */
+router.patch(
+  "/:jobId/invoices/:invoiceId/issue",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.issueJobInvoice
+);
+
+/**
  * PATCH /jobs/:jobId
  * Update job
  */
@@ -268,7 +301,7 @@ router.get(
 
 /**
  * GET /jobs/:jobId/tracking
- * Unified workflow + KPI tracking view
+ * Unified workflow tracking view
  */
 router.get(
   "/:jobId/tracking",

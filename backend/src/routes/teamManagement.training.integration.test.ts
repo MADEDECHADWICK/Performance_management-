@@ -27,7 +27,7 @@ jest.mock('../middleware/auth', () => ({
 const createApp = () => {
   const app = express();
   app.use(express.json());
-  app.use('/api/manager', teamManagementRoutes);
+  app.use('/api/team-management', teamManagementRoutes);
   return app;
 };
 
@@ -76,7 +76,7 @@ describe('teamManagement training records integration', () => {
     const app = createApp();
     const suffix = Date.now();
 
-    const createResponse = await request(app).post('/api/manager/training-records').send({
+    const createResponse = await request(app).post('/api/team-management/training-records').send({
       courseName: `Integration Training ${suffix}`,
       trainingType: 'workshop',
       deliveryMode: 'online',
@@ -92,10 +92,9 @@ describe('teamManagement training records integration', () => {
     const trainingId = Number(createResponse.body.id);
     createdTrainingIds.push(trainingId);
 
-    const listResponse = await request(app).get('/api/manager/training-records');
+    const listResponse = await request(app).get('/api/team-management/training-records');
     expect(listResponse.status).toBe(200);
     expect(Array.isArray(listResponse.body)).toBe(true);
     expect(listResponse.body.some((record: any) => Number(record.id) === trainingId)).toBe(true);
   }, 45000);
 });
-

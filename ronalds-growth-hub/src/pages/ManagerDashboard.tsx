@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
+import JobOperationsOverview from '@/components/jobs/JobOperationsOverview';
 import PageLoader from '@/components/ui/page-loader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,6 +11,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  AnalyticsChartShell,
+  AnalyticsLegendContent,
+  AnalyticsTooltipContent,
+  analyticsAxisProps,
+  analyticsColorAt,
+  analyticsDonutProps,
+  analyticsGridProps,
+} from '@/components/ui/analytics-chart';
 import { apiFetch, timeEntriesAPI } from '@/lib/api';
 import {
   BarChart as RechartsBarChart,
@@ -160,7 +170,6 @@ interface PersonalPerformance {
   revenue: number;
   netProfit: number;
   utilizationRate: number;
-  okrScore: number;
   projectEvaluationScore: number;
   lossAlert?: boolean;
 }
@@ -307,7 +316,7 @@ const ManagerDashboard = () => {
       // Load overview data first
       const overviewResponse = await apiFetch('GET', '/manager-dashboard/overview');
       setOverview(overviewResponse);
-      const workloadResponse = await apiFetch('GET', '/manager/workload-metrics');
+      const workloadResponse = await apiFetch('GET', '/team-management/workload-metrics');
       setWorkloadMetrics(workloadResponse);
       await loadAlerts();
       await loadPersonalPerformance();
@@ -437,7 +446,6 @@ const ManagerDashboard = () => {
           revenue: Number(financial.revenue || 0),
           netProfit: Number(financial.netProfit || 0),
           utilizationRate: utilizationPercent,
-          okrScore: Math.round(nonFinancial.okrScore || 0),
           projectEvaluationScore: Math.round(nonFinancial.projectEvaluationScore || 0),
           lossAlert,
         });
@@ -692,18 +700,9 @@ const ManagerDashboard = () => {
       return `/jobs/${Number(jobMatch[1])}/tracking`;
     }
 
-    const evaluationMatch = rawLink.match(/^\/evaluations\/(\d+)$/);
-    if (evaluationMatch) {
-      return `/evaluation/${evaluationMatch[1]}`;
-    }
-
-    if (rawLink.startsWith('/complete-evaluation/')) {
-      return rawLink.replace('/complete-evaluation/', '/evaluation/');
-    }
-
-    if (rawLink === '/onboarding') {
-      return '/profile?tab=onboarding';
-    }
+      if (rawLink === '/onboarding') {
+        return '/profile?tab=onboarding';
+      }
 
     if (rawLink.startsWith('/hr-queue')) {
       return rawLink.replace('/hr-queue', '/client-onboarding-queue');
@@ -715,7 +714,7 @@ const ManagerDashboard = () => {
       }
     }
 
-    return rawLink;
+      return rawLink;
   };
 
   const openAlert = (alert: NotificationItem) => {
@@ -824,6 +823,46 @@ const ManagerDashboard = () => {
     })
     .slice(0, 6);
 
+  const managerJobMetrics = [
+    {
+      label: 'Managed jobs',
+      value: String(overview?.activeJobs || 0),
+      hint: `${toNumber(financialControls.jobsAwaitingPartner)} awaiting partner review`,
+      icon: Briefcase,
+      tone: 'primary' as const,
+      graphValue: overview?.activeJobs || 0,
+      graphBaseline: toNumber(financialControls.jobsAwaitingPartner),
+    },
+    {
+      label: 'Monthly revenue',
+      value: formatCurrency(monthlyRevenue),
+      hint: `Monthly profit ${formatCurrency(monthlyProfit)}`,
+      icon: DollarSign,
+      tone: 'positive' as const,
+      graphValue: monthlyRevenue,
+      graphBaseline: monthlyProfit,
+    },
+    {
+      label: 'Team utilization',
+      value: `${utilizationRate.toFixed(0)}%`,
+      hint: `${overview?.teamSize || 0} direct reports in view`,
+      icon: Users,
+      tone: 'warning' as const,
+      graphValue: utilizationRate,
+      graphBaseline: 75,
+    },
+    {
+      label: 'Approval pressure',
+      value: String(pendingAlertsCount + overBudgetRequests.length),
+      hint: `${toNumber(overview?.pendingReviews)} pending reviews`,
+      icon: AlertCircle,
+      tone: 'danger' as const,
+      graphValue: pendingAlertsCount + overBudgetRequests.length,
+      graphBaseline: 0,
+      inverse: true,
+    },
+  ];
+
   if (loading && !overview) {
     return (
       <DashboardLayout>
@@ -841,6 +880,13 @@ const ManagerDashboard = () => {
             Manage your team, track job performance, and oversee financial metrics
           </p>
         </div>
+
+        <JobOperationsOverview
+          title="Manager job command"
+          description="Keep the team, revenue, execution pressure, and approval load in one cleaner operational view before diving into the detailed tabs."
+          metrics={managerJobMetrics}
+          showLocator={false}
+        />
 
         {personalPerformance && (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
@@ -899,14 +945,14 @@ const ManagerDashboard = () => {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">OKR Progress</CardTitle>
+                <CardTitle className="text-sm font-medium">Learning & Feedback</CardTitle>
                 <Target className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {personalPerformance.okrScore}%
+                  {personalPerformance.overallScore}%
                 </div>
-                <p className="text-xs text-muted-foreground">Objectives on track</p>
+                <p className="text-xs text-muted-foreground">Current personal performance score</p>
               </CardContent>
             </Card>
 
@@ -920,98 +966,6 @@ const ManagerDashboard = () => {
                   {personalPerformance.projectEvaluationScore}%
                 </div>
                 <p className="text-xs text-muted-foreground">Job-based reviews</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* Overview Cards */}
-        {!overview && (
-          <Card className="border-dashed mb-6">
-            <CardHeader>
-              <CardTitle>No manager analytics yet</CardTitle>
-              <CardDescription>
-                Team and job metrics will appear once activity is recorded.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-        {overview && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-4 mb-6">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Team Size</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{overview.teamSize}</div>
-                <p className="text-xs text-muted-foreground">Direct reports</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Active Jobs</CardTitle>
-                <Briefcase className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{overview.activeJobs}</div>
-                <p className="text-xs text-muted-foreground">In progress</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Revenue</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatCurrency(overview.monthlyRevenue)}</div>
-                <p className="text-xs text-muted-foreground">This month</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Profit</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatCurrency(overview.monthlyProfit)}</div>
-                <p className="text-xs text-muted-foreground">Revenue - Cost</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Utilization</CardTitle>
-                <Clock className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{overview.utilizationRate}%</div>
-                <p className="text-xs text-muted-foreground">Team average</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Pending Reviews</CardTitle>
-                <Target className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{overview.pendingReviews}</div>
-                <p className="text-xs text-muted-foreground">Need attention</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
-                <AlertCircle className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{pendingAlertsCount}</div>
-                <p className="text-xs text-muted-foreground">Action required</p>
               </CardContent>
             </Card>
           </div>
@@ -1814,24 +1768,30 @@ const ManagerDashboard = () => {
                 </CardHeader>
                 <CardContent className="h-[250px]">
                   {hasFinancialMixData ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <RechartsPieChart>
-                        <Pie
-                          data={financialMixData}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius={52}
-                          outerRadius={84}
-                          paddingAngle={3}
-                        >
-                          {financialMixData.map((entry, index) => (
-                            <Cell key={`financial-mix-${entry.name}`} fill={chartPalette[index % chartPalette.length]} />
-                          ))}
-                        </Pie>
-                        <Legend verticalAlign="bottom" height={20} />
-                        <RechartsTooltip formatter={(value: number) => formatCurrency(Number(value || 0))} />
-                      </RechartsPieChart>
-                    </ResponsiveContainer>
+                    <AnalyticsChartShell>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <RechartsPieChart>
+                          <Pie
+                            data={financialMixData}
+                            dataKey="value"
+                            nameKey="name"
+                            {...analyticsDonutProps}
+                          >
+                            {financialMixData.map((entry, index) => (
+                              <Cell key={`financial-mix-${entry.name}`} fill={analyticsColorAt(index)} />
+                            ))}
+                          </Pie>
+                          <Legend content={<AnalyticsLegendContent />} />
+                          <RechartsTooltip
+                            content={
+                              <AnalyticsTooltipContent
+                                valueFormatter={(value) => formatCurrency(Number(value || 0))}
+                              />
+                            }
+                          />
+                        </RechartsPieChart>
+                      </ResponsiveContainer>
+                    </AnalyticsChartShell>
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                       No financial mix data yet.
@@ -1849,23 +1809,29 @@ const ManagerDashboard = () => {
                   <CardDescription>Used capacity vs available capacity.</CardDescription>
                 </CardHeader>
                 <CardContent className="h-[250px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RechartsPieChart>
-                      <Pie
-                        data={utilizationMixData}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius={52}
-                        outerRadius={84}
-                        paddingAngle={2}
-                      >
-                        <Cell fill="#22c55e" />
-                        <Cell fill="#cbd5e1" />
-                      </Pie>
-                      <Legend verticalAlign="bottom" height={20} />
-                      <RechartsTooltip formatter={(value: number) => `${Number(value || 0).toFixed(1)}%`} />
-                    </RechartsPieChart>
-                  </ResponsiveContainer>
+                  <AnalyticsChartShell>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RechartsPieChart>
+                        <Pie
+                          data={utilizationMixData}
+                          dataKey="value"
+                          nameKey="name"
+                          {...analyticsDonutProps}
+                        >
+                          <Cell fill="#22c55e" />
+                          <Cell fill="#cbd5e1" />
+                        </Pie>
+                        <Legend content={<AnalyticsLegendContent />} />
+                        <RechartsTooltip
+                          content={
+                            <AnalyticsTooltipContent
+                              valueFormatter={(value) => `${Number(value || 0).toFixed(1)}%`}
+                            />
+                          }
+                        />
+                      </RechartsPieChart>
+                    </ResponsiveContainer>
+                  </AnalyticsChartShell>
                 </CardContent>
               </Card>
 
@@ -1879,24 +1845,30 @@ const ManagerDashboard = () => {
                 </CardHeader>
                 <CardContent className="h-[250px]">
                   {hasApprovalMixData ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <RechartsPieChart>
-                        <Pie
-                          data={approvalMixData}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius={52}
-                          outerRadius={84}
-                          paddingAngle={3}
-                        >
-                          {approvalMixData.map((entry, index) => (
-                            <Cell key={`approval-mix-${entry.name}`} fill={chartPalette[(index + 1) % chartPalette.length]} />
-                          ))}
-                        </Pie>
-                        <Legend verticalAlign="bottom" height={20} />
-                        <RechartsTooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                      </RechartsPieChart>
-                    </ResponsiveContainer>
+                    <AnalyticsChartShell>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <RechartsPieChart>
+                          <Pie
+                            data={approvalMixData}
+                            dataKey="value"
+                            nameKey="name"
+                            {...analyticsDonutProps}
+                          >
+                            {approvalMixData.map((entry, index) => (
+                              <Cell key={`approval-mix-${entry.name}`} fill={analyticsColorAt(index + 1)} />
+                            ))}
+                          </Pie>
+                          <Legend content={<AnalyticsLegendContent />} />
+                          <RechartsTooltip
+                            content={
+                              <AnalyticsTooltipContent
+                                valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                              />
+                            }
+                          />
+                        </RechartsPieChart>
+                      </ResponsiveContainer>
+                    </AnalyticsChartShell>
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                       No approval pressure data yet.
@@ -1914,24 +1886,32 @@ const ManagerDashboard = () => {
                 </CardTitle>
                 <CardDescription>Jobs at risk by control category.</CardDescription>
               </CardHeader>
-              <CardContent className="h-[280px]">
-                {hasRiskData ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RechartsBarChart data={riskBreakdownData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="label" />
-                      <YAxis allowDecimals={false} />
-                      <RechartsTooltip formatter={(value: number) => Number(value || 0).toFixed(0)} />
-                      <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                        {riskBreakdownData.map((entry, index) => (
-                          <Cell key={`risk-${entry.label}`} fill={chartPalette[(index + 2) % chartPalette.length]} />
-                        ))}
-                      </Bar>
-                    </RechartsBarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                    No risk data available yet.
+                <CardContent className="h-[280px]">
+                  {hasRiskData ? (
+                    <AnalyticsChartShell>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <RechartsBarChart data={riskBreakdownData}>
+                          <CartesianGrid {...analyticsGridProps} />
+                          <XAxis dataKey="label" {...analyticsAxisProps} />
+                          <YAxis allowDecimals={false} {...analyticsAxisProps} />
+                          <RechartsTooltip
+                            content={
+                              <AnalyticsTooltipContent
+                                valueFormatter={(value) => Number(value || 0).toFixed(0)}
+                              />
+                            }
+                          />
+                          <Bar dataKey="value" radius={[10, 10, 4, 4]}>
+                            {riskBreakdownData.map((entry, index) => (
+                              <Cell key={`risk-${entry.label}`} fill={analyticsColorAt(index + 2)} />
+                            ))}
+                          </Bar>
+                        </RechartsBarChart>
+                      </ResponsiveContainer>
+                    </AnalyticsChartShell>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                      No risk data available yet.
                   </div>
                 )}
               </CardContent>

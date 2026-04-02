@@ -12,7 +12,12 @@
 
 import prisma from "../prisma";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
-import { NotificationPriority, NotificationService } from "./notifications.service";
+import {
+  NotificationAction,
+  NotificationPriority,
+  NotificationService,
+} from "./notifications.service";
+import { logger, toLogContext } from "../lib/logger";
 const db = prisma as any;
 const MAX_INT_32 = 2_147_483_647;
 
@@ -74,6 +79,14 @@ type DocumentNotificationInput = {
   link?: string;
   jobId?: number;
   clientId?: number;
+  eventType?: string;
+  priority?: NotificationPriority;
+  targetEntityType?: string;
+  targetEntityId?: number;
+  canonicalRoute?: string;
+  actions?: NotificationAction[];
+  requiredPermission?: string;
+  templateLabel?: string;
 };
 
 class DocumentServiceClass {
@@ -133,6 +146,45 @@ class DocumentServiceClass {
     };
   }
 
+  private buildDocumentNotificationContext(
+    document: {
+      id: number;
+      entityType: string;
+      entityId: number | null;
+    },
+    options: {
+      link?: string;
+      eventType?: string;
+      priority?: NotificationPriority;
+      targetEntityType?: string;
+      targetEntityId?: number | null;
+      actions?: NotificationAction[];
+      requiredPermission?: string;
+      templateLabel?: string;
+    } = {}
+  ) {
+    const canonicalRoute =
+      String(options.link || "").trim() ||
+      this.buildDocumentLink(document.entityType, document.entityId, undefined);
+    const targetEntityType = String(
+      options.targetEntityType || document.entityType || "Document"
+    ).trim();
+    const targetEntityId =
+      options.targetEntityId ??
+      (document.entityId && document.entityId > 0 ? document.entityId : document.id);
+
+    return {
+      eventType: options.eventType || "document.submitted",
+      priority: options.priority || "medium",
+      targetEntityType,
+      targetEntityId: targetEntityId ?? undefined,
+      canonicalRoute,
+      actions: options.actions,
+      requiredPermission: options.requiredPermission || "module.documents.read",
+      templateLabel: options.templateLabel || options.eventType || "document.submitted",
+    };
+  }
+
   private buildDocumentLink(entityType: string, entityId?: number | null, documentType?: string) {
     const normalizedEntityType = this.normalizeEntityType(entityType);
     const normalizedDocumentType = this.normalizeDocumentType(documentType);
@@ -141,11 +193,11 @@ class DocumentServiceClass {
       if (normalizedDocumentType.includes("invoice")) {
         return "/finance-balances";
       }
-      return entityId ? `/jobs/${entityId}` : "/jobs";
+      return entityId ? `/jobs/${entityId}/tracking` : "/jobs";
     }
 
     if (normalizedEntityType === "jobinvoicemilestone") {
-      return "/finance-balances";
+      return "/job-workflow-dashboard";
     }
 
     if (normalizedEntityType === "onboarding" || normalizedEntityType === "clientonboarding") {
@@ -211,6 +263,104 @@ class DocumentServiceClass {
     return profiles.map((profile) => profile.id);
   }
 
+  private async resolveJobMilestoneTaskScope(taskId: number) {
+    return prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        assignedToProfileId: true,
+        job: {
+          select: {
+            id: true,
+            managerProfileId: true,
+            partnerProfileId: true,
+            receivableOwnerProfileId: true,
+            staffing: {
+              select: { employeeProfileId: true },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async assertWorkflowUploadAccess(input: DocumentUploadInput, auth: AuthContext) {
+    if (!input.entityId) return;
+
+    const normalizedEntityType = this.normalizeEntityType(input.entityType);
+    if (!["job", "jobinvoicemilestone"].includes(normalizedEntityType)) {
+      return;
+    }
+
+    const normalizedRoles = new Set((auth.roles || []).map((role) => this.normalizeRoleName(role)));
+    const isPrivileged =
+      normalizedRoles.has("super_admin") ||
+      normalizedRoles.has("hr") ||
+      normalizedRoles.has("gmp") ||
+      normalizedRoles.has("finance") ||
+      normalizedRoles.has("finance_manager");
+
+    if (normalizedEntityType === "job") {
+      const job = await prisma.job.findUnique({
+        where: { id: input.entityId },
+        select: {
+          id: true,
+          managerProfileId: true,
+          partnerProfileId: true,
+          receivableOwnerProfileId: true,
+          staffing: {
+            select: { employeeProfileId: true },
+          },
+        },
+      });
+
+      if (!job) {
+        const err = new Error("Job not found");
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      const isAssignedStaff = job.staffing.some(
+        (assignment) => assignment.employeeProfileId === auth.profileId
+      );
+      const isWorkflowOwner =
+        job.managerProfileId === auth.profileId ||
+        job.partnerProfileId === auth.profileId ||
+        job.receivableOwnerProfileId === auth.profileId;
+
+      if (!isPrivileged && !isWorkflowOwner && !isAssignedStaff) {
+        const err = new Error("Not authorized to upload documents for this job");
+        (err as any).statusCode = 403;
+        throw err;
+      }
+      return;
+    }
+
+    const milestoneTask = await this.resolveJobMilestoneTaskScope(input.entityId);
+    if (!milestoneTask?.job) {
+      const err = new Error("Billing milestone not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    const isAssignedStaff = milestoneTask.job.staffing.some(
+      (assignment) => assignment.employeeProfileId === auth.profileId
+    );
+    const isWorkflowOwner =
+      milestoneTask.job.managerProfileId === auth.profileId ||
+      milestoneTask.job.partnerProfileId === auth.profileId ||
+      milestoneTask.job.receivableOwnerProfileId === auth.profileId;
+    const isMilestoneOwner = milestoneTask.assignedToProfileId === auth.profileId;
+    const canUploadAsStaff =
+      isMilestoneOwner || (milestoneTask.assignedToProfileId == null && isAssignedStaff);
+
+    if (!isPrivileged && !isWorkflowOwner && !canUploadAsStaff) {
+      const err = new Error("Not authorized to upload documents for this billing milestone");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+  }
+
   private async dispatchNotifications(
     notifications: DocumentNotificationInput[],
     auth: AuthContext
@@ -257,7 +407,23 @@ class DocumentServiceClass {
       if (recipientProfileId === auth.profileId) return;
       if (recipientSet.has(recipientProfileId)) return;
       recipientSet.add(recipientProfileId);
-      notifications.push({ recipientProfileId, ...payload });
+      const notificationLink = String(payload.canonicalRoute || payload.link || defaultLink || "").trim() || undefined;
+      const metadata = this.buildDocumentNotificationContext(document, {
+        link: notificationLink,
+        eventType: payload.eventType || "document.submitted",
+        priority: payload.priority,
+        targetEntityType: payload.targetEntityType,
+        targetEntityId: payload.targetEntityId,
+        actions: payload.actions,
+        requiredPermission: payload.requiredPermission,
+        templateLabel: payload.templateLabel,
+      });
+      notifications.push({
+        recipientProfileId,
+        ...payload,
+        link: notificationLink,
+        ...metadata,
+      });
     };
 
     const queueRoleRecipients = async (
@@ -569,6 +735,7 @@ class DocumentServiceClass {
         select: {
           id: true,
           title: true,
+          assignedToProfileId: true,
           job: {
             select: {
               id: true,
@@ -584,17 +751,23 @@ class DocumentServiceClass {
       if (task?.job) {
         const payload = {
           type: "action" as const,
-          title: "Invoice milestone document submitted",
-          message: `A document for milestone "${task.title}" on "${task.job.jobName}" is ready for finance review.`,
+          title: "Milestone document submitted",
+          message: `A document for milestone "${task.title}" on "${task.job.jobName}" is ready for review.`,
           actionRequired: true,
-          link: "/finance-balances",
+          link: `/jobs/${task.job.id}/tracking`,
           jobId: task.job.id,
           clientId: task.job.clientId ?? undefined,
         };
 
         queue(task.job.managerProfileId, payload);
         queue(task.job.partnerProfileId, payload);
-        await queueRoleRecipients(["finance", "finance_manager"], payload);
+        queue(task.assignedToProfileId, {
+          ...payload,
+          type: "info",
+          actionRequired: false,
+          title: "Milestone document updated",
+          message: `Documents linked to milestone "${task.title}" on "${task.job.jobName}" were updated.`,
+        });
       }
       return notifications;
     }
@@ -735,6 +908,20 @@ class DocumentServiceClass {
         }`
       : `Verification status for "${document.fileName}" was updated to pending.`;
 
+    let link = this.buildDocumentLink(document.entityType, document.entityId, document.documentType);
+    if (
+      this.normalizeEntityType(document.entityType) === "jobinvoicemilestone" &&
+      document.entityId
+    ) {
+      const milestoneTask = await prisma.task.findUnique({
+        where: { id: document.entityId },
+        select: { jobId: true },
+      });
+      if (milestoneTask?.jobId) {
+        link = `/jobs/${milestoneTask.jobId}/tracking`;
+      }
+    }
+
     return [
       {
         recipientProfileId: document.uploadedBy,
@@ -742,7 +929,21 @@ class DocumentServiceClass {
         title,
         message,
         actionRequired: isRejected,
-        link: this.buildDocumentLink(document.entityType, document.entityId, document.documentType),
+        link,
+        ...this.buildDocumentNotificationContext(document, {
+          link,
+          eventType: isVerified
+            ? "document.verified"
+            : isRejected
+            ? "document.rejected"
+            : "document.verification_updated",
+          priority: isRejected ? "high" : "low",
+          templateLabel: isVerified
+            ? "document.verified"
+            : isRejected
+            ? "document.rejected"
+            : "document.verification_updated",
+        }),
       },
     ];
   }
@@ -804,6 +1005,8 @@ class DocumentServiceClass {
       throw new Error(`entityId must be a positive 32-bit integer (received ${input.entityId})`);
     }
 
+    await this.assertWorkflowUploadAccess(input, auth);
+
     const created = await prisma.document.create({
       data: {
         fileName: input.fileName,
@@ -833,7 +1036,10 @@ class DocumentServiceClass {
       const notifications = await this.resolveSubmissionNotifications(created, auth);
       await this.dispatchNotifications(notifications, auth);
     } catch (error) {
-      console.error("DocumentService.uploadDocument notification error:", error);
+      logger.warn("document_upload_notification_failed", {
+        documentId: created.id,
+        ...toLogContext(error),
+      });
     }
 
     return created;
@@ -1004,8 +1210,18 @@ class DocumentServiceClass {
       });
       const assignedJobIds = assignedJobs.map((job) => job.id);
       const jobEntityTypes = this.expandEntityTypeFilter("job");
+      const jobMilestoneEntityTypes = this.expandEntityTypeFilter("jobinvoicemilestone");
+      const restrictedJobEntityTypes = [...jobEntityTypes, ...jobMilestoneEntityTypes];
+      const milestoneTasks =
+        assignedJobIds.length > 0
+          ? await prisma.task.findMany({
+              where: { jobId: { in: assignedJobIds } },
+              select: { id: true },
+            })
+          : [];
+      const assignedMilestoneTaskIds = milestoneTasks.map((task) => task.id);
 
-      const nonJobClause = { entityType: { notIn: jobEntityTypes } };
+      const nonJobClause = { entityType: { notIn: restrictedJobEntityTypes } };
       const assignedJobClause =
         assignedJobIds.length > 0
           ? {
@@ -1022,9 +1238,25 @@ class DocumentServiceClass {
               ],
             }
           : null;
+      const assignedMilestoneClause =
+        assignedMilestoneTaskIds.length > 0
+          ? {
+              AND: [
+                {
+                  entityType:
+                    jobMilestoneEntityTypes.length === 1
+                      ? jobMilestoneEntityTypes[0]
+                      : { in: jobMilestoneEntityTypes },
+                },
+                {
+                  entityId: { in: assignedMilestoneTaskIds },
+                },
+              ],
+            }
+          : null;
 
       where = appendAndCondition(where, {
-        OR: assignedJobClause ? [nonJobClause, assignedJobClause] : [nonJobClause],
+        OR: [nonJobClause, assignedJobClause, assignedMilestoneClause].filter(Boolean),
       });
     }
 
@@ -1113,7 +1345,11 @@ class DocumentServiceClass {
       const notifications = await this.resolveVerificationNotifications(updated, input, auth);
       await this.dispatchNotifications(notifications, auth);
     } catch (error) {
-      console.error("DocumentService.verifyDocument notification error:", error);
+      logger.warn("document_verify_notification_failed", {
+        documentId,
+        verificationStatus: input.verificationStatus,
+        ...toLogContext(error),
+      });
     }
 
     return updated;

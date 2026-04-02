@@ -1,0 +1,294 @@
+process.env.NODE_ENV = "test";
+process.env.JWT_SECRET =
+  process.env.JWT_SECRET || "frontend-live-smoke-secret-12345678901234567890";
+process.env.REQUEST_LOGGING_ENABLED = "false";
+process.env.OBSERVABILITY_ENABLED = "false";
+
+import http from "http";
+import type { Server } from "http";
+import app from "../../../../backend/src/app";
+import prisma from "../../../../backend/src/prisma";
+import { seedDatabase } from "../../../../backend/prisma/seed";
+const mockTokenKey = "rg_token";
+const mockUserKey = "rg_user";
+const mockApiBaseUrl = "http://127.0.0.1:4000/api";
+
+class MemoryStorage {
+  private readonly store = new Map<string, string>();
+
+  clear() {
+    this.store.clear();
+  }
+
+  getItem(key: string) {
+    return this.store.has(key) ? this.store.get(key)! : null;
+  }
+
+  removeItem(key: string) {
+    this.store.delete(key);
+  }
+
+  setItem(key: string, value: string) {
+    this.store.set(key, String(value));
+  }
+}
+
+const mockStorage = new MemoryStorage();
+
+const mockNormalizeApiResponse = (payload: any) => {
+  if (payload && typeof payload === "object" && "success" in payload && "data" in payload) {
+    const data = payload.data;
+    if (data && typeof data === "object" && "items" in data && "pagination" in data) {
+      return {
+        data: data.items,
+        ...data.pagination,
+      };
+    }
+    return data;
+  }
+
+  return payload;
+};
+
+const mockGetToken = () => mockStorage.getItem(mockTokenKey);
+
+const mockGetUser = () => {
+  const value = mockStorage.getItem(mockUserKey);
+  return value ? JSON.parse(value) : null;
+};
+
+const mockSetToken = (token: string | null) => {
+  if (token) {
+    mockStorage.setItem(mockTokenKey, token);
+    return;
+  }
+  mockStorage.removeItem(mockTokenKey);
+};
+
+const mockSetUser = (user: unknown) => {
+  if (user) {
+    mockStorage.setItem(mockUserKey, JSON.stringify(user));
+    return;
+  }
+  mockStorage.removeItem(mockUserKey);
+};
+
+const mockClearAuth = () => {
+  mockStorage.removeItem(mockTokenKey);
+  mockStorage.removeItem(mockUserKey);
+};
+
+const mockApiFetch = async (method: string, path: string, body?: unknown) => {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const token = mockGetToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${mockApiBaseUrl}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
+
+  if (!response.ok) {
+    throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+  }
+
+  return mockNormalizeApiResponse(payload);
+};
+
+jest.mock("./client", () => ({
+  api: {
+    get: (path: string) => mockApiFetch("GET", path),
+    post: (path: string, body?: unknown) => mockApiFetch("POST", path, body),
+    patch: (path: string, body?: unknown) => mockApiFetch("PATCH", path, body),
+    delete: (path: string) => mockApiFetch("DELETE", path),
+  },
+  setToken: (token: string | null) => mockSetToken(token),
+  getToken: () => mockGetToken(),
+  setUser: (user: unknown) => mockSetUser(user),
+  getUser: () => mockGetUser(),
+  clearAuth: () => mockClearAuth(),
+}));
+
+import authAPI, { type LoginSuccessResponse, type LoginResponse } from "./auth";
+import evaluationsAPI from "./evaluations";
+import { clearAuth, getToken, getUser, setToken, setUser } from "./client";
+
+jest.setTimeout(120_000);
+
+const API_BASE_URL = "http://127.0.0.1:4000";
+const FRONTEND_SMOKE_PREFIX = "[FRONTEND_LIVE_SMOKE]";
+let server: Server | null = null;
+
+const assertLoginSuccess = (response: LoginResponse): LoginSuccessResponse => {
+  if (!("token" in response) || !response.token) {
+    throw new Error("Expected seeded login to return an authenticated session");
+  }
+  return response;
+};
+
+const toIsoDate = (date: Date) => date.toISOString().slice(0, 10);
+
+const addDays = (date: Date, days: number) =>
+  new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+
+const isServerHealthy = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`);
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+const startLocalBackend = async () => {
+  if (await isServerHealthy()) {
+    return;
+  }
+
+  server = http.createServer(app);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server?.off("error", onError);
+      reject(error);
+    };
+
+    server?.once("error", onError);
+    server?.listen(4000, "127.0.0.1", () => {
+      server?.off("error", onError);
+      resolve();
+    });
+  });
+};
+
+const useSession = (session: LoginSuccessResponse) => {
+  setToken(session.token);
+  setUser(session.user);
+};
+
+describe("frontend live smoke flows", () => {
+  beforeAll(async () => {
+    await seedDatabase();
+    await startLocalBackend();
+  });
+
+  beforeEach(() => {
+    clearAuth();
+    mockStorage.clear();
+  });
+
+  afterAll(async () => {
+    clearAuth();
+
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server?.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
+
+    await prisma.$disconnect();
+  });
+
+  it("logs in against the live backend and persists the authenticated session", async () => {
+    const response = assertLoginSuccess(
+      await authAPI.login("hr@ronalds.local", "Password123!")
+    );
+
+    expect(response.user.email).toBe("hr@ronalds.local");
+    expect(response.user.profile?.id).toBeDefined();
+    expect(Array.isArray(response.user.roles)).toBe(true);
+    expect(getToken()).toBe(response.token);
+    expect(getUser()).toEqual(response.user);
+  });
+
+  it("creates a cycle, publishes assignments, and submits a live evaluation", async () => {
+    const hrSession = assertLoginSuccess(
+      await authAPI.login("hr@ronalds.local", "Password123!")
+    );
+    const managerSession = assertLoginSuccess(
+      await authAPI.login("manager@ronalds.local", "Password123!")
+    );
+    const managerProfileId = managerSession.user.profile?.id;
+
+    expect(managerProfileId).toBeDefined();
+
+    useSession(hrSession);
+    const employees = await evaluationsAPI.getAssignableEmployees();
+    const evaluatee = employees.find((employee) => employee.managerId === managerProfileId);
+
+    expect(evaluatee).toBeDefined();
+
+    const now = new Date();
+    const title = `${FRONTEND_SMOKE_PREFIX} Cycle ${Date.now()}`;
+    const cycle = await evaluationsAPI.createCycle({
+      title,
+      description: "Backend-integrated frontend smoke cycle",
+      cycleType: "quarterly",
+      startDate: toIsoDate(now),
+      endDate: toIsoDate(addDays(now, 30)),
+      dueDate: toIsoDate(addDays(now, 7)),
+      enableSelfEvaluation: false,
+      enablePeerEvaluation: false,
+      enableUpwardEvaluation: false,
+      enableDownwardEvaluation: true,
+      processAnonymously: false,
+      requireEvaluatorSignature: true,
+    });
+
+    const published = await evaluationsAPI.assignEvaluators(cycle.id, {
+      assignments: [
+        {
+          evaluateeId: evaluatee!.id,
+          evaluatorId: managerProfileId!,
+          relationship: "manager",
+          dueDate: toIsoDate(addDays(now, 7)),
+        },
+      ],
+    });
+
+    expect(published.count).toBe(1);
+
+    useSession(managerSession);
+    const assignments = await evaluationsAPI.getMyAssignments();
+    const assignment = assignments.find((item) => item.cycleId === cycle.id);
+
+    expect(assignment?.id).toBeDefined();
+
+    const detail = await evaluationsAPI.getAssignmentById(assignment!.id);
+    const questions = detail.template?.questions || [];
+
+    expect(questions.length).toBeGreaterThan(0);
+
+    const submitted = await evaluationsAPI.submitEvaluation(assignment!.id, {
+      responses: questions.map((question) => ({
+        questionId: question.id,
+        score: 4,
+        comment: `${FRONTEND_SMOKE_PREFIX} response ${question.id}`,
+      })),
+      evaluatorComment: `${FRONTEND_SMOKE_PREFIX} submitted via frontend API`,
+      evaluatorSigned: true,
+    });
+
+    expect(String(submitted.status).toLowerCase()).toBe("submitted");
+
+    useSession(hrSession);
+    const results = await evaluationsAPI.getCycleResults(cycle.id);
+    const result = results.results.find((row) => row.evaluateeId === evaluatee!.id);
+
+    expect(result).toBeDefined();
+    expect(typeof result?.overallScore).toBe("number");
+    expect(result?.ratingBand).toBeTruthy();
+  });
+});

@@ -14,7 +14,6 @@ import evaluationsAPI from "@/lib/api/evaluations";
 const CATEGORY_LABELS: Record<string, string> = {
   competency: "Competency",
   behavior: "Behavior",
-  goal: "Goal",
   culture: "Culture",
 };
 
@@ -113,7 +112,7 @@ export default function EvaluationResults() {
             <CardContent>
               <div className="text-3xl font-semibold">{averageTotalScore.toFixed(1)}</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                Composite score across evaluation, KPI, and development signals
+                Composite score across evaluation and development signals
               </div>
             </CardContent>
           </Card>
@@ -241,13 +240,6 @@ export default function EvaluationResults() {
                         {Math.round(result.assignmentSummary?.completionPercent || 0)}%
                       </div>
                       <Progress className="mt-3 h-2" value={result.assignmentSummary?.completionPercent || 0} />
-                    </div>
-                    <div className="rounded-xl border bg-muted/20 p-4">
-                      <div className="text-sm text-muted-foreground">KPI completion</div>
-                      <div className="mt-2 text-2xl font-semibold">
-                        {Math.round(result.scoreReport?.kpiCompletionPercent || 0)}%
-                      </div>
-                      <Progress className="mt-3 h-2" value={Math.min(result.scoreReport?.kpiCompletionPercent || 0, 100)} />
                     </div>
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <div className="text-sm text-muted-foreground">Peer vs manager variance</div>

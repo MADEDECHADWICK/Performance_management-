@@ -271,6 +271,88 @@ export class EvaluationService {
     });
   }
 
+  private static isPrivilegedEvaluationManager(auth: ServiceAuthContext) {
+    const roles = toRoleSet(auth.roles);
+    return roles.has("super_admin") || roles.has("hr");
+  }
+
+  private static isScopedManager(auth: ServiceAuthContext) {
+    return hasManagerPrivileges(auth.roles) && !this.isPrivilegedEvaluationManager(auth);
+  }
+
+  private static async getManagedProfileIds(managerProfileId: number) {
+    const directReports = await prisma.profile.findMany({
+      where: { managerId: managerProfileId },
+      select: { id: true },
+    });
+
+    return new Set([managerProfileId, ...directReports.map((profile) => profile.id)]);
+  }
+
+  private static canManagerSeeAssignment(
+    assignment: {
+      evaluatorProfileId: number;
+      evaluateeProfileId: number;
+    },
+    managerProfileId: number,
+    managedProfileIds: Set<number>
+  ) {
+    return (
+      assignment.evaluatorProfileId === managerProfileId ||
+      managedProfileIds.has(assignment.evaluateeProfileId)
+    );
+  }
+
+  private static async getCycleWhereForAuth(auth: ServiceAuthContext) {
+    if (this.isPrivilegedEvaluationManager(auth)) {
+      return {};
+    }
+
+    if (!hasManagerPrivileges(auth.roles)) {
+      return {
+        OR: [
+          {
+            assignments: {
+              some: {
+                evaluatorProfileId: auth.profileId,
+              },
+            },
+          },
+          {
+            assignments: {
+              some: {
+                evaluateeProfileId: auth.profileId,
+              },
+            },
+          },
+        ],
+      };
+    }
+
+    const managedProfileIds = Array.from(await this.getManagedProfileIds(auth.profileId));
+    return {
+      OR: [
+        { createdByProfileId: auth.profileId },
+        {
+          assignments: {
+            some: {
+              evaluatorProfileId: auth.profileId,
+            },
+          },
+        },
+        {
+          assignments: {
+            some: {
+              evaluateeProfileId: {
+                in: managedProfileIds,
+              },
+            },
+          },
+        },
+      ],
+    };
+  }
+
   private static async ensureCycleDefinition(
     tx: PrismaTx,
     cycleId: number,
@@ -620,26 +702,7 @@ export class EvaluationService {
   }
 
   static async getMyCycles(auth: ServiceAuthContext) {
-    const where = hasManagerPrivileges(auth.roles)
-      ? {}
-      : {
-          OR: [
-            {
-              assignments: {
-                some: {
-                  evaluatorProfileId: auth.profileId,
-                },
-              },
-            },
-            {
-              assignments: {
-                some: {
-                  evaluateeProfileId: auth.profileId,
-                },
-              },
-            },
-          ],
-        };
+    const where = await this.getCycleWhereForAuth(auth);
 
     const cycles = await prisma.evaluationCycle.findMany({
       where,
@@ -663,17 +726,29 @@ export class EvaluationService {
       orderBy: { startDate: "desc" },
     });
 
-    return cycles.map((cycle) => ({
-      id: cycle.id,
-      title: cycle.cycleName,
-      description: cycle.description,
-      cycleType: cycle.cycleType,
-      startDate: cycle.startDate,
-      endDate: cycle.endDate,
-      status: cycle.status,
-      department: cycle.department,
-      ...buildCycleProgress(cycle.assignments),
-    }));
+    const managedProfileIds = this.isScopedManager(auth)
+      ? await this.getManagedProfileIds(auth.profileId)
+      : null;
+
+    return cycles.map((cycle) => {
+      const scopedAssignments = managedProfileIds
+        ? cycle.assignments.filter((assignment) =>
+            this.canManagerSeeAssignment(assignment, auth.profileId, managedProfileIds)
+          )
+        : cycle.assignments;
+
+      return {
+        id: cycle.id,
+        title: cycle.cycleName,
+        description: cycle.description,
+        cycleType: cycle.cycleType,
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
+        status: cycle.status,
+        department: cycle.department,
+        ...buildCycleProgress(scopedAssignments),
+      };
+    });
   }
 
   static async getCycleById(cycleId: number, auth: ServiceAuthContext) {
@@ -720,7 +795,17 @@ export class EvaluationService {
       throw { statusCode: 404, message: "Evaluation cycle not found" };
     }
 
-    if (!hasManagerPrivileges(auth.roles)) {
+    let scopedAssignments = cycle.assignments;
+    if (this.isScopedManager(auth)) {
+      const managedProfileIds = await this.getManagedProfileIds(auth.profileId);
+      scopedAssignments = cycle.assignments.filter((assignment) =>
+        this.canManagerSeeAssignment(assignment, auth.profileId, managedProfileIds)
+      );
+      const createdByActor = cycle.createdByProfileId === auth.profileId;
+      if (!createdByActor && scopedAssignments.length === 0) {
+        throw { statusCode: 403, message: "You do not have access to this cycle" };
+      }
+    } else if (!hasManagerPrivileges(auth.roles)) {
       const visible = cycle.assignments.some(
         (assignment) =>
           assignment.evaluatorProfileId === auth.profileId ||
@@ -774,7 +859,7 @@ export class EvaluationService {
             enabledEvaluatorTypes: resolveEnabledEvaluatorTypes(primaryDefinition as Record<string, any>),
           }
         : null,
-      assignments: cycle.assignments.map((assignment) => ({
+      assignments: scopedAssignments.map((assignment) => ({
         id: assignment.id,
         cycleId: assignment.cycleId || cycle.id,
         evaluateeId: assignment.evaluateeProfileId,
@@ -786,7 +871,7 @@ export class EvaluationService {
         evaluator: assignment.evaluator,
         evaluatee: assignment.evaluatee,
       })),
-      ...buildCycleProgress(cycle.assignments),
+      ...buildCycleProgress(scopedAssignments),
     };
   }
 
@@ -1469,48 +1554,10 @@ export class EvaluationService {
     }>,
     weighted: ScoreSummary
   ) {
-    const [kpis, goals, cycle] = await Promise.all([
-      prisma.kpi.findMany({
-        where: {
-          ownerProfileId: evaluateeId,
-          deletedAt: null,
-        },
-      }),
-      prisma.developmentGoal.findMany({
-        where: {
-          employeeProfileId: evaluateeId,
-        },
-      }),
-      prisma.evaluationCycle.findUnique({
-        where: { id: cycleId },
-        select: { endDate: true },
-      }),
-    ]);
-
-    const weightedKpiScore = (() => {
-      if (!kpis.length) return 0;
-
-      const totals = kpis.map((kpi) => {
-        const target = toNumber(kpi.targetValue);
-        const actual = toNumber(kpi.actualValue);
-        const completion = target > 0 ? clamp((actual / target) * 100, 0, 150) : 0;
-        const weight = toNumber(kpi.weight) || 1;
-        return { completion, weight };
-      });
-
-      const totalWeight = totals.reduce((sum, item) => sum + item.weight, 0);
-      const weightedSum = totals.reduce(
-        (sum, item) => sum + item.completion * item.weight,
-        0
-      );
-      return totalWeight > 0 ? roundTo(weightedSum / totalWeight) : 0;
-    })();
-
-    const developmentGoalProgress = goals.length
-      ? roundTo(
-          goals.reduce((sum, goal) => sum + toNumber(goal.currentProgress), 0) / goals.length
-        )
-      : 0;
+    const cycle = await prisma.evaluationCycle.findUnique({
+      where: { id: cycleId },
+      select: { endDate: true },
+    });
 
     const relationshipScores = assignments.reduce<Record<string, number[]>>((acc, assignment) => {
       const relationshipKey = String(
@@ -1549,9 +1596,7 @@ export class EvaluationService {
     const peerVsManagerVariance = roundTo(Math.abs(peerAverage - managerAverage));
 
     const evaluationScore100 = roundTo(weighted.overall * 20);
-    const totalScore = roundTo(
-      evaluationScore100 * 0.7 + weightedKpiScore * 0.2 + developmentGoalProgress * 0.1
-    );
+    const totalScore = evaluationScore100;
     const ratingBand = this.normalizeToRating(weighted.overall);
     const period = cycle?.endDate || new Date();
 
@@ -1559,8 +1604,6 @@ export class EvaluationService {
       weightedOverall: weighted.overall,
       byCategory: weighted.byCategory,
       ratingBand,
-      kpiCompletionPercent: weightedKpiScore,
-      developmentGoalProgress,
       peerVsManagerVariance,
       averageByRelationship,
       assignmentCount: assignments.length,
@@ -1576,7 +1619,6 @@ export class EvaluationService {
       },
       update: {
         evaluationScore: new Prisma.Decimal(evaluationScore100),
-        kpiScore: new Prisma.Decimal(weightedKpiScore),
         nonFinancialWeighted: new Prisma.Decimal(evaluationScore100),
         totalScore: new Prisma.Decimal(totalScore),
         grade: ratingBand,
@@ -1596,7 +1638,6 @@ export class EvaluationService {
         financialWeighted: new Prisma.Decimal(0),
         efficiencyWeighted: new Prisma.Decimal(0),
         evaluationScore: new Prisma.Decimal(evaluationScore100),
-        kpiScore: new Prisma.Decimal(weightedKpiScore),
         clientRatingScore: new Prisma.Decimal(0),
         nonFinancialWeighted: new Prisma.Decimal(evaluationScore100),
         totalScore: new Prisma.Decimal(totalScore),
@@ -1611,8 +1652,6 @@ export class EvaluationService {
       overall: weighted.overall,
       byCategory: weighted.byCategory,
       ratingBand,
-      kpiCompletionPercent: weightedKpiScore,
-      developmentGoalProgress,
       peerVsManagerVariance,
       averageByRelationship,
       totalScore,
@@ -1691,7 +1730,20 @@ export class EvaluationService {
       throw { statusCode: 404, message: "Evaluation cycle not found" };
     }
 
-    const scores = await prisma.performanceScore.findMany({
+    let scopedAssignments = cycle.assignments;
+    let scopedEmployeeIds: Set<number> | null = null;
+    if (this.isScopedManager(auth)) {
+      scopedEmployeeIds = await this.getManagedProfileIds(auth.profileId);
+      scopedAssignments = cycle.assignments.filter((assignment) =>
+        this.canManagerSeeAssignment(assignment, auth.profileId, scopedEmployeeIds as Set<number>)
+      );
+      const createdByActor = cycle.createdByProfileId === auth.profileId;
+      if (!createdByActor && scopedAssignments.length === 0) {
+        throw { statusCode: 403, message: "You do not have access to this cycle" };
+      }
+    }
+
+    const allScores = await prisma.performanceScore.findMany({
       where: {
         evaluationCycleId: cycleId,
       },
@@ -1709,6 +1761,9 @@ export class EvaluationService {
       },
       orderBy: { totalScore: "desc" },
     });
+    const scores = scopedEmployeeIds
+      ? allScores.filter((score) => scopedEmployeeIds?.has(score.employeeProfileId))
+      : allScores;
 
     const primaryDefinition = cycle.definitions[0] || null;
     const ratingDistribution = scores.reduce<Record<string, number>>((acc, score) => {
@@ -1718,13 +1773,13 @@ export class EvaluationService {
     }, {});
 
     const signatureSummary = {
-      evaluatorSignedCount: cycle.assignments.filter((assignment) => assignment.evaluatorSigned).length,
-      evaluateeAcknowledgedCount: cycle.assignments.filter((assignment) => assignment.evaluateeAcknowledged)
+      evaluatorSignedCount: scopedAssignments.filter((assignment) => assignment.evaluatorSigned).length,
+      evaluateeAcknowledgedCount: scopedAssignments.filter((assignment) => assignment.evaluateeAcknowledged)
         .length,
-      requiredEvaluatorSignatures: cycle.assignments.filter(
+      requiredEvaluatorSignatures: scopedAssignments.filter(
         (assignment) => assignment.definition.requireEvaluatorSignature
       ).length,
-      requiredEvaluateeAcknowledgements: cycle.assignments.filter(
+      requiredEvaluateeAcknowledgements: scopedAssignments.filter(
         (assignment) => assignment.definition.requireEvaluateeSignature
       ).length,
     };
@@ -1751,9 +1806,9 @@ export class EvaluationService {
         : null,
       ratingDistribution,
       signatureSummary,
-      ...buildCycleProgress(cycle.assignments),
+      ...buildCycleProgress(scopedAssignments),
       results: scores.map((score) => {
-        const employeeAssignments = cycle.assignments.filter(
+        const employeeAssignments = scopedAssignments.filter(
           (assignment) => assignment.evaluateeProfileId === score.employeeProfileId
         );
         const employeeScoreReport = mapPerformanceScoreToReport(score);
@@ -1888,7 +1943,7 @@ export class EvaluationService {
       throw { statusCode: 403, message: "You do not have access to this dashboard" };
     }
 
-    const [pendingEvaluations, kpis, okrs, goals, feedback, checkIns] = await Promise.all([
+    const [pendingEvaluations, feedback, checkIns] = await Promise.all([
       prisma.evaluationAssignment.findMany({
         where: {
           evaluatorProfileId: requestedProfileId,
@@ -1908,25 +1963,6 @@ export class EvaluationService {
         },
         orderBy: { dueDate: "asc" },
         take: 10,
-      }),
-      prisma.kpi.findMany({
-        where: {
-          ownerProfileId: requestedProfileId,
-          deletedAt: null,
-        },
-        orderBy: { dueDate: "asc" },
-      }),
-      prisma.okr.findMany({
-        where: {
-          ownerProfileId: requestedProfileId,
-        },
-        orderBy: { updatedAt: "desc" },
-      }),
-      prisma.developmentGoal.findMany({
-        where: {
-          employeeProfileId: requestedProfileId,
-        },
-        orderBy: { targetCompletion: "asc" },
       }),
       prisma.feedback.findMany({
         where: {
@@ -1954,24 +1990,6 @@ export class EvaluationService {
       }),
     ]);
 
-    const kpisByStatus = kpis.reduce<Record<string, number>>((acc, kpi) => {
-      const key = String(kpi.progressStatus || "on_track");
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
-    const okrsByStatus = okrs.reduce<Record<string, number>>((acc, okr) => {
-      const key = String(okr.status || "on_track");
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
-    const goalsByStatus = goals.reduce<Record<string, number>>((acc, goal) => {
-      const key = String(goal.planStatus || "not_started");
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
     return {
       userId: requestedProfileId,
       pendingEvaluations: pendingEvaluations.map((assignment) => ({
@@ -1990,39 +2008,6 @@ export class EvaluationService {
           : null,
         evaluatee: assignment.evaluatee,
       })),
-      kpiSummary: {
-        total: kpis.length,
-        byStatus: kpisByStatus,
-        items: kpis.map((kpi) => ({
-          id: kpi.id,
-          title: kpi.name,
-          description: kpi.description,
-          target: toNumber(kpi.targetValue),
-          actual: toNumber(kpi.actualValue),
-          unit: kpi.measurementUnit,
-          weight: toNumber(kpi.weight),
-          status: kpi.progressStatus,
-          dueDate: kpi.dueDate,
-        })),
-      },
-      okrSummary: {
-        total: okrs.length,
-        byStatus: okrsByStatus,
-        items: okrs,
-      },
-      developmentGoalSummary: {
-        total: goals.length,
-        byStatus: goalsByStatus,
-        items: goals.map((goal) => ({
-          id: goal.id,
-          title: goal.goalTitle,
-          description: goal.goalDescription,
-          progress: toNumber(goal.currentProgress),
-          targetDate: goal.targetCompletion,
-          status: goal.planStatus,
-          linkedKpiId: goal.linkedKpiId,
-        })),
-      },
       recentFeedback: feedback.map((item) => ({
         id: item.id,
         giverId: item.giverProfileId,
