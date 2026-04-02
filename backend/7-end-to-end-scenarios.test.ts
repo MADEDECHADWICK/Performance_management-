@@ -289,6 +289,17 @@ describe('End-to-end workflow smoke test', () => {
         },
       }));
 
+    await prisma.inductionChecklist.deleteMany({
+      where: { onboardingCaseId: onboardingCase.id },
+    });
+
+    await prisma.notification.deleteMany({
+      where: {
+        profileId: employeeProfile.id,
+        title: "Onboarding checklist assigned",
+      },
+    });
+
     const checklist = await InductionChecklistService.createChecklist(
       {
         onboardingCaseId: onboardingCase.id,

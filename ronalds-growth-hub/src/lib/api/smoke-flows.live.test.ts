@@ -6,7 +6,6 @@ process.env.OBSERVABILITY_ENABLED = "false";
 
 import http from "http";
 import type { Server } from "http";
-import app from "../../../../backend/src/app";
 import prisma from "../../../../backend/src/prisma";
 import { seedDatabase } from "../../../../backend/prisma/seed";
 const mockTokenKey = "rg_token";
@@ -124,7 +123,15 @@ jest.setTimeout(120_000);
 
 const API_BASE_URL = "http://127.0.0.1:4000";
 const FRONTEND_SMOKE_PREFIX = "[FRONTEND_LIVE_SMOKE]";
+const RUN_FRONTEND_LIVE_SMOKE =
+  process.env.FRONTEND_SMOKE_LIVE === "true" ||
+  process.env.npm_lifecycle_event === "test:frontend-smoke:live";
 let server: Server | null = null;
+
+const loadBackendApp = async () => {
+  const module = await import("../../../../backend/src/app");
+  return module.default;
+};
 
 const assertLoginSuccess = (response: LoginResponse): LoginSuccessResponse => {
   if (!("token" in response) || !response.token) {
@@ -152,6 +159,7 @@ const startLocalBackend = async () => {
     return;
   }
 
+  const app = await loadBackendApp();
   server = http.createServer(app);
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => {
@@ -167,12 +175,25 @@ const startLocalBackend = async () => {
   });
 };
 
+const getManagedEvaluatee = async (managerProfileId: number) => {
+  const employees = await evaluationsAPI.getAssignableEmployees();
+  const evaluatee = employees.find((employee) => employee.managerId === managerProfileId);
+
+  if (!evaluatee) {
+    throw new Error("No managed employee found in evaluation directory for seeded manager");
+  }
+
+  return evaluatee;
+};
+
 const useSession = (session: LoginSuccessResponse) => {
   setToken(session.token);
   setUser(session.user);
 };
 
-describe("frontend live smoke flows", () => {
+const describeLive = RUN_FRONTEND_LIVE_SMOKE ? describe : describe.skip;
+
+describeLive("frontend live smoke flows", () => {
   beforeAll(async () => {
     await seedDatabase();
     await startLocalBackend();
@@ -225,10 +246,7 @@ describe("frontend live smoke flows", () => {
     expect(managerProfileId).toBeDefined();
 
     useSession(hrSession);
-    const employees = await evaluationsAPI.getAssignableEmployees();
-    const evaluatee = employees.find((employee) => employee.managerId === managerProfileId);
-
-    expect(evaluatee).toBeDefined();
+    const evaluatee = await getManagedEvaluatee(managerProfileId!);
 
     const now = new Date();
     const title = `${FRONTEND_SMOKE_PREFIX} Cycle ${Date.now()}`;
@@ -250,7 +268,7 @@ describe("frontend live smoke flows", () => {
     const published = await evaluationsAPI.assignEvaluators(cycle.id, {
       assignments: [
         {
-          evaluateeId: evaluatee!.id,
+          evaluateeId: evaluatee.id,
           evaluatorId: managerProfileId!,
           relationship: "manager",
           dueDate: toIsoDate(addDays(now, 7)),
@@ -285,7 +303,7 @@ describe("frontend live smoke flows", () => {
 
     useSession(hrSession);
     const results = await evaluationsAPI.getCycleResults(cycle.id);
-    const result = results.results.find((row) => row.evaluateeId === evaluatee!.id);
+    const result = results.results.find((row) => row.evaluateeId === evaluatee.id);
 
     expect(result).toBeDefined();
     expect(typeof result?.overallScore).toBe("number");

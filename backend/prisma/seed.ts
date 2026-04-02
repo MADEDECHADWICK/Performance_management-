@@ -804,10 +804,16 @@ export async function seedDatabase() {
   const managerProfile = seededUsers.find((item) => item.user.email === 'manager@ronalds.local')?.profile;
   const marketingProfile = seededUsers.find((item) => item.user.email === 'marketing@ronalds.local')?.profile;
   const hrProfile = seededUsers.find((item) => item.user.email === 'hr@ronalds.local')?.profile;
+  const employeeProfile = seededUsers.find((item) => item.user.email === 'employee@ronalds.local')?.profile;
 
-  if (!partnerProfile || !managerProfile || !marketingProfile || !hrProfile) {
+  if (!partnerProfile || !managerProfile || !marketingProfile || !hrProfile || !employeeProfile) {
     throw new Error('Missing required seed profiles');
   }
+
+  await prisma.profile.update({
+    where: { id: employeeProfile.id },
+    data: { managerId: managerProfile.id },
+  });
 
   const upsertLeaveType = async (config: SeedLeaveTypeConfig) =>
     prisma.leaveType.upsert({

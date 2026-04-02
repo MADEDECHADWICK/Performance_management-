@@ -27,6 +27,8 @@ export type ChecklistItemType =
 
 type OwnerRole = "employee" | "hr";
 
+const CHECKLIST_ASSIGNMENT_NOTIFICATION_TITLE = "Onboarding checklist assigned";
+
 type CreateChecklistItemInput = {
   itemName: string;
   description?: string;
@@ -439,7 +441,7 @@ class InductionChecklistServiceClass {
       {
         recipientProfileId: employeeProfileId,
         type: "action",
-        title: "Induction checklist assigned",
+        title: CHECKLIST_ASSIGNMENT_NOTIFICATION_TITLE,
         message: "HR assigned your employee induction and compliance checklist.",
         actionRequired: true,
         link: "/profile?tab=onboarding",
