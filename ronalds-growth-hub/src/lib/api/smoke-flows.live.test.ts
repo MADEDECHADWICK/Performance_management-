@@ -6,8 +6,6 @@ process.env.OBSERVABILITY_ENABLED = "false";
 
 import http from "http";
 import type { Server } from "http";
-import prisma from "../../../../backend/src/prisma";
-import { seedDatabase } from "../../../../backend/prisma/seed";
 const mockTokenKey = "rg_token";
 const mockUserKey = "rg_user";
 const mockApiBaseUrl = "http://127.0.0.1:4000/api";
@@ -127,10 +125,28 @@ const RUN_FRONTEND_LIVE_SMOKE =
   process.env.FRONTEND_SMOKE_LIVE === "true" ||
   process.env.npm_lifecycle_event === "test:frontend-smoke:live";
 let server: Server | null = null;
+let prismaClient: any = null;
+let seedDatabaseFn: null | (() => Promise<unknown>) = null;
 
 const loadBackendApp = async () => {
   const module = await import("../../../../backend/src/app");
   return module.default;
+};
+
+const loadBackendTestRuntime = async () => {
+  if (prismaClient && seedDatabaseFn) {
+    return { prisma: prismaClient, seedDatabase: seedDatabaseFn };
+  }
+
+  const [prismaModule, seedModule] = await Promise.all([
+    import("../../../../backend/src/prisma"),
+    import("../../../../backend/prisma/seed"),
+  ]);
+
+  prismaClient = prismaModule.default;
+  seedDatabaseFn = seedModule.seedDatabase;
+
+  return { prisma: prismaClient, seedDatabase: seedDatabaseFn };
 };
 
 const assertLoginSuccess = (response: LoginResponse): LoginSuccessResponse => {
@@ -186,6 +202,21 @@ const getManagedEvaluatee = async (managerProfileId: number) => {
   return evaluatee;
 };
 
+const completeOnboardingForProfiles = async (profileIds: number[]) => {
+  const ids = profileIds.filter((id): id is number => Number.isFinite(id) && id > 0);
+  if (!ids.length) return;
+
+  const { prisma } = await loadBackendTestRuntime();
+  await prisma.profile.updateMany({
+    where: { id: { in: ids } },
+    data: {
+      onboardingStatus: "completed",
+      onboardingChecklistCompleted: true,
+      inductionCompleted: true,
+    },
+  });
+};
+
 const useSession = (session: LoginSuccessResponse) => {
   setToken(session.token);
   setUser(session.user);
@@ -195,6 +226,7 @@ const describeLive = RUN_FRONTEND_LIVE_SMOKE ? describe : describe.skip;
 
 describeLive("frontend live smoke flows", () => {
   beforeAll(async () => {
+    const { seedDatabase } = await loadBackendTestRuntime();
     await seedDatabase();
     await startLocalBackend();
   });
@@ -219,7 +251,9 @@ describeLive("frontend live smoke flows", () => {
       });
     }
 
-    await prisma.$disconnect();
+    if (prismaClient) {
+      await prismaClient.$disconnect();
+    }
   });
 
   it("logs in against the live backend and persists the authenticated session", async () => {
@@ -247,6 +281,7 @@ describeLive("frontend live smoke flows", () => {
 
     useSession(hrSession);
     const evaluatee = await getManagedEvaluatee(managerProfileId!);
+    await completeOnboardingForProfiles([managerProfileId!, evaluatee.id]);
 
     const now = new Date();
     const title = `${FRONTEND_SMOKE_PREFIX} Cycle ${Date.now()}`;

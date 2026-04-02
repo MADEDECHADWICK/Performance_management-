@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "test:frontend-smoke": "jest --config ronalds-growth-hub/jest.config.cjs --runInBand",
+    "test:frontend-smoke": "jest --config ronalds-growth-hub/jest.config.cjs --runInBand --runTestsByPath ronalds-growth-hub/src/lib/api/smoke-flows.test.ts",
     "test:frontend-smoke:live": "jest --config ronalds-growth-hub/jest.config.cjs --runInBand --runTestsByPath ronalds-growth-hub/src/lib/api/smoke-flows.live.test.ts",
     "test:frontend-ui": "playwright test",
     "test:frontend-ui:live": "node scripts/run-playwright-live-smoke.cjs"
