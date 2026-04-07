@@ -136,13 +136,23 @@ export async function apiFetch<T = any>(
     const data = text ? JSON.parse(text) : {};
     
     if (!res.ok) {
+      const validationDetail =
+        Array.isArray(data?.errors) && data.errors.length > 0
+          ? data.errors
+              .map((entry: any) => String(entry?.message || "").trim())
+              .find(Boolean)
+          : null;
+      const errorMessage =
+        data.error === "Validation failed" && validationDetail
+          ? validationDetail
+          : data.error || data.message || validationDetail || `HTTP ${res.status}`;
       // Handle 401 - clear auth and redirect
       if (res.status === 401) {
         clearAuth();
         window.location.href = '/auth';
       }
       throw new ApiError(
-        data.error || data.message || `HTTP ${res.status}`,
+        errorMessage,
         res.status,
         data.code
       );

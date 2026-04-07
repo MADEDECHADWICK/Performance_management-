@@ -118,6 +118,31 @@ export const runtimeConfig = Object.freeze({
     25 * 1024 * 1024,
     "KNOWLEDGE_HUB_UPLOAD_MAX_BYTES"
   ),
+  r2AccountId: toTrimmedString(process.env.R2_ACCOUNT_ID),
+  r2Endpoint:
+    toTrimmedString(process.env.R2_ENDPOINT) ||
+    (toTrimmedString(process.env.R2_ACCOUNT_ID)
+      ? `https://${toTrimmedString(process.env.R2_ACCOUNT_ID)}.r2.cloudflarestorage.com`
+      : ""),
+  r2AccessKeyId: toTrimmedString(process.env.R2_ACCESS_KEY_ID),
+  r2SecretAccessKey: toTrimmedString(process.env.R2_SECRET_ACCESS_KEY),
+  r2DocumentsBucket: toTrimmedString(process.env.R2_DOCUMENTS_BUCKET),
+  r2KnowledgeBucket: toTrimmedString(process.env.R2_KNOWLEDGE_BUCKET),
+  r2SignedUrlTtlSeconds: parsePositiveInteger(
+    process.env.R2_SIGNED_URL_TTL_SECONDS,
+    900,
+    "R2_SIGNED_URL_TTL_SECONDS"
+  ),
+  objectStorageEnabled: Boolean(
+    toTrimmedString(process.env.R2_ENDPOINT) ||
+      (toTrimmedString(process.env.R2_ACCOUNT_ID)
+        ? `https://${toTrimmedString(process.env.R2_ACCOUNT_ID)}.r2.cloudflarestorage.com`
+        : "")
+  ) &&
+    Boolean(toTrimmedString(process.env.R2_ACCESS_KEY_ID)) &&
+    Boolean(toTrimmedString(process.env.R2_SECRET_ACCESS_KEY)) &&
+    Boolean(toTrimmedString(process.env.R2_DOCUMENTS_BUCKET)) &&
+    Boolean(toTrimmedString(process.env.R2_KNOWLEDGE_BUCKET)),
 });
 
 export const isProductionEnv = () => runtimeConfig.nodeEnv === "production";
@@ -134,6 +159,18 @@ export const assertRuntimeConfig = () => {
 
   if (isProductionEnv() && !toTrimmedString(process.env.CORS_ORIGIN)) {
     throw new Error("CORS_ORIGIN is required in production");
+  }
+
+  if (!runtimeConfig.diskUploadsEnabled && !runtimeConfig.objectStorageEnabled) {
+    throw new Error(
+      "Object storage must be configured when local disk uploads are disabled"
+    );
+  }
+
+  if (!runtimeConfig.serveLocalUploads && !runtimeConfig.objectStorageEnabled) {
+    throw new Error(
+      "Object storage must be configured when local upload serving is disabled"
+    );
   }
 
   ensureUploadRootExists();

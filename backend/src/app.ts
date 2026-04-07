@@ -21,8 +21,13 @@ import {
   shouldTrustProxy,
 } from './config/httpSecurity';
 import { runtimeConfig } from './config/env';
-import { getUploadRoot } from './config/uploads';
-import { logger, requestLoggingMiddleware } from './lib/logger';
+import {
+  getPublicUploadPrefix,
+  getStoredUploadReadUrl,
+  getUploadRoot,
+  type UploadBucket,
+} from './config/uploads';
+import { logger, requestLoggingMiddleware, toLogContext } from './lib/logger';
 import { httpRateLimitMiddleware } from './middleware/httpRateLimit';
 import { requestMetricsMiddleware } from './middleware/observability';
 
@@ -131,6 +136,29 @@ app.use((_req, res, next) => {
 });
 
 // Serve uploaded files
+const registerManagedUploadRoute = (bucket: UploadBucket) => {
+  app.get(`${getPublicUploadPrefix(bucket)}/:fileName`, async (req, res, next) => {
+    try {
+      const readUrl = await getStoredUploadReadUrl(bucket, req.params.fileName);
+      if (!readUrl) {
+        return res.status(404).json({
+          success: false,
+          error: 'Uploaded file not found',
+        });
+      }
+
+      return res.redirect(readUrl);
+    } catch (error) {
+      logger.error('managed_upload_read_failed', {
+        bucket,
+        fileName: req.params.fileName,
+        ...toLogContext(error),
+      });
+      return next(error);
+    }
+  });
+};
+
 if (runtimeConfig.serveLocalUploads) {
   const uploadPreviewFrameAncestors = buildFrameAncestorsDirective();
   app.use(
@@ -148,6 +176,9 @@ if (runtimeConfig.serveLocalUploads) {
       },
     })
   );
+} else if (runtimeConfig.objectStorageEnabled) {
+  registerManagedUploadRoute('documents');
+  registerManagedUploadRoute('knowledge-hub');
 } else {
   logger.warn('local_upload_serving_disabled', {
     uploadRoot: runtimeConfig.uploadRoot,

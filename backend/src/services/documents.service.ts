@@ -12,6 +12,7 @@
 
 import prisma from "../prisma";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
+import { deleteStoredUpload, isManagedUploadPath } from "../config/uploads";
 import {
   NotificationAction,
   NotificationPriority,
@@ -1284,7 +1285,7 @@ class DocumentServiceClass {
   async deleteDocument(documentId: number, auth: AuthContext) {
     const doc = await prisma.document.findUnique({
       where: { id: documentId },
-      select: { id: true, uploadedBy: true },
+      select: { id: true, uploadedBy: true, filePath: true },
     });
 
     if (!doc) {
@@ -1303,6 +1304,19 @@ class DocumentServiceClass {
     }
 
     await prisma.document.delete({ where: { id: documentId } });
+
+    if (isManagedUploadPath("documents", doc.filePath)) {
+      try {
+        await deleteStoredUpload("documents", doc.filePath);
+      } catch (error) {
+        logger.warn("document_upload_cleanup_failed", {
+          documentId,
+          filePath: doc.filePath,
+          ...toLogContext(error),
+        });
+      }
+    }
+
     return { id: documentId, deleted: true };
   }
 

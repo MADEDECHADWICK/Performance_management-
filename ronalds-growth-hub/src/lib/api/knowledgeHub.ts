@@ -235,7 +235,7 @@ const knowledgeHubAPI = {
   ) => api.put(`/knowledge-hub/${resourceId}/progress`, payload),
 
   getQuiz: (resourceId: number) =>
-    api.get<KnowledgeHubQuiz>(`/knowledge-hub/${resourceId}/quiz`),
+    api.get<KnowledgeHubQuiz | null>(`/knowledge-hub/${resourceId}/quiz`),
 
   upsertQuiz: (resourceId: number, payload: UpsertKnowledgeHubQuizInput) =>
     api.put<KnowledgeHubQuiz>(`/knowledge-hub/${resourceId}/quiz`, payload),

@@ -5,8 +5,6 @@ import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { handleValidationErrors } from "../middleware/validate";
 import { ensureAuthorizationContext } from "../services/authorizationContext.service";
-import fs from "fs";
-import path from "path";
 import {
   SYSTEM_MODULES,
   hasModuleAccess,
@@ -15,9 +13,9 @@ import {
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
 import {
   buildDiskUpload,
-  buildPublicUploadPath,
-  getPublicUploadPrefix,
-  resolveLocalUploadPath,
+  deleteStoredUpload,
+  isManagedUploadPath,
+  storeUploadedFile,
 } from "../config/uploads";
 import { logger, toLogContext } from "../lib/logger";
 import { rejectMultipartDiskUploadsDisabled } from "../middleware/rejectMultipartDiskUploads";
@@ -55,7 +53,6 @@ const KNOWLEDGE_COMPLETION_MODES = [
   "manual",
 ] as const;
 
-const localKnowledgeHubUploadPrefix = `${getPublicUploadPrefix("knowledge-hub")}/`;
 const upload = buildDiskUpload("knowledge-hub");
 
 const excludedScopeModules = new Set(["access_control", "settings", "knowledge_hub"]);
@@ -201,7 +198,7 @@ const toNullableTrimmedString = (value: unknown) => {
 const validateLinkUrlInput = (value: unknown) => {
   const trimmed = toNullableTrimmedString(value);
   if (!trimmed) return true;
-  if (trimmed.startsWith(localKnowledgeHubUploadPrefix)) return true;
+  if (isManagedKnowledgeHubUpload(trimmed)) return true;
 
   try {
     const parsed = new URL(trimmed);
@@ -214,8 +211,8 @@ const validateLinkUrlInput = (value: unknown) => {
   }
 };
 
-const isLocalKnowledgeHubUpload = (value: string | null) =>
-  typeof value === "string" && value.startsWith(localKnowledgeHubUploadPrefix);
+const isManagedKnowledgeHubUpload = (value: string | null) =>
+  isManagedUploadPath("knowledge-hub", value);
 
 const inferAssetKindFromUpload = (
   file: Express.Multer.File | undefined
@@ -226,20 +223,14 @@ const inferAssetKindFromUpload = (
   return "document";
 };
 
-const deleteLocalKnowledgeHubUpload = (linkUrl: string | null) => {
-  if (!isLocalKnowledgeHubUpload(linkUrl)) return;
+const deleteManagedKnowledgeHubUpload = async (linkUrl: string | null) => {
+  if (!isManagedKnowledgeHubUpload(linkUrl)) return;
 
-  const fileName = path.basename(linkUrl || "");
-  if (!fileName) return;
-
-  const filePath = resolveLocalUploadPath("knowledge-hub", fileName);
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    await deleteStoredUpload("knowledge-hub", linkUrl);
   } catch (error) {
     logger.warn("knowledge_hub_upload_delete_failed", {
-      filePath,
+      linkUrl,
       ...toLogContext(error),
     });
   }
@@ -256,14 +247,16 @@ const toAssetKind = (
   return fallback;
 };
 
-const buildUploadedAsset = (file: Express.Multer.File | undefined) => {
+const buildUploadedAsset = async (file: Express.Multer.File | undefined) => {
   if (!file) return null;
+
+  const storedFile = await storeUploadedFile("knowledge-hub", file);
 
   return {
     assetKind: inferAssetKindFromUpload(file),
-    linkUrl: buildPublicUploadPath("knowledge-hub", file.filename),
-    assetFileName: file.originalname || file.filename,
-    assetMimeType: file.mimetype || null,
+    linkUrl: storedFile.publicPath,
+    assetFileName: storedFile.originalName,
+    assetMimeType: storedFile.mimeType,
   };
 };
 
@@ -831,7 +824,7 @@ router.get(
       });
 
       if (!quiz) {
-        return res.status(404).json({ error: "Knowledge quiz not found" });
+        return res.json(null);
       }
 
       return res.json({
@@ -1123,8 +1116,9 @@ router.post(
   ...createValidators,
   handleValidationErrors,
   async (req: AuthRequest, res) => {
-    const uploadedAsset = buildUploadedAsset(req.file);
+    let uploadedAsset: Awaited<ReturnType<typeof buildUploadedAsset>> | null = null;
     try {
+      uploadedAsset = await buildUploadedAsset(req.file);
       const actorProfileId = req.user?.profileId ? Number(req.user.profileId) : null;
       const payload = req.body as Record<string, unknown>;
 
@@ -1211,7 +1205,7 @@ router.post(
       return res.status(201).json(created);
     } catch (error: any) {
       if (uploadedAsset) {
-        deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+        await deleteManagedKnowledgeHubUpload(uploadedAsset.linkUrl);
       }
       logger.error("knowledge_hub_resource_create_failed", toLogContext(error));
       return res.status(500).json({ error: "Failed to create knowledge hub resource" });
@@ -1227,8 +1221,9 @@ router.patch(
   ...updateValidators,
   handleValidationErrors,
   async (req: AuthRequest, res) => {
-    const uploadedAsset = buildUploadedAsset(req.file);
+    let uploadedAsset: Awaited<ReturnType<typeof buildUploadedAsset>> | null = null;
     try {
+      uploadedAsset = await buildUploadedAsset(req.file);
       const resourceId = Number(req.params.resourceId);
       const actorProfileId = req.user?.profileId ? Number(req.user.profileId) : null;
       const payload = req.body as Record<string, unknown>;
@@ -1236,7 +1231,7 @@ router.patch(
 
       if (!existing) {
         if (uploadedAsset) {
-          deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+          await deleteManagedKnowledgeHubUpload(uploadedAsset.linkUrl);
         }
         return res.status(404).json({ error: "Knowledge resource not found" });
       }
@@ -1360,23 +1355,23 @@ router.patch(
 
       if (!updatedRows[0]?.id) {
         if (uploadedAsset) {
-          deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+          await deleteManagedKnowledgeHubUpload(uploadedAsset.linkUrl);
         }
         return res.status(404).json({ error: "Knowledge resource not found" });
       }
 
       if (
-        isLocalKnowledgeHubUpload(existing.link_url) &&
+        isManagedKnowledgeHubUpload(existing.link_url) &&
         ((uploadedAsset && existing.link_url !== uploadedAsset.linkUrl) || hasKey(payload, "linkUrl"))
       ) {
-        deleteLocalKnowledgeHubUpload(existing.link_url);
+        await deleteManagedKnowledgeHubUpload(existing.link_url);
       }
 
       const updated = await getResourceById(resourceId, true);
       return res.json(updated);
     } catch (error: any) {
       if (uploadedAsset) {
-        deleteLocalKnowledgeHubUpload(uploadedAsset.linkUrl);
+        await deleteManagedKnowledgeHubUpload(uploadedAsset.linkUrl);
       }
       logger.error("knowledge_hub_resource_update_failed", {
         resourceId: Number(req.params.resourceId),
@@ -1408,7 +1403,7 @@ router.delete(
         return res.status(404).json({ error: "Knowledge resource not found" });
       }
 
-      deleteLocalKnowledgeHubUpload(existing.link_url);
+      await deleteManagedKnowledgeHubUpload(existing.link_url);
 
       return res.json({ success: true });
     } catch (error: any) {

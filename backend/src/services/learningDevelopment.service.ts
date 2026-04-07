@@ -1,6 +1,4 @@
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
 import PDFDocument from "pdfkit";
 import {
   CertificateStatus,
@@ -17,7 +15,7 @@ import {
   TrainingRecordStatus,
 } from "@prisma/client";
 import prisma from "../prisma";
-import { buildPublicUploadPath, getUploadDirectory, resolveLocalUploadPath } from "../config/uploads";
+import { downloadStoredUploadBuffer, storeGeneratedUploadBuffer } from "../config/uploads";
 
 type PrismaLike = Prisma.TransactionClient;
 
@@ -164,28 +162,24 @@ const createPdfBuffer = async (
   });
 
 const writeDocumentFile = async (fileName: string, buffer: Buffer) => {
-  const directory = getUploadDirectory("documents");
-  const resolvedName = `${Date.now()}-${sanitizeFileName(fileName)}`;
-  const absolutePath = path.join(directory, resolvedName);
-  await fs.promises.writeFile(absolutePath, buffer);
-  return {
-    absolutePath,
-    publicPath: buildPublicUploadPath("documents", resolvedName),
-    storedName: resolvedName,
-  };
+  return storeGeneratedUploadBuffer({
+    bucket: "documents",
+    fileName: sanitizeFileName(fileName),
+    buffer,
+    mimeType: "application/pdf",
+  });
 };
 
-const resolveCertificateImagePath = (document?: {
-  fileName?: string | null;
+const loadCertificateImageBuffer = async (document?: {
+  filePath?: string | null;
   mimeType?: string | null;
 } | null) => {
-  if (!document?.fileName) return null;
+  if (!document?.filePath) return null;
 
   const mimeType = String(document.mimeType || "").toLowerCase();
   if (!mimeType.startsWith("image/")) return null;
 
-  const localPath = resolveLocalUploadPath("documents", document.fileName);
-  return fs.existsSync(localPath) ? localPath : null;
+  return downloadStoredUploadBuffer("documents", document.filePath);
 };
 
 const buildDefaultCertificateTemplate = (_trainingName: string) => ({
@@ -198,16 +192,28 @@ const buildDefaultCertificateTemplate = (_trainingName: string) => ({
     accentColor: "#0f766e",
   },
   issuedByLabel: null as string | null,
-  backgroundDocument: null as { fileName?: string | null; mimeType?: string | null } | null,
-  signatureDocument: null as { fileName?: string | null; mimeType?: string | null } | null,
+  backgroundDocument: null as
+    | { fileName?: string | null; filePath?: string | null; mimeType?: string | null }
+    | null,
+  signatureDocument: null as
+    | { fileName?: string | null; filePath?: string | null; mimeType?: string | null }
+    | null,
 });
 
 type CertificateTemplateRenderSource = {
   name: string;
   templateDefinition: Prisma.JsonValue | Record<string, unknown> | null;
   issuedByLabel?: string | null;
-  backgroundDocument?: { fileName?: string | null; mimeType?: string | null } | null;
-  signatureDocument?: { fileName?: string | null; mimeType?: string | null } | null;
+  backgroundDocument?: {
+    fileName?: string | null;
+    filePath?: string | null;
+    mimeType?: string | null;
+  } | null;
+  signatureDocument?: {
+    fileName?: string | null;
+    filePath?: string | null;
+    mimeType?: string | null;
+  } | null;
 };
 
 const getTemplateConfigValue = (
@@ -1023,8 +1029,10 @@ export const issueCertificateIfEligible = async (input: {
   const verificationCode = crypto.randomBytes(8).toString("hex").toUpperCase();
   const learnerName = `${assignment.employee.firstName} ${assignment.employee.lastName}`.trim();
   const completionDate = (assignment.completedAt ?? new Date()).toLocaleDateString();
-  const backgroundImagePath = resolveCertificateImagePath(template.backgroundDocument);
-  const signatureImagePath = resolveCertificateImagePath(template.signatureDocument);
+  const [backgroundImageBuffer, signatureImageBuffer] = await Promise.all([
+    loadCertificateImageBuffer(template.backgroundDocument),
+    loadCertificateImageBuffer(template.signatureDocument),
+  ]);
   const templateVariables = {
     trainingName,
     learnerName,
@@ -1053,9 +1061,9 @@ export const issueCertificateIfEligible = async (input: {
     const contentWidth = pageWidth - 144;
     const contentLeft = 72;
 
-    if (backgroundImagePath) {
+    if (backgroundImageBuffer) {
       try {
-        doc.image(backgroundImagePath, 0, 0, { width: pageWidth, height: pageHeight });
+        doc.image(backgroundImageBuffer, 0, 0, { width: pageWidth, height: pageHeight });
       } catch {
         doc
           .save()
@@ -1107,9 +1115,9 @@ export const issueCertificateIfEligible = async (input: {
       }
     );
 
-    if (signatureImagePath) {
+    if (signatureImageBuffer) {
       try {
-        doc.image(signatureImagePath, pageWidth / 2 - 70, pageHeight - 210, {
+        doc.image(signatureImageBuffer, pageWidth / 2 - 70, pageHeight - 210, {
           fit: [140, 60],
           align: "center",
         });
@@ -1197,7 +1205,7 @@ export const issueCertificateIfEligible = async (input: {
 
     const document = await tx.document.create({
       data: {
-        fileName: path.basename(storedFile.storedName),
+        fileName: storedFile.storedName,
         filePath: storedFile.publicPath,
         fileSize: pdfBuffer.length,
         mimeType: "application/pdf",

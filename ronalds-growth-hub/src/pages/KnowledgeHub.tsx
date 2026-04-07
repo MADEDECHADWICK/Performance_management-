@@ -38,7 +38,14 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import PageLoader from "@/components/ui/page-loader";
@@ -832,25 +839,25 @@ export default function KnowledgeHub() {
         formData.append("allowDownload", String(payload.allowDownload ?? true));
         formData.append("isFeatured", String(payload.isFeatured ?? false));
         formData.append("isPublished", String(payload.isPublished ?? true));
-        formData.append(
-          "estimatedDurationMinutes",
-          payload.estimatedDurationMinutes !== null && payload.estimatedDurationMinutes !== undefined
-            ? String(payload.estimatedDurationMinutes)
-            : ""
-        );
+        if (
+          payload.estimatedDurationMinutes !== null &&
+          payload.estimatedDurationMinutes !== undefined
+        ) {
+          formData.append("estimatedDurationMinutes", String(payload.estimatedDurationMinutes));
+        }
         formData.append("completionMode", String(payload.completionMode || "manual"));
-        formData.append(
-          "completionThresholdPercent",
-          payload.completionThresholdPercent !== null && payload.completionThresholdPercent !== undefined
-            ? String(payload.completionThresholdPercent)
-            : ""
-        );
-        formData.append(
-          "minReadSeconds",
-          payload.minReadSeconds !== null && payload.minReadSeconds !== undefined
-            ? String(payload.minReadSeconds)
-            : ""
-        );
+        if (
+          payload.completionThresholdPercent !== null &&
+          payload.completionThresholdPercent !== undefined
+        ) {
+          formData.append(
+            "completionThresholdPercent",
+            String(payload.completionThresholdPercent)
+          );
+        }
+        if (payload.minReadSeconds !== null && payload.minReadSeconds !== undefined) {
+          formData.append("minReadSeconds", String(payload.minReadSeconds));
+        }
         formData.append("pointsOnCompletion", String(payload.pointsOnCompletion || 0));
         formData.append("file", selectedFile);
 
@@ -1250,6 +1257,9 @@ export default function KnowledgeHub() {
                   </Badge>
                 )}
               </DialogTitle>
+              <DialogDescription>
+                Review the selected knowledge resource, preview its content, and track completion.
+              </DialogDescription>
             </DialogHeader>
 
             {previewResource && (
@@ -1439,6 +1449,9 @@ export default function KnowledgeHub() {
           <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{previewQuiz?.title || "Knowledge Check"}</DialogTitle>
+              <DialogDescription>
+                Answer the questions attached to this knowledge resource.
+              </DialogDescription>
             </DialogHeader>
 
             {previewQuiz ? (
@@ -1542,6 +1555,9 @@ export default function KnowledgeHub() {
               <DialogTitle>
                 {editingResource ? "Edit Knowledge Resource" : "Add Knowledge Resource"}
               </DialogTitle>
+              <DialogDescription>
+                Create or update a knowledge resource, optional file, and completion settings.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">

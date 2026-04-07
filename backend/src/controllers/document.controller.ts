@@ -7,7 +7,7 @@ import { AuthRequest } from "../middleware/auth";
 import { DocumentService } from "../services/documents.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
-import { buildPublicUploadPath } from "../config/uploads";
+import { deleteStoredUpload, storeUploadedFile } from "../config/uploads";
 import { logger, toLogContext } from "../lib/logger";
 
 const buildAuth = (req: AuthRequest) => ({
@@ -65,10 +65,14 @@ export class DocumentController {
   }
 
   static async uploadDocument(req: AuthRequest, res: Response): Promise<void> {
+    let storedUpload: Awaited<ReturnType<typeof storeUploadedFile>> | null = null;
     try {
       const auth = buildAuth(req);
 
       const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+      if (uploadedFile) {
+        storedUpload = await storeUploadedFile("documents", uploadedFile);
+      }
 
       const {
         fileName: bodyFileName,
@@ -84,12 +88,10 @@ export class DocumentController {
       } = req.body;
       const normalizedIsRequired = normalizeOptionalBoolean(isRequired);
 
-      const fileName = bodyFileName || uploadedFile?.originalname;
-      const filePath = uploadedFile
-        ? buildPublicUploadPath("documents", uploadedFile.filename)
-        : bodyFilePath;
-      const fileSize = uploadedFile?.size || bodyFileSize;
-      const mimeType = uploadedFile?.mimetype || bodyMimeType;
+      const fileName = bodyFileName || storedUpload?.originalName || uploadedFile?.originalname;
+      const filePath = storedUpload?.publicPath || bodyFilePath;
+      const fileSize = storedUpload?.fileSize || bodyFileSize;
+      const mimeType = storedUpload?.mimeType || bodyMimeType;
 
       if (!fileName || !filePath) {
         res
@@ -116,6 +118,9 @@ export class DocumentController {
 
       res.status(201).json(successResponse(result, "Document uploaded", 201));
     } catch (error: any) {
+      if (storedUpload?.publicPath) {
+        await deleteStoredUpload("documents", storedUpload.publicPath);
+      }
       logger.error("document_upload_failed", toLogContext(error));
       const status = error.statusCode ?? 400;
       res.status(status).json(errorResponse(error.message || "Failed to upload document", status));

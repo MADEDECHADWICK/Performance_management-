@@ -11,15 +11,13 @@
  * - Job status workflows
  */
 
-import fs from 'fs';
-import path from 'path';
 import PDFDocument from 'pdfkit';
 import prisma from '../prisma';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
 import { JobInvoiceStatus, JobStatus, Prisma, TaskStatus } from '@prisma/client';
 import { createClientSurveyForJobCompletion } from './surveyRouting.service';
-import { buildPublicUploadPath, getUploadDirectory } from '../config/uploads';
+import { storeGeneratedUploadBuffer } from '../config/uploads';
 
 export interface JobMilestoneInput {
   title: string;
@@ -266,17 +264,13 @@ const createPdfBuffer = async (
     doc.end();
   });
 
-const writeGeneratedDocumentFile = async (fileName: string, buffer: Buffer) => {
-  const directory = getUploadDirectory('documents');
-  const storedName = `${Date.now()}-${sanitizeGeneratedFileName(fileName)}`;
-  const absolutePath = path.join(directory, storedName);
-  await fs.promises.writeFile(absolutePath, buffer);
-  return {
-    absolutePath,
-    publicPath: buildPublicUploadPath('documents', storedName),
-    storedName,
-  };
-};
+const writeGeneratedDocumentFile = async (fileName: string, buffer: Buffer) =>
+  storeGeneratedUploadBuffer({
+    bucket: 'documents',
+    fileName: sanitizeGeneratedFileName(fileName),
+    buffer,
+    mimeType: 'application/pdf',
+  });
 
 const normalizeDocumentType = (value: unknown) =>
   String(value || '')
