@@ -776,7 +776,7 @@ export default function EmployeeProfile() {
                                     )}
                                   </div>
                                   <div className="flex items-center gap-2">
-                                    {!item.isCompleted && item.requiresDocument && !item.documentId && isChecklistSelfView && (
+                                    {!item.isCompleted && item.requiresDocument && !item.documentId && employeeOwned && (
                                       <label className="inline-flex items-center">
                                         <input
                                           type="file"

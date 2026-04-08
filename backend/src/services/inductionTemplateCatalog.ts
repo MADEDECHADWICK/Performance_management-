@@ -30,19 +30,69 @@ const buildSection = (
     ownerRole,
   }));
 
-const employeeFileItems = buildSection("employee_file", "Employee File", "hr", [
-  {
-    itemName: "Application letter & CV",
-    description: "Employee file must contain the application letter and CV.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Certified education certificates",
-    description: "Upload certified copies of all education certificates.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
+const employeeFileEmployeeOwnedItems = buildSection(
+  "employee_file",
+  "Employee File",
+  "employee",
+  [
+    {
+      itemName: "Application letter & CV",
+      description: "Employee file must contain the application letter and CV.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Certified education certificates",
+      description: "Upload certified copies of all education certificates.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Personal details form",
+      description: "Employee must complete the personal details form.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Certificate of good conduct",
+      description: "Upload the certificate of good conduct.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Copy of ID",
+      description: "Upload a national ID or passport copy.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Copy of NHIF card",
+      description: "Upload the NHIF card copy.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Copy of KRA PIN",
+      description: "Upload the KRA PIN certificate or card copy.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Copy of NSSF card",
+      description: "Upload the NSSF card copy.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+    {
+      itemName: "Passport-size photos",
+      description: "Upload two passport-size photos.",
+      itemType: "document_upload",
+      requiresDocument: true,
+    },
+  ]
+);
+
+const employeeFileHrOwnedItems = buildSection("employee_file", "Employee File", "hr", [
   {
     itemName: "Offer letter",
     description: "Attach the signed offer letter to the employee file.",
@@ -52,48 +102,6 @@ const employeeFileItems = buildSection("employee_file", "Employee File", "hr", [
   {
     itemName: "Appointment letter",
     description: "Attach the appointment letter to the employee file.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Personal details form",
-    description: "Employee must complete the personal details form.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Certificate of good conduct",
-    description: "Upload the certificate of good conduct.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Copy of ID",
-    description: "Upload a national ID or passport copy.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Copy of NHIF card",
-    description: "Upload the NHIF card copy.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Copy of KRA PIN",
-    description: "Upload the KRA PIN certificate or card copy.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Copy of NSSF card",
-    description: "Upload the NSSF card copy.",
-    itemType: "document_upload",
-    requiresDocument: true,
-  },
-  {
-    itemName: "Passport-size photos",
-    description: "Upload two passport-size photos.",
     itemType: "document_upload",
     requiresDocument: true,
   },
@@ -181,7 +189,8 @@ const accessAndRoleReadinessItems = [
 ];
 
 const DEFAULT_TEMPLATE_ITEMS: InductionTemplateItem[] = [
-  ...employeeFileItems,
+  ...employeeFileEmployeeOwnedItems,
+  ...employeeFileHrOwnedItems,
   ...firmOrientationItems,
   ...hrPolicyItems,
   ...financeAndPerformanceItems,

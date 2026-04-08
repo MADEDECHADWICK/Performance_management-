@@ -52,6 +52,18 @@ export interface CreateChecklistInput {
 }
 
 class InductionChecklistServiceClass {
+  private readonly legacyEmployeeOwnedEmployeeFileItems = new Set([
+    "application_letter_cv",
+    "certified_education_certificates",
+    "personal_details_form",
+    "certificate_of_good_conduct",
+    "copy_of_id",
+    "copy_of_nhif_card",
+    "copy_of_kra_pin",
+    "copy_of_nssf_card",
+    "passport_size_photos",
+  ]);
+
   private getRoles(auth: AuthContext) {
     return (auth.roles ?? []).map((role) =>
       String(role || "")
@@ -73,6 +85,57 @@ class InductionChecklistServiceClass {
       .replace(/[\s-]+/g, "_");
     if (normalized === "employee") return "employee";
     return "hr";
+  }
+
+  private normalizeChecklistKey(value?: string | null) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[&/]+/g, " ")
+      .replace(/[^\w\s]+/g, "")
+      .replace(/[\s-]+/g, "_");
+  }
+
+  private resolveOwnerRoleForItem(item: {
+    ownerRole?: string | null;
+    sectionKey?: string | null;
+    itemName?: string | null;
+    itemType?: string | null;
+    requiresDocument?: boolean | null;
+  }): OwnerRole {
+    const storedOwnerRole = this.normalizeOwnerRole(item.ownerRole);
+    if (storedOwnerRole === "employee") {
+      return "employee";
+    }
+
+    const sectionKey = this.normalizeChecklistKey(item.sectionKey);
+    const itemName = this.normalizeChecklistKey(item.itemName);
+    const itemType = this.normalizeChecklistKey(item.itemType);
+    const isDocumentUpload = itemType === "document_upload" || Boolean(item.requiresDocument);
+
+    if (
+      sectionKey === "employee_file" &&
+      isDocumentUpload &&
+      this.legacyEmployeeOwnedEmployeeFileItems.has(itemName)
+    ) {
+      return "employee";
+    }
+
+    return storedOwnerRole;
+  }
+
+  private withResolvedOwnerRoles<T extends { items?: Array<Record<string, any>> }>(checklist: T): T {
+    if (!Array.isArray(checklist.items)) {
+      return checklist;
+    }
+
+    return {
+      ...checklist,
+      items: checklist.items.map((item) => ({
+        ...item,
+        ownerRole: this.resolveOwnerRoleForItem(item),
+      })),
+    };
   }
 
   private sanitizeChecklistItem(
@@ -171,7 +234,7 @@ class InductionChecklistServiceClass {
       throw err;
     }
 
-    return checklist;
+    return this.withResolvedOwnerRoles(checklist);
   }
 
   private async assertCanViewChecklist(
@@ -209,7 +272,7 @@ class InductionChecklistServiceClass {
       throw err;
     }
 
-    const ownerRole = this.normalizeOwnerRole(item.ownerRole);
+    const ownerRole = this.resolveOwnerRoleForItem(item);
     if (this.isPrivileged(auth)) {
       return { checklist, item, ownerRole };
     }
@@ -318,7 +381,7 @@ class InductionChecklistServiceClass {
       });
     }
 
-    return updated;
+    return this.withResolvedOwnerRoles(updated);
   }
 
   getDefaultTemplate() {

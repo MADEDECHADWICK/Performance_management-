@@ -45,7 +45,10 @@ export class InductionChecklistController {
   static async getById(req: AuthRequest, res: Response) {
     try {
       const checklistId = Number(req.params.checklistId);
-      const checklist = await InductionChecklistService.getChecklistById(checklistId);
+      const checklist = await InductionChecklistService.getChecklistById(
+        checklistId,
+        authFromReq(req)
+      );
       res.json(successResponse(checklist, "Checklist retrieved"));
     } catch (e: any) {
       console.error("InductionChecklistController.getById error:", e);
