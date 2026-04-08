@@ -89,6 +89,7 @@ const Calibration = lazy(() => import("./pages/Calibration"));
 // Document & Surveys
 const DocumentManagement = lazy(() => import("./pages/DocumentManagement"));
 const KnowledgeHub = lazy(() => import("./pages/KnowledgeHub"));
+const OnboardingPolicies = lazy(() => import("./pages/OnboardingPolicies"));
 const ClientSurveys = lazy(() => import("./pages/ClientSurveys"));
 
 // Other
@@ -296,6 +297,22 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <EmployeeManagement />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/onboarding-policies"
+                element={
+                  <AppRouteGuard>
+                    <OnboardingPolicies />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/onboarding-policies/:slug"
+                element={
+                  <AppRouteGuard>
+                    <OnboardingPolicies />
                   </AppRouteGuard>
                 }
               />

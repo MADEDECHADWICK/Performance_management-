@@ -883,6 +883,8 @@ model Profile {
 
   inductionChecklistsAsEmployee InductionChecklist[] @relation("InductionChecklistEmployee")
   inductionChecklistsAsAssigner InductionChecklist[] @relation("InductionChecklistAssigner")
+  onboardingPoliciesCreated      OnboardingPolicy[]   @relation("OnboardingPolicyCreatedBy")
+  onboardingPoliciesUpdated      OnboardingPolicy[]   @relation("OnboardingPolicyUpdatedBy")
   clientOnboardingChecklistsAssigned ClientOnboardingChecklist[] @relation("ClientOnboardingChecklistAssigner")
   clientOnboardingChecklistItemsCompleted ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemCompletedBy")
   trainingRecordsAsEmployee      TrainingRecord[]    @relation("TrainingRecordEmployee")
@@ -1674,6 +1676,35 @@ model InductionChecklistItem {
 
   @@index([checklistId])
   @@map("induction_checklist_items")
+}
+
+model OnboardingPolicy {
+  id      Int     @id @default(autoincrement())
+  slug    String  @unique
+  title   String
+  summary String? @db.Text
+  content String? @db.Text
+
+  sectionKey   String @default("general") @map("section_key")
+  sectionLabel String @default("General") @map("section_label")
+  orderIndex   Int    @default(0) @map("order_index")
+
+  requiresAcknowledgement Boolean   @default(true) @map("requires_acknowledgement")
+  isActive                Boolean   @default(true) @map("is_active")
+  isPublished             Boolean   @default(true) @map("is_published")
+  publishedAt             DateTime? @map("published_at")
+
+  createdByProfileId Int?     @map("created_by_profile_id")
+  updatedByProfileId Int?     @map("updated_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  createdBy Profile? @relation("OnboardingPolicyCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  updatedBy Profile? @relation("OnboardingPolicyUpdatedBy", fields: [updatedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([sectionKey, orderIndex])
+  @@index([isPublished, isActive])
+  @@map("onboarding_policies")
 }
 
 // =============================

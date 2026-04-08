@@ -13,8 +13,20 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, Search, Plus, Pencil, Trash2, Building2, Users, ClipboardCheck, FileText, Upload } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import {
+  Eye,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  Building2,
+  Users,
+  ClipboardCheck,
+  FileText,
+  Upload,
+  BookOpen,
+} from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { rolesAPI } from "@/lib/api";
 import documentsAPI from "@/lib/api/documents";
 import { CANONICAL_ROLES, resolveCanonicalRole } from "@/auth/canonicalRoles";
@@ -2085,6 +2097,12 @@ const EmployeeManagement = () => {
                     <CardDescription>Use checklist assignment and completion as the onboarding flow.</CardDescription>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" asChild>
+                      <Link to="/onboarding-policies">
+                        <BookOpen className="h-4 w-4 mr-2" />
+                        Manage Policies
+                      </Link>
+                    </Button>
                     <Button variant="outline" onClick={() => void handleOpenBulkChecklistDialog()}>
                       <ClipboardCheck className="h-4 w-4 mr-2" />
                       Bulk Assign
@@ -2231,7 +2249,7 @@ const EmployeeManagement = () => {
                                           size="sm"
                                           onClick={() => openChecklistDetails(oc.inductionChecklist!.id)}
                                         >
-                                          View checklist
+                                          Review / finalize
                                         </Button>
                                       )}
                                       {!oc.inductionChecklist && oc.profileId && (

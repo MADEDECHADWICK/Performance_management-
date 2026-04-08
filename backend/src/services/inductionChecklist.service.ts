@@ -11,6 +11,10 @@ import {
   getDefaultInductionTemplate,
 } from "./inductionTemplateCatalog";
 import { EmployeeOnboardingCaseService } from "./employeeOnboardingCase.service";
+import {
+  findOnboardingPolicyDefinitionForChecklistItem,
+  onboardingPolicyPath,
+} from "./onboardingPolicyCatalog";
 
 export interface AuthContext {
   userId: number;
@@ -124,7 +128,9 @@ class InductionChecklistServiceClass {
     return storedOwnerRole;
   }
 
-  private withResolvedOwnerRoles<T extends { items?: Array<Record<string, any>> }>(checklist: T): T {
+  private withResolvedChecklistItems<T extends { items?: Array<Record<string, any>> }>(
+    checklist: T
+  ): T {
     if (!Array.isArray(checklist.items)) {
       return checklist;
     }
@@ -133,7 +139,21 @@ class InductionChecklistServiceClass {
       ...checklist,
       items: checklist.items.map((item) => ({
         ...item,
-        ownerRole: this.resolveOwnerRoleForItem(item),
+        ownerRole: findOnboardingPolicyDefinitionForChecklistItem(item.sectionKey, item.itemName)
+          ? "employee"
+          : this.resolveOwnerRoleForItem(item),
+        itemType: findOnboardingPolicyDefinitionForChecklistItem(item.sectionKey, item.itemName)
+          ? "policy_link"
+          : item.itemType,
+        resourceUrl:
+          item.resourceUrl ||
+          (() => {
+            const definition = findOnboardingPolicyDefinitionForChecklistItem(
+              item.sectionKey,
+              item.itemName
+            );
+            return definition ? onboardingPolicyPath(definition.slug) : null;
+          })(),
       })),
     };
   }
@@ -234,7 +254,7 @@ class InductionChecklistServiceClass {
       throw err;
     }
 
-    return this.withResolvedOwnerRoles(checklist);
+    return this.withResolvedChecklistItems(checklist);
   }
 
   private async assertCanViewChecklist(
@@ -381,7 +401,7 @@ class InductionChecklistServiceClass {
       });
     }
 
-    return this.withResolvedOwnerRoles(updated);
+    return this.withResolvedChecklistItems(updated);
   }
 
   getDefaultTemplate() {

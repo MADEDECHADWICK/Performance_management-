@@ -1,3 +1,5 @@
+import { buildDefaultOnboardingPolicyChecklistItems } from "./onboardingPolicyCatalog";
+
 export type InductionTemplateItem = {
   itemName: string;
   description?: string;
@@ -107,67 +109,7 @@ const employeeFileHrOwnedItems = buildSection("employee_file", "Employee File", 
   },
 ]);
 
-const firmOrientationItems = buildSection("firm_orientation", "About the Firm", "hr", [
-  { itemName: "History of the firm", description: "Take the employee through the history of the firm." },
-  { itemName: "Vision", description: "Brief the employee on the firm's vision." },
-  { itemName: "Mission", description: "Brief the employee on the firm's mission." },
-  { itemName: "Firm services", description: "Explain the firm's service lines and client work." },
-  {
-    itemName: "Organisation structure and departments",
-    description: "Review organisation structure, departments, and reporting lines.",
-  },
-  {
-    itemName: "Management team introduction",
-    description: "Introduce partners, team leaders, and key contacts.",
-  },
-  { itemName: "Firm culture", description: "Explain the culture, behaviours, and expected standards." },
-  { itemName: "Culture manual", description: "Share and explain the culture manual." },
-  { itemName: "Time management", description: "Review expected time management discipline." },
-  { itemName: "Dress code", description: "Review the firm's dress code expectations." },
-  { itemName: "Email and phone etiquette", description: "Explain professional communication standards." },
-  { itemName: "Brand book and guidelines", description: "Review brand standards and presentation expectations." },
-  { itemName: "Laptop policy", description: "Review device handling and laptop policy." },
-]);
-
-const hrPolicyItems = buildSection("hr_policies", "HR Policies", "hr", [
-  { itemName: "Recruitment and selection procedure", description: "Walk through the recruitment policy context." },
-  { itemName: "Employee onboarding procedure", description: "Explain how onboarding is governed internally." },
-  { itemName: "Attendance and time management", description: "Cover attendance rules and time discipline." },
-  { itemName: "Staff training procedure", description: "Explain learning and training expectations." },
-  {
-    itemName: "Timesheets and workflow management system",
-    description: "Introduce Xero Practice Manager and timesheet expectations.",
-  },
-  { itemName: "Staff disciplinary procedure", description: "Review disciplinary procedures and standards." },
-  { itemName: "Leave management procedure", description: "Review leave approval rules and timelines." },
-  { itemName: "Leave management system", description: "Introduce Wingubox or the active leave system." },
-  { itemName: "Employee separation procedure", description: "Explain separation and exit process rules." },
-  { itemName: "Data protection policy", description: "Review data privacy and data handling obligations." },
-  { itemName: "Confidentiality and non-disclosure policy", description: "Review confidentiality obligations." },
-  { itemName: "Anti-money laundering policy", description: "Review AML obligations and escalation expectations." },
-  { itemName: "Sexual harassment policy", description: "Review anti-harassment policy and reporting channels." },
-]);
-
-const financeAndPerformanceItems = [
-  ...buildSection("finance_policies", "Finance Policies", "hr", [
-    { itemName: "Travel allowances and expenses policy", description: "Review travel and expense rules." },
-    { itemName: "Petty cash management policy", description: "Explain petty cash request and control rules." },
-    { itemName: "Disbursement policy", description: "Review disbursement controls and approvals." },
-  ]),
-  ...buildSection("performance_management", "Performance Management", "hr", [
-    { itemName: "Performance expectations", description: "Introduce performance expectations and ownership." },
-    { itemName: "Performance appraisals", description: "Explain evaluation and appraisal cadence." },
-    {
-      itemName: "Rewards and performance consequences",
-      description: "Review reward, consequence, and accountability rules.",
-    },
-    { itemName: "Performance management policy", description: "Review the performance management policy." },
-    {
-      itemName: "Performance management system",
-      description: "Introduce the performance management system and required usage.",
-    },
-  ]),
-];
+const onboardingPolicyItems = buildDefaultOnboardingPolicyChecklistItems();
 
 const accessAndRoleReadinessItems = [
   ...buildSection("tools_access", "Tools & Access", "hr", [
@@ -191,9 +133,7 @@ const accessAndRoleReadinessItems = [
 const DEFAULT_TEMPLATE_ITEMS: InductionTemplateItem[] = [
   ...employeeFileEmployeeOwnedItems,
   ...employeeFileHrOwnedItems,
-  ...firmOrientationItems,
-  ...hrPolicyItems,
-  ...financeAndPerformanceItems,
+  ...onboardingPolicyItems,
   ...accessAndRoleReadinessItems,
 ].map((item, index) => ({
   ...item,

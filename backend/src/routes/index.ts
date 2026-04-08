@@ -17,6 +17,7 @@ import departmentRoutes from './departments.routes';
 import documentsRoutes from './documents.routes';
 import employeeOnboardingRoutes from './employeeOnboardingCase.routes';
 import employeeOffboardingRoutes from './employeeOffboardingCase.routes';
+import onboardingPoliciesRoutes from './onboardingPolicies.routes';
 import evaluationRoutes from './evaluations.routes';
 import inductionChecklistRoutes from './inductionChecklist.routes';
 import partnerRoutes from './partners.routes';
@@ -106,6 +107,7 @@ router.use(
   knowledgeHubRoutes
 );
 router.use('/onboarding', authMiddleware, requireModuleAccess('users', 'read'), employeeOnboardingRoutes);
+router.use('/onboarding-policies', authMiddleware, requireModuleAccess('users', 'read'), onboardingPoliciesRoutes);
 router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
 router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
 router.use('/induction-checklist', authMiddleware, requireModuleAccess('users', 'read'), inductionChecklistRoutes);
