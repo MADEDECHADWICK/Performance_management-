@@ -107,7 +107,7 @@ router.use(
   knowledgeHubRoutes
 );
 router.use('/onboarding', authMiddleware, requireModuleAccess('users', 'read'), employeeOnboardingRoutes);
-router.use('/onboarding-policies', authMiddleware, requireModuleAccess('users', 'read'), onboardingPoliciesRoutes);
+router.use('/onboarding-policies', authMiddleware, onboardingPoliciesRoutes);
 router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
 router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
 router.use('/induction-checklist', authMiddleware, requireModuleAccess('users', 'read'), inductionChecklistRoutes);
