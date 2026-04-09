@@ -103,6 +103,7 @@ import {
   strategyReviewPoints,
   type KpiSheetMode,
   type ModuleTabValue,
+  type RoleBoardItem,
   type RoleHomeMetric,
   type RoleKey,
   type SetupSheetMode,
@@ -239,29 +240,7 @@ export default function BalancedScorecardModule() {
       .toLowerCase();
     return haystack.includes(searchTerm);
   });
-  const highlightedKpi: KpiDefinition =
-    filteredKpis[0] ??
-    kpiData[0] ?? {
-      id: "placeholder-kpi",
-      name: "No KPI contract defined yet",
-      perspectiveId: perspectiveData[0]?.id ?? "financial",
-      goalId: goalData[0]?.id ?? "",
-      description: "Create a KPI contract to see live measurement detail and score movement here.",
-      formula: "No formula has been defined yet.",
-      frequency: "Not set",
-      unit: "-",
-      weight: 0,
-      firmTarget: "-",
-      actual: "-",
-      weightedScore: 0,
-      owner: "Unassigned",
-      status: "at_risk",
-      statusLogic: "Status logic will appear after the KPI contract is created.",
-      updateFrequency: "Not set",
-      initiativeProgress: 0,
-      trend: [0, 0, 0, 0, 0, 0],
-      ownerUpdate: "Live owner commentary will appear once a KPI is mapped to a live metric template.",
-    };
+  const highlightedKpi: KpiDefinition | null = filteredKpis[0] ?? kpiData[0] ?? null;
 
   const selectedRoleProfile = roleProfiles[selectedRole];
   const selectedRoleHomeBase = roleHomeConfigs[selectedRole];
@@ -507,11 +486,20 @@ export default function BalancedScorecardModule() {
       note: employee.ack,
     };
   });
+  const visibleSectionItems: RoleBoardItem[] = visibleTabs.map((tab) => ({
+    label: tab.label,
+    value: "Visible",
+    note: `Available in the ${selectedRoleProfile.label} workspace.`,
+  }));
   const selectedRoleHome = (() => {
     switch (selectedRole) {
       case "hr":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Governance state",
+          primaryBoardDescription: "Current strategy and review signals pulled from the active BSC workspace.",
+          secondaryBoardTitle: "Live scorecard state",
+          secondaryBoardDescription: "Only live structure, KPI, initiative, and evaluation state is shown here.",
           metrics: setupMetrics,
           primaryBoardItems: [
             {
@@ -542,10 +530,40 @@ export default function BalancedScorecardModule() {
                   : 0,
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Evaluation cycle",
+              value: evaluationSummary.cycleTitle || "No active cycle",
+              note: evaluationSummary.cycleId
+                ? `${evaluationSummary.pendingAssignments} assignments are pending and ${evaluationSummary.overdueAssignments} are overdue.`
+                : "Create or select an evaluation cycle to connect scorecard progress to reviews.",
+            },
+            {
+              label: "KPI contracts",
+              value: `${kpiData.length} configured`,
+              note:
+                atRiskKpiCount > 0
+                  ? `${atRiskKpiCount} KPI contracts are currently amber or red.`
+                  : "All live KPI contracts are currently on track.",
+            },
+            {
+              label: "Cascade chain",
+              value: `${featuredCascadeData.length} levels`,
+              note: activeFeaturedRootInitiative
+                ? `${activeFeaturedRootInitiative.title} is the active parent initiative in the shared cascade.`
+                : "No featured cascade chain is available yet.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "gmp":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Executive review queue",
+          primaryBoardDescription: "Live approval and risk signals from the current scorecard.",
+          secondaryBoardTitle: "Current executive signals",
+          secondaryBoardDescription: "Decision-ready items only, derived from the live structure and review state.",
           metrics: [
             {
               label: "Approval queue",
@@ -580,7 +598,9 @@ export default function BalancedScorecardModule() {
             {
               label: "Firm initiative approvals",
               value: `${atRiskInitiativeCount} needing decision`,
-              note: "Use this to review initiative quality, escalation notes, and whether execution is ready to move down the chain.",
+              note: gmpCascadeCards.length > 0
+                ? `${gmpCascadeCards.length} executive-layer initiatives are currently visible in the approval queue.`
+                : "No executive-layer initiatives are currently awaiting approval.",
               status: atRiskInitiativeCount > 0 ? "at_risk" : "on_track",
               progress: averageScore(initiativeData.map((initiative) => initiative.progress)),
             },
@@ -594,15 +614,46 @@ export default function BalancedScorecardModule() {
             {
               label: "Executive review readiness",
               value: `${averagePerspectiveScore}%`,
-              note: "Perspective performance, role roll-up health, and commentary are already synced into the review surface.",
+              note: evaluationSummary.cycleId
+                ? `${evaluationSummary.resultCount} scored results are available in ${evaluationSummary.cycleTitle}.`
+                : `${perspectiveData.length} perspectives are contributing to the live executive score.`,
               status: scoreToStatus(averagePerspectiveScore),
               progress: averagePerspectiveScore,
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Escalated cascades",
+              value: String(featuredCascadeData.filter((node) => node.status !== "on_track").length),
+              note: featuredCascadeData.length > 0
+                ? `${featuredCascadeData.filter((node) => node.status !== "on_track").length} cascade levels are amber or red.`
+                : "No cascade chain is available yet.",
+            },
+            {
+              label: "Review completion",
+              value: evaluationSummary.cycleId ? `${evaluationSummary.completionPercent}%` : "No active cycle",
+              note: evaluationSummary.cycleId
+                ? `${evaluationSummary.submittedAssignments} of ${evaluationSummary.totalAssignments} assignments are submitted.`
+                : "Start an evaluation cycle to join scorecard and review signals.",
+            },
+            {
+              label: "Strategic KPI risks",
+              value: String(atRiskKpiCount),
+              note: atRiskKpiCount > 0
+                ? `${atRiskKpiCount} KPI contracts need executive attention.`
+                : "No KPI risks are currently flagged in the live scorecard.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "partner":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Portfolio performance focus",
+          primaryBoardDescription: "Live client, manager, and initiative signals in the partner slice.",
+          secondaryBoardTitle: "Current portfolio signals",
+          secondaryBoardDescription: "Only live downstream coverage and account risk is shown here.",
           metrics: [
             {
               label: "Portfolio initiatives",
@@ -652,16 +703,47 @@ export default function BalancedScorecardModule() {
             {
               label: "Client/account risk",
               value: `${customerKpis.filter((kpi) => kpi.status !== "on_track").length} KPI risks`,
-              note: "Customer movement and account execution should stay visible together on the portfolio board.",
+              note: customerKpis.length > 0
+                ? `${customerKpis.length} customer KPI contracts are feeding this portfolio slice.`
+                : "No customer KPI contracts are mapped into this portfolio slice yet.",
               status:
                 customerKpis.some((kpi) => kpi.status !== "on_track") ? "at_risk" : "on_track",
               progress: averageScore(customerKpis.map((kpi) => kpi.weightedScore)),
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Customer KPI risks",
+              value: String(customerKpis.filter((kpi) => kpi.status !== "on_track").length),
+              note: customerKpis.length > 0
+                ? `${customerKpis.length} customer-facing KPI contracts are in scope for this portfolio view.`
+                : "No customer KPI contracts are mapped into this view yet.",
+            },
+            {
+              label: "Manager coverage",
+              value: `${managerPerformanceData.length} teams`,
+              note: managerPerformanceData.length > 0
+                ? `${managerPerformanceData.filter((manager) => manager.score < 70).length} manager lanes are below the expected threshold.`
+                : "No manager performance rows are available yet.",
+            },
+            {
+              label: "Active portfolio initiatives",
+              value: `${partnerCascadeCards.length} live`,
+              note: customerInitiatives.length > 0
+                ? `${customerInitiatives.length} initiatives directly support customer and stakeholder outcomes.`
+                : "No portfolio initiatives are currently mapped into the customer slice.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "manager":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Team execution focus",
+          primaryBoardDescription: "Live delivery, coaching, and acknowledgement signals for the manager lane.",
+          secondaryBoardTitle: "Current team signals",
+          secondaryBoardDescription: "This view is driven by live employee actions and manager-owned work only.",
           metrics: [
             {
               label: "Deliverables active",
@@ -706,15 +788,46 @@ export default function BalancedScorecardModule() {
             {
               label: "Coaching cadence",
               value: coachingKpi?.actual || `${averageScore(peopleKpis.map((kpi) => kpi.weightedScore))}%`,
-              note: coachingKpi?.ownerUpdate || "Live people signals now shape the manager delivery board.",
+              note:
+                coachingKpi?.ownerUpdate ||
+                `${peopleKpis.filter((kpi) => kpi.status !== "on_track").length} people KPI contracts need coaching follow-through.`,
               status: coachingKpi?.status || scoreToStatus(averageScore(peopleKpis.map((kpi) => kpi.weightedScore))),
               progress: coachingKpi?.weightedScore || averageScore(peopleKpis.map((kpi) => kpi.weightedScore)),
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Employee action queue",
+              value: `${managerEmployeeItems.length} items`,
+              note: managerEmployeeItems.length > 0
+                ? `${pendingAcknowledgementCount} actions still need acknowledgement or cleaner status coverage.`
+                : "No employee contribution items are currently assigned in this view.",
+            },
+            {
+              label: "Overdue follow-up",
+              value: String(overdueEmployeeCount),
+              note: overdueEmployeeCount > 0
+                ? `${overdueEmployeeCount} employee items are overdue.`
+                : "No overdue employee follow-up is currently flagged.",
+            },
+            {
+              label: "Manager-owned deliverables",
+              value: `${managerCascadeCardsLive.length} live`,
+              note: managerCascadeCardsLive.length > 0
+                ? `${internalKpis.length} internal or people KPIs are represented in this operating slice.`
+                : "No manager deliverables are linked to the active cascade yet.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "finance":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Financial control focus",
+          primaryBoardDescription: "Live finance KPI and initiative signals only.",
+          secondaryBoardTitle: "Current finance signals",
+          secondaryBoardDescription: "Collections, realization, and finance execution are derived from the active workspace.",
           metrics: [
             {
               label: "Financial KPIs",
@@ -745,14 +858,14 @@ export default function BalancedScorecardModule() {
             {
               label: "Realization",
               value: realizationKpi?.actual || "0",
-              note: realizationKpi?.ownerUpdate || "Live realization inputs are now feeding this board.",
+              note: realizationKpi?.ownerUpdate || "No live realization KPI is mapped yet.",
               status: realizationKpi?.status || "at_risk",
               progress: realizationKpi?.weightedScore || 0,
             },
             {
               label: "Collections cycle",
               value: collectionsKpi?.actual || "0",
-              note: collectionsKpi?.ownerUpdate || "Collections pressure is now driven by live invoice and payment data.",
+              note: collectionsKpi?.ownerUpdate || "No live collections KPI is mapped yet.",
               status: collectionsKpi?.status || "at_risk",
               progress: collectionsKpi?.weightedScore || 0,
             },
@@ -765,10 +878,35 @@ export default function BalancedScorecardModule() {
               progress: averageScore(financialInitiatives.map((initiative) => initiative.progress)),
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Realization KPI",
+              value: realizationKpi?.actual || "Not mapped",
+              note: realizationKpi?.ownerUpdate || "No live realization KPI is mapped yet.",
+            },
+            {
+              label: "Collections KPI",
+              value: collectionsKpi?.actual || "Not mapped",
+              note: collectionsKpi?.ownerUpdate || "No live collections KPI is mapped yet.",
+            },
+            {
+              label: "Finance initiatives",
+              value: `${financialInitiatives.length} live`,
+              note: financialInitiatives.length > 0
+                ? `${financialKpis.filter((kpi) => kpi.status !== "on_track").length} financial KPIs still need recovery action.`
+                : "No finance initiatives are linked to the active scorecard yet.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "marketing":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "Customer-growth focus",
+          primaryBoardDescription: "Live retention, cross-sell, and customer initiative signals only.",
+          secondaryBoardTitle: "Current customer signals",
+          secondaryBoardDescription: "This view is driven by actual customer KPI and initiative data.",
           metrics: [
             {
               label: "Customer KPIs",
@@ -799,14 +937,14 @@ export default function BalancedScorecardModule() {
             {
               label: "Retention support",
               value: retentionKpi?.actual || "0",
-              note: retentionKpi?.ownerUpdate || "Live survey and client engagement data now feeds the retention signal.",
+              note: retentionKpi?.ownerUpdate || "No live retention KPI is mapped yet.",
               status: retentionKpi?.status || "at_risk",
               progress: retentionKpi?.weightedScore || 0,
             },
             {
               label: "Cross-sell conversion",
               value: crossSellKpi?.actual || "0",
-              note: crossSellKpi?.ownerUpdate || "Conversion movement is now driven by live proposal outcomes.",
+              note: crossSellKpi?.ownerUpdate || "No live cross-sell KPI is mapped yet.",
               status: crossSellKpi?.status || "at_risk",
               progress: crossSellKpi?.weightedScore || 0,
             },
@@ -819,10 +957,35 @@ export default function BalancedScorecardModule() {
               progress: averageScore(marketingCascadeCards.map((initiative) => initiative.progress)),
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Retention KPI",
+              value: retentionKpi?.actual || "Not mapped",
+              note: retentionKpi?.ownerUpdate || "No live retention KPI is mapped yet.",
+            },
+            {
+              label: "Cross-sell KPI",
+              value: crossSellKpi?.actual || "Not mapped",
+              note: crossSellKpi?.ownerUpdate || "No live cross-sell KPI is mapped yet.",
+            },
+            {
+              label: "Growth initiatives",
+              value: `${marketingCascadeCards.length} live`,
+              note: marketingCascadeCards.length > 0
+                ? `${customerKpis.filter((kpi) => kpi.status !== "on_track").length} customer KPIs still need stronger handoff and follow-through.`
+                : "No marketing initiatives are linked to the active cascade yet.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       case "employee":
         return {
           ...selectedRoleHomeBase,
+          primaryBoardTitle: "My contribution focus",
+          primaryBoardDescription: "Live employee actions and acknowledgement state only.",
+          secondaryBoardTitle: "Current work signals",
+          secondaryBoardDescription: "This view is driven by assigned contribution items, not generic submodule examples.",
           metrics: [
             {
               label: "Assigned items",
@@ -854,8 +1017,8 @@ export default function BalancedScorecardModule() {
               label: "Assigned actions",
               value: `${employeeContributionData.length} active`,
               note: evaluationSummary.cycleId
-                ? `This contribution view is now tied to ${evaluationSummary.cycleTitle} and the live people-perspective flow.`
-                : "Each contribution item now comes from the live workspace data instead of a design-time example set.",
+                ? `${evaluationSummary.cycleTitle} is the active cycle for these contribution items.`
+                : `${employeeContributionData.filter((item) => item.status !== "on_track").length} assigned items are currently amber or red.`,
               status: scoreToStatus(averageContributionProgress),
               progress: averageContributionProgress,
             },
@@ -877,14 +1040,46 @@ export default function BalancedScorecardModule() {
             {
               label: "Manager notes",
               value: `${employeeContributionData.filter((item) => item.managerComment).length} live notes`,
-              note: "Manager commentary now travels with the live contribution items in the same workspace.",
+              note: employeeContributionData.filter((item) => item.managerComment).length > 0
+                ? `${employeeContributionData.filter((item) => item.managerComment).length} contribution items include manager commentary.`
+                : "No manager commentary is attached to the current contribution items.",
               status: "on_track",
               progress: 100,
             },
           ],
+          secondaryBoardItems: [
+            {
+              label: "Assigned actions",
+              value: `${employeeContributionData.length} active`,
+              note: employeeContributionData.length > 0
+                ? `${employeeContributionData.filter((item) => !item.acknowledged).length} items still need acknowledgement.`
+                : "No live contribution items are assigned yet.",
+            },
+            {
+              label: "Average progress",
+              value: `${averageContributionProgress}%`,
+              note: employeeContributionData.length > 0
+                ? `${averageContributionScore} is the current weighted contribution score across assigned work.`
+                : "Progress will appear once contribution items are assigned.",
+            },
+            {
+              label: "Manager notes",
+              value: `${employeeContributionData.filter((item) => item.managerComment).length} live`,
+              note: employeeContributionData.some((item) => item.managerComment)
+                ? "Manager commentary is attached to the live contribution items in this workspace."
+                : "No manager notes are attached to the current contribution items.",
+            },
+          ],
+          allowedActions: [],
+          hiddenByDefault: [],
         };
       default:
-        return selectedRoleHomeBase;
+        return {
+          ...selectedRoleHomeBase,
+          secondaryBoardItems: visibleSectionItems,
+          allowedActions: [],
+          hiddenByDefault: [],
+        };
     }
   })();
 
@@ -1294,7 +1489,7 @@ export default function BalancedScorecardModule() {
           status: employee.score >= 75 ? "on_track" : employee.score >= 60 ? "at_risk" : "off_track",
           note: employee.ack,
         })),
-        sideTitle: "What HR should read here",
+        sideTitle: "HR focus",
         sideDescription: "This view helps HR spot workforce friction in the cascade before it becomes a strategic problem.",
         sideLines: [
           "Use acknowledgement and contribution health as leading indicators.",
@@ -1306,7 +1501,7 @@ export default function BalancedScorecardModule() {
 
     return {
       title: "Employee view",
-      description: "A lightweight employee dashboard focused on what the employee owns, how they are progressing, and how their work contributes upward.",
+      // description: "A lightweight employee dashboard focused on what the employee owns, how they are progressing, and how their work contributes upward.",
       metrics: [
         {
           label: "My assigned items",
@@ -1354,6 +1549,8 @@ export default function BalancedScorecardModule() {
   })();
 
   const reportsView = (() => {
+    // Keep the reporting tab BSC-native. Manager/employee rows previously leaked
+    // evaluation and learning rollups into the scorecard surface.
     const perspectiveRows =
       selectedRole === "finance"
         ? perspectiveData.filter((perspective) => perspective.id === "financial")
@@ -1370,24 +1567,18 @@ export default function BalancedScorecardModule() {
           : selectedRole === "partner"
             ? departmentPerformanceData.filter((department) => department.status !== "off_track").slice(0, 4)
             : departmentPerformanceData;
-    const managerRows =
-      selectedRole === "finance"
-        ? managerPerformanceData
-            .filter((manager) => manager.score >= averageManagerScore)
-            .slice(0, 3)
-        : selectedRole === "partner"
-          ? managerPerformanceData.slice(0, 3)
-          : selectedRole === "marketing"
-            ? managerPerformanceData.slice(0, 2)
-            : managerPerformanceData;
-    const employeeRows =
-      selectedRole === "partner"
-        ? employeePerformanceData.slice(0, 3)
-        : selectedRole === "finance"
-          ? employeePerformanceData.filter((employee) => employee.ack.toLowerCase().includes("overdue")).slice(0, 2)
-          : selectedRole === "marketing"
-            ? employeePerformanceData.slice(0, 2)
-            : employeePerformanceData;
+    const managerRows: WorkspaceManagerRow[] = [];
+    const employeeRows: WorkspaceEmployeeRow[] = [];
+    const reportBlocks = reportBlockData.map((block) =>
+      block.label === "Performance by manager"
+        ? {
+            ...block,
+            value: `${managerRows.length} managers`,
+            hint:
+              "Manager roll-up is hidden until live BSC-owned manager data is explicitly modeled.",
+          }
+        : block
+    );
 
     switch (selectedRole) {
       case "gmp":
@@ -1476,9 +1667,9 @@ export default function BalancedScorecardModule() {
         };
       default:
         return {
-          title: "Reports and analytics layout",
-          description: "A realistic reporting surface: performance by perspective, department, manager, employee, KPI roll-up, and initiative completion summary.",
-          blocks: reportBlockData,
+          title: "Reporting roll-up",
+          description: "Perspective, department, manager, employee, KPI, and initiative summaries from the live workspace.",
+          blocks: reportBlocks,
           perspectiveRows,
           departmentRows,
           managerRows,
@@ -1839,7 +2030,7 @@ export default function BalancedScorecardModule() {
               </Breadcrumb>
 
               <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
+                {/* <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 text-primary">
                     Balanced Scorecard
                   </Badge>
@@ -1859,15 +2050,11 @@ export default function BalancedScorecardModule() {
                   <Badge variant="outline" className="rounded-full">
                     Initiative = execution layer
                   </Badge>
-                </div>
+                </div> */}
                 <div className="space-y-2">
                   <h1 className="max-w-4xl text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-                    KPI Powered Balanced Scorecard Management
+                    Scorecard Management
                   </h1>
-                  <p className="max-w-3xl text-base text-muted-foreground">
-                     BSC perspectives and goals at the top, KPIs as the shared
-                    measurement layer, and initiatives as the work that cascades from HR to GMP, partner, manager, and employee.
-                  </p>
                 </div>
               </div>
 
@@ -1986,27 +2173,11 @@ export default function BalancedScorecardModule() {
               </CardHeader>
 
               <CardContent className="space-y-4">
-                <div className="rounded-3xl border border-border/70 bg-muted/25 p-4">
-                  <p className="text-sm font-medium text-foreground">{selectedRoleProfile.subtitle}</p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Primary action: <span className="font-medium text-foreground">{selectedRoleProfile.primaryAction}</span>
-                  </p>
-                  {workspaceError ? (
-                    <p className="mt-2 text-sm text-amber-600">{workspaceError}</p>
-                  ) : null}
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">What this role needs most</p>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedRoleProfile.focus.map((focusItem) => (
-                      <Badge key={focusItem} variant="outline" className="rounded-full bg-background">
-                        {focusItem}
-                      </Badge>
-                    ))}
+                {workspaceError ? (
+                  <div className="rounded-3xl border border-amber-200 bg-amber-50/80 p-4">
+                    <p className="text-sm text-amber-700">{workspaceError}</p>
                   </div>
-                </div>
-
+                ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Button className="h-11 rounded-2xl">{selectedRoleProfile.primaryAction}</Button>
                   <Button
@@ -2116,47 +2287,34 @@ export default function BalancedScorecardModule() {
               </Card>
 
               <div className="space-y-6">
-                <Card className="rounded-[28px] border-border/70 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg">{selectedRoleHome.secondaryBoardTitle}</CardTitle>
-                    <CardDescription>{selectedRoleHome.secondaryBoardDescription}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {selectedRoleHome.secondaryBoardItems.map((item) => (
-                      <div key={item.label} className="rounded-2xl border border-border/60 bg-muted/20 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-foreground">{item.label}</p>
-                            <p className="mt-2 text-sm text-muted-foreground">{item.note}</p>
+                {selectedRoleHome.secondaryBoardItems.length > 0 ? (
+                  <Card className="rounded-[28px] border-border/70 shadow-sm">
+                    <CardHeader>
+                      <CardTitle className="text-lg">{selectedRoleHome.secondaryBoardTitle}</CardTitle>
+                      <CardDescription>{selectedRoleHome.secondaryBoardDescription}</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {selectedRoleHome.secondaryBoardItems.map((item) => (
+                        <div key={item.label} className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground">{item.label}</p>
+                              <p className="mt-2 text-sm text-muted-foreground">{item.note}</p>
+                            </div>
+                            <Badge variant="outline" className="rounded-full bg-background">
+                              {item.value}
+                            </Badge>
                           </div>
-                          <Badge variant="outline" className="rounded-full bg-background">
-                            {item.value}
-                          </Badge>
                         </div>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
+                      ))}
+                    </CardContent>
+                  </Card>
+                ) : null}
 
                 <Card className="rounded-[28px] border-border/70 shadow-sm">
                   <CardHeader>
-                    <CardTitle className="text-lg">Allowed actions</CardTitle>
-                    <CardDescription>What this role should be able to do inside the KPI engine.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {selectedRoleHome.allowedActions.map((action) => (
-                      <div key={action} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/20 p-4">
-                        <ArrowRight className="mt-0.5 h-4 w-4 text-primary" />
-                        <p className="text-sm text-foreground">{action}</p>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-
-                <Card className="rounded-[28px] border-border/70 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Visible sections</CardTitle>
-                    <CardDescription>The tabs this role should actually use as part of the KPI flow.</CardDescription>
+                    <CardTitle className="text-lg">Enabled sections</CardTitle>
+                    <CardDescription>Tabs currently available in this live workspace.</CardDescription>
                   </CardHeader>
                   <CardContent className="flex flex-wrap gap-2">
                     {visibleTabs.map((tab) => (
@@ -2167,19 +2325,6 @@ export default function BalancedScorecardModule() {
                   </CardContent>
                 </Card>
 
-                <Card className="rounded-[28px] border-border/70 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Hidden by default</CardTitle>
-                    <CardDescription>Noise this role should not carry on the landing page.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {selectedRoleHome.hiddenByDefault.map((item) => (
-                      <div key={item} className="rounded-2xl border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
-                        {item}
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
               </div>
             </div>
 
@@ -2244,17 +2389,6 @@ export default function BalancedScorecardModule() {
                   title="Strategy setup"
                   description="HR defines the scorecard structure here. This is the BSC authoring surface, not an operational workspace."
                 />
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline" className="rounded-full">
-                    Perspective -&gt; Goal -&gt; KPI -&gt; Initiative
-                  </Badge>
-                  <Badge variant="outline" className="rounded-full">
-                    Owners assigned at goal and KPI level
-                  </Badge>
-                  <Badge variant="outline" className="rounded-full">
-                    Employees inherit work through initiatives, not strategic goals
-                  </Badge>
-                </div>
                 <div className="flex flex-wrap gap-3">
                   <Button className="rounded-2xl" onClick={() => setSetupSheetMode("flow")}>
                     Open strategy flow
@@ -2282,9 +2416,9 @@ export default function BalancedScorecardModule() {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_360px]">
+              <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
                 <div className="space-y-4">
-                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
                     {setupMetrics.map((metric) => (
                       <MetricCard
                         key={metric.label}
@@ -2295,29 +2429,6 @@ export default function BalancedScorecardModule() {
                       />
                     ))}
                   </div>
-                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Controlled authoring surface</CardTitle>
-                      <CardDescription>
-                        HR should work from guided flows, not long-scroll forms. Use the drawers to author the strategy layer and review governance before launch.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid gap-4 md:grid-cols-2">
-                      <div className="rounded-2xl border border-border/60 bg-background p-4">
-                        <p className="text-sm font-medium text-foreground">Strategy flow</p>
-                        <p className="mt-2 text-sm text-muted-foreground">
-                          Perspective setup, goal creation, KPI linking, and launch readiness in one controlled sequence.
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background p-4">
-                        <p className="text-sm font-medium text-foreground">Governance review</p>
-                        <p className="mt-2 text-sm text-muted-foreground">
-                          Use the review drawer to confirm ownership, structure quality, and whether the scorecard is clean enough to cascade.
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">Goal registry</CardTitle>
@@ -2363,8 +2474,8 @@ export default function BalancedScorecardModule() {
                 <div className="space-y-4">
                   <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                     <CardHeader>
-                      <CardTitle className="text-base">BSC blueprint preview</CardTitle>
-                      <CardDescription>A compact structural preview before any KPI is tracked or any initiative is cascaded.</CardDescription>
+                      <CardTitle className="text-base">Scorecard structure</CardTitle>
+                      <CardDescription>Current perspectives and linked goals in the live scorecard structure.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       {perspectiveData.map((perspective) => (
@@ -2389,10 +2500,6 @@ export default function BalancedScorecardModule() {
                       ))}
                     </CardContent>
                   </Card>
-
-                  <div className="rounded-[24px] border border-dashed border-border/70 bg-muted/10 p-5 text-sm text-muted-foreground">
-                    Strategy reminders now live in the governance drawer so this tab stays compact and reviewable.
-                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -2446,7 +2553,7 @@ export default function BalancedScorecardModule() {
                             onChange={(event) =>
                               setPerspectiveForm((current) => ({ ...current, name: event.target.value }))
                             }
-                            placeholder="e.g. Financial"
+                            placeholder="Enter perspective name"
                             className="rounded-2xl"
                           />
                         </div>
@@ -2457,7 +2564,7 @@ export default function BalancedScorecardModule() {
                             onChange={(event) =>
                               setPerspectiveForm((current) => ({ ...current, ownerName: event.target.value }))
                             }
-                            placeholder="e.g. Strategy Office"
+                            placeholder="Enter perspective owner"
                             className="rounded-2xl"
                           />
                         </div>
@@ -2514,7 +2621,7 @@ export default function BalancedScorecardModule() {
                             onChange={(event) =>
                               setGoalForm((current) => ({ ...current, title: event.target.value }))
                             }
-                            placeholder="e.g. Deepen client retention and cross-sell"
+                            placeholder="Enter goal title"
                             className="rounded-2xl"
                           />
                         </div>
@@ -2525,7 +2632,7 @@ export default function BalancedScorecardModule() {
                             onChange={(event) =>
                               setGoalForm((current) => ({ ...current, ownerName: event.target.value }))
                             }
-                            placeholder="e.g. Grace Njeri"
+                            placeholder="Enter goal owner"
                             className="rounded-2xl"
                           />
                         </div>
@@ -2644,9 +2751,8 @@ export default function BalancedScorecardModule() {
                   </Select>
                 </div>
               </CardHeader>
-              <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_360px]">
-                <div className="space-y-4">
-                  <div className="grid gap-4 md:grid-cols-3">
+              <CardContent className="space-y-4">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     {governanceMetrics.map((metric) => (
                       <MetricCard
                         key={metric.label}
@@ -2770,60 +2876,6 @@ export default function BalancedScorecardModule() {
                       </Table>
                     </CardContent>
                   </Card>
-                </div>
-
-                <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                  <CardHeader>
-                    <CardTitle className="text-base">Highlighted KPI contract</CardTitle>
-                    <CardDescription>The KPI library should always make the strategic link, target logic, and weighting obvious. Use the contract drawer for the step-by-step authoring flow.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="rounded-2xl border border-border/60 bg-background p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="font-medium text-foreground">{highlightedKpi.name}</p>
-                          <p className="text-sm text-muted-foreground">{linkedGoal?.title}</p>
-                        </div>
-                        <StatusBadge status={highlightedKpi.status} />
-                      </div>
-                      <p className="mt-3 text-sm text-muted-foreground">{highlightedKpi.description}</p>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-border/60 bg-background p-4">
-                        <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Firm target</p>
-                        <p className="mt-2 text-2xl font-semibold text-foreground">{highlightedKpi.firmTarget}</p>
-                      </div>
-                      <div className="rounded-2xl border border-border/60 bg-background p-4">
-                        <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Actual</p>
-                        <p className="mt-2 text-2xl font-semibold text-foreground">{highlightedKpi.actual}</p>
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background p-4">
-                      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Measurement definition</p>
-                      <p className="mt-2 text-sm text-foreground">{highlightedKpi.formula}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">BSC context</p>
-                          <p className="mt-2 font-medium text-foreground">{highlightedPerspective?.name}</p>
-                        </div>
-                        <Badge variant="outline" className="rounded-full">
-                          Weight {highlightedKpi.weight}%
-                        </Badge>
-                      </div>
-                      <p className="mt-3 text-sm text-muted-foreground">{highlightedKpi.statusLogic}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background p-4">
-                      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Governance rules</p>
-                      <div className="mt-3 space-y-2 text-sm text-muted-foreground">
-                        {kpiGovernanceRules.map((rule) => (
-                          <p key={rule}>{rule}</p>
-                        ))}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
               </CardContent>
             </Card>
             <Sheet open={kpiSheetMode !== null} onOpenChange={(open) => !open && setKpiSheetMode(null)}>
@@ -3179,7 +3231,7 @@ export default function BalancedScorecardModule() {
                             onChange={(event) =>
                               setInitiativeForm((current) => ({ ...current, title: event.target.value }))
                             }
-                            placeholder="e.g. Strategic client sponsorship cadence"
+                            placeholder="Enter initiative title"
                             className="rounded-2xl"
                           />
                         </div>
@@ -3317,14 +3369,6 @@ export default function BalancedScorecardModule() {
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
                   <Card className="rounded-[28px] border-border/60 shadow-none">
                     <CardHeader>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className="rounded-full bg-primary/5 text-primary">
-                          Featured cascade
-                        </Badge>
-                        <Badge variant="outline" className="rounded-full">
-                          Strategic goal -&gt; KPI -&gt; role initiatives -&gt; employee action
-                        </Badge>
-                      </div>
                       <CardTitle className="text-xl">{cascadeView.boardTitle}</CardTitle>
                       <CardDescription>{cascadeView.boardDescription}</CardDescription>
                     </CardHeader>
@@ -3338,18 +3382,19 @@ export default function BalancedScorecardModule() {
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {featuredGoalRecord?.description ||
-                                "The strategic goal stays at the firm level and does not change for each employee."}
+                                linkedGoal?.description ||
+                                "No goal description is available yet."}
                             </p>
                           </div>
                           <div className="space-y-2">
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
                             <p className="text-lg font-semibold text-foreground">
-                              {featuredLiveKpi?.name || highlightedKpi.name}
+                              {featuredLiveKpi?.name || highlightedKpi?.name || "No KPI linked yet"}
                             </p>
                             <p className="text-sm text-muted-foreground">
-                              Target {featuredLiveKpi?.firmTarget || highlightedKpi.firmTarget} · Actual{" "}
-                              {featuredLiveKpi?.actual || highlightedKpi.actual} · Shared measurement layer
-                              across every role.
+                              {featuredLiveKpi || highlightedKpi
+                                ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} · Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} · Shared measurement layer across every role.`
+                                : "Add a KPI contract to connect this cascade to a measurable scorecard outcome."}
                             </p>
                           </div>
                         </div>
@@ -3405,8 +3450,8 @@ export default function BalancedScorecardModule() {
                   <div className="space-y-4">
                     <Card className="rounded-[28px] border-border/60 bg-muted/20 shadow-none">
                       <CardHeader>
-                        <CardTitle className="text-base">Featured cascade example</CardTitle>
-                        <CardDescription>Keep one canonical example visible so every role understands the full chain.</CardDescription>
+                        <CardTitle className="text-base">Active cascade chain</CardTitle>
+                        <CardDescription>One live goal-to-KPI-to-initiative chain drawn from the current workspace.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
                         <div className="rounded-[24px] border border-primary/20 bg-primary/5 p-5">
@@ -3418,18 +3463,19 @@ export default function BalancedScorecardModule() {
                               </p>
                               <p className="text-sm text-muted-foreground">
                                 {featuredGoalRecord?.description ||
-                                  "The strategic goal stays at the firm level and does not change for each employee."}
+                                  linkedGoal?.description ||
+                                  "No goal description is available yet."}
                               </p>
                             </div>
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
                               <p className="text-lg font-semibold text-foreground">
-                                {featuredLiveKpi?.name || highlightedKpi.name}
+                                {featuredLiveKpi?.name || highlightedKpi?.name || "No KPI linked yet"}
                               </p>
                               <p className="text-sm text-muted-foreground">
-                                Target {featuredLiveKpi?.firmTarget || highlightedKpi.firmTarget} - Actual{" "}
-                                {featuredLiveKpi?.actual || highlightedKpi.actual} - Shared measurement layer
-                                across every role.
+                                {featuredLiveKpi || highlightedKpi
+                                  ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} - Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} - Shared measurement layer across every role.`
+                                  : "Add a KPI contract to connect this cascade to a measurable scorecard outcome."}
                               </p>
                             </div>
                           </div>
@@ -3448,19 +3494,6 @@ export default function BalancedScorecardModule() {
                       </CardContent>
                     </Card>
 
-                    <Card className="rounded-[28px] border-border/60 bg-muted/20 shadow-none">
-                      <CardHeader>
-                        <CardTitle className="text-base">{cascadeView.asideTitle}</CardTitle>
-                        <CardDescription>{cascadeView.asideDescription}</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-3 text-sm text-muted-foreground">
-                        {cascadeView.asideLines.map((line) => (
-                          <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
-                            {line}
-                          </div>
-                        ))}
-                      </CardContent>
-                    </Card>
                   </div>
                 </div>
               </CardContent>
@@ -3623,7 +3656,7 @@ export default function BalancedScorecardModule() {
                   title={employeeView.title}
                   description={employeeView.description}
                 />
-                <div className="flex flex-wrap gap-2">
+                {/* <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className="rounded-full">
                     {selectedRole === "employee"
                       ? "Lightweight by default"
@@ -3641,9 +3674,14 @@ export default function BalancedScorecardModule() {
                   <Badge variant="outline" className="rounded-full">
                     {selectedRole === "employee" ? "Includes a small upward-connect section" : "Roll-up and acknowledgement visibility"}
                   </Badge>
-                </div>
+                </div> */}
               </CardHeader>
-              <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_360px]">
+              <CardContent
+                className={cn(
+                  "grid gap-6",
+                  selectedRole === "employee" && "xl:grid-cols-[minmax(0,1.3fr)_360px]"
+                )}
+              >
                 <div className="space-y-4">
                   <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4">
                     {employeeView.metrics.map((metric) => (
@@ -3787,63 +3825,42 @@ export default function BalancedScorecardModule() {
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">
-                        {selectedRole === "employee" ? "How this connects upward" : employeeView.sideTitle}
-                      </CardTitle>
-                      <CardDescription>
-                        {selectedRole === "employee"
-                          ? "A small section is enough to make upward contribution clear."
-                          : employeeView.sideDescription}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {selectedRole === "employee"
-                        ? employeeContributionData.map((item) => (
-                            <div key={item.id} className="rounded-2xl border border-border/60 bg-background p-4">
-                              <p className="font-medium text-foreground">{item.title}</p>
-                              <p className="mt-2 text-sm text-muted-foreground">{item.rollup}</p>
-                            </div>
-                          ))
-                        : employeeView.sideLines.map((line) => (
-                            <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
-                              <p className="text-sm text-muted-foreground">{line}</p>
-                            </div>
-                          ))}
-                    </CardContent>
-                  </Card>
+                {selectedRole === "employee" ? (
+                  <div className="space-y-4">
+                    <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                      <CardHeader>
+                        <CardTitle className="text-base">How this connects upward</CardTitle>
+                        <CardDescription>
+                          A small section is enough to make upward contribution clear.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {employeeContributionData.map((item) => (
+                          <div key={item.id} className="rounded-2xl border border-border/60 bg-background p-4">
+                            <p className="font-medium text-foreground">{item.title}</p>
+                            <p className="mt-2 text-sm text-muted-foreground">{item.rollup}</p>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
 
-                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">
-                        {selectedRole === "employee" ? "Employee design rules" : "Why this surface stays focused"}
-                      </CardTitle>
-                      <CardDescription>
-                        {selectedRole === "employee"
-                          ? "Keep the experience light, clear, and role-relevant."
-                          : "This tab should stay narrow and role-relevant instead of becoming another full workspace."}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm text-muted-foreground">
-                      {(selectedRole === "employee"
-                        ? employeeView.sideLines
-                        : [
-                            selectedRole === "manager"
-                              ? "Managers need employee signals, overdue actions, and coaching cues in one place."
-                              : "HR needs workforce contribution health and acknowledgement coverage, not every tactical task.",
-                            "Keep the widget count low so the tab stays readable during weekly operating reviews.",
-                            "Use this surface to spot friction in the cascade, then drill into the owner context only when needed.",
-                          ]
-                      ).map((line) => (
-                        <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
-                          {line}
-                        </div>
-                      ))}
-                    </CardContent>
-                  </Card>
-                </div>
+                    <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                      <CardHeader>
+                        <CardTitle className="text-base">Employee design rules</CardTitle>
+                        <CardDescription>
+                          Keep the experience light, clear, and role-relevant.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        {employeeView.sideLines.map((line) => (
+                          <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
+                            {line}
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </TabsContent>
@@ -3938,13 +3955,21 @@ export default function BalancedScorecardModule() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {reportsView.managerRows.map((manager) => (
-                            <TableRow key={manager.name}>
-                              <TableCell className="font-medium">{manager.name}</TableCell>
-                              <TableCell>{manager.team}</TableCell>
-                              <TableCell>{manager.score}</TableCell>
+                          {reportsView.managerRows.length > 0 ? (
+                            reportsView.managerRows.map((manager) => (
+                              <TableRow key={manager.name}>
+                                <TableCell className="font-medium">{manager.name}</TableCell>
+                                <TableCell>{manager.team}</TableCell>
+                                <TableCell>{manager.score}</TableCell>
+                              </TableRow>
+                            ))
+                          ) : (
+                            <TableRow>
+                              <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
+                                No live manager score data is available yet.
+                              </TableCell>
                             </TableRow>
-                          ))}
+                          )}
                         </TableBody>
                       </Table>
                     </CardContent>
@@ -3964,13 +3989,21 @@ export default function BalancedScorecardModule() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {reportsView.employeeRows.map((employee) => (
-                            <TableRow key={employee.name}>
-                              <TableCell className="font-medium">{employee.name}</TableCell>
-                              <TableCell>{employee.score}</TableCell>
-                              <TableCell>{employee.ack}</TableCell>
+                          {reportsView.employeeRows.length > 0 ? (
+                            reportsView.employeeRows.map((employee) => (
+                              <TableRow key={employee.name}>
+                                <TableCell className="font-medium">{employee.name}</TableCell>
+                                <TableCell>{employee.score}</TableCell>
+                                <TableCell>{employee.ack}</TableCell>
+                              </TableRow>
+                            ))
+                          ) : (
+                            <TableRow>
+                              <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
+                                No live employee contribution data is available yet.
+                              </TableCell>
                             </TableRow>
-                          ))}
+                          )}
                         </TableBody>
                       </Table>
                     </CardContent>
@@ -3981,38 +4014,6 @@ export default function BalancedScorecardModule() {
           </TabsContent>
         </Tabs>
 
-        <Card className="rounded-[28px] border-border/70 shadow-sm">
-          <CardContent className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_420px] lg:p-8">
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Conceptual guardrails</p>
-              <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-                Keep the strategy, measurement, and execution layers distinct.
-              </h2>
-              <p className="max-w-3xl text-sm text-muted-foreground">
-                The most important thing in this product is clarity. The BSC owns the strategy structure. KPIs are the measurement layer
-                attached to that structure. Initiatives are the execution layer that cascades down into accountable work.
-              </p>
-            </div>
-            <div className="grid gap-3">
-              {[
-                { icon: Building2, title: "BSC", body: "Top-level strategic framework with perspectives and goals." },
-                { icon: Target, title: "KPI", body: "Measurable indicator linked to a strategic goal." },
-                { icon: Briefcase, title: "Initiative", body: "Execution action that cascades by role and becomes specific work." },
-                { icon: Users, title: "Employee contribution", body: "A visible assigned action with progress and upward roll-up context." },
-              ].map((item) => (
-                <div key={item.title} className="flex items-start gap-3 rounded-2xl border border-border/70 bg-muted/20 p-4">
-                  <div className="rounded-2xl bg-primary/10 p-2.5 text-primary">
-                    <item.icon className="h-4 w-4" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="font-medium text-foreground">{item.title}</p>
-                    <p className="text-sm text-muted-foreground">{item.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </DashboardLayout>
   );

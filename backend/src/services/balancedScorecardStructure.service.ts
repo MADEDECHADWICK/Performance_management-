@@ -129,7 +129,7 @@ type SeedInitiative = {
   sortOrder: number;
 };
 
-const defaultPerspectives: SeedPerspective[] = [
+const legacySeedPerspectives: SeedPerspective[] = [
   {
     key: "financial",
     name: "Financial",
@@ -160,7 +160,7 @@ const defaultPerspectives: SeedPerspective[] = [
   },
 ];
 
-const defaultGoals: SeedGoal[] = [
+const legacySeedGoals: SeedGoal[] = [
   {
     key: "goal-1",
     perspectiveKey: "financial",
@@ -360,7 +360,7 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
   },
 ];
 
-const defaultKpis: SeedKpi[] = [
+const legacySeedKpis: SeedKpi[] = [
   {
     key: "kpi-1",
     goalKey: "goal-1",
@@ -523,7 +523,7 @@ const defaultKpis: SeedKpi[] = [
   },
 ];
 
-const defaultInitiatives: SeedInitiative[] = [
+const legacySeedInitiatives: SeedInitiative[] = [
   {
     key: "init-1",
     goalKey: "goal-1",
@@ -670,6 +670,151 @@ const defaultInitiatives: SeedInitiative[] = [
   },
 ];
 
+const defaultPerspectives: SeedPerspective[] = [
+  {
+    key: "financial",
+    name: "Financial",
+    ownerName: "",
+    summary: "",
+    sortOrder: 1,
+  },
+  {
+    key: "customer",
+    name: "Customer / Stakeholder",
+    ownerName: "",
+    summary: "",
+    sortOrder: 2,
+  },
+  {
+    key: "internal",
+    name: "Internal Process",
+    ownerName: "",
+    summary: "",
+    sortOrder: 3,
+  },
+  {
+    key: "people",
+    name: "People / Learning & Growth",
+    ownerName: "",
+    summary: "",
+    sortOrder: 4,
+  },
+];
+
+const defaultGoals: SeedGoal[] = [];
+const defaultKpis: SeedKpi[] = [];
+const defaultInitiatives: SeedInitiative[] = [];
+
+const cleanText = (value: string | null | undefined) => value?.trim() || "";
+const toDateKey = (value: Date | string | null | undefined) => {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return value;
+};
+
+const legacyPerspectiveByKey = new Map(
+  legacySeedPerspectives.map((record) => [record.key, record])
+);
+const legacyGoalByKey = new Map(legacySeedGoals.map((record) => [record.key, record]));
+const legacyKpiByKey = new Map(legacySeedKpis.map((record) => [record.key, record]));
+const legacyInitiativeByKey = new Map(
+  legacySeedInitiatives.map((record) => [record.key, record])
+);
+
+const isLegacySeedPerspective = (record: {
+  key: string;
+  name: string;
+  ownerName: string | null;
+  summary: string | null;
+  createdByProfileId: number | null;
+}) => {
+  const legacy = legacyPerspectiveByKey.get(record.key);
+  return (
+    !record.createdByProfileId &&
+    !!legacy &&
+    record.name === legacy.name &&
+    cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
+    cleanText(record.summary) === cleanText(legacy.summary)
+  );
+};
+
+const isLegacySeedGoal = (record: {
+  key: string;
+  title: string;
+  description: string | null;
+  ownerName: string | null;
+  createdByProfileId: number | null;
+}) => {
+  const legacy = legacyGoalByKey.get(record.key);
+  return (
+    !record.createdByProfileId &&
+    !!legacy &&
+    record.title === legacy.title &&
+    cleanText(record.description) === cleanText(legacy.description) &&
+    cleanText(record.ownerName) === cleanText(legacy.ownerName)
+  );
+};
+
+const isLegacySeedKpi = (record: {
+  key: string;
+  metricKey: string;
+  name: string;
+  description: string | null;
+  formula: string | null;
+  frequency: string;
+  unit: string;
+  weight: number;
+  firmTarget: string;
+  ownerName: string | null;
+  statusLogic: string | null;
+  updateFrequency: string | null;
+  createdByProfileId: number | null;
+}) => {
+  const legacy = legacyKpiByKey.get(record.key);
+  return (
+    !record.createdByProfileId &&
+    !!legacy &&
+    record.metricKey === legacy.metricKey &&
+    record.name === legacy.name &&
+    cleanText(record.description) === cleanText(legacy.description) &&
+    cleanText(record.formula) === cleanText(legacy.formula) &&
+    record.frequency === legacy.frequency &&
+    record.unit === legacy.unit &&
+    record.weight === legacy.weight &&
+    record.firmTarget === legacy.firmTarget &&
+    cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
+    cleanText(record.statusLogic) === cleanText(legacy.statusLogic) &&
+    cleanText(record.updateFrequency) === cleanText(legacy.updateFrequency)
+  );
+};
+
+const isLegacySeedInitiative = (record: {
+  key: string;
+  scopeRole: string;
+  title: string;
+  summary: string | null;
+  ownerName: string | null;
+  timeline: string | null;
+  dueDate: Date | null;
+  status: string;
+  progress: number;
+  createdByProfileId: number | null;
+}) => {
+  const legacy = legacyInitiativeByKey.get(record.key);
+  return (
+    !record.createdByProfileId &&
+    !!legacy &&
+    record.scopeRole === legacy.scopeRole &&
+    record.title === legacy.title &&
+    cleanText(record.summary) === cleanText(legacy.summary) &&
+    cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
+    cleanText(record.timeline) === cleanText(legacy.timeline) &&
+    toDateKey(record.dueDate) === toDateKey(legacy.dueDate) &&
+    record.status === legacy.status &&
+    record.progress === legacy.progress
+  );
+};
+
 export async function ensureBalancedScorecardSeed() {
   const existingCount = await prisma.balancedScorecardPerspective.count();
   if (existingCount > 0) return;
@@ -681,8 +826,8 @@ export async function ensureBalancedScorecardSeed() {
         data: {
           key: perspective.key,
           name: perspective.name,
-          ownerName: perspective.ownerName,
-          summary: perspective.summary,
+          ownerName: perspective.ownerName || null,
+          summary: perspective.summary || null,
           sortOrder: perspective.sortOrder,
         },
       });
@@ -754,7 +899,7 @@ export async function ensureBalancedScorecardSeed() {
 export async function listBalancedScorecardStructure() {
   await ensureBalancedScorecardSeed();
 
-  const [perspectives, goals, kpis, initiatives] = await Promise.all([
+  const [rawPerspectives, rawGoals, rawKpis, rawInitiatives] = await Promise.all([
     prisma.balancedScorecardPerspective.findMany({
       where: { isActive: true },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
@@ -772,6 +917,35 @@ export async function listBalancedScorecardStructure() {
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     }),
   ]);
+
+  const perspectives = rawPerspectives.map((record) =>
+    isLegacySeedPerspective(record)
+      ? {
+          ...record,
+          ownerName: null,
+          summary: null,
+        }
+      : record
+  );
+  const hideLegacyGoals = rawGoals.length > 0 && rawGoals.every(isLegacySeedGoal);
+  const goals = hideLegacyGoals ? [] : rawGoals;
+  const visibleGoalIds = new Set(goals.map((goal) => goal.id));
+
+  const hideLegacyKpis = rawKpis.length > 0 && rawKpis.every(isLegacySeedKpi);
+  const kpis =
+    hideLegacyGoals || hideLegacyKpis
+      ? []
+      : rawKpis.filter((record) => visibleGoalIds.has(record.goalId));
+  const visibleKpiIds = new Set(kpis.map((kpi) => kpi.id));
+
+  const hideLegacyInitiatives =
+    rawInitiatives.length > 0 && rawInitiatives.every(isLegacySeedInitiative);
+  const initiatives =
+    hideLegacyGoals || hideLegacyKpis || hideLegacyInitiatives
+      ? []
+      : rawInitiatives.filter(
+          (record) => visibleGoalIds.has(record.goalId) && visibleKpiIds.has(record.kpiId)
+        );
 
   return { perspectives, goals, kpis, initiatives };
 }

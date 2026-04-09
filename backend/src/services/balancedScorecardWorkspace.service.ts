@@ -1504,9 +1504,9 @@ export async function getBalancedScorecardWorkspace(params: {
       ? catalogKpi.compute(ctx)
       : {
           actualValue: 0,
-          actualLabel: "No live metric",
+          actualLabel: "Not mapped",
           trend: [0, 0, 0, 0, 0, 0],
-          ownerUpdate: "This KPI is stored in the scorecard structure but is not yet mapped to a live metric template.",
+          ownerUpdate: "",
         };
     const weightedScore = Math.round(
       catalogKpi
@@ -1528,7 +1528,7 @@ export async function getBalancedScorecardWorkspace(params: {
       weightedScore,
       owner: record.ownerName || catalogKpi?.owner || "Unassigned",
       status: scoreToStatus(weightedScore),
-      statusLogic: record.statusLogic || catalogKpi?.statusLogic || "Live status logic not yet set.",
+      statusLogic: record.statusLogic || catalogKpi?.statusLogic || "",
       updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
       initiativeProgress: weightedScore,
       trend: computed.trend,
@@ -1551,13 +1551,6 @@ export async function getBalancedScorecardWorkspace(params: {
         job.dueDate &&
         job.dueDate < new Date()
     ).length;
-    const summaryByInitiative: Record<string, string> = {
-      "init-1": `${jobs.length} live jobs and ${proposals.filter((proposal) => proposal.status === "won").length} wins are feeding the growth chain behind the firm revenue goal.`,
-      "init-2": `${overdueInvoices} overdue invoices still need active collection follow-through.`,
-      "init-3": `${surveys.filter((survey) => survey.completedAt).length} client feedback signals and ${proposals.filter((proposal) => proposal.status === "sent").length} open proposals are feeding sponsor review decisions.`,
-      "init-4": `${overdueJobs} overdue jobs and ${tasks.filter((task) => task.status === "blocked").length} blocked tasks are driving the delivery control board.`,
-      "init-5": `${evaluationAssignments.filter((assignment) => assignment.status !== "submitted").length} review assignments and ${learningAssignments.filter((assignment) => assignment.status !== "completed").length} learning actions remain open in the people layer.`,
-    };
     const descendantCount = structure.initiatives.filter((candidate) => {
       let currentParentId = candidate.parentInitiativeId;
       while (currentParentId) {
@@ -1584,8 +1577,14 @@ export async function getBalancedScorecardWorkspace(params: {
         structure.initiatives.find((item) => item.id === record.parentInitiativeId)?.key || null,
       summary:
         record.summary ||
-        summaryByInitiative[record.key] ||
-        "Live execution signals are feeding this workstream.",
+        [
+          linkedKpi ? `Linked KPI: ${linkedKpi.name}.` : null,
+          record.timeline ? `Timeline: ${record.timeline}.` : null,
+          record.dueDate ? `Due ${formatDateLabel(record.dueDate)}.` : null,
+          `Progress ${record.progress || linkedKpi?.initiativeProgress || 0}%.`,
+        ]
+          .filter(Boolean)
+          .join(" "),
     } satisfies WorkspaceInitiative;
   });
   const topLevelInitiativeRecords = structure.initiatives.filter(
@@ -1707,13 +1706,6 @@ export async function getBalancedScorecardWorkspace(params: {
         .filter((initiative) => initiative.parentInitiativeId === currentChainNode?.id)
         .sort((a, b) => a.sortOrder - b.sortOrder)[0] || null;
   }
-  const noteByScopeRole: Record<string, string> = {
-    hr: "HR anchors the strategic goal, KPI contract, and the parent initiative that the rest of the chain inherits.",
-    gmp: "GMP keeps the same KPI aligned while focusing on sponsorship quality and executive intervention.",
-    partner: "Partner initiatives stay aligned to the same KPI but become portfolio and account specific.",
-    manager: "Managers convert the shared KPI chain into team deliverables, follow-up, and delivery controls.",
-    employee: "Employees own specific actions and updates, not the whole scorecard structure.",
-  };
   const featuredCascade: WorkspaceCascadeLevel[] =
     featuredChainRecords.length > 0
       ? featuredChainRecords.map((record) => {
@@ -1742,10 +1734,10 @@ export async function getBalancedScorecardWorkspace(params: {
               ? employeeContributions[0]?.initiative || record.title
               : record.title,
             target: isEmployeeLayer
-              ? employeeContributions[0]?.rollup || "Employee contribution flowing into the manager and partner chain."
+              ? employeeContributions[0]?.rollup || "No downstream roll-up is linked yet."
               : linkedKpi
                 ? `${linkedKpi.actual} actual against ${linkedKpi.firmTarget} target`
-                : "Live KPI target",
+                : "No KPI target linked yet.",
             progress: isEmployeeLayer
               ? employeeContributionProgress || record.progress
               : record.progress || linkedKpi?.weightedScore || 0,
@@ -1756,8 +1748,18 @@ export async function getBalancedScorecardWorkspace(params: {
               ? scoreToStatus(employeeContributionProgress || record.progress)
               : (record.status as StatusTone),
             note:
-              noteByScopeRole[record.scopeRole] ||
-              "This initiative layer contributes to the same strategic KPI from a more specific operating context.",
+              record.summary ||
+              (isEmployeeLayer
+                ? employeeContributions[0]?.managerComment ||
+                  employeeContributions[0]?.rollup ||
+                  "Employee contribution is linked to the active cascade."
+                : [
+                    linkedKpi ? `Tracking ${linkedKpi.name}.` : null,
+                    record.ownerName ? `Owner: ${record.ownerName}.` : null,
+                    record.dueDate ? `Due ${formatDateLabel(record.dueDate)}.` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")),
           } satisfies WorkspaceCascadeLevel;
         })
       : [];
@@ -1767,21 +1769,17 @@ export async function getBalancedScorecardWorkspace(params: {
     latestScores,
     evaluationAssignments
   );
-  const departmentPerformance = buildDepartmentRows(
-    latestScores,
-    evaluationAssignments,
-    learningAssignments
-  );
-  const managerPerformance = buildManagerRows(
-    latestScores,
-    evaluationAssignments,
-    learningAssignments
-  );
-  const employeePerformance = buildEmployeePerformanceRows(
-    latestScores,
-    evaluationAssignments,
-    learningAssignments
-  );
+  const hasLiveScorecardRollup =
+    goals.length > 0 && kpis.length > 0 && (initiatives.length > 0 || latestScores.length > 0);
+  const departmentPerformance = hasLiveScorecardRollup
+    ? buildDepartmentRows(latestScores, evaluationAssignments, learningAssignments)
+    : [];
+  const managerPerformance = hasLiveScorecardRollup
+    ? buildManagerRows(latestScores, evaluationAssignments, learningAssignments)
+    : [];
+  const employeePerformance = hasLiveScorecardRollup
+    ? buildEmployeePerformanceRows(latestScores, evaluationAssignments, learningAssignments)
+    : [];
   const reportBlocks: WorkspaceReportBlock[] = [
     {
       label: "Evaluation cycle",
