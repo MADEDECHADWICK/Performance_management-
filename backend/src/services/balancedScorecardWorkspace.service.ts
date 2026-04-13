@@ -1,5 +1,9 @@
 import prisma from "../prisma";
-import { listBalancedScorecardStructure } from "./balancedScorecardStructure.service";
+import {
+  KpiMeasurementType,
+  KpiTargetDirection,
+  listBalancedScorecardStructure,
+} from "./balancedScorecardStructure.service";
 
 export type StatusTone = "on_track" | "at_risk" | "off_track";
 export type WorkspaceRole =
@@ -313,6 +317,11 @@ const ratioPercent = (numerator: number, denominator: number) =>
 const formatPercent = (value: number, decimals = 1) =>
   `${Number.isInteger(value) ? value : Number(value.toFixed(decimals))}%`;
 const formatDays = (value: number) => `${Math.round(value)} days`;
+const formatCount = (value: number) => `${Math.round(value)}`;
+const formatCurrency = (value: number, unit?: string | null) => {
+  if (unit && unit.trim()) return `${unit.trim()} ${Math.round(value).toLocaleString()}`;
+  return `KES ${Math.round(value).toLocaleString()}`;
+};
 const scoreToStatus = (score: number): StatusTone =>
   score >= 85 ? "on_track" : score >= 65 ? "at_risk" : "off_track";
 const achievementToScore = (
@@ -324,6 +333,67 @@ const achievementToScore = (
   if (direction === "higher_better") return clamp((actualValue / targetValue) * 100, 0, 100);
   if (actualValue <= 0) return 100;
   return clamp((targetValue / actualValue) * 100, 0, 100);
+};
+
+const manualStatusScore = (
+  actualValue: number,
+  targetValue: number,
+  direction: KpiTargetDirection
+) => {
+  if (!Number.isFinite(actualValue) || !Number.isFinite(targetValue)) return 0;
+  if (direction === "higher_better") {
+    return achievementToScore(actualValue, targetValue, "higher_better");
+  }
+  if (direction === "lower_better") {
+    return achievementToScore(actualValue, targetValue, "lower_better");
+  }
+  if (direction === "exact_match") {
+    return actualValue === targetValue ? 100 : 0;
+  }
+  return actualValue >= targetValue ? 100 : 0;
+};
+
+const formatManualActual = (
+  measurementType: KpiMeasurementType | null,
+  actualValue: number,
+  unit?: string | null
+) => {
+  if (measurementType === "percentage") return formatPercent(actualValue);
+  if (measurementType === "currency") return formatCurrency(actualValue, unit);
+  if (measurementType === "days") return formatDays(actualValue);
+  if (measurementType === "count") return formatCount(actualValue);
+  if (measurementType === "boolean" || measurementType === "milestone") {
+    return actualValue >= 1 ? "Completed" : "Not completed";
+  }
+  return unit?.trim() ? `${actualValue} ${unit.trim()}` : `${actualValue}`;
+};
+
+const buildManualKpiComputation = (record: {
+  measurementType: KpiMeasurementType | null;
+  targetDirection: KpiTargetDirection | null;
+  targetValue: number | null;
+  currentActualValue: number | null;
+  unit: string;
+  lastMeasurementNote: string | null;
+}) => {
+  const actualValue =
+    record.currentActualValue !== null && record.currentActualValue !== undefined
+      ? Number(record.currentActualValue)
+      : 0;
+  const targetValue =
+    record.targetValue !== null && record.targetValue !== undefined
+      ? Number(record.targetValue)
+      : 0;
+  const direction = record.targetDirection ?? "higher_better";
+  const score = manualStatusScore(actualValue, targetValue, direction);
+  return {
+    actualValue,
+    actualLabel: formatManualActual(record.measurementType, actualValue, record.unit),
+    trend: [actualValue, actualValue, actualValue, actualValue, actualValue, actualValue],
+    ownerUpdate: record.lastMeasurementNote || "",
+    weightedScore: Math.round(score),
+    status: scoreToStatus(score),
+  };
 };
 const monthKey = (value: Date) =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
@@ -1500,19 +1570,44 @@ export async function getBalancedScorecardWorkspace(params: {
     const goal = goalById.get(record.goalId);
     const perspectiveId = goal ? perspectiveKeyById.get(goal.perspectiveId) : undefined;
     const catalogKpi = kpiCatalogByMetricKey.get(record.metricKey);
+    const manualComputation =
+      record.trackingMode === "manual"
+        ? buildManualKpiComputation({
+            measurementType: record.measurementType ?? null,
+            targetDirection: record.targetDirection ?? null,
+            targetValue: record.targetValue ?? null,
+            currentActualValue: record.currentActualValue ?? null,
+            unit: record.unit,
+            lastMeasurementNote: record.lastMeasurementNote ?? null,
+          })
+        : null;
     const computed = catalogKpi
       ? catalogKpi.compute(ctx)
-      : {
-          actualValue: 0,
-          actualLabel: "Not mapped",
-          trend: [0, 0, 0, 0, 0, 0],
-          ownerUpdate: "",
-        };
+      : manualComputation
+        ? {
+            actualValue: manualComputation.actualValue,
+            actualLabel: manualComputation.actualLabel,
+            trend: manualComputation.trend,
+            ownerUpdate: manualComputation.ownerUpdate,
+          }
+        : {
+            actualValue: 0,
+            actualLabel: "Awaiting first update",
+            trend: [0, 0, 0, 0, 0, 0],
+            ownerUpdate: "",
+          };
     const weightedScore = Math.round(
       catalogKpi
         ? achievementToScore(computed.actualValue, catalogKpi.targetValue, catalogKpi.direction)
-        : 0
+        : manualComputation
+          ? manualComputation.weightedScore
+          : 0
     );
+    const status = catalogKpi
+      ? scoreToStatus(weightedScore)
+      : manualComputation
+        ? manualComputation.status
+        : scoreToStatus(weightedScore);
     return {
       id: record.key,
       name: record.name,
@@ -1527,8 +1622,8 @@ export async function getBalancedScorecardWorkspace(params: {
       actual: computed.actualLabel,
       weightedScore,
       owner: record.ownerName || catalogKpi?.owner || "Unassigned",
-      status: scoreToStatus(weightedScore),
-      statusLogic: record.statusLogic || catalogKpi?.statusLogic || "",
+      status,
+      statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
       updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
       initiativeProgress: weightedScore,
       trend: computed.trend,

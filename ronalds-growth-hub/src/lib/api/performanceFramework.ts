@@ -257,6 +257,12 @@ export interface BalancedScorecardKpiRecord {
   key: string;
   goalId: number;
   metricKey: string;
+  trackingMode: "template" | "manual";
+  measurementType: string | null;
+  targetDirection: string | null;
+  targetValue: number | null;
+  currentActualValue: number | null;
+  lastMeasurementNote: string | null;
   name: string;
   description: string | null;
   formula: string | null;
@@ -298,6 +304,9 @@ export interface BalancedScorecardMetricTemplate {
   metricKey: string;
   name: string;
   perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
+  defaultMeasurementType: string;
+  defaultTargetDirection: string;
+  defaultTargetValue: number;
   defaultFormula: string;
   defaultFrequency: string;
   defaultUnit: string;
@@ -399,6 +408,18 @@ export const performanceFrameworkAPI = {
     summary?: string;
   }) => api.post<BalancedScorecardPerspectiveRecord>('/performance-framework/perspectives', payload),
 
+  updatePerspective: (
+    perspectiveId: number,
+    payload: {
+      name: string;
+      ownerName?: string;
+      summary?: string;
+    }
+  ) => api.patch<BalancedScorecardPerspectiveRecord>(`/performance-framework/perspectives/${perspectiveId}`, payload),
+
+  archivePerspective: (perspectiveId: number) =>
+    api.delete<BalancedScorecardPerspectiveRecord>(`/performance-framework/perspectives/${perspectiveId}`),
+
   createGoal: (payload: {
     perspectiveId: number;
     title: string;
@@ -408,7 +429,13 @@ export const performanceFrameworkAPI = {
 
   createKpi: (payload: {
     goalId: number;
-    metricKey: string;
+    trackingMode?: "template" | "manual";
+    metricKey?: string;
+    measurementType?: string;
+    targetDirection?: string;
+    targetValue?: number;
+    currentActualValue?: number;
+    lastMeasurementNote?: string;
     name: string;
     description?: string;
     formula?: string;

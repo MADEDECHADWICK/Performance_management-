@@ -3607,6 +3607,12 @@ model BalancedScorecardKpi {
   key              String   @unique
   goalId           Int      @map("goal_id")
   metricKey        String   @map("metric_key")
+  trackingMode     String   @default("template") @map("tracking_mode")
+  measurementType  String?  @map("measurement_type")
+  targetDirection  String?  @map("target_direction")
+  targetValue      Decimal? @map("target_value") @db.Decimal(14, 2)
+  currentActualValue Decimal? @map("current_actual_value") @db.Decimal(14, 2)
+  lastMeasurementNote String? @map("last_measurement_note") @db.Text
   name             String
   description      String?  @db.Text
   formula          String?  @db.Text

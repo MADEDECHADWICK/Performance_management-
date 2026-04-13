@@ -28,7 +28,13 @@ export type RoleKey =
   | "marketing"
   | "employee";
 export type PerspectiveKey = "financial" | "customer" | "internal" | "people";
-export type SetupSheetMode = "flow" | "governance" | "createPerspective" | "createGoal" | null;
+export type SetupSheetMode =
+  | "flow"
+  | "governance"
+  | "createPerspective"
+  | "editPerspective"
+  | "createGoal"
+  | null;
 export type KpiSheetMode = "contract" | "rules" | "createKpi" | "createInitiative" | null;
 
 export type RoleProfile = {

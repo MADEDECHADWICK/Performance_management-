@@ -20,13 +20,18 @@ import {
   WorkspaceRole,
 } from "../services/balancedScorecardWorkspace.service";
 import {
+  archiveBalancedScorecardPerspective,
   createBalancedScorecardGoal,
   createBalancedScorecardInitiative,
   createBalancedScorecardKpi,
+  KpiMeasurementType,
+  KpiTargetDirection,
+  KpiTrackingMode,
   createBalancedScorecardPerspective,
   ensureBalancedScorecardSeed,
   listBalancedScorecardMetricTemplates,
   listBalancedScorecardStructure,
+  updateBalancedScorecardPerspective,
 } from "../services/balancedScorecardStructure.service";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, successResponse } from "../utils/response";
@@ -36,6 +41,11 @@ const router = Router();
 const parseIntSafe = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const parseNumberSafe = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 const normalizeUserRoles = (req: AuthRequest) =>
@@ -59,6 +69,12 @@ const isBscPerspective = (value: string): value is BscPerspective =>
 
 const isWorkspaceRole = (value: string): value is WorkspaceRole =>
   ["hr", "gmp", "partner", "manager", "finance", "marketing", "employee"].includes(value);
+
+const isKpiMeasurementType = (value: string): value is KpiMeasurementType =>
+  ["percentage", "currency", "number", "count", "days", "boolean", "milestone"].includes(value);
+
+const isKpiTargetDirection = (value: string): value is KpiTargetDirection =>
+  ["higher_better", "lower_better", "exact_match", "milestone_complete"].includes(value);
 
 const resolveDefinitionForProfile = async (
   departmentId: number | null | undefined,
@@ -330,6 +346,60 @@ router.post("/perspectives", async (req: AuthRequest, res) => {
   }
 });
 
+router.patch("/perspectives/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can update scorecard perspectives", 403));
+    }
+
+    const perspectiveId = parseIntSafe(req.params.id);
+    if (!perspectiveId) {
+      return res.status(400).json(errorResponse("Perspective is required", 400));
+    }
+
+    const { name, ownerName, summary } = req.body || {};
+    if (!name || String(name).trim().length < 2) {
+      return res.status(400).json(errorResponse("Perspective name is required", 400));
+    }
+
+    const updated = await updateBalancedScorecardPerspective(perspectiveId, {
+      name: String(name),
+      ownerName: ownerName ? String(ownerName) : null,
+      summary: summary ? String(summary) : null,
+    });
+
+    return res.json(successResponse(updated, "Perspective updated"));
+  } catch (error: any) {
+    console.error("Error updating perspective:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to update perspective" : error.message, statusCode));
+  }
+});
+
+router.delete("/perspectives/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can archive scorecard perspectives", 403));
+    }
+
+    const perspectiveId = parseIntSafe(req.params.id);
+    if (!perspectiveId) {
+      return res.status(400).json(errorResponse("Perspective is required", 400));
+    }
+
+    const archived = await archiveBalancedScorecardPerspective(perspectiveId);
+    return res.json(successResponse(archived, "Perspective archived"));
+  } catch (error: any) {
+    console.error("Error archiving perspective:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to archive perspective" : error.message, statusCode));
+  }
+});
+
 router.post("/goals", async (req: AuthRequest, res) => {
   try {
     if (!canManageBalancedScorecard(req)) {
@@ -364,7 +434,13 @@ router.post("/kpis", async (req: AuthRequest, res) => {
     }
     const {
       goalId,
+      trackingMode,
       metricKey,
+      measurementType,
+      targetDirection,
+      targetValue,
+      currentActualValue,
+      lastMeasurementNote,
       name,
       description,
       formula,
@@ -380,8 +456,29 @@ router.post("/kpis", async (req: AuthRequest, res) => {
     if (!resolvedGoalId) {
       return res.status(400).json(errorResponse("Goal is required", 400));
     }
-    if (!metricKey || !String(metricKey).trim()) {
-      return res.status(400).json(errorResponse("Metric template is required", 400));
+    const resolvedTrackingMode: KpiTrackingMode =
+      String(trackingMode || "").trim().toLowerCase() === "manual" ? "manual" : "template";
+    if (resolvedTrackingMode === "template" && (!metricKey || !String(metricKey).trim())) {
+      return res.status(400).json(errorResponse("Metric template is required for template-based KPIs", 400));
+    }
+    if (resolvedTrackingMode === "manual") {
+      const resolvedMeasurementType = String(measurementType || "").trim().toLowerCase();
+      const resolvedTargetDirection = String(targetDirection || "").trim().toLowerCase();
+      if (!resolvedMeasurementType) {
+        return res.status(400).json(errorResponse("Measurement type is required for custom KPIs", 400));
+      }
+      if (!isKpiMeasurementType(resolvedMeasurementType)) {
+        return res.status(400).json(errorResponse("Unsupported measurement type", 400));
+      }
+      if (!resolvedTargetDirection) {
+        return res.status(400).json(errorResponse("Target direction is required for custom KPIs", 400));
+      }
+      if (!isKpiTargetDirection(resolvedTargetDirection)) {
+        return res.status(400).json(errorResponse("Unsupported target direction", 400));
+      }
+      if (parseNumberSafe(targetValue) === undefined) {
+        return res.status(400).json(errorResponse("Target value is required for custom KPIs", 400));
+      }
     }
     if (!name || String(name).trim().length < 3) {
       return res.status(400).json(errorResponse("KPI name is required", 400));
@@ -391,7 +488,13 @@ router.post("/kpis", async (req: AuthRequest, res) => {
     }
     const created = await createBalancedScorecardKpi({
       goalId: resolvedGoalId,
-      metricKey: String(metricKey),
+      metricKey: metricKey ? String(metricKey) : null,
+      trackingMode: resolvedTrackingMode,
+      measurementType: measurementType ? (String(measurementType) as KpiMeasurementType) : null,
+      targetDirection: targetDirection ? (String(targetDirection) as KpiTargetDirection) : null,
+      targetValue: parseNumberSafe(targetValue) ?? null,
+      currentActualValue: parseNumberSafe(currentActualValue) ?? null,
+      lastMeasurementNote: lastMeasurementNote ? String(lastMeasurementNote) : null,
       name: String(name),
       description: description ? String(description) : null,
       formula: formula ? String(formula) : null,

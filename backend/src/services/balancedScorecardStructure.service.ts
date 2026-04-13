@@ -11,6 +11,11 @@ const slugify = (value: string) =>
 const uniqueKey = (prefix: string, value: string) =>
   `${prefix}-${slugify(value) || "item"}-${Date.now()}`;
 
+const decimalValueOrNull = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export type StructurePerspective = {
   id: number;
   key: string;
@@ -35,6 +40,12 @@ export type StructureKpi = {
   key: string;
   goalId: number;
   metricKey: string;
+  trackingMode: KpiTrackingMode;
+  measurementType: KpiMeasurementType | null;
+  targetDirection: KpiTargetDirection | null;
+  targetValue: number | null;
+  currentActualValue: number | null;
+  lastMeasurementNote: string | null;
   name: string;
   description: string | null;
   formula: string | null;
@@ -69,6 +80,9 @@ export type BalancedScorecardMetricTemplate = {
   metricKey: string;
   name: string;
   perspectiveId: "financial" | "customer" | "internal" | "people";
+  defaultMeasurementType: KpiMeasurementType;
+  defaultTargetDirection: KpiTargetDirection;
+  defaultTargetValue: number;
   defaultFormula: string;
   defaultFrequency: string;
   defaultUnit: string;
@@ -78,6 +92,21 @@ export type BalancedScorecardMetricTemplate = {
   defaultStatusLogic: string;
   defaultUpdateFrequency: string;
 };
+
+export type KpiTrackingMode = "template" | "manual";
+export type KpiMeasurementType =
+  | "percentage"
+  | "currency"
+  | "number"
+  | "count"
+  | "days"
+  | "boolean"
+  | "milestone";
+export type KpiTargetDirection =
+  | "higher_better"
+  | "lower_better"
+  | "exact_match"
+  | "milestone_complete";
 
 type SeedPerspective = {
   key: string;
@@ -232,6 +261,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-1",
     name: "Priority account revenue growth",
     perspectiveId: "financial",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 12,
     defaultFormula: "((Current period revenue - Prior period revenue) / Prior period revenue) * 100",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -245,6 +277,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-2",
     name: "Matter realization rate",
     perspectiveId: "financial",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 88,
     defaultFormula: "Recovered fees / standard billable value",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -258,6 +293,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-3",
     name: "Collection cycle days",
     perspectiveId: "financial",
+    defaultMeasurementType: "days",
+    defaultTargetDirection: "lower_better",
+    defaultTargetValue: 42,
     defaultFormula: "Average days from invoice issuance to cash collection",
     defaultFrequency: "Weekly",
     defaultUnit: "Days",
@@ -271,6 +309,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-4",
     name: "Strategic client retention",
     perspectiveId: "customer",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 92,
     defaultFormula: "Retained strategic clients / total strategic clients",
     defaultFrequency: "Quarterly",
     defaultUnit: "%",
@@ -284,6 +325,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-5",
     name: "Cross-practice conversion rate",
     perspectiveId: "customer",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 35,
     defaultFormula: "Won cross-practice opportunities / qualified opportunities",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -297,6 +341,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-6",
     name: "Executive review completion",
     perspectiveId: "customer",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 100,
     defaultFormula: "Completed executive reviews / scheduled executive reviews",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -310,6 +357,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-7",
     name: "Turnaround SLA adherence",
     perspectiveId: "internal",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 95,
     defaultFormula: "Assignments delivered within SLA / total assignments",
     defaultFrequency: "Weekly",
     defaultUnit: "%",
@@ -323,6 +373,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-8",
     name: "Review rework ratio",
     perspectiveId: "internal",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "lower_better",
+    defaultTargetValue: 10,
     defaultFormula: "Assignments with major rework / total reviewed assignments",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -336,6 +389,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-9",
     name: "Monthly coaching completion",
     perspectiveId: "people",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 95,
     defaultFormula: "Completed coaching sessions / scheduled coaching sessions",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
@@ -349,6 +405,9 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     metricKey: "kpi-10",
     name: "Priority skill readiness",
     perspectiveId: "people",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 85,
     defaultFormula: "Ready staff / total staff in target pool",
     defaultFrequency: "Quarterly",
     defaultUnit: "%",
@@ -927,25 +986,45 @@ export async function listBalancedScorecardStructure() {
         }
       : record
   );
-  const hideLegacyGoals = rawGoals.length > 0 && rawGoals.every(isLegacySeedGoal);
-  const goals = hideLegacyGoals ? [] : rawGoals;
+  const goals = rawGoals.filter((record) => !isLegacySeedGoal(record));
   const visibleGoalIds = new Set(goals.map((goal) => goal.id));
 
-  const hideLegacyKpis = rawKpis.length > 0 && rawKpis.every(isLegacySeedKpi);
-  const kpis =
-    hideLegacyGoals || hideLegacyKpis
-      ? []
-      : rawKpis.filter((record) => visibleGoalIds.has(record.goalId));
+  const kpis = rawKpis
+    .filter((record) => !isLegacySeedKpi(record) && visibleGoalIds.has(record.goalId))
+    .map((record) => ({
+      ...record,
+      trackingMode: (record.trackingMode as KpiTrackingMode) || "template",
+      measurementType: (record.measurementType as KpiMeasurementType | null) ?? null,
+      targetDirection: (record.targetDirection as KpiTargetDirection | null) ?? null,
+      targetValue: decimalValueOrNull(record.targetValue),
+      currentActualValue: decimalValueOrNull(record.currentActualValue),
+      lastMeasurementNote: record.lastMeasurementNote ?? null,
+    }));
   const visibleKpiIds = new Set(kpis.map((kpi) => kpi.id));
 
-  const hideLegacyInitiatives =
-    rawInitiatives.length > 0 && rawInitiatives.every(isLegacySeedInitiative);
-  const initiatives =
-    hideLegacyGoals || hideLegacyKpis || hideLegacyInitiatives
-      ? []
-      : rawInitiatives.filter(
-          (record) => visibleGoalIds.has(record.goalId) && visibleKpiIds.has(record.kpiId)
-        );
+  const initiativeCandidates = rawInitiatives.filter(
+    (record) =>
+      !isLegacySeedInitiative(record) &&
+      visibleGoalIds.has(record.goalId) &&
+      visibleKpiIds.has(record.kpiId)
+  );
+  const visibleInitiativeIds = new Set<number>();
+  let didAddInitiative = true;
+
+  while (didAddInitiative) {
+    didAddInitiative = false;
+    initiativeCandidates.forEach((record) => {
+      if (visibleInitiativeIds.has(record.id)) return;
+      if (!record.parentInitiativeId || visibleInitiativeIds.has(record.parentInitiativeId)) {
+        visibleInitiativeIds.add(record.id);
+        didAddInitiative = true;
+      }
+    });
+  }
+
+  const initiatives = initiativeCandidates.filter((record) =>
+    visibleInitiativeIds.has(record.id)
+  );
 
   return { perspectives, goals, kpis, initiatives };
 }
@@ -970,6 +1049,96 @@ export async function createBalancedScorecardPerspective(input: {
       sortOrder,
       createdByProfileId: input.createdByProfileId ?? null,
     },
+  });
+}
+
+export async function updateBalancedScorecardPerspective(
+  perspectiveId: number,
+  input: {
+    name: string;
+    ownerName?: string | null;
+    summary?: string | null;
+  }
+) {
+  const existing = await prisma.balancedScorecardPerspective.findUnique({
+    where: { id: perspectiveId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Perspective not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return prisma.balancedScorecardPerspective.update({
+    where: { id: perspectiveId },
+    data: {
+      name: input.name.trim(),
+      ownerName: input.ownerName?.trim() || null,
+      summary: input.summary?.trim() || null,
+    },
+  });
+}
+
+export async function archiveBalancedScorecardPerspective(perspectiveId: number) {
+  const existing = await prisma.balancedScorecardPerspective.findUnique({
+    where: { id: perspectiveId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Perspective not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const activeGoals = await prisma.balancedScorecardGoal.findMany({
+    where: { perspectiveId, isActive: true },
+    select: {
+      id: true,
+      key: true,
+      title: true,
+      description: true,
+      ownerName: true,
+    },
+  });
+
+  const realGoals = activeGoals.filter((goal) => !isLegacySeedGoal(goal));
+  if (realGoals.length > 0) {
+    const err = new Error(
+      `Cannot archive this perspective while ${realGoals.length} active goal${
+        realGoals.length === 1 ? " is" : "s are"
+      } still linked to it`
+    ) as Error & { statusCode?: number };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const goalIds = activeGoals.map((goal) => goal.id);
+
+  return prisma.$transaction(async (tx) => {
+    if (goalIds.length > 0) {
+      await tx.balancedScorecardInitiative.updateMany({
+        where: { goalId: { in: goalIds }, isActive: true },
+        data: { isActive: false },
+      });
+
+      await tx.balancedScorecardKpi.updateMany({
+        where: { goalId: { in: goalIds }, isActive: true },
+        data: { isActive: false },
+      });
+
+      await tx.balancedScorecardGoal.updateMany({
+        where: { id: { in: goalIds }, isActive: true },
+        data: { isActive: false },
+      });
+    }
+
+    return tx.balancedScorecardPerspective.update({
+      where: { id: perspectiveId },
+      data: { isActive: false },
+    });
   });
 }
 
@@ -999,7 +1168,13 @@ export async function createBalancedScorecardGoal(input: {
 
 export async function createBalancedScorecardKpi(input: {
   goalId: number;
-  metricKey: string;
+  metricKey?: string | null;
+  trackingMode?: KpiTrackingMode | null;
+  measurementType?: KpiMeasurementType | null;
+  targetDirection?: KpiTargetDirection | null;
+  targetValue?: number | null;
+  currentActualValue?: number | null;
+  lastMeasurementNote?: string | null;
   name: string;
   description?: string | null;
   formula?: string | null;
@@ -1012,16 +1187,36 @@ export async function createBalancedScorecardKpi(input: {
   updateFrequency?: string | null;
   createdByProfileId?: number | null;
 }) {
+  const trimmedName = input.name.trim();
+  const metricKey = input.metricKey?.trim() || `custom-${slugify(trimmedName) || "metric"}-${Date.now()}`;
+  const trackingMode =
+    input.trackingMode ?? (input.metricKey && input.metricKey.trim() ? "template" : "manual");
   const sortOrder =
     (await prisma.balancedScorecardKpi.count({
       where: { goalId: input.goalId, isActive: true },
     })) + 1;
   return prisma.balancedScorecardKpi.create({
     data: {
-      key: uniqueKey("kpi", input.name),
+      key: uniqueKey("kpi", trimmedName),
       goalId: input.goalId,
-      metricKey: input.metricKey,
-      name: input.name.trim(),
+      metricKey,
+      trackingMode,
+      measurementType: input.measurementType ?? null,
+      targetDirection: input.targetDirection ?? null,
+      targetValue:
+        input.targetValue !== null &&
+        input.targetValue !== undefined &&
+        Number.isFinite(Number(input.targetValue))
+          ? Number(input.targetValue)
+          : null,
+      currentActualValue:
+        input.currentActualValue !== null &&
+        input.currentActualValue !== undefined &&
+        Number.isFinite(Number(input.currentActualValue))
+          ? Number(input.currentActualValue)
+          : null,
+      lastMeasurementNote: input.lastMeasurementNote?.trim() || null,
+      name: trimmedName,
       description: input.description?.trim() || null,
       formula: input.formula?.trim() || null,
       frequency: input.frequency.trim(),
