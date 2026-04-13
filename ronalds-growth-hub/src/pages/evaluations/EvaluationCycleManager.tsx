@@ -320,6 +320,7 @@ export default function EvaluationCycleManager() {
       toast({
         title: "Assignments published",
         description: "The evaluation cycle is now live for the selected evaluators.",
+        duration: 8000,
       });
       setStagedAssignments([]);
     },
