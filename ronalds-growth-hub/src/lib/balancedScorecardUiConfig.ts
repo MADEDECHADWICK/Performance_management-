@@ -103,7 +103,7 @@ export const roleProfiles: Record<RoleKey, RoleProfile> = {
     label: "HR / Admin",
     subtitle: "Owns the BSC structure, KPI definitions, and firm-wide initiatives.",
     scope: "Firm-wide strategy design and governance",
-    primaryAction: "Create strategic goal",
+    primaryAction: "Open strategy setup",
     focus: ["Define perspectives", "Link goals to KPIs", "Launch firm initiatives"],
   },
   gmp: {

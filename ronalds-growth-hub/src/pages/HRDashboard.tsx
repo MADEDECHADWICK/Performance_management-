@@ -624,7 +624,7 @@ const HRDashboard = () => {
 
         <JobOperationsOverview
           title="Firmwide job operations"
-          description="See staffing readiness, fee realization, and delivery pressure across the firm from one simpler HR command surface."
+          description=""
           metrics={hrJobMetrics}
           showLocator={false}
         />

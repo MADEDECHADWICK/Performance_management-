@@ -311,6 +311,9 @@ export default function BalancedScorecardModule() {
     ? kpiData.find((kpi) => kpi.id === featuredKpiRecord.key) ?? null
     : null;
   const isEditingPerspective = setupSheetMode === "editPerspective";
+  const editingPerspective = isEditingPerspective
+    ? perspectiveRecords.find((perspective) => perspective.id === editingPerspectiveId) ?? null
+    : null;
 
   const closeSetupSheet = () => {
     setSetupSheetMode(null);
@@ -1885,6 +1888,43 @@ export default function BalancedScorecardModule() {
     }
   };
 
+  const handleDeletePerspective = async (perspective: BalancedScorecardPerspectiveRecord) => {
+    const linkedGoals = goalRecords.filter((goal) => goal.perspectiveId === perspective.id);
+    if (linkedGoals.length > 0) {
+      toast({
+        title: "Perspective still has goals",
+        description: "Remove the linked goals before permanently deleting this perspective.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!window.confirm(`Delete "${perspective.name}" permanently? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setAuthoringSubmitting(`deletePerspective:${perspective.id}`);
+      await performanceFrameworkAPI.deletePerspective(perspective.id);
+      await refreshBalancedScorecardData(selectedRole);
+      if (editingPerspectiveId === perspective.id) {
+        closeSetupSheet();
+      }
+      toast({
+        title: "Perspective deleted",
+        description: "The perspective was permanently removed from the scorecard structure.",
+      });
+    } catch (error) {
+      toast({
+        title: "Perspective deletion failed",
+        description: error instanceof Error ? error.message : "The perspective could not be deleted.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
   const handleCreateGoal = async () => {
     try {
       setAuthoringSubmitting("createGoal");
@@ -2025,6 +2065,29 @@ export default function BalancedScorecardModule() {
       });
     } finally {
       setAuthoringSubmitting(null);
+    }
+  };
+
+  const handlePrimaryActionClick = () => {
+    switch (selectedRole) {
+      case "hr":
+        setActiveTab("setup");
+        return;
+      case "gmp":
+      case "partner":
+        setActiveTab("cascade");
+        return;
+      case "manager":
+        setActiveTab("employee");
+        return;
+      case "finance":
+      case "marketing":
+        setActiveTab("tracking");
+        return;
+      case "employee":
+      default:
+        setActiveTab("employee");
+        return;
     }
   };
 
@@ -2343,7 +2406,9 @@ export default function BalancedScorecardModule() {
                   </div>
                 ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Button className="h-11 rounded-2xl">{selectedRoleProfile.primaryAction}</Button>
+                  <Button className="h-11 rounded-2xl" onClick={handlePrimaryActionClick}>
+                    {selectedRoleProfile.primaryAction}
+                  </Button>
                   <Button
                     variant="outline"
                     className="h-11 rounded-2xl"
@@ -2790,21 +2855,40 @@ export default function BalancedScorecardModule() {
                             className="min-h-[120px] rounded-2xl"
                           />
                         </div>
-                        <div className="flex items-center justify-end gap-3">
-                          <Button variant="outline" className="rounded-2xl" onClick={closeSetupSheet}>
-                            Cancel
-                          </Button>
-                          <Button
-                            className="rounded-2xl"
-                            disabled={!perspectiveForm.name.trim() || authoringSubmitting !== null}
-                            onClick={isEditingPerspective ? handleUpdatePerspective : handleCreatePerspective}
-                          >
-                            {authoringSubmitting === "createPerspective" || authoringSubmitting === "editPerspective"
-                              ? "Saving..."
-                              : isEditingPerspective
-                                ? "Update perspective"
-                                : "Save perspective"}
-                          </Button>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          {isEditingPerspective && editingPerspective ? (
+                            <Button
+                              variant="destructive"
+                              className="rounded-2xl"
+                              disabled={
+                                authoringSubmitting !== null ||
+                                goalRecords.some((goal) => goal.perspectiveId === editingPerspective.id)
+                              }
+                              onClick={() => handleDeletePerspective(editingPerspective)}
+                            >
+                              {authoringSubmitting === `deletePerspective:${editingPerspective.id}`
+                                ? "Deleting..."
+                                : "Delete perspective"}
+                            </Button>
+                          ) : (
+                            <span />
+                          )}
+                          <div className="flex items-center gap-3">
+                            <Button variant="outline" className="rounded-2xl" onClick={closeSetupSheet}>
+                              Cancel
+                            </Button>
+                            <Button
+                              className="rounded-2xl"
+                              disabled={!perspectiveForm.name.trim() || authoringSubmitting !== null}
+                              onClick={isEditingPerspective ? handleUpdatePerspective : handleCreatePerspective}
+                            >
+                              {authoringSubmitting === "createPerspective" || authoringSubmitting === "editPerspective"
+                                ? "Saving..."
+                                : isEditingPerspective
+                                  ? "Update perspective"
+                                  : "Save perspective"}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     ) : setupSheetMode === "createGoal" ? (

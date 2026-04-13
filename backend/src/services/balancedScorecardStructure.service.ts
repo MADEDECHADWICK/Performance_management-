@@ -1143,6 +1143,35 @@ export async function archiveBalancedScorecardPerspective(perspectiveId: number)
   });
 }
 
+export async function deleteBalancedScorecardPerspective(perspectiveId: number) {
+  const existing = await prisma.balancedScorecardPerspective.findUnique({
+    where: { id: perspectiveId },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    const err = new Error("Perspective not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const linkedGoals = await prisma.balancedScorecardGoal.count({
+    where: { perspectiveId },
+  });
+
+  if (linkedGoals > 0) {
+    const err = new Error(
+      "Cannot delete this perspective while goals are still linked to it"
+    ) as Error & { statusCode?: number };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  return prisma.balancedScorecardPerspective.delete({
+    where: { id: perspectiveId },
+  });
+}
+
 export async function createBalancedScorecardGoal(input: {
   perspectiveId: number;
   title: string;

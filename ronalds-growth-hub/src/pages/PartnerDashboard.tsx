@@ -589,8 +589,8 @@ const PartnerDashboard = () => {
         </div>
 
         <JobOperationsOverview
-          title="Partner portfolio command"
-          description="Trace fee, cash, profit, and partner approvals from one cleaner job-operations surface before moving into portfolio detail."
+          title="Partner portfolio"
+          description=""
           metrics={partnerJobMetrics}
           showLocator={false}
         />

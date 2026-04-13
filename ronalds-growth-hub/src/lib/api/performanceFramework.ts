@@ -420,6 +420,11 @@ export const performanceFrameworkAPI = {
   archivePerspective: (perspectiveId: number) =>
     api.delete<BalancedScorecardPerspectiveRecord>(`/performance-framework/perspectives/${perspectiveId}`),
 
+  deletePerspective: (perspectiveId: number) =>
+    api.delete<BalancedScorecardPerspectiveRecord>(
+      `/performance-framework/perspectives/${perspectiveId}/hard-delete`
+    ),
+
   createGoal: (payload: {
     perspectiveId: number;
     title: string;

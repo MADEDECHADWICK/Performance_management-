@@ -21,6 +21,7 @@ import {
 } from "../services/balancedScorecardWorkspace.service";
 import {
   archiveBalancedScorecardPerspective,
+  deleteBalancedScorecardPerspective,
   createBalancedScorecardGoal,
   createBalancedScorecardInitiative,
   createBalancedScorecardKpi,
@@ -397,6 +398,28 @@ router.delete("/perspectives/:id", async (req: AuthRequest, res) => {
     return res
       .status(statusCode)
       .json(errorResponse(statusCode >= 500 ? "Failed to archive perspective" : error.message, statusCode));
+  }
+});
+
+router.delete("/perspectives/:id/hard-delete", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can delete scorecard perspectives", 403));
+    }
+
+    const perspectiveId = parseIntSafe(req.params.id);
+    if (!perspectiveId) {
+      return res.status(400).json(errorResponse("Perspective is required", 400));
+    }
+
+    const deleted = await deleteBalancedScorecardPerspective(perspectiveId);
+    return res.json(successResponse(deleted, "Perspective deleted"));
+  } catch (error: any) {
+    console.error("Error deleting perspective:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to delete perspective" : error.message, statusCode));
   }
 });
 

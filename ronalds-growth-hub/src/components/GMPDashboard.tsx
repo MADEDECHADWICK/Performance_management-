@@ -669,7 +669,7 @@ export default function GMPDashboard() {
 
         <JobOperationsOverview
           title="Executive job operations"
-          description="Keep firm revenue, delivery pressure, and portfolio risk visible in one cleaner executive board before you step into partner and department detail."
+          description=""
           metrics={gmpJobMetrics}
           showLocator={false}
         />

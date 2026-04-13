@@ -858,7 +858,7 @@ export default function FinanceBalances() {
                       </TableCell>
                       <TableCell>
                         <select
-                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                          className="w-full min-w-[150px] rounded-md border border-input bg-background px-2 py-1 text-xs"
                           value={job.receivableOwnerProfileId ?? ""}
                           disabled={!canAdminFinance || updatingOwnerJobId === job.jobId}
                           onChange={(event) => handleAssignOwner(job.jobId, event.target.value)}
@@ -873,7 +873,7 @@ export default function FinanceBalances() {
                       </TableCell>
                       <TableCell>
                         <select
-                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                          className="w-full min-w-[150px] rounded-md border border-input bg-background px-2 py-1 text-xs"
                           value={job.collectionStage || "not_ready"}
                           disabled={!canApproveFinance || updatingStageJobId === job.jobId}
                           onChange={(event) =>
@@ -893,22 +893,25 @@ export default function FinanceBalances() {
                           : "--"}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          size="sm"
-                          variant={selectedJobId === job.jobId ? "default" : "outline"}
-                          onClick={() => setSelectedJobId(job.jobId)}
-                        >
-                          Follow-up
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="ml-2"
-                          disabled={!canApproveFinance || escalatingJobId === job.jobId || job.balance <= 0}
-                          onClick={() => handleEscalateReceivable(job)}
-                        >
-                          {escalatingJobId === job.jobId ? "Escalating..." : "Escalate"}
-                        </Button>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <Button
+                            size="sm"
+                            className="w-full sm:w-auto"
+                            variant={selectedJobId === job.jobId ? "default" : "outline"}
+                            onClick={() => setSelectedJobId(job.jobId)}
+                          >
+                            Follow-up
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="w-full sm:w-auto"
+                            variant="outline"
+                            disabled={!canApproveFinance || escalatingJobId === job.jobId || job.balance <= 0}
+                            onClick={() => handleEscalateReceivable(job)}
+                          >
+                            {escalatingJobId === job.jobId ? "Escalating..." : "Escalate"}
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
