@@ -129,6 +129,8 @@ const emptyStructure: BalancedScorecardStructure = {
   kpis: [],
   initiatives: [],
 };
+
+type KpiTrackingMode = "template" | "manual";
 export default function BalancedScorecardModule() {
   const navigate = useNavigate();
   const { workspaceRole } = useParams<{ workspaceRole?: string }>();
@@ -159,7 +161,26 @@ export default function BalancedScorecardModule() {
     ownerName: "",
     description: "",
   });
-  const [kpiForm, setKpiForm] = useState({
+  const [kpiForm, setKpiForm] = useState<{
+    goalId: string;
+    trackingMode: KpiTrackingMode;
+    metricKey: string;
+    name: string;
+    description: string;
+    formula: string;
+    frequency: string;
+    unit: string;
+    weight: string;
+    firmTarget: string;
+    ownerName: string;
+    statusLogic: string;
+    updateFrequency: string;
+    measurementType: string;
+    targetDirection: string;
+    targetValue: string;
+    currentActualValue: string;
+    lastMeasurementNote: string;
+  }>({
     goalId: "",
     trackingMode: "template",
     metricKey: "",
@@ -1767,7 +1788,7 @@ export default function BalancedScorecardModule() {
     }));
   };
 
-  const updateTrackingMode = (mode: "template" | "manual") => {
+  const updateTrackingMode = (mode: KpiTrackingMode) => {
     setKpiForm((current) => ({
       ...current,
       trackingMode: mode,

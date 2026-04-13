@@ -1101,6 +1101,7 @@ export async function archiveBalancedScorecardPerspective(perspectiveId: number)
       title: true,
       description: true,
       ownerName: true,
+      createdByProfileId: true,
     },
   });
 
