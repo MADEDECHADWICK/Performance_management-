@@ -27,7 +27,10 @@ import {
 } from "../services/balancedScorecardGovernance.service";
 import {
   closeBalancedScorecardMeasurementPeriod,
+  buildBalancedScorecardMeasurementReviewPackPdf,
+  buildBalancedScorecardMeasurementReviewPackWorkbook,
   createBalancedScorecardMeasurementPeriod,
+  generateBalancedScorecardMeasurementReviewPack,
   generateBalancedScorecardMeasurementPeriod,
   getBalancedScorecardMeasurementSnapshots,
   listBalancedScorecardMeasurementPeriods,
@@ -484,6 +487,15 @@ router.post(
       const evaluationCycleId = parseIntSafe(req.body?.evaluationCycleId);
       const contributionKey = decodeURIComponent(String(req.params.contributionKey || "")).trim();
       const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+      if (!profileId) {
+        return res.status(400).json(errorResponse("Profile is required", 400));
+      }
+      if (!contributionKey) {
+        return res.status(400).json(errorResponse("Contribution key is required", 400));
+      }
+      if (!canManageContributionForProfile(req, profileId)) {
+        return res.status(403).json(errorResponse("You cannot upload evidence for this contribution item", 403));
+      }
       if (uploadedFile) {
         storedUpload = await storeUploadedFile("documents", uploadedFile);
       }
@@ -505,15 +517,6 @@ router.post(
       const documentType =
         typeof req.body?.documentType === "string" ? String(req.body.documentType) : undefined;
 
-      if (!profileId) {
-        return res.status(400).json(errorResponse("Profile is required", 400));
-      }
-      if (!contributionKey) {
-        return res.status(400).json(errorResponse("Contribution key is required", 400));
-      }
-      if (!canManageContributionForProfile(req, profileId)) {
-        return res.status(403).json(errorResponse("You cannot upload evidence for this contribution item", 403));
-      }
       if (!filePath || !fileName) {
         return res.status(400).json(errorResponse("File upload or filePath is required", 400));
       }
@@ -758,6 +761,66 @@ router.get("/measurement-periods/:id/snapshots", async (req: AuthRequest, res) =
         errorResponse(
           statusCode >= 500
             ? "Failed to load balanced scorecard measurement snapshot pack"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.get("/measurement-periods/:id/review-pack", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can export measurement review packs", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const pack = await generateBalancedScorecardMeasurementReviewPack(periodId);
+    const format = String(req.query.format || "json").trim().toLowerCase();
+
+    if (format === "xlsx" || format === "excel") {
+      const workbook = await buildBalancedScorecardMeasurementReviewPackWorkbook(pack);
+      const safeLabel = pack.period.label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "measurement-review-pack";
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader("Content-Disposition", `attachment; filename="${safeLabel}.xlsx"`);
+      return res.send(workbook);
+    }
+
+    if (format === "pdf") {
+      const pdf = await buildBalancedScorecardMeasurementReviewPackPdf(pack);
+      const safeLabel = pack.period.label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "measurement-review-pack";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeLabel}.pdf"`);
+      return res.send(pdf);
+    }
+
+    if (format !== "json") {
+      return res.status(400).json(errorResponse("Unsupported review pack format", 400));
+    }
+
+    return res.json(successResponse(pack, "Balanced scorecard measurement review pack generated"));
+  } catch (error: any) {
+    console.error("Error generating balanced scorecard measurement review pack:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to generate balanced scorecard measurement review pack"
             : error.message,
           statusCode
         )
@@ -1169,6 +1232,11 @@ router.post("/kpis", async (req: AuthRequest, res) => {
     });
     const currentTotal = existingKpis.reduce((sum, k) => sum + (k.weight || 0), 0);
     const newTotal = currentTotal + parsedWeight;
+    if (newTotal > 100) {
+      return res
+        .status(409)
+        .json(errorResponse(`KPI weights for this goal would total ${newTotal}%. Keep the goal at or below 100%.`, 409));
+    }
     const created = await createBalancedScorecardKpi({
       goalId: resolvedGoalId,
       metricKey: metricKey ? String(metricKey) : null,
@@ -1192,15 +1260,13 @@ router.post("/kpis", async (req: AuthRequest, res) => {
       updateFrequency: updateFrequency ? String(updateFrequency) : null,
       createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
     });
-    return res.json(successResponse(
-      { ...created, goalWeightTotal: newTotal },
-      newTotal > 100
-        ? `KPI created. Note: total goal weight is now ${newTotal}% — consider redistributing weights to sum to 100%.`
-        : "KPI contract created"
-    ));
+    return res.json(successResponse({ ...created, goalWeightTotal: newTotal }, "KPI contract created"));
   } catch (error: any) {
     console.error("Error creating KPI:", error);
-    return res.status(500).json(errorResponse("Failed to create KPI contract", 500));
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to create KPI contract" : error.message, statusCode));
   }
 });
 

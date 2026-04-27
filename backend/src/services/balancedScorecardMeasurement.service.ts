@@ -1,4 +1,6 @@
 import { randomUUID } from "crypto";
+import ExcelJS from "exceljs";
+import PDFDocument from "pdfkit";
 import { Prisma } from "@prisma/client";
 import prisma from "../prisma";
 import {
@@ -7,6 +9,7 @@ import {
   computeBalancedScorecardKpiRecords,
 } from "./balancedScorecardWorkspace.service";
 import { resolveActiveBalancedScorecardVersionId } from "./balancedScorecardGovernance.service";
+import cacheService from "./cache.service";
 
 const slugify = (value: string) =>
   value
@@ -144,6 +147,19 @@ export type BalancedScorecardMeasurementPeriodSummary = {
   reviewHistory: BalancedScorecardMeasurementReviewRecord[];
 };
 
+export type BalancedScorecardMeasurementSnapshotTraceRecord = {
+  id: number;
+  sourceType: "metric_catalog" | "manual_actual" | "initiative_rollup" | "operational_signal";
+  sourceKey: string;
+  sourceLabel: string;
+  dataQualityStatus: "healthy" | "warning" | "missing_data" | "stale_data" | "manual_override";
+  recordCount: number | null;
+  rawValue: number | null;
+  normalizedValue: number | null;
+  note: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
 export type BalancedScorecardMeasurementSnapshotRecord = {
   id: number;
   kpiId: number;
@@ -176,18 +192,38 @@ export type BalancedScorecardMeasurementSnapshotRecord = {
   dataQualityNote: string | null;
   actualAsOf: Date | null;
   measuredAt: Date;
-  traces: Array<{
-    id: number;
-    sourceType: "metric_catalog" | "manual_actual" | "initiative_rollup" | "operational_signal";
-    sourceKey: string;
-    sourceLabel: string;
-    dataQualityStatus: "healthy" | "warning" | "missing_data" | "stale_data" | "manual_override";
-    recordCount: number | null;
-    rawValue: number | null;
-    normalizedValue: number | null;
-    note: string | null;
-    metadata: Record<string, unknown> | null;
+  traces: BalancedScorecardMeasurementSnapshotTraceRecord[];
+};
+
+export type BalancedScorecardMeasurementReviewPack = {
+  generatedAt: Date;
+  period: BalancedScorecardMeasurementPeriodSummary;
+  summary: {
+    snapshotCount: number;
+    onTrackCount: number;
+    atRiskCount: number;
+    offTrackCount: number;
+    warningCount: number;
+    missingDataCount: number;
+    averageWeightedScore: number;
+  };
+  perspectives: Array<{
+    perspectiveKey: string;
+    perspectiveName: string;
+    snapshotCount: number;
+    averageWeightedScore: number;
+    missingDataCount: number;
+    offTrackCount: number;
   }>;
+  snapshots: BalancedScorecardMeasurementSnapshotRecord[];
+  traces: Array<
+    BalancedScorecardMeasurementSnapshotTraceRecord & {
+      kpiId: number;
+      kpiKey: string;
+      kpiName: string;
+      perspectiveName: string;
+    }
+  >;
 };
 
 type ReviewDecision = "start_review" | "request_changes" | "approve";
@@ -561,6 +597,226 @@ export async function getBalancedScorecardMeasurementSnapshots(periodId: number)
   };
 }
 
+export async function generateBalancedScorecardMeasurementReviewPack(
+  periodId: number
+): Promise<BalancedScorecardMeasurementReviewPack> {
+  const snapshotPack = await getBalancedScorecardMeasurementSnapshots(periodId);
+  const snapshots = snapshotPack.snapshots;
+  const scoreTotal = snapshots.reduce((sum, snapshot) => sum + snapshot.weightedScore, 0);
+  const perspectiveMap = new Map<
+    string,
+    {
+      perspectiveKey: string;
+      perspectiveName: string;
+      snapshotCount: number;
+      weightedScoreTotal: number;
+      missingDataCount: number;
+      offTrackCount: number;
+    }
+  >();
+
+  snapshots.forEach((snapshot) => {
+    const existing =
+      perspectiveMap.get(snapshot.perspectiveKey) ??
+      {
+        perspectiveKey: snapshot.perspectiveKey,
+        perspectiveName: snapshot.perspectiveName,
+        snapshotCount: 0,
+        weightedScoreTotal: 0,
+        missingDataCount: 0,
+        offTrackCount: 0,
+      };
+    existing.snapshotCount += 1;
+    existing.weightedScoreTotal += snapshot.weightedScore;
+    if (snapshot.dataQualityStatus === "missing_data") existing.missingDataCount += 1;
+    if (snapshot.status === "off_track") existing.offTrackCount += 1;
+    perspectiveMap.set(snapshot.perspectiveKey, existing);
+  });
+
+  return {
+    generatedAt: new Date(),
+    period: snapshotPack.period,
+    summary: {
+      snapshotCount: snapshots.length,
+      onTrackCount: snapshots.filter((snapshot) => snapshot.status === "on_track").length,
+      atRiskCount: snapshots.filter((snapshot) => snapshot.status === "at_risk").length,
+      offTrackCount: snapshots.filter((snapshot) => snapshot.status === "off_track").length,
+      warningCount: snapshots.filter((snapshot) => snapshot.dataQualityStatus === "warning").length,
+      missingDataCount: snapshots.filter((snapshot) => snapshot.dataQualityStatus === "missing_data").length,
+      averageWeightedScore: snapshots.length > 0 ? Math.round(scoreTotal / snapshots.length) : 0,
+    },
+    perspectives: Array.from(perspectiveMap.values()).map((perspective) => ({
+      perspectiveKey: perspective.perspectiveKey,
+      perspectiveName: perspective.perspectiveName,
+      snapshotCount: perspective.snapshotCount,
+      averageWeightedScore:
+        perspective.snapshotCount > 0
+          ? Math.round(perspective.weightedScoreTotal / perspective.snapshotCount)
+          : 0,
+      missingDataCount: perspective.missingDataCount,
+      offTrackCount: perspective.offTrackCount,
+    })),
+    snapshots,
+    traces: snapshots.flatMap((snapshot) =>
+      snapshot.traces.map((trace) => ({
+        ...trace,
+        kpiId: snapshot.kpiId,
+        kpiKey: snapshot.kpiKey,
+        kpiName: snapshot.kpiName,
+        perspectiveName: snapshot.perspectiveName,
+      }))
+    ),
+  };
+}
+
+export async function buildBalancedScorecardMeasurementReviewPackWorkbook(
+  pack: BalancedScorecardMeasurementReviewPack
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Ronalds Growth Hub";
+  workbook.created = pack.generatedAt;
+
+  const summary = workbook.addWorksheet("Summary");
+  summary.columns = [
+    { header: "Field", key: "field", width: 34 },
+    { header: "Value", key: "value", width: 42 },
+  ];
+  summary.addRows([
+    { field: "Cycle", value: pack.period.scorecardCycleName },
+    { field: "Scorecard", value: pack.period.scorecardLabel || `Version ${pack.period.scorecardVersionId}` },
+    { field: "Period", value: pack.period.label },
+    { field: "Status", value: pack.period.status },
+    { field: "Snapshots", value: pack.summary.snapshotCount },
+    { field: "Average weighted score", value: pack.summary.averageWeightedScore },
+    { field: "On track", value: pack.summary.onTrackCount },
+    { field: "At risk", value: pack.summary.atRiskCount },
+    { field: "Off track", value: pack.summary.offTrackCount },
+    { field: "Warnings", value: pack.summary.warningCount },
+    { field: "Missing data", value: pack.summary.missingDataCount },
+  ]);
+
+  const perspectives = workbook.addWorksheet("Perspectives");
+  perspectives.columns = [
+    { header: "Perspective", key: "perspectiveName", width: 28 },
+    { header: "Snapshots", key: "snapshotCount", width: 14 },
+    { header: "Average weighted score", key: "averageWeightedScore", width: 24 },
+    { header: "Missing data", key: "missingDataCount", width: 16 },
+    { header: "Off track", key: "offTrackCount", width: 14 },
+  ];
+  perspectives.addRows(pack.perspectives);
+
+  const kpis = workbook.addWorksheet("KPI Snapshots");
+  kpis.columns = [
+    { header: "Perspective", key: "perspectiveName", width: 24 },
+    { header: "Goal", key: "goalTitle", width: 36 },
+    { header: "KPI", key: "kpiName", width: 40 },
+    { header: "Tracking mode", key: "trackingMode", width: 16 },
+    { header: "Weight", key: "weight", width: 10 },
+    { header: "Target", key: "firmTarget", width: 24 },
+    { header: "Actual", key: "actualLabel", width: 18 },
+    { header: "Weighted score", key: "weightedScore", width: 18 },
+    { header: "Initiative progress", key: "initiativeProgress", width: 20 },
+    { header: "Status", key: "status", width: 14 },
+    { header: "Data quality", key: "dataQualityStatus", width: 18 },
+    { header: "Owner", key: "ownerName", width: 24 },
+    { header: "Owner update", key: "ownerUpdate", width: 60 },
+    { header: "Data-quality note", key: "dataQualityNote", width: 60 },
+  ];
+  kpis.addRows(pack.snapshots);
+
+  const traces = workbook.addWorksheet("Trace Evidence");
+  traces.columns = [
+    { header: "KPI", key: "kpiName", width: 40 },
+    { header: "Perspective", key: "perspectiveName", width: 24 },
+    { header: "Source type", key: "sourceType", width: 20 },
+    { header: "Source", key: "sourceLabel", width: 34 },
+    { header: "Data quality", key: "dataQualityStatus", width: 18 },
+    { header: "Records", key: "recordCount", width: 12 },
+    { header: "Raw value", key: "rawValue", width: 14 },
+    { header: "Normalized", key: "normalizedValue", width: 14 },
+    { header: "Note", key: "note", width: 60 },
+  ];
+  traces.addRows(pack.traces);
+
+  workbook.worksheets.forEach((worksheet) => {
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
+}
+
+export async function buildBalancedScorecardMeasurementReviewPackPdf(
+  pack: BalancedScorecardMeasurementReviewPack
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 48 });
+    const chunks: Buffer[] = [];
+
+    doc.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    doc.fontSize(18).text("Balanced Scorecard Review Pack", { underline: false });
+    doc.moveDown(0.5);
+    doc.fontSize(10).fillColor("#555555").text(`Generated: ${pack.generatedAt.toISOString()}`);
+    doc.moveDown();
+
+    doc.fillColor("#000000").fontSize(12).text(pack.period.scorecardCycleName, { continued: false });
+    doc.fontSize(10).text(`${pack.period.label} - ${pack.period.status}`);
+    doc.moveDown();
+
+    const summaryRows = [
+      ["Snapshots", pack.summary.snapshotCount],
+      ["Average weighted score", pack.summary.averageWeightedScore],
+      ["On track", pack.summary.onTrackCount],
+      ["At risk", pack.summary.atRiskCount],
+      ["Off track", pack.summary.offTrackCount],
+      ["Missing data", pack.summary.missingDataCount],
+    ];
+    summaryRows.forEach(([label, value]) => {
+      doc.fontSize(10).text(`${label}: ${value}`);
+    });
+
+    doc.moveDown();
+    doc.fontSize(13).text("Perspective Summary");
+    doc.moveDown(0.5);
+    pack.perspectives.forEach((perspective) => {
+      doc
+        .fontSize(10)
+        .text(
+          `${perspective.perspectiveName}: avg ${perspective.averageWeightedScore}, ` +
+            `${perspective.snapshotCount} KPIs, ${perspective.missingDataCount} missing-data flags`
+        );
+    });
+
+    doc.addPage();
+    doc.fontSize(13).text("KPI Snapshot Register");
+    doc.moveDown(0.5);
+    pack.snapshots.forEach((snapshot, index) => {
+      if (index > 0 && index % 8 === 0) {
+        doc.addPage();
+        doc.fontSize(13).text("KPI Snapshot Register");
+        doc.moveDown(0.5);
+      }
+      doc.fontSize(10).fillColor("#000000").text(snapshot.kpiName);
+      doc
+        .fontSize(9)
+        .fillColor("#555555")
+        .text(
+          `${snapshot.perspectiveName} | ${snapshot.status} | ${snapshot.actualLabel} / ${snapshot.firmTarget} | score ${snapshot.weightedScore}`
+        );
+      if (snapshot.dataQualityNote) {
+        doc.fontSize(8).fillColor("#777777").text(snapshot.dataQualityNote, { width: 500 });
+      }
+      doc.moveDown(0.5);
+    });
+
+    doc.end();
+  });
+}
+
 export async function submitBalancedScorecardMeasurementPeriod(input: {
   periodId: number;
   actedByProfileId?: number | null;
@@ -665,8 +921,14 @@ export async function closeBalancedScorecardMeasurementPeriod(input: {
   }
 
   const now = new Date();
-  await prisma.$transaction([
-    prisma.balancedScorecardMeasurementPeriod.update({
+
+  const approvedSnapshots = await prisma.balancedScorecardKpiSnapshot.findMany({
+    where: { measurementPeriodId: period.id, actualValue: { not: null } },
+    select: { kpiId: true, actualValue: true, actualLabel: true },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.balancedScorecardMeasurementPeriod.update({
       where: { id: period.id },
       data: {
         status: "closed",
@@ -680,8 +942,9 @@ export async function closeBalancedScorecardMeasurementPeriod(input: {
           },
         },
       },
-    }),
-    prisma.balancedScorecardMeasurementReview.create({
+    });
+
+    await tx.balancedScorecardMeasurementReview.create({
       data: {
         measurementPeriodId: period.id,
         action: "closed",
@@ -691,8 +954,27 @@ export async function closeBalancedScorecardMeasurementPeriod(input: {
         actedByProfileId: input.actedByProfileId ?? null,
         actedAt: now,
       },
-    }),
-  ]);
+    });
+
+    for (const snapshot of approvedSnapshots) {
+      if (snapshot.actualValue === null) continue;
+      await tx.balancedScorecardKpiActualHistory.create({
+        data: {
+          kpiId: snapshot.kpiId,
+          actualValue: snapshot.actualValue,
+          note: `Approved measurement period "${period.label}" closed with actual ${snapshot.actualLabel}.`,
+          recordedByProfileId: input.actedByProfileId ?? null,
+          recordedAt: now,
+        },
+      });
+      await tx.balancedScorecardKpi.update({
+        where: { id: snapshot.kpiId },
+        data: { currentActualValue: snapshot.actualValue },
+      });
+    }
+  });
+
+  cacheService.invalidate("^bsc:workspace:");
 
   return prisma.balancedScorecardMeasurementPeriod.findUnique({ where: { id: period.id } });
 }

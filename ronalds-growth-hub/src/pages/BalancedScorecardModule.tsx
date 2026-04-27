@@ -84,6 +84,7 @@ import {
   type BalancedScorecardKpiAssignmentRecord,
   type BalancedScorecardGovernanceVersion,
   type BalancedScorecardMeasurementPeriodSummary,
+  type BalancedScorecardMeasurementReviewPack,
   type BalancedScorecardMeasurementSnapshotPack,
   type BalancedScorecardPerspectiveRecord,
   type BalancedScorecardGoalRecord,
@@ -255,6 +256,7 @@ export default function BalancedScorecardModule() {
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
   const [measurementPeriodDialogOpen, setMeasurementPeriodDialogOpen] = useState(false);
   const [measurementSubmitting, setMeasurementSubmitting] = useState<string | null>(null);
+  const [measurementPackDownloading, setMeasurementPackDownloading] = useState(false);
   const [contributionDialogMode, setContributionDialogMode] = useState<"detail" | "progress" | "evidence" | null>(null);
   const [selectedContributionId, setSelectedContributionId] = useState<string | null>(null);
   const [contributionSubmitting, setContributionSubmitting] = useState<string | null>(null);
@@ -481,6 +483,16 @@ export default function BalancedScorecardModule() {
     queryFn: () =>
       performanceFrameworkAPI.getMeasurementSnapshots(selectedMeasurementPeriod!.id),
     enabled: canPreviewAllRoles && Boolean(selectedMeasurementPeriod?.id),
+    staleTime: 30_000,
+  });
+  const { data: measurementReviewPack } = useQuery<BalancedScorecardMeasurementReviewPack>({
+    queryKey: ["bsc-measurement-review-pack", selectedMeasurementPeriod?.id ?? "none"],
+    queryFn: () =>
+      performanceFrameworkAPI.getMeasurementReviewPack(selectedMeasurementPeriod!.id),
+    enabled:
+      canPreviewAllRoles &&
+      Boolean(selectedMeasurementPeriod?.id) &&
+      (selectedMeasurementPeriod?.snapshotCount ?? 0) > 0,
     staleTime: 30_000,
   });
   const perspectiveRecords = structureSnapshot.perspectives;
@@ -1966,6 +1978,7 @@ export default function BalancedScorecardModule() {
     queryClient.invalidateQueries({ queryKey: ["bsc-performance-bands"] });
     queryClient.invalidateQueries({ queryKey: ["bsc-measurement-periods"] });
     queryClient.invalidateQueries({ queryKey: ["bsc-measurement-snapshots"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-measurement-review-pack"] });
     queryClient.invalidateQueries({ queryKey: ["bsc-contribution-detail"] });
   };
 
@@ -2059,7 +2072,7 @@ export default function BalancedScorecardModule() {
   };
 
   const handleUploadContributionEvidence = async () => {
-    if (!selectedContributionId || !contributionDetail) return;
+    if (!selectedContributionId || !profile?.id) return;
     if (!contributionEvidenceFile) {
       toast({
         title: "Evidence file required",
@@ -2070,11 +2083,10 @@ export default function BalancedScorecardModule() {
     }
     try {
       setContributionSubmitting(`evidence:${selectedContributionId}`);
-      await documentsAPI.uploadFile(contributionEvidenceFile, {
-        documentType: "other",
-        entityType: "BalancedScorecardContribution",
-        entityId: contributionDetail.workflowId,
-        accessLevel: "employee",
+      await performanceFrameworkAPI.uploadContributionEvidence(selectedContributionId, {
+        profileId: profile.id,
+        evaluationCycleId: selectedCycleId,
+        file: contributionEvidenceFile,
         description: contributionEvidenceNote || undefined,
       });
       refreshBalancedScorecardData();
@@ -2395,6 +2407,38 @@ export default function BalancedScorecardModule() {
       });
     } finally {
       setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleDownloadMeasurementReviewPack = async (format: "xlsx" | "pdf" = "xlsx") => {
+    if (!selectedMeasurementPeriod) return;
+    try {
+      setMeasurementPackDownloading(true);
+      const { blob, fileName } =
+        format === "pdf"
+          ? await performanceFrameworkAPI.downloadMeasurementReviewPackPdf(selectedMeasurementPeriod.id)
+          : await performanceFrameworkAPI.downloadMeasurementReviewPackExcel(selectedMeasurementPeriod.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Review pack downloaded",
+        description: "The review pack has been generated for the selected period.",
+      });
+    } catch (error) {
+      toast({
+        title: "Review pack download failed",
+        description:
+          error instanceof Error ? error.message : "The review pack could not be downloaded.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementPackDownloading(false);
     }
   };
 
@@ -5219,7 +5263,7 @@ export default function BalancedScorecardModule() {
                   </Button>
                 </div>
                 {canPreviewAllRoles ? (
-                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_auto_auto_auto_auto]">
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_auto_auto_auto_auto_auto]">
                     <Select
                       value={selectedMeasurementPeriodId}
                       onValueChange={setSelectedMeasurementPeriodId}
@@ -5286,6 +5330,18 @@ export default function BalancedScorecardModule() {
                       measurementSubmitting === `closeMeasurement:${selectedMeasurementPeriod.id}`
                         ? "Closing..."
                         : "Close"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-2xl"
+                      onClick={() => handleDownloadMeasurementReviewPack("xlsx")}
+                      disabled={
+                        !selectedMeasurementPeriod ||
+                        selectedMeasurementPeriod.snapshotCount <= 0 ||
+                        measurementPackDownloading
+                      }
+                    >
+                      {measurementPackDownloading ? "Downloading..." : "Download pack"}
                     </Button>
                   </div>
                 ) : null}
@@ -5910,6 +5966,105 @@ export default function BalancedScorecardModule() {
                 />
               </CardHeader>
               <CardContent className="space-y-6">
+                {canPreviewAllRoles ? (
+                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                    <CardHeader className="space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <CardTitle className="text-base">Measurement review pack</CardTitle>
+                          <CardDescription>
+                            {selectedMeasurementPeriod
+                              ? `${selectedMeasurementPeriod.label} - ${selectedMeasurementPeriod.status}`
+                              : "No measurement period selected"}
+                          </CardDescription>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            className="rounded-2xl"
+                            onClick={() => handleDownloadMeasurementReviewPack("xlsx")}
+                            disabled={
+                              !selectedMeasurementPeriod ||
+                              selectedMeasurementPeriod.snapshotCount <= 0 ||
+                              measurementPackDownloading
+                            }
+                          >
+                            {measurementPackDownloading ? "Downloading..." : "Download Excel"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="rounded-2xl"
+                            onClick={() => handleDownloadMeasurementReviewPack("pdf")}
+                            disabled={
+                              !selectedMeasurementPeriod ||
+                              selectedMeasurementPeriod.snapshotCount <= 0 ||
+                              measurementPackDownloading
+                            }
+                          >
+                            Download PDF
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Snapshots</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {measurementReviewPack?.summary.snapshotCount ?? selectedMeasurementPeriod?.snapshotCount ?? 0}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Average score</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {measurementReviewPack?.summary.averageWeightedScore ?? 0}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">On track</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {measurementReviewPack?.summary.onTrackCount ?? 0}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">At risk</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {measurementReviewPack?.summary.atRiskCount ?? selectedMeasurementPeriod?.atRiskCount ?? 0}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Missing data</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {measurementReviewPack?.summary.missingDataCount ?? selectedMeasurementPeriod?.missingDataCount ?? 0}
+                          </p>
+                        </div>
+                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Perspective</TableHead>
+                            <TableHead>Snapshots</TableHead>
+                            <TableHead>Avg score</TableHead>
+                            <TableHead>Missing data</TableHead>
+                            <TableHead>Off track</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(measurementReviewPack?.perspectives ?? []).map((perspective) => (
+                            <TableRow key={perspective.perspectiveKey}>
+                              <TableCell className="font-medium">{perspective.perspectiveName}</TableCell>
+                              <TableCell>{perspective.snapshotCount}</TableCell>
+                              <TableCell>{perspective.averageWeightedScore}</TableCell>
+                              <TableCell>{perspective.missingDataCount}</TableCell>
+                              <TableCell>{perspective.offTrackCount}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {reportsView.blocks.map((report) => (
                     <Card key={report.label} className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">

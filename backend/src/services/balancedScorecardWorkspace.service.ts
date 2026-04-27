@@ -253,7 +253,7 @@ export interface BalancedScorecardComputedKpiRecord {
   firmTarget: string;
   targetValue: number | null;
   targetLabel: string | null;
-  actualValue: number;
+  actualValue: number | null;
   actualLabel: string;
   weightedScore: number;
   owner: string;
@@ -281,7 +281,7 @@ const DEFAULT_SCORE_BAND: ScoreBandThresholds = {
 };
 
 type KpiComputeOutput = {
-  actualValue: number;
+  actualValue: number | null;
   actualLabel: string;
   trend: number[];
   ownerUpdate: string;
@@ -467,10 +467,11 @@ const scoreToStatus = (
       ? "at_risk"
       : "off_track";
 const achievementToScore = (
-  actualValue: number,
+  actualValue: number | null,
   targetValue: number,
   direction: MetricToneDirection
 ) => {
+  if (actualValue === null) return 0;
   if (targetValue <= 0) return 0;
   if (direction === "higher_better") return clamp((actualValue / targetValue) * 100, 0, 100);
   if (actualValue <= 0) return 100;
@@ -478,10 +479,11 @@ const achievementToScore = (
 };
 
 const manualStatusScore = (
-  actualValue: number,
+  actualValue: number | null,
   targetValue: number,
   direction: KpiTargetDirection
 ) => {
+  if (actualValue === null) return 0;
   if (!Number.isFinite(actualValue) || !Number.isFinite(targetValue)) return 0;
   if (direction === "higher_better") {
     return achievementToScore(actualValue, targetValue, "higher_better");
@@ -523,7 +525,9 @@ const buildManualKpiTrend = (
     .map((h) => ({ value: numberValue(h.actualValue), recordedAt: h.recordedAt }))
     .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
 
-  let lastKnown = 0;
+  if (kpiHistory.length === 0) return [];
+
+  let lastKnown: number | null = null;
   return buckets.map((bucket) => {
     const inBucket = kpiHistory.filter(
       (h) => h.recordedAt >= bucket.start && h.recordedAt <= bucket.end
@@ -531,7 +535,7 @@ const buildManualKpiTrend = (
     if (inBucket.length > 0) {
       lastKnown = inBucket[inBucket.length - 1].value;
     }
-    return Math.round(lastKnown);
+    return Math.round(lastKnown ?? 0);
   });
 };
 
@@ -552,10 +556,14 @@ const buildManualKpiComputation = (
     .filter((entry) => entry.kpiId === record.id)
     .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
   const latestHistory = kpiHistory[kpiHistory.length - 1] ?? null;
+  const hasActualValue =
+    record.currentActualValue !== null &&
+    record.currentActualValue !== undefined &&
+    Number.isFinite(Number(record.currentActualValue));
   const actualValue =
     record.currentActualValue !== null && record.currentActualValue !== undefined
       ? Number(record.currentActualValue)
-      : 0;
+      : null;
   const targetValue =
     record.targetValue !== null && record.targetValue !== undefined
       ? Number(record.targetValue)
@@ -565,17 +573,16 @@ const buildManualKpiComputation = (
   const trend = buildManualKpiTrend(record.id, history, buckets);
   return {
     actualValue,
-    actualLabel: formatManualActual(record.measurementType, actualValue, record.unit),
+    actualLabel: hasActualValue
+      ? formatManualActual(record.measurementType, Number(actualValue), record.unit)
+      : "Awaiting first update",
     trend,
     ownerUpdate: record.lastMeasurementNote || "",
     weightedScore: Math.round(score),
     status: scoreToStatus(score),
-    dataQualityStatus:
-      record.currentActualValue !== null && record.currentActualValue !== undefined
-        ? "manual_override"
-        : "missing_data",
+    dataQualityStatus: hasActualValue ? "manual_override" : "missing_data",
     dataQualityNote:
-      record.currentActualValue !== null && record.currentActualValue !== undefined
+      hasActualValue
         ? "This KPI uses a manually entered actual value."
         : "No manual actual value has been captured for this KPI yet.",
     actualAsOf: latestHistory?.recordedAt ?? null,
@@ -584,22 +591,13 @@ const buildManualKpiComputation = (
         sourceType: "manual_actual",
         sourceKey: `kpi-${record.id}-manual`,
         sourceLabel: "Manual KPI update",
-        dataQualityStatus:
-          record.currentActualValue !== null && record.currentActualValue !== undefined
-            ? "manual_override"
-            : "missing_data",
+        dataQualityStatus: hasActualValue ? "manual_override" : "missing_data",
         recordCount: kpiHistory.length,
-        rawValue:
-          record.currentActualValue !== null && record.currentActualValue !== undefined
-            ? actualValue
-            : null,
-        normalizedValue:
-          record.currentActualValue !== null && record.currentActualValue !== undefined
-            ? Math.round(score)
-            : null,
+        rawValue: hasActualValue ? Number(actualValue) : null,
+        normalizedValue: hasActualValue ? Math.round(score) : null,
         note:
           record.lastMeasurementNote ||
-          (record.currentActualValue !== null && record.currentActualValue !== undefined
+          (hasActualValue
             ? "Manual measurement captured on the KPI contract."
             : "Awaiting the first manual measurement update."),
         metadata: latestHistory
@@ -1004,10 +1002,11 @@ const kpiCatalog: KpiCatalogEntry[] = [
         .reduce((sum, payment) => sum + numberValue(payment.paymentAmount), 0);
       const actual = ratioPercent(projectionActual > 0 ? projectionActual : paymentActual, projected);
       const usingPaymentFallback = projected <= 0 && paymentActual > 0;
+      const isMissingData = monthRecords.length <= 0 && paymentRecords.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) => {
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) => {
           const scopedProjection = ctx.projections.filter(
             (record) => record.monthYear >= bucket.start && record.monthYear <= bucket.end
           );
@@ -1087,10 +1086,11 @@ const kpiCatalog: KpiCatalogEntry[] = [
       const paid = scoped.reduce((sum, invoice) => sum + numberValue(invoice.amountPaid), 0);
       const outstanding = scoped.reduce((sum, invoice) => sum + numberValue(invoice.amountOutstanding), 0);
       const actual = ratioPercent(paid, total);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) => {
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) => {
           const monthInvoices = ctx.invoices.filter(
             (invoice) => invoice.createdAt >= bucket.start && invoice.createdAt <= bucket.end
           );
@@ -1099,7 +1099,7 @@ const kpiCatalog: KpiCatalogEntry[] = [
             monthInvoices.reduce((sum, invoice) => sum + numberValue(invoice.totalAmount), 0)
           );
         }),
-        ownerUpdate: `${formatPercent(actual)} recovered across issued invoices, with KES ${Math.round(outstanding).toLocaleString()} still outstanding.`,
+        ownerUpdate: isMissingData ? "No invoice data in the current period." : `${formatPercent(actual)} recovered across issued invoices, with KES ${Math.round(outstanding).toLocaleString()} still outstanding.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0
@@ -1145,17 +1145,18 @@ const kpiCatalog: KpiCatalogEntry[] = [
       });
       const actual = averageCollectionDays(ctx.invoices, start, end, ctx.asOfDate);
       const overdueInvoices = scoped.filter((invoice) => invoice.status === "overdue").length;
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatDays(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatDays(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           achievementToScore(
             averageCollectionDays(ctx.invoices, bucket.start, bucket.end, ctx.asOfDate),
             42,
             "lower_better"
           )
         ),
-        ownerUpdate: `${Math.round(actual)} day cycle with ${overdueInvoices} overdue invoices still sitting in the receivables queue.`,
+        ownerUpdate: isMissingData ? "No invoice aging data in the current period." : `${Math.round(actual)} day cycle with ${overdueInvoices} overdue invoices still sitting in the receivables queue.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0
@@ -1200,16 +1201,17 @@ const kpiCatalog: KpiCatalogEntry[] = [
         start,
         end
       );
+      const isMissingData = totalHours <= 0;
       return {
-        actualValue: rate,
-        actualLabel: formatPercent(rate),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : rate,
+        actualLabel: isMissingData ? "No data" : formatPercent(rate),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           billableUtilizationRate(ctx.timeEntries, bucket.start, bucket.end).rate
         ),
         ownerUpdate:
-          totalHours > 0
-            ? `${formatPercent(rate)} billable across ${Math.round(billableHours)} billable hours out of ${Math.round(totalHours)} total hours logged.`
-            : "No time entries logged in the current period.",
+          isMissingData
+            ? "No time entries logged in the current period."
+            : `${formatPercent(rate)} billable across ${Math.round(billableHours)} billable hours out of ${Math.round(totalHours)} total hours logged.`,
         dataQualityStatus: totalHours > 0 ? "healthy" : "missing_data",
         dataQualityNote:
           totalHours > 0 ? null : "No time entries were logged in this measurement window.",
@@ -1262,13 +1264,14 @@ const kpiCatalog: KpiCatalogEntry[] = [
       );
       const actual = clientRetentionRate(ctx.jobs, start, end);
       const currentClients = new Set(scoped.map((job) => job.clientId)).size;
+      const isMissingData = currentClients <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           clientRetentionRate(ctx.jobs, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${formatPercent(actual)} of prior-period clients are active in the current window. ${currentClients} unique client relationships tracked.`,
+        ownerUpdate: isMissingData ? "No client-job activity in the current period." : `${formatPercent(actual)} of prior-period clients are active in the current window. ${currentClients} unique client relationships tracked.`,
         dataQualityStatus: currentClients > 0 ? "healthy" : "missing_data",
         dataQualityNote:
           currentClients > 0 ? null : "No client-job activity was found in this measurement window.",
@@ -1310,13 +1313,14 @@ const kpiCatalog: KpiCatalogEntry[] = [
         (proposal) => proposal.proposalDate >= start && proposal.proposalDate <= end
       );
       const actual = proposalWinRate(ctx.proposals, start, end);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           proposalWinRate(ctx.proposals, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${scoped.filter((proposal) => proposal.status === "won").length} wins from ${scoped.length} proposals in the live pipeline window.`,
+        ownerUpdate: isMissingData ? "No proposals in the current pipeline window." : `${scoped.filter((proposal) => proposal.status === "won").length} wins from ${scoped.length} proposals in the live pipeline window.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0 ? "No proposals were raised in this measurement window." : null,
@@ -1361,11 +1365,12 @@ const kpiCatalog: KpiCatalogEntry[] = [
           typeof survey.overallSatisfaction === "number"
       );
       const actual = surveyScore(ctx.surveys, start, end);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) => surveyScore(ctx.surveys, bucket.start, bucket.end)),
-        ownerUpdate: `${scoped.length} completed surveys with ${scoped.filter((survey) => survey.wouldRecommend === true).length} positive recommendation signals in the current period.`,
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) => surveyScore(ctx.surveys, bucket.start, bucket.end)),
+        ownerUpdate: isMissingData ? "No client surveys in the current period." : `${scoped.length} completed surveys with ${scoped.filter((survey) => survey.wouldRecommend === true).length} positive recommendation signals in the current period.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0 ? "No completed client surveys were found in this measurement window." : null,
@@ -1423,13 +1428,14 @@ const kpiCatalog: KpiCatalogEntry[] = [
           job.dueDate
       );
       const actual = onTimeJobRate(ctx.jobs, start, end);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           onTimeJobRate(ctx.jobs, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${formatPercent(actual)} on-time completion across recent jobs, with ${overdueJobs} open jobs currently past due.`,
+        ownerUpdate: isMissingData ? "No completed jobs with due dates in the current period." : `${formatPercent(actual)} on-time completion across recent jobs, with ${overdueJobs} open jobs currently past due.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0 ? "No completed jobs with due dates were found in this measurement window." : null,
@@ -1480,13 +1486,14 @@ const kpiCatalog: KpiCatalogEntry[] = [
         return anchor >= start && anchor <= end;
       });
       const actual = reviewQualityRate(ctx.projectEvaluations, start, end);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           reviewQualityRate(ctx.projectEvaluations, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${ctx.projectEvaluations.length} submitted project evaluations are feeding the current quality score.`,
+        ownerUpdate: isMissingData ? "No submitted project evaluations in the current period." : `${ctx.projectEvaluations.length} submitted project evaluations are feeding the current quality score.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0 ? "No submitted project evaluations were found in this measurement window." : null,
@@ -1530,13 +1537,14 @@ const kpiCatalog: KpiCatalogEntry[] = [
         (assignment) => assignment.createdAt >= start && assignment.createdAt <= end
       );
       const actual = evaluationCompletionRate(ctx.evaluationAssignments, start, end);
+      const isMissingData = scoped.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           evaluationCompletionRate(ctx.evaluationAssignments, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${formatPercent(actual)} completion with ${ctx.evaluationAssignments.filter((assignment) => assignment.status !== "submitted").length} assignments still open or in progress.`,
+        ownerUpdate: isMissingData ? "No evaluation assignments in the current period." : `${formatPercent(actual)} completion with ${ctx.evaluationAssignments.filter((assignment) => assignment.status !== "submitted").length} assignments still open or in progress.`,
         dataQualityStatus: qualityFromCount(scoped.length),
         dataQualityNote:
           scoped.length <= 0 ? "No evaluation assignments were created in this measurement window." : null,
@@ -1588,10 +1596,11 @@ const kpiCatalog: KpiCatalogEntry[] = [
         start,
         end
       );
+      const isMissingData = scopedLearning.length <= 0 && scopedOnboarding.length <= 0;
       return {
-        actualValue: actual,
-        actualLabel: formatPercent(actual),
-        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+        actualValue: isMissingData ? null : actual,
+        actualLabel: isMissingData ? "No data" : formatPercent(actual),
+        trend: isMissingData ? [] : buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           readinessCompletionRate(
             ctx.learningAssignments,
             ctx.onboardingCases,
@@ -1599,7 +1608,7 @@ const kpiCatalog: KpiCatalogEntry[] = [
             bucket.end
           )
         ),
-        ownerUpdate: `${formatPercent(actual)} readiness, with ${ctx.learningAssignments.filter((assignment) => assignment.status === "overdue").length} overdue learning assignments and ${ctx.onboardingCases.filter((record) => record.status !== "completed").length} onboarding cases still open.`,
+        ownerUpdate: isMissingData ? "No learning assignments or onboarding cases in the current period." : `${formatPercent(actual)} readiness, with ${ctx.learningAssignments.filter((assignment) => assignment.status === "overdue").length} overdue learning assignments and ${ctx.onboardingCases.filter((record) => record.status !== "completed").length} onboarding cases still open.`,
         dataQualityStatus:
           scopedLearning.length > 0 || scopedOnboarding.length > 0 ? "healthy" : "missing_data",
         dataQualityNote:
@@ -1956,7 +1965,33 @@ const buildEmployeeContributions = (
       };
     });
 
-  return [...contributionItems, ...learningItems].slice(0, 3);
+  const combined = [...contributionItems, ...learningItems].slice(0, 3);
+
+  if (combined.length === 0 && resolvedProfileId && config.peopleKpiId) {
+    combined.push({
+      id: `scorecard-${resolvedProfileId}`,
+      sourceType: "evaluation_cycle",
+      sourceReferenceId: null,
+      title: "BSC contribution — awaiting review cycle",
+      kpiId: config.peopleKpiId,
+      initiative: config.peopleInitiativeTitle || "People & Readiness",
+      dueDate: "Next review cycle",
+      progress: 0,
+      score: 0,
+      status: "at_risk",
+      acknowledged: false,
+      managerComment:
+        "No evaluation or learning assignment is linked yet. Your contribution will appear here once an active review cycle is started.",
+      rollup: "Feeds the people perspective and review readiness signal.",
+      employeeComment: null,
+      lastUpdatedAt: null,
+      workflowRecordId: null,
+      evidenceCount: 0,
+      reviewContextPath: "/evaluations/feedback",
+    });
+  }
+
+  return combined;
 };
 
 type EmployeeScoreRecord = WorkspaceComputationContext["latestScores"][number] & {
@@ -2701,9 +2736,9 @@ export async function computeBalancedScorecardKpiRecords(params?: {
               traces: manualComputation.traces,
             }
           : {
-              actualValue: 0,
+              actualValue: null as number | null,
               actualLabel: "Awaiting first update",
-              trend: [0, 0, 0, 0, 0, 0],
+              trend: [] as number[],
               ownerUpdate: "",
               dataQualityStatus: "missing_data" as BalancedScorecardComputedDataQualityStatus,
               dataQualityNote: "No supporting measurement data was available for this KPI.",
@@ -2715,6 +2750,8 @@ export async function computeBalancedScorecardKpiRecords(params?: {
         manualActualValue !== null
           ? formatManualActual(record.measurementType ?? null, manualActualValue, record.unit)
           : computed.actualLabel;
+      const historicalTrend = buildManualKpiTrend(record.id, kpiActualHistory, buckets);
+      const resolvedTrend = historicalTrend.length > 0 ? historicalTrend : computed.trend;
       const targetValue =
         record.targetValue !== null && record.targetValue !== undefined
           ? Number(record.targetValue)
@@ -2766,7 +2803,7 @@ export async function computeBalancedScorecardKpiRecords(params?: {
         status,
         statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
         updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
-        trend: computed.trend,
+        trend: resolvedTrend,
         ownerUpdate: computed.ownerUpdate,
         dataQualityStatus: computed.dataQualityStatus,
         dataQualityNote: computed.dataQualityNote ?? null,
@@ -2899,16 +2936,18 @@ const buildBalancedScorecardWorkspace = async (params: {
             ownerUpdate: manualComputation.ownerUpdate,
           }
         : {
-            actualValue: 0,
+            actualValue: null as number | null,
             actualLabel: "Awaiting first update",
-            trend: [0, 0, 0, 0, 0, 0],
+            trend: [] as number[],
             ownerUpdate: "",
           };
     const resolvedActualValue = manualActualValue ?? computed.actualValue;
     const resolvedActualLabel =
       manualActualValue !== null
-        ? `${manualActualValue} ${record.unit}`
+        ? formatManualActual(record.measurementType ?? null, manualActualValue, record.unit)
         : computed.actualLabel;
+    const historicalTrend = buildManualKpiTrend(record.id, kpiActualHistory, buckets);
+    const resolvedTrend = historicalTrend.length > 0 ? historicalTrend : computed.trend;
     const weightedScore = Math.round(
       catalogKpi
         ? achievementToScore(
@@ -2948,7 +2987,7 @@ const buildBalancedScorecardWorkspace = async (params: {
       statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
       updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
       initiativeProgress: weightedScore,
-      trend: computed.trend,
+      trend: resolvedTrend,
       ownerUpdate: computed.ownerUpdate,
     } satisfies WorkspaceKpi;
   });

@@ -1,4 +1,4 @@
-import { api } from './client';
+import { ApiError, api, getToken } from './client';
 
 export type DashboardModuleKey =
   | 'gmp'
@@ -530,6 +530,37 @@ export interface BalancedScorecardMeasurementSnapshotPack {
   snapshots: BalancedScorecardMeasurementSnapshotRecord[];
 }
 
+export interface BalancedScorecardMeasurementReviewPack {
+  generatedAt: string;
+  period: BalancedScorecardMeasurementPeriodSummary;
+  summary: {
+    snapshotCount: number;
+    onTrackCount: number;
+    atRiskCount: number;
+    offTrackCount: number;
+    warningCount: number;
+    missingDataCount: number;
+    averageWeightedScore: number;
+  };
+  perspectives: Array<{
+    perspectiveKey: string;
+    perspectiveName: string;
+    snapshotCount: number;
+    averageWeightedScore: number;
+    missingDataCount: number;
+    offTrackCount: number;
+  }>;
+  snapshots: BalancedScorecardMeasurementSnapshotRecord[];
+  traces: Array<
+    BalancedScorecardMeasurementSnapshotTrace & {
+      kpiId: number;
+      kpiKey: string;
+      kpiName: string;
+      perspectiveName: string;
+    }
+  >;
+}
+
 const buildQuery = (params: Record<string, string | number | undefined>) => {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -539,6 +570,34 @@ const buildQuery = (params: Record<string, string | number | undefined>) => {
   });
   const encoded = query.toString();
   return encoded ? `?${encoded}` : '';
+};
+
+const API_BASE_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api`;
+
+const fetchBlob = async (path: string) => {
+  const token = getToken();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.error || payload.message || message;
+    } catch {
+      // Leave the generic HTTP message when the response is not JSON.
+    }
+    throw new ApiError(message, response.status);
+  }
+
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const fileName =
+    disposition.match(/filename="([^"]+)"/)?.[1] ||
+    disposition.match(/filename=([^;]+)/)?.[1]?.trim() ||
+    'balanced-scorecard-review-pack.xlsx';
+
+  return { blob: await response.blob(), fileName };
 };
 
 export const performanceFrameworkAPI = {
@@ -629,6 +688,30 @@ export const performanceFrameworkAPI = {
       payload
     ),
 
+  uploadContributionEvidence: (
+    contributionKey: string,
+    payload: {
+      profileId?: number;
+      evaluationCycleId?: number;
+      file: File;
+      description?: string;
+      documentType?: string;
+    }
+  ) => {
+    const formData = new FormData();
+    formData.append('file', payload.file);
+    if (payload.profileId !== undefined) formData.append('profileId', String(payload.profileId));
+    if (payload.evaluationCycleId !== undefined) {
+      formData.append('evaluationCycleId', String(payload.evaluationCycleId));
+    }
+    if (payload.description) formData.append('description', payload.description);
+    formData.append('documentType', payload.documentType || 'balanced_scorecard_evidence');
+    return api.post<BalancedScorecardContributionDetail>(
+      `/performance-framework/employee-contributions/${encodeURIComponent(contributionKey)}/evidence`,
+      formData
+    );
+  },
+
   getScorecardGovernance: () =>
     api.get<BalancedScorecardGovernanceCycle[]>('/performance-framework/scorecard-governance'),
 
@@ -682,6 +765,17 @@ export const performanceFrameworkAPI = {
     api.get<BalancedScorecardMeasurementSnapshotPack>(
       `/performance-framework/measurement-periods/${periodId}/snapshots`
     ),
+
+  getMeasurementReviewPack: (periodId: number) =>
+    api.get<BalancedScorecardMeasurementReviewPack>(
+      `/performance-framework/measurement-periods/${periodId}/review-pack`
+    ),
+
+  downloadMeasurementReviewPackExcel: (periodId: number) =>
+    fetchBlob(`/performance-framework/measurement-periods/${periodId}/review-pack?format=xlsx`),
+
+  downloadMeasurementReviewPackPdf: (periodId: number) =>
+    fetchBlob(`/performance-framework/measurement-periods/${periodId}/review-pack?format=pdf`),
 
   submitMeasurementPeriod: (periodId: number, payload?: { comment?: string }) =>
     api.post<BalancedScorecardMeasurementPeriodSummary>(

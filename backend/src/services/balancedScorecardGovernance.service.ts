@@ -152,20 +152,52 @@ const listSourceStructure = async (scorecardVersionId: number | null) => {
   return { perspectives, goals, kpis, initiatives, kpiAssignments };
 };
 
-export async function resolveActiveBalancedScorecardVersionId() {
+const reconcileActivePublishedScorecardVersion = async () => {
   const activeCycle = await prisma.balancedScorecardCycle.findFirst({
     where: {
       status: "active",
       activeVersionId: { not: null },
     },
     orderBy: [{ startDate: "desc" }, { id: "desc" }],
-    select: { activeVersionId: true },
+    select: {
+      id: true,
+      activeVersionId: true,
+      activeVersion: { select: { id: true, status: true } },
+    },
   });
 
-  return activeCycle?.activeVersionId ?? null;
+  if (activeCycle?.activeVersionId && activeCycle.activeVersion?.status === "published") {
+    return activeCycle.activeVersionId;
+  }
+
+  const publishedVersion = await prisma.balancedScorecardVersion.findFirst({
+    where: { status: "published" },
+    orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+    select: { id: true, cycleId: true },
+  });
+
+  if (!publishedVersion) return null;
+
+  await prisma.$transaction([
+    prisma.balancedScorecardCycle.updateMany({
+      where: { id: { not: publishedVersion.cycleId }, status: "active" },
+      data: { status: "closed", activeVersionId: null },
+    }),
+    prisma.balancedScorecardCycle.update({
+      where: { id: publishedVersion.cycleId },
+      data: { status: "active", activeVersionId: publishedVersion.id },
+    }),
+  ]);
+
+  return publishedVersion.id;
+};
+
+export async function resolveActiveBalancedScorecardVersionId() {
+  return reconcileActivePublishedScorecardVersion();
 }
 
 export async function listBalancedScorecardGovernance() {
+  await reconcileActivePublishedScorecardVersion();
   const cycles = await prisma.balancedScorecardCycle.findMany({
     orderBy: [{ startDate: "desc" }, { id: "desc" }],
     include: {
@@ -417,7 +449,7 @@ export async function createBalancedScorecardVersion(input: {
     }
 
     return createdVersion;
-  });
+  }, { timeout: 60000 });
   invalidateBalancedScorecardWorkspaceCache();
   return createdVersion;
 }

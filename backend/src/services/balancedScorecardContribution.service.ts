@@ -1,3 +1,4 @@
+import { DashboardStatus, Prisma } from "@prisma/client";
 import prisma from "../prisma";
 import { getBalancedScorecardWorkspace } from "./balancedScorecardWorkspace.service";
 import { DocumentService } from "./documents.service";
@@ -43,6 +44,8 @@ const selectContributionRecord = {
   id: true,
   profileId: true,
   contributionKey: true,
+  linkedKpiKey: true,
+  initiativeTitle: true,
   acknowledgedAt: true,
   acknowledgedByProfileId: true,
   latestProgress: true,
@@ -189,6 +192,96 @@ export const acknowledgeBalancedScorecardContribution = async (params: {
   return getBalancedScorecardContributionDetail(params);
 };
 
+const progressToStatus = (progress: number): DashboardStatus =>
+  progress >= 85
+    ? DashboardStatus.on_track
+    : progress >= 65
+      ? DashboardStatus.at_risk
+      : DashboardStatus.off_track;
+
+const rollupInitiativeParents = async (
+  tx: Prisma.TransactionClient,
+  initiativeIds: number[]
+) => {
+  let parentIds = Array.from(new Set(initiativeIds));
+  while (parentIds.length > 0) {
+    const parents = await tx.balancedScorecardInitiative.findMany({
+      where: { id: { in: parentIds }, parentInitiativeId: { not: null }, isActive: true },
+      select: { parentInitiativeId: true },
+    });
+    const nextParentIds = Array.from(
+      new Set(
+        parents
+          .map((initiative) => initiative.parentInitiativeId)
+          .filter((id): id is number => typeof id === "number")
+      )
+    );
+    if (nextParentIds.length === 0) return;
+
+    for (const parentId of nextParentIds) {
+      const children = await tx.balancedScorecardInitiative.findMany({
+        where: { parentInitiativeId: parentId, isActive: true },
+        select: { progress: true },
+      });
+      if (children.length === 0) continue;
+      const progress = Math.round(
+        children.reduce((sum, child) => sum + (child.progress ?? 0), 0) / children.length
+      );
+      await tx.balancedScorecardInitiative.update({
+        where: { id: parentId },
+        data: { progress, status: progressToStatus(progress) },
+      });
+    }
+
+    parentIds = nextParentIds;
+  }
+};
+
+const rollupInitiativeProgressForContribution = async (
+  kpiKey: string | null,
+  initiativeTitle: string | null
+) => {
+  if (!kpiKey) return;
+  const kpi = await prisma.balancedScorecardKpi.findFirst({
+    where: { key: kpiKey, isActive: true },
+    select: { id: true },
+  });
+  if (!kpi) return;
+
+  const contributions = await prisma.balancedScorecardEmployeeContribution.findMany({
+    where: {
+      linkedKpiKey: kpiKey,
+      latestProgress: { not: null },
+      ...(initiativeTitle ? { initiativeTitle } : {}),
+    },
+    select: { latestProgress: true },
+  });
+  if (contributions.length === 0) return;
+
+  const averageProgress = Math.round(
+    contributions.reduce((sum, c) => sum + (c.latestProgress ?? 0), 0) / contributions.length
+  );
+
+  await prisma.$transaction(async (tx) => {
+    const initiatives = await tx.balancedScorecardInitiative.findMany({
+      where: {
+        kpiId: kpi.id,
+        isActive: true,
+        ...(initiativeTitle ? { title: initiativeTitle } : { scopeRole: "employee" }),
+      },
+      select: { id: true },
+    });
+    const initiativeIds = initiatives.map((initiative) => initiative.id);
+    if (initiativeIds.length === 0) return;
+
+    await tx.balancedScorecardInitiative.updateMany({
+      where: { id: { in: initiativeIds } },
+      data: { progress: averageProgress, status: progressToStatus(averageProgress) },
+    });
+    await rollupInitiativeParents(tx, initiativeIds);
+  });
+};
+
 export const updateBalancedScorecardContributionProgress = async (params: {
   profileId: number;
   contributionKey: string;
@@ -219,6 +312,7 @@ export const updateBalancedScorecardContributionProgress = async (params: {
       },
     }),
   ]);
+  await rollupInitiativeProgressForContribution(record.linkedKpiKey, record.initiativeTitle);
   invalidateBalancedScorecardWorkspaceCache();
   return getBalancedScorecardContributionDetail(params);
 };

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import { Pool } from "pg";
 
 const globalForPrisma = globalThis as typeof globalThis & {
   prisma?: PrismaClient;
@@ -13,11 +14,16 @@ if (!connectionString) {
   throw new Error("DIRECT_DATABASE_URL or DATABASE_URL must be set before Prisma is initialized.");
 }
 
+const isRemote =
+  !connectionString.includes("localhost") && !connectionString.includes("127.0.0.1");
+
+const pool = new Pool({
+  connectionString,
+  ...(isRemote ? { ssl: { rejectUnauthorized: false } } : {}),
+});
+
 const prismaAdapter =
-  globalForPrisma.prismaAdapter ??
-  new PrismaPg({
-    connectionString,
-  });
+  globalForPrisma.prismaAdapter ?? new PrismaPg(pool);
 
 export const prisma =
   globalForPrisma.prisma ??

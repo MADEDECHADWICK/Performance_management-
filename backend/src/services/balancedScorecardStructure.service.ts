@@ -1146,7 +1146,7 @@ export async function ensureBalancedScorecardSeed() {
       });
       initiativeIdByKey.set(initiative.key, created.id);
     }
-  });
+  }, { timeout: 60000 });
   invalidateBalancedScorecardWorkspaceCache();
 }
 
