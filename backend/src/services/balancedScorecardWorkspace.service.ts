@@ -4,6 +4,8 @@ import {
   KpiTargetDirection,
   listBalancedScorecardStructure,
 } from "./balancedScorecardStructure.service";
+import { resolveActiveBalancedScorecardVersionId } from "./balancedScorecardGovernance.service";
+import cacheService from "./cache.service";
 
 export type StatusTone = "on_track" | "at_risk" | "off_track";
 export type WorkspaceRole =
@@ -70,6 +72,7 @@ export interface WorkspaceInitiative {
   kpiId: string;
   perspectiveId: PerspectiveKey;
   owner: string;
+  ownerProfileId?: number | null;
   timeline: string;
   dueDate: string;
   status: StatusTone;
@@ -93,6 +96,8 @@ export interface WorkspaceCascadeLevel {
 
 export interface WorkspaceEmployeeContribution {
   id: string;
+  sourceType: "evaluation_cycle" | "learning_assignment";
+  sourceReferenceId: number | null;
   title: string;
   kpiId: string;
   initiative: string;
@@ -103,6 +108,28 @@ export interface WorkspaceEmployeeContribution {
   acknowledged: boolean;
   managerComment: string;
   rollup: string;
+  employeeComment: string | null;
+  lastUpdatedAt: string | null;
+  workflowRecordId: number | null;
+  evidenceCount: number;
+  reviewContextPath: string | null;
+  individualTarget?: number | null;
+  individualWeight?: number | null;
+}
+
+export interface WorkspaceEmployeeKpiAssignment {
+  id: number;
+  profileId: number;
+  kpiId: string;
+  kpiName: string;
+  individualTarget: number | null;
+  individualWeight: number;
+  actualProgress: number;
+  score: number;
+  status: StatusTone;
+  initiativeTitles: string[];
+  dueDate: string | null;
+  owner: string;
 }
 
 export interface WorkspaceReportBlock {
@@ -158,6 +185,7 @@ export interface BalancedScorecardWorkspace {
   cascadeInitiatives: WorkspaceInitiative[];
   featuredCascade: WorkspaceCascadeLevel[];
   employeeContributions: WorkspaceEmployeeContribution[];
+  employeeKpiAssignments: WorkspaceEmployeeKpiAssignment[];
   evaluationSummary: WorkspaceEvaluationSummary;
   reportBlocks: WorkspaceReportBlock[];
   departmentPerformance: WorkspaceDepartmentRow[];
@@ -165,7 +193,103 @@ export interface BalancedScorecardWorkspace {
   employeePerformance: WorkspaceEmployeeRow[];
 }
 
+const WORKSPACE_CACHE_TTL_MS = 15_000;
+
+const buildWorkspaceCacheKey = (params: {
+  role: WorkspaceRole;
+  profileId?: number | null;
+  requestingProfileId?: number | null;
+  evaluationCycleId?: number | null;
+}) =>
+  [
+    "bsc:workspace",
+    params.role,
+    params.profileId ?? "none",
+    params.requestingProfileId ?? "none",
+    params.evaluationCycleId ?? "latest",
+  ].join(":");
+
+export type BalancedScorecardComputedDataQualityStatus =
+  | "healthy"
+  | "warning"
+  | "missing_data"
+  | "stale_data"
+  | "manual_override";
+
+export type BalancedScorecardComputedTraceSourceType =
+  | "metric_catalog"
+  | "manual_actual"
+  | "initiative_rollup"
+  | "operational_signal";
+
+export interface BalancedScorecardComputedTrace {
+  sourceType: BalancedScorecardComputedTraceSourceType;
+  sourceKey: string;
+  sourceLabel: string;
+  dataQualityStatus: BalancedScorecardComputedDataQualityStatus;
+  recordCount?: number;
+  rawValue?: number | null;
+  normalizedValue?: number | null;
+  note?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BalancedScorecardComputedKpiRecord {
+  recordId: number;
+  key: string;
+  metricKey: string;
+  trackingMode: "template" | "manual";
+  perspectiveKey: PerspectiveKey;
+  perspectiveName: string;
+  goalRecordId: number;
+  goalKey: string;
+  goalTitle: string;
+  name: string;
+  description: string;
+  formula: string;
+  frequency: string;
+  unit: string;
+  weight: number;
+  firmTarget: string;
+  targetValue: number | null;
+  targetLabel: string | null;
+  actualValue: number;
+  actualLabel: string;
+  weightedScore: number;
+  owner: string;
+  status: StatusTone;
+  statusLogic: string;
+  updateFrequency: string;
+  trend: number[];
+  ownerUpdate: string;
+  dataQualityStatus: BalancedScorecardComputedDataQualityStatus;
+  dataQualityNote: string | null;
+  actualAsOf: Date | null;
+  traces: BalancedScorecardComputedTrace[];
+}
+
 type MetricToneDirection = "higher_better" | "lower_better";
+
+type ScoreBandThresholds = {
+  onTrackMin: number;
+  atRiskMin: number;
+};
+
+const DEFAULT_SCORE_BAND: ScoreBandThresholds = {
+  onTrackMin: 85,
+  atRiskMin: 65,
+};
+
+type KpiComputeOutput = {
+  actualValue: number;
+  actualLabel: string;
+  trend: number[];
+  ownerUpdate: string;
+  dataQualityStatus: BalancedScorecardComputedDataQualityStatus;
+  dataQualityNote?: string | null;
+  actualAsOf?: Date | null;
+  traces: BalancedScorecardComputedTrace[];
+};
 
 type WorkspaceComputationContext = {
   payments: Array<{ paymentAmount: unknown; paymentDate: Date }>;
@@ -190,6 +314,12 @@ type WorkspaceComputationContext = {
     status: string;
     proposalDate: Date;
     wonAt: Date | null;
+  }>;
+  timeEntries: Array<{
+    hours: unknown;
+    billable: boolean;
+    billableAmount: unknown;
+    dateWorked: Date;
   }>;
   jobs: Array<{
     id: number;
@@ -277,6 +407,8 @@ type WorkspaceComputationContext = {
     managerName: string | null;
     score: number;
   }>;
+  measurementWindow: { start: Date; end: Date };
+  asOfDate: Date;
   monthBuckets: Array<{ key: string; label: string; start: Date; end: Date }>;
   currentMonthBucket: { key: string; label: string; start: Date; end: Date };
 };
@@ -297,17 +429,20 @@ type KpiCatalogEntry = {
   direction: MetricToneDirection;
   statusLogic: string;
   updateFrequency: string;
-  compute: (ctx: WorkspaceComputationContext) => {
-    actualValue: number;
-    actualLabel: string;
-    trend: number[];
-    ownerUpdate: string;
-  };
+  compute: (ctx: WorkspaceComputationContext) => KpiComputeOutput;
 };
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const average = (values: number[]) =>
   values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+// Weighted average: each entry carries a `score` (0-100) and a `weight` (positive int).
+// Falls back to a simple average when all weights are zero.
+const weightedAverage = (entries: Array<{ score: number; weight: number }>) => {
+  if (entries.length === 0) return 0;
+  const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+  if (totalWeight <= 0) return average(entries.map((e) => e.score));
+  return entries.reduce((sum, e) => sum + e.score * e.weight, 0) / totalWeight;
+};
 const numberValue = (value: unknown) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -322,8 +457,15 @@ const formatCurrency = (value: number, unit?: string | null) => {
   if (unit && unit.trim()) return `${unit.trim()} ${Math.round(value).toLocaleString()}`;
   return `KES ${Math.round(value).toLocaleString()}`;
 };
-const scoreToStatus = (score: number): StatusTone =>
-  score >= 85 ? "on_track" : score >= 65 ? "at_risk" : "off_track";
+const scoreToStatus = (
+  score: number,
+  thresholds: ScoreBandThresholds = DEFAULT_SCORE_BAND
+): StatusTone =>
+  score >= thresholds.onTrackMin
+    ? "on_track"
+    : score >= thresholds.atRiskMin
+      ? "at_risk"
+      : "off_track";
 const achievementToScore = (
   actualValue: number,
   targetValue: number,
@@ -368,14 +510,48 @@ const formatManualActual = (
   return unit?.trim() ? `${actualValue} ${unit.trim()}` : `${actualValue}`;
 };
 
-const buildManualKpiComputation = (record: {
-  measurementType: KpiMeasurementType | null;
-  targetDirection: KpiTargetDirection | null;
-  targetValue: number | null;
-  currentActualValue: number | null;
-  unit: string;
-  lastMeasurementNote: string | null;
-}) => {
+// Build real historical trend for a manual KPI using its actual history records.
+// Each bucket gets the last recorded value within that bucket. If no record exists
+// in a bucket, carry forward the previous known value (or 0 for the earliest bucket).
+const buildManualKpiTrend = (
+  kpiId: number,
+  history: Array<{ kpiId: number; actualValue: unknown; recordedAt: Date }>,
+  buckets: WorkspaceComputationContext["monthBuckets"]
+): number[] => {
+  const kpiHistory = history
+    .filter((h) => h.kpiId === kpiId)
+    .map((h) => ({ value: numberValue(h.actualValue), recordedAt: h.recordedAt }))
+    .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
+
+  let lastKnown = 0;
+  return buckets.map((bucket) => {
+    const inBucket = kpiHistory.filter(
+      (h) => h.recordedAt >= bucket.start && h.recordedAt <= bucket.end
+    );
+    if (inBucket.length > 0) {
+      lastKnown = inBucket[inBucket.length - 1].value;
+    }
+    return Math.round(lastKnown);
+  });
+};
+
+const buildManualKpiComputation = (
+  record: {
+    id: number;
+    measurementType: KpiMeasurementType | null;
+    targetDirection: KpiTargetDirection | null;
+    targetValue: number | null;
+    currentActualValue: number | null;
+    unit: string;
+    lastMeasurementNote: string | null;
+  },
+  history: Array<{ kpiId: number; actualValue: unknown; recordedAt: Date }>,
+  buckets: WorkspaceComputationContext["monthBuckets"]
+): KpiComputeOutput & { weightedScore: number; status: StatusTone } => {
+  const kpiHistory = history
+    .filter((entry) => entry.kpiId === record.id)
+    .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime());
+  const latestHistory = kpiHistory[kpiHistory.length - 1] ?? null;
   const actualValue =
     record.currentActualValue !== null && record.currentActualValue !== undefined
       ? Number(record.currentActualValue)
@@ -386,13 +562,51 @@ const buildManualKpiComputation = (record: {
       : 0;
   const direction = record.targetDirection ?? "higher_better";
   const score = manualStatusScore(actualValue, targetValue, direction);
+  const trend = buildManualKpiTrend(record.id, history, buckets);
   return {
     actualValue,
     actualLabel: formatManualActual(record.measurementType, actualValue, record.unit),
-    trend: [actualValue, actualValue, actualValue, actualValue, actualValue, actualValue],
+    trend,
     ownerUpdate: record.lastMeasurementNote || "",
     weightedScore: Math.round(score),
     status: scoreToStatus(score),
+    dataQualityStatus:
+      record.currentActualValue !== null && record.currentActualValue !== undefined
+        ? "manual_override"
+        : "missing_data",
+    dataQualityNote:
+      record.currentActualValue !== null && record.currentActualValue !== undefined
+        ? "This KPI uses a manually entered actual value."
+        : "No manual actual value has been captured for this KPI yet.",
+    actualAsOf: latestHistory?.recordedAt ?? null,
+    traces: [
+      {
+        sourceType: "manual_actual",
+        sourceKey: `kpi-${record.id}-manual`,
+        sourceLabel: "Manual KPI update",
+        dataQualityStatus:
+          record.currentActualValue !== null && record.currentActualValue !== undefined
+            ? "manual_override"
+            : "missing_data",
+        recordCount: kpiHistory.length,
+        rawValue:
+          record.currentActualValue !== null && record.currentActualValue !== undefined
+            ? actualValue
+            : null,
+        normalizedValue:
+          record.currentActualValue !== null && record.currentActualValue !== undefined
+            ? Math.round(score)
+            : null,
+        note:
+          record.lastMeasurementNote ||
+          (record.currentActualValue !== null && record.currentActualValue !== undefined
+            ? "Manual measurement captured on the KPI contract."
+            : "Awaiting the first manual measurement update."),
+        metadata: latestHistory
+          ? { lastRecordedAt: latestHistory.recordedAt.toISOString() }
+          : undefined,
+      },
+    ] satisfies BalancedScorecardComputedTrace[],
   };
 };
 const monthKey = (value: Date) =>
@@ -410,8 +624,8 @@ const normalizeReviewScore = (value: number) => {
   if (value <= 5) return clamp((value / 5) * 100);
   return clamp(value);
 };
-const monthBuckets = (months = 6) => {
-  const currentStart = new Date();
+const monthBuckets = (months = 6, anchorDate = new Date()) => {
+  const currentStart = new Date(anchorDate);
   currentStart.setDate(1);
   currentStart.setHours(0, 0, 0, 0);
   return Array.from({ length: months }, (_, index) => {
@@ -574,7 +788,8 @@ const buildMonthlyTrend = (
 const averageCollectionDays = (
   invoices: WorkspaceComputationContext["invoices"],
   start: Date,
-  end: Date
+  end: Date,
+  asOfDate: Date
 ) => {
   const scoped = invoices.filter((invoice) => {
     const anchor = invoice.issuedAt ?? invoice.createdAt;
@@ -584,29 +799,38 @@ const averageCollectionDays = (
   return average(
     scoped.map((invoice) => {
       const anchor = invoice.issuedAt ?? invoice.createdAt;
-      const closeDate = invoice.paidAt ?? new Date();
+      const closeDate = invoice.paidAt ?? asOfDate;
       return Math.max(0, closeDate.getTime() - anchor.getTime()) / (1000 * 60 * 60 * 24);
     })
   );
 };
 
+// Real retention: clients active in the current window who were also active in the equivalent
+// prior window (same duration, immediately before). Prior window defaults to the same span
+// ending one period before `start`.
 const clientRetentionRate = (
   jobs: WorkspaceComputationContext["jobs"],
   start: Date,
   end: Date
 ) => {
-  const scoped = jobs.filter(
-    (job) => job.clientId && job.createdAt >= start && job.createdAt <= end
+  const windowMs = end.getTime() - start.getTime();
+  const priorEnd = new Date(start.getTime() - 1);
+  const priorStart = new Date(priorEnd.getTime() - windowMs);
+
+  const currentClients = new Set(
+    jobs
+      .filter((job) => job.clientId && job.createdAt >= start && job.createdAt <= end)
+      .map((job) => job.clientId as number)
   );
-  const byClient = new Map<number, number>();
-  scoped.forEach((job) => {
-    if (!job.clientId) return;
-    byClient.set(job.clientId, (byClient.get(job.clientId) || 0) + 1);
-  });
-  return ratioPercent(
-    Array.from(byClient.values()).filter((count) => count > 1).length,
-    byClient.size
+  const priorClients = new Set(
+    jobs
+      .filter((job) => job.clientId && job.createdAt >= priorStart && job.createdAt <= priorEnd)
+      .map((job) => job.clientId as number)
   );
+
+  if (priorClients.size === 0) return currentClients.size > 0 ? 100 : 0;
+  const retained = Array.from(currentClients).filter((id) => priorClients.has(id)).length;
+  return ratioPercent(retained, priorClients.size);
 };
 
 const proposalWinRate = (
@@ -637,6 +861,26 @@ const surveyScore = (
   });
   if (scoped.length === 0) return 0;
   return average(scoped.map((survey) => normalizeReviewScore(survey.overallSatisfaction || 0)));
+};
+
+const billableUtilizationRate = (
+  timeEntries: WorkspaceComputationContext["timeEntries"],
+  start: Date,
+  end: Date
+) => {
+  const scoped = timeEntries.filter(
+    (entry) => entry.dateWorked >= start && entry.dateWorked <= end
+  );
+  const totalHours = scoped.reduce((sum, entry) => sum + numberValue(entry.hours), 0);
+  const billableHours = scoped.reduce(
+    (sum, entry) => sum + (entry.billable ? numberValue(entry.hours) : 0),
+    0
+  );
+  return {
+    totalHours,
+    billableHours,
+    rate: ratioPercent(billableHours, totalHours),
+  };
 };
 
 const onTimeJobRate = (
@@ -715,6 +959,20 @@ const readinessCompletionRate = (
   return average([learningCompletion, onboardingCompletion].filter((value) => value > 0));
 };
 
+const qualityFromCount = (
+  count: number,
+  fallback = false
+): BalancedScorecardComputedDataQualityStatus => {
+  if (count <= 0) return "missing_data";
+  return fallback ? "warning" : "healthy";
+};
+
+const latestDateOrNull = (...values: Array<Date | null | undefined>) => {
+  const valid = values.filter((value): value is Date => value instanceof Date);
+  if (valid.length === 0) return null;
+  return valid.sort((a, b) => b.getTime() - a.getTime())[0];
+};
+
 const kpiCatalog: KpiCatalogEntry[] = [
   {
     id: "kpi-1",
@@ -733,21 +991,19 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
     updateFrequency: "Monthly finance close",
     compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
       const monthRecords = ctx.projections.filter(
-        (record) =>
-          record.monthYear >= ctx.currentMonthBucket.start &&
-          record.monthYear <= ctx.currentMonthBucket.end
+        (record) => record.monthYear >= start && record.monthYear <= end
       );
       const projected = monthRecords.reduce((sum, record) => sum + numberValue(record.projectedAmount), 0);
       const projectionActual = monthRecords.reduce((sum, record) => sum + numberValue(record.actualCollected), 0);
-      const paymentActual = ctx.payments
-        .filter(
-          (payment) =>
-            payment.paymentDate >= ctx.currentMonthBucket.start &&
-            payment.paymentDate <= ctx.currentMonthBucket.end
-        )
+      const paymentRecords = ctx.payments.filter(
+        (payment) => payment.paymentDate >= start && payment.paymentDate <= end
+      );
+      const paymentActual = paymentRecords
         .reduce((sum, payment) => sum + numberValue(payment.paymentAmount), 0);
       const actual = ratioPercent(projectionActual > 0 ? projectionActual : paymentActual, projected);
+      const usingPaymentFallback = projected <= 0 && paymentActual > 0;
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
@@ -763,6 +1019,46 @@ const kpiCatalog: KpiCatalogEntry[] = [
           return ratioPercent(scopedProjectionActual > 0 ? scopedProjectionActual : scopedPayments, scopedProjected);
         }),
         ownerUpdate: `${formatPercent(actual)} collected against ${projected > 0 ? `KES ${projected.toLocaleString()}` : "no live projection"} in the current month.`,
+        dataQualityStatus:
+          monthRecords.length <= 0 && paymentRecords.length <= 0
+            ? "missing_data"
+            : usingPaymentFallback
+              ? "warning"
+              : "healthy",
+        dataQualityNote:
+          monthRecords.length <= 0 && paymentRecords.length <= 0
+            ? "No live projection or payment records were found in this measurement window."
+            : usingPaymentFallback
+              ? "Projection actuals were unavailable, so the KPI fell back to payment records."
+              : null,
+        actualAsOf: latestDateOrNull(
+          ...monthRecords.map((record) => record.monthYear),
+          ...paymentRecords.map((payment) => payment.paymentDate)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "revenue_projections",
+            sourceLabel: "Revenue projections",
+            dataQualityStatus: qualityFromCount(monthRecords.length),
+            recordCount: monthRecords.length,
+            rawValue: projected,
+            normalizedValue: projectionActual,
+            note: "Projection pack rows contributing to projected and actual collected values.",
+          },
+          {
+            sourceType: "operational_signal",
+            sourceKey: "client_payments",
+            sourceLabel: "Client payments",
+            dataQualityStatus: qualityFromCount(paymentRecords.length, usingPaymentFallback),
+            recordCount: paymentRecords.length,
+            rawValue: paymentActual,
+            normalizedValue: actual,
+            note: usingPaymentFallback
+              ? "Payments provided the fallback actual because no projection actuals were available."
+              : "Payments available for corroborating the projection-based actual.",
+          },
+        ],
       };
     },
   },
@@ -783,7 +1079,10 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
     updateFrequency: "Monthly collections review",
     compute: (ctx) => {
-      const scoped = ctx.invoices.filter((invoice) => invoice.createdAt >= ctx.monthBuckets[0].start);
+      const { start, end } = ctx.measurementWindow;
+      const scoped = ctx.invoices.filter(
+        (invoice) => invoice.createdAt >= start && invoice.createdAt <= end
+      );
       const total = scoped.reduce((sum, invoice) => sum + numberValue(invoice.totalAmount), 0);
       const paid = scoped.reduce((sum, invoice) => sum + numberValue(invoice.amountPaid), 0);
       const outstanding = scoped.reduce((sum, invoice) => sum + numberValue(invoice.amountOutstanding), 0);
@@ -801,6 +1100,24 @@ const kpiCatalog: KpiCatalogEntry[] = [
           );
         }),
         ownerUpdate: `${formatPercent(actual)} recovered across issued invoices, with KES ${Math.round(outstanding).toLocaleString()} still outstanding.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0
+            ? "No invoice records were found in this measurement window."
+            : null,
+        actualAsOf: latestDateOrNull(...scoped.map((invoice) => invoice.createdAt)),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "job_invoices",
+            sourceLabel: "Job invoices",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: total,
+            normalizedValue: actual,
+            note: "Issued invoice value and paid value contributing to realization.",
+          },
+        ],
       };
     },
   },
@@ -821,15 +1138,104 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 42 days or better, amber at 43-50, red above 50 days.",
     updateFrequency: "Weekly collections huddle",
     compute: (ctx) => {
-      const actual = averageCollectionDays(ctx.invoices, ctx.monthBuckets[0].start, ctx.currentMonthBucket.end);
-      const overdueInvoices = ctx.invoices.filter((invoice) => invoice.status === "overdue").length;
+      const { start, end } = ctx.measurementWindow;
+      const scoped = ctx.invoices.filter((invoice) => {
+        const anchor = invoice.issuedAt ?? invoice.createdAt;
+        return anchor >= start && anchor <= end;
+      });
+      const actual = averageCollectionDays(ctx.invoices, start, end, ctx.asOfDate);
+      const overdueInvoices = scoped.filter((invoice) => invoice.status === "overdue").length;
       return {
         actualValue: actual,
         actualLabel: formatDays(actual),
         trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
-          achievementToScore(averageCollectionDays(ctx.invoices, bucket.start, bucket.end), 42, "lower_better")
+          achievementToScore(
+            averageCollectionDays(ctx.invoices, bucket.start, bucket.end, ctx.asOfDate),
+            42,
+            "lower_better"
+          )
         ),
         ownerUpdate: `${Math.round(actual)} day cycle with ${overdueInvoices} overdue invoices still sitting in the receivables queue.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0
+            ? "No invoice aging records were available for this measurement window."
+            : null,
+        actualAsOf: ctx.asOfDate,
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "invoice_aging",
+            sourceLabel: "Invoice aging",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: actual,
+            normalizedValue: achievementToScore(actual, 42, "lower_better"),
+            note: "Average days from invoice issue to payment or current aging.",
+          },
+        ],
+      };
+    },
+  },
+  {
+    id: "kpi-11",
+    name: "Billable utilization",
+    perspectiveId: "financial",
+    goalId: "goal-2",
+    description: "Measures the share of recorded hours marked as billable in the current period.",
+    formula: "Billable hours / total recorded hours",
+    frequency: "Monthly",
+    unit: "%",
+    weight: 12,
+    owner: "Finance",
+    targetValue: 80,
+    targetLabel: "80%",
+    direction: "higher_better",
+    statusLogic: "Green at 80%+, amber at 65%-79.9%, red below 65%.",
+    updateFrequency: "Monthly time entry close",
+    compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
+      const { rate, billableHours, totalHours } = billableUtilizationRate(
+        ctx.timeEntries,
+        start,
+        end
+      );
+      return {
+        actualValue: rate,
+        actualLabel: formatPercent(rate),
+        trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
+          billableUtilizationRate(ctx.timeEntries, bucket.start, bucket.end).rate
+        ),
+        ownerUpdate:
+          totalHours > 0
+            ? `${formatPercent(rate)} billable across ${Math.round(billableHours)} billable hours out of ${Math.round(totalHours)} total hours logged.`
+            : "No time entries logged in the current period.",
+        dataQualityStatus: totalHours > 0 ? "healthy" : "missing_data",
+        dataQualityNote:
+          totalHours > 0 ? null : "No time entries were logged in this measurement window.",
+        actualAsOf: latestDateOrNull(
+          ...ctx.timeEntries
+            .filter((entry) => entry.dateWorked >= start && entry.dateWorked <= end)
+            .map((entry) => entry.dateWorked)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "time_entries",
+            sourceLabel: "Time entries",
+            dataQualityStatus: totalHours > 0 ? "healthy" : "missing_data",
+            recordCount: ctx.timeEntries.filter(
+              (entry) => entry.dateWorked >= start && entry.dateWorked <= end
+            ).length,
+            rawValue: totalHours,
+            normalizedValue: rate,
+            note: "Billable hours divided by total logged hours.",
+            metadata: {
+              billableHours: Math.round(billableHours),
+              totalHours: Math.round(totalHours),
+            },
+          },
+        ],
       };
     },
   },
@@ -838,8 +1244,8 @@ const kpiCatalog: KpiCatalogEntry[] = [
     name: "Strategic client retention",
     perspectiveId: "customer",
     goalId: "goal-3",
-    description: "Measures repeat client activity as a proxy for retention depth across live work.",
-    formula: "Clients with multiple live jobs / clients with at least one job in the period",
+    description: "Share of clients active in the prior 6-month window who are also active in the current 6-month window. Measures true carry-forward retention.",
+    formula: "Clients retained from prior period / clients in prior period",
     frequency: "Quarterly",
     unit: "%",
     weight: 16,
@@ -850,15 +1256,35 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 70%+, amber at 55%-69.9%, red below 55%.",
     updateFrequency: "Quarterly sponsor review",
     compute: (ctx) => {
-      const actual = clientRetentionRate(ctx.jobs, ctx.monthBuckets[0].start, ctx.currentMonthBucket.end);
-      const uniqueClients = new Set(ctx.jobs.filter((job) => job.clientId).map((job) => job.clientId)).size;
+      const { start, end } = ctx.measurementWindow;
+      const scoped = ctx.jobs.filter(
+        (job) => job.clientId && job.createdAt >= start && job.createdAt <= end
+      );
+      const actual = clientRetentionRate(ctx.jobs, start, end);
+      const currentClients = new Set(scoped.map((job) => job.clientId)).size;
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
         trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) =>
           clientRetentionRate(ctx.jobs, bucket.start, bucket.end)
         ),
-        ownerUpdate: `${formatPercent(actual)} repeat-client activity across ${uniqueClients} active client relationships in the current window.`,
+        ownerUpdate: `${formatPercent(actual)} of prior-period clients are active in the current window. ${currentClients} unique client relationships tracked.`,
+        dataQualityStatus: currentClients > 0 ? "healthy" : "missing_data",
+        dataQualityNote:
+          currentClients > 0 ? null : "No client-job activity was found in this measurement window.",
+        actualAsOf: latestDateOrNull(...scoped.map((job) => job.createdAt)),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "jobs_retention",
+            sourceLabel: "Client job activity",
+            dataQualityStatus: currentClients > 0 ? "healthy" : "missing_data",
+            recordCount: scoped.length,
+            rawValue: currentClients,
+            normalizedValue: actual,
+            note: "Unique clients active in the current period compared with the immediately prior equivalent window.",
+          },
+        ],
       };
     },
   },
@@ -879,12 +1305,11 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 35%+, amber at 22%-34.9%, red below 22%.",
     updateFrequency: "Monthly pipeline review",
     compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
       const scoped = ctx.proposals.filter(
-        (proposal) =>
-          proposal.proposalDate >= ctx.monthBuckets[0].start &&
-          proposal.proposalDate <= ctx.currentMonthBucket.end
+        (proposal) => proposal.proposalDate >= start && proposal.proposalDate <= end
       );
-      const actual = proposalWinRate(ctx.proposals, ctx.monthBuckets[0].start, ctx.currentMonthBucket.end);
+      const actual = proposalWinRate(ctx.proposals, start, end);
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
@@ -892,6 +1317,22 @@ const kpiCatalog: KpiCatalogEntry[] = [
           proposalWinRate(ctx.proposals, bucket.start, bucket.end)
         ),
         ownerUpdate: `${scoped.filter((proposal) => proposal.status === "won").length} wins from ${scoped.length} proposals in the live pipeline window.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0 ? "No proposals were raised in this measurement window." : null,
+        actualAsOf: latestDateOrNull(...scoped.map((proposal) => proposal.proposalDate)),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "proposals",
+            sourceLabel: "Proposals",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: scoped.filter((proposal) => proposal.status === "won").length,
+            normalizedValue: actual,
+            note: "Won proposals divided by total proposals raised in the measurement window.",
+          },
+        ],
       };
     },
   },
@@ -912,18 +1353,40 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 88%+, amber at 75%-87.9%, red below 75%.",
     updateFrequency: "Monthly client-listening pack",
     compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
       const scoped = ctx.surveys.filter(
         (survey) =>
-          (survey.completedAt ?? survey.createdAt) >= ctx.monthBuckets[0].start &&
-          (survey.completedAt ?? survey.createdAt) <= ctx.currentMonthBucket.end &&
+          (survey.completedAt ?? survey.createdAt) >= start &&
+          (survey.completedAt ?? survey.createdAt) <= end &&
           typeof survey.overallSatisfaction === "number"
       );
-      const actual = surveyScore(ctx.surveys, ctx.monthBuckets[0].start, ctx.currentMonthBucket.end);
+      const actual = surveyScore(ctx.surveys, start, end);
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
         trend: buildMonthlyTrend(ctx.monthBuckets, (bucket) => surveyScore(ctx.surveys, bucket.start, bucket.end)),
         ownerUpdate: `${scoped.length} completed surveys with ${scoped.filter((survey) => survey.wouldRecommend === true).length} positive recommendation signals in the current period.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0 ? "No completed client surveys were found in this measurement window." : null,
+        actualAsOf: latestDateOrNull(
+          ...scoped.map((survey) => survey.completedAt ?? survey.createdAt)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "client_surveys",
+            sourceLabel: "Client satisfaction surveys",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: scoped.length,
+            normalizedValue: actual,
+            note: "Average normalized overall satisfaction score from completed surveys.",
+            metadata: {
+              promoterSignals: scoped.filter((survey) => survey.wouldRecommend === true).length,
+            },
+          },
+        ],
       };
     },
   },
@@ -944,14 +1407,22 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
     updateFrequency: "Weekly delivery board",
     compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
       const overdueJobs = ctx.jobs.filter(
         (job) =>
           job.status !== "completed" &&
           job.status !== "cancelled" &&
           job.dueDate &&
-          job.dueDate < new Date()
+          job.dueDate < ctx.asOfDate
       ).length;
-      const actual = onTimeJobRate(ctx.jobs, ctx.monthBuckets[0].start, ctx.currentMonthBucket.end);
+      const scoped = ctx.jobs.filter(
+        (job) =>
+          job.completionDate &&
+          job.completionDate >= start &&
+          job.completionDate <= end &&
+          job.dueDate
+      );
+      const actual = onTimeJobRate(ctx.jobs, start, end);
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
@@ -959,6 +1430,30 @@ const kpiCatalog: KpiCatalogEntry[] = [
           onTimeJobRate(ctx.jobs, bucket.start, bucket.end)
         ),
         ownerUpdate: `${formatPercent(actual)} on-time completion across recent jobs, with ${overdueJobs} open jobs currently past due.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0 ? "No completed jobs with due dates were found in this measurement window." : null,
+        actualAsOf: latestDateOrNull(
+          ...scoped.map((job) => job.completionDate),
+          ...scoped.map((job) => job.dueDate)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "jobs_delivery",
+            sourceLabel: "Completed jobs",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: scoped.filter(
+              (job) =>
+                job.completionDate &&
+                job.dueDate &&
+                job.completionDate.getTime() <= job.dueDate.getTime()
+            ).length,
+            normalizedValue: actual,
+            note: "Completed jobs delivered on or before the committed due date.",
+          },
+        ],
       };
     },
   },
@@ -979,11 +1474,12 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 84%+, amber at 70%-83.9%, red below 70%.",
     updateFrequency: "Monthly quality review",
     compute: (ctx) => {
-      const actual = reviewQualityRate(
-        ctx.projectEvaluations,
-        ctx.monthBuckets[0].start,
-        ctx.currentMonthBucket.end
-      );
+      const { start, end } = ctx.measurementWindow;
+      const scoped = ctx.projectEvaluations.filter((evaluation) => {
+        const anchor = evaluation.submittedAt ?? evaluation.createdAt;
+        return anchor >= start && anchor <= end;
+      });
+      const actual = reviewQualityRate(ctx.projectEvaluations, start, end);
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
@@ -991,6 +1487,24 @@ const kpiCatalog: KpiCatalogEntry[] = [
           reviewQualityRate(ctx.projectEvaluations, bucket.start, bucket.end)
         ),
         ownerUpdate: `${ctx.projectEvaluations.length} submitted project evaluations are feeding the current quality score.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0 ? "No submitted project evaluations were found in this measurement window." : null,
+        actualAsOf: latestDateOrNull(
+          ...scoped.map((evaluation) => evaluation.submittedAt ?? evaluation.createdAt)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "project_evaluations",
+            sourceLabel: "Project evaluations",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: scoped.length,
+            normalizedValue: actual,
+            note: "Average normalized quality-review score across submitted evaluations.",
+          },
+        ],
       };
     },
   },
@@ -1011,11 +1525,11 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
     updateFrequency: "Monthly people review",
     compute: (ctx) => {
-      const actual = evaluationCompletionRate(
-        ctx.evaluationAssignments,
-        ctx.monthBuckets[0].start,
-        ctx.currentMonthBucket.end
+      const { start, end } = ctx.measurementWindow;
+      const scoped = ctx.evaluationAssignments.filter(
+        (assignment) => assignment.createdAt >= start && assignment.createdAt <= end
       );
+      const actual = evaluationCompletionRate(ctx.evaluationAssignments, start, end);
       return {
         actualValue: actual,
         actualLabel: formatPercent(actual),
@@ -1023,6 +1537,24 @@ const kpiCatalog: KpiCatalogEntry[] = [
           evaluationCompletionRate(ctx.evaluationAssignments, bucket.start, bucket.end)
         ),
         ownerUpdate: `${formatPercent(actual)} completion with ${ctx.evaluationAssignments.filter((assignment) => assignment.status !== "submitted").length} assignments still open or in progress.`,
+        dataQualityStatus: qualityFromCount(scoped.length),
+        dataQualityNote:
+          scoped.length <= 0 ? "No evaluation assignments were created in this measurement window." : null,
+        actualAsOf: latestDateOrNull(
+          ...scoped.map((assignment) => assignment.submittedAt ?? assignment.createdAt)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "evaluation_assignments",
+            sourceLabel: "Evaluation assignments",
+            dataQualityStatus: qualityFromCount(scoped.length),
+            recordCount: scoped.length,
+            rawValue: scoped.filter((assignment) => assignment.status === "submitted").length,
+            normalizedValue: actual,
+            note: "Submitted evaluation assignments divided by total assignments created in the measurement window.",
+          },
+        ],
       };
     },
   },
@@ -1043,11 +1575,18 @@ const kpiCatalog: KpiCatalogEntry[] = [
     statusLogic: "Green at 88%+, amber at 72%-87.9%, red below 72%.",
     updateFrequency: "Monthly readiness checkpoint",
     compute: (ctx) => {
+      const { start, end } = ctx.measurementWindow;
+      const scopedLearning = ctx.learningAssignments.filter(
+        (assignment) => assignment.createdAt >= start && assignment.createdAt <= end
+      );
+      const scopedOnboarding = ctx.onboardingCases.filter(
+        (record) => record.createdAt >= start && record.createdAt <= end
+      );
       const actual = readinessCompletionRate(
         ctx.learningAssignments,
         ctx.onboardingCases,
-        ctx.monthBuckets[0].start,
-        ctx.currentMonthBucket.end
+        start,
+        end
       );
       return {
         actualValue: actual,
@@ -1061,6 +1600,48 @@ const kpiCatalog: KpiCatalogEntry[] = [
           )
         ),
         ownerUpdate: `${formatPercent(actual)} readiness, with ${ctx.learningAssignments.filter((assignment) => assignment.status === "overdue").length} overdue learning assignments and ${ctx.onboardingCases.filter((record) => record.status !== "completed").length} onboarding cases still open.`,
+        dataQualityStatus:
+          scopedLearning.length > 0 || scopedOnboarding.length > 0 ? "healthy" : "missing_data",
+        dataQualityNote:
+          scopedLearning.length > 0 || scopedOnboarding.length > 0
+            ? null
+            : "No learning assignments or onboarding cases were found in this measurement window.",
+        actualAsOf: latestDateOrNull(
+          ...scopedLearning.map((assignment) => assignment.completedAt ?? assignment.createdAt),
+          ...scopedOnboarding.map((record) => record.dueDate ?? record.createdAt)
+        ),
+        traces: [
+          {
+            sourceType: "operational_signal",
+            sourceKey: "learning_assignments",
+            sourceLabel: "Learning assignments",
+            dataQualityStatus: qualityFromCount(scopedLearning.length),
+            recordCount: scopedLearning.length,
+            rawValue: scopedLearning.filter((assignment) => assignment.status === "completed").length,
+            normalizedValue: scopedLearning.length
+              ? ratioPercent(
+                  scopedLearning.filter((assignment) => assignment.status === "completed").length,
+                  scopedLearning.length
+                )
+              : null,
+            note: "Learning completion rate component.",
+          },
+          {
+            sourceType: "operational_signal",
+            sourceKey: "employee_onboarding_cases",
+            sourceLabel: "Onboarding cases",
+            dataQualityStatus: qualityFromCount(scopedOnboarding.length),
+            recordCount: scopedOnboarding.length,
+            rawValue: scopedOnboarding.filter((record) => record.status === "completed").length,
+            normalizedValue: scopedOnboarding.length
+              ? ratioPercent(
+                  scopedOnboarding.filter((record) => record.status === "completed").length,
+                  scopedOnboarding.length
+                )
+              : null,
+            note: "Onboarding completion rate component.",
+          },
+        ],
       };
     },
   },
@@ -1068,9 +1649,16 @@ const kpiCatalog: KpiCatalogEntry[] = [
 
 const kpiCatalogByMetricKey = new Map(kpiCatalog.map((item) => [item.id, item]));
 
-const buildLatestScores = async (evaluationCycleId?: number | null) => {
+const buildLatestScores = async (
+  evaluationCycleId?: number | null,
+  scopeFilter?: RoleScopeFilter
+) => {
+  const filter = scopeFilter ?? { employeeIds: null, departmentIds: null };
   const rawScores = await prisma.performanceScore.findMany({
-    where: evaluationCycleId ? { evaluationCycleId } : undefined,
+    where: {
+      ...(evaluationCycleId ? { evaluationCycleId } : {}),
+      ...scopeWhere(filter, "employeeProfileId", "employee"),
+    },
     orderBy: [{ employeeProfileId: "asc" }, { calculatedAt: "desc" }],
     include: {
       employee: {
@@ -1104,12 +1692,39 @@ const buildLatestScores = async (evaluationCycleId?: number | null) => {
 const buildEmployeePerformanceRows = (
   latestScores: WorkspaceComputationContext["latestScores"],
   assignments: WorkspaceComputationContext["evaluationAssignments"],
-  learningAssignments: WorkspaceComputationContext["learningAssignments"]
+  learningAssignments: WorkspaceComputationContext["learningAssignments"],
+  role: WorkspaceRole,
+  scope: RoleScopeContext
 ): WorkspaceEmployeeRow[] => {
   const activityMap = buildEmployeeActivityMap(assignments, learningAssignments);
-  const latestByEmployee = new Map(latestScores.map((record) => [record.employeeId, record]));
+  const scopedLatestScores =
+    role === "employee" && scope.requestingProfileId
+      ? latestScores.filter((record) => record.employeeId === scope.requestingProfileId)
+      : role === "manager" && scope.requestingProfileName
+        ? latestScores.filter(
+            (record) =>
+              normalizeDisplayName(record.managerName) ===
+              normalizeDisplayName(scope.requestingProfileName)
+          )
+        : latestScores;
+  const scopedActivityEntries =
+    role === "employee" && scope.requestingProfileId
+      ? Array.from(activityMap.values()).filter(
+          (activity) => activity.employeeId === scope.requestingProfileId
+        )
+      : role === "manager" && scope.requestingProfileName
+        ? Array.from(activityMap.values()).filter(
+            (activity) =>
+              normalizeDisplayName(activity.managerName) ===
+              normalizeDisplayName(scope.requestingProfileName)
+          )
+        : Array.from(activityMap.values());
+  const latestByEmployee = new Map(scopedLatestScores.map((record) => [record.employeeId, record]));
   const employeeIds = Array.from(
-    new Set([...latestScores.map((record) => record.employeeId), ...activityMap.keys()])
+    new Set([
+      ...scopedLatestScores.map((record) => record.employeeId),
+      ...scopedActivityEntries.map((activity) => activity.employeeId),
+    ])
   );
   return employeeIds
     .map((employeeId) => {
@@ -1130,8 +1745,12 @@ const buildEmployeePerformanceRows = (
 const buildDepartmentRows = (
   latestScores: WorkspaceComputationContext["latestScores"],
   assignments: WorkspaceComputationContext["evaluationAssignments"],
-  learningAssignments: WorkspaceComputationContext["learningAssignments"]
+  learningAssignments: WorkspaceComputationContext["learningAssignments"],
+  role: WorkspaceRole
 ): WorkspaceDepartmentRow[] => {
+  if (role === "employee") {
+    return [];
+  }
   if (latestScores.length > 0) {
     const grouped = new Map<string, number[]>();
     latestScores.forEach((record) => {
@@ -1165,12 +1784,25 @@ const buildDepartmentRows = (
 const buildManagerRows = (
   latestScores: WorkspaceComputationContext["latestScores"],
   assignments: WorkspaceComputationContext["evaluationAssignments"],
-  learningAssignments: WorkspaceComputationContext["learningAssignments"]
+  learningAssignments: WorkspaceComputationContext["learningAssignments"],
+  role: WorkspaceRole,
+  scope: RoleScopeContext
 ): WorkspaceManagerRow[] => {
   const activityMap = buildEmployeeActivityMap(assignments, learningAssignments);
-  if (latestScores.length > 0) {
+  if (role === "employee" || role === "manager") {
+    return [];
+  }
+  const scopedLatestScores =
+    role === "partner" && scope.visibleProfileNames.length > 0
+      ? latestScores.filter(
+          (record) =>
+            !record.managerName ||
+            scope.visibleProfileNames.includes(normalizeDisplayName(record.managerName))
+        )
+      : latestScores;
+  if (scopedLatestScores.length > 0) {
     const grouped = new Map<string, number[]>();
-    latestScores.forEach((record) => {
+    scopedLatestScores.forEach((record) => {
       if (!record.managerName) return;
       if (!grouped.has(record.managerName)) grouped.set(record.managerName, []);
       grouped.get(record.managerName)?.push(record.score);
@@ -1187,7 +1819,15 @@ const buildManagerRows = (
       .slice(0, 6);
   }
   const groupedActivities = new Map<string, { team: string; scores: number[] }>();
-  activityMap.forEach((activity) => {
+  Array.from(activityMap.values())
+    .filter(
+      (activity) =>
+        role !== "partner" ||
+        scope.visibleProfileNames.length === 0 ||
+        !activity.managerName ||
+        scope.visibleProfileNames.includes(normalizeDisplayName(activity.managerName))
+    )
+    .forEach((activity) => {
     if (!activity.managerName) return;
     if (!groupedActivities.has(activity.managerName)) {
       groupedActivities.set(activity.managerName, {
@@ -1196,7 +1836,7 @@ const buildManagerRows = (
       });
     }
     groupedActivities.get(activity.managerName)?.scores.push(scoreFromActivity(activity));
-  });
+    });
   return Array.from(groupedActivities.entries())
     .map(([name, values]) => ({
       name,
@@ -1251,8 +1891,13 @@ const buildEmployeeContributions = (
   const contributionItems: WorkspaceEmployeeContribution[] = [];
 
   if (employeeAssignments.length > 0) {
+    const reviewAssignment =
+      employeeAssignments.find((assignment) => assignment.status !== "submitted") ||
+      employeeAssignments[0];
     contributionItems.push({
       id: `evaluation-${resolvedProfileId}`,
+      sourceType: "evaluation_cycle",
+      sourceReferenceId: reviewAssignment?.id ?? null,
       title:
         role === "employee"
           ? "Keep my evaluation cycle current"
@@ -1270,6 +1915,15 @@ const buildEmployeeContributions = (
           : `${employeeAssignments.filter((assignment) => assignment.status === "submitted").length}/${employeeAssignments.length} evaluation assignments are submitted in the current cycle.`,
       rollup:
         "Feeds the people perspective, review readiness, and the employee's current evaluation signal.",
+      employeeComment: null,
+      lastUpdatedAt: null,
+      workflowRecordId: null,
+      evidenceCount: 0,
+      reviewContextPath: reviewAssignment
+        ? `/evaluations/assignments/${reviewAssignment.id}`
+        : employeeAssignments[0]?.cycleId
+          ? `/evaluations/cycles/${employeeAssignments[0].cycleId}/results`
+          : "/evaluations/feedback",
     });
   }
 
@@ -1279,6 +1933,8 @@ const buildEmployeeContributions = (
       const progress = Math.round(numberValue(assignment.progressPercent));
       return {
         id: `learning-${assignment.id}`,
+        sourceType: "learning_assignment",
+        sourceReferenceId: assignment.id,
         title: assignment.programVersion.title || assignment.programVersion.program.title,
         kpiId: config.peopleKpiId,
         initiative: config.peopleInitiativeTitle,
@@ -1292,10 +1948,170 @@ const buildEmployeeContributions = (
             ? "Learning requirement completed."
             : "Keep the readiness action moving before the next review checkpoint.",
         rollup: "Improves readiness and learning completion in the people perspective.",
+        employeeComment: null,
+        lastUpdatedAt: null,
+        workflowRecordId: null,
+        evidenceCount: 0,
+        reviewContextPath: "/knowledge-hub",
       };
     });
 
   return [...contributionItems, ...learningItems].slice(0, 3);
+};
+
+type EmployeeScoreRecord = WorkspaceComputationContext["latestScores"][number] & {
+  roleId: number | null;
+};
+
+const buildEmployeeScorecardViews = (params: {
+  employeeProfiles: Array<{
+    id: number;
+    firstName: string;
+    lastName: string;
+    roleId: number | null;
+    department: { name: string } | null;
+    manager: { firstName: string; lastName: string } | null;
+  }>;
+  structure: Awaited<ReturnType<typeof listBalancedScorecardStructure>>;
+  rawAssignments: Array<{
+    id: number;
+    profileId: number;
+    kpiId: number;
+    individualTarget: unknown;
+    individualWeight: number;
+    kpi: { id: number; key: string; name: string; weight: number };
+  }>;
+  rawInitiatives: Awaited<ReturnType<typeof listBalancedScorecardStructure>>["initiatives"];
+  activityMap: ReturnType<typeof buildEmployeeActivityMap>;
+  latestScores: WorkspaceComputationContext["latestScores"];
+  performanceBandByRoleId: Map<number | null, ScoreBandThresholds>;
+  perspectiveKeyById: Map<number, PerspectiveKey>;
+  goalById: Map<number, Awaited<ReturnType<typeof listBalancedScorecardStructure>>["goals"][number]>;
+}) => {
+  const peopleKpiIds = new Set(
+    params.structure.kpis
+      .filter((kpi) => {
+        const goal = params.goalById.get(kpi.goalId);
+        return goal ? params.perspectiveKeyById.get(goal.perspectiveId) === "people" : false;
+      })
+      .map((kpi) => kpi.id)
+  );
+  const latestScoreByEmployee = new Map(
+    params.latestScores.map((record) => [record.employeeId, record])
+  );
+  const profileById = new Map(params.employeeProfiles.map((profile) => [profile.id, profile]));
+  const initiativeSignalByProfileAndKpi = new Map<
+    string,
+    {
+      progresses: number[];
+      dueDates: Date[];
+      initiativeTitles: string[];
+      ownerName: string;
+    }
+  >();
+
+  params.rawInitiatives.forEach((initiative) => {
+    if (!initiative.ownerProfileId) return;
+    if (!["employee", "manager"].includes(String(initiative.scopeRole || "").toLowerCase())) {
+      return;
+    }
+    const key = `${initiative.ownerProfileId}:${initiative.kpiId}`;
+    const current = initiativeSignalByProfileAndKpi.get(key) ?? {
+      progresses: [],
+      dueDates: [],
+      initiativeTitles: [],
+      ownerName: initiative.ownerName || "Unassigned",
+    };
+    current.progresses.push(Math.max(0, Math.min(100, Number(initiative.progress || 0))));
+    if (initiative.dueDate) current.dueDates.push(initiative.dueDate);
+    if (initiative.title) current.initiativeTitles.push(initiative.title);
+    if (!current.ownerName && initiative.ownerName) current.ownerName = initiative.ownerName;
+    initiativeSignalByProfileAndKpi.set(key, current);
+  });
+
+  const assignmentsByProfileId = new Map<number, WorkspaceEmployeeKpiAssignment[]>();
+
+  params.rawAssignments.forEach((assignment) => {
+    const profile = profileById.get(assignment.profileId);
+    if (!profile) return;
+    const band =
+      params.performanceBandByRoleId.get(profile.roleId ?? null) ??
+      params.performanceBandByRoleId.get(null) ??
+      DEFAULT_SCORE_BAND;
+    const signal = initiativeSignalByProfileAndKpi.get(`${assignment.profileId}:${assignment.kpiId}`);
+    const activity = params.activityMap.get(assignment.profileId);
+    const actualProgress = Math.round(
+      signal?.progresses.length
+        ? average(signal.progresses)
+        : peopleKpiIds.has(assignment.kpiId)
+          ? scoreFromActivity(activity)
+          : 0
+    );
+    const targetValue = Number(assignment.individualTarget);
+    const individualTarget = Number.isFinite(targetValue) ? targetValue : null;
+    const score =
+      individualTarget !== null && individualTarget > 0
+        ? Math.round(achievementToScore(actualProgress, individualTarget, "higher_better"))
+        : Math.round(clamp(actualProgress));
+    const dueDate =
+      signal?.dueDates.length && signal.dueDates[0]
+        ? formatDateLabel(
+            signal.dueDates.sort((left, right) => left.getTime() - right.getTime())[0]
+          )
+        : null;
+    const view: WorkspaceEmployeeKpiAssignment = {
+      id: assignment.id,
+      profileId: assignment.profileId,
+      kpiId: assignment.kpi.key,
+      kpiName: assignment.kpi.name,
+      individualTarget,
+      individualWeight:
+        assignment.individualWeight > 0 ? assignment.individualWeight : assignment.kpi.weight,
+      actualProgress,
+      score,
+      status: scoreToStatus(score, band),
+      initiativeTitles: signal?.initiativeTitles ?? [],
+      dueDate,
+      owner: signal?.ownerName || `${profile.firstName} ${profile.lastName}`.trim(),
+    };
+    const bucket = assignmentsByProfileId.get(assignment.profileId) ?? [];
+    bucket.push(view);
+    assignmentsByProfileId.set(assignment.profileId, bucket);
+  });
+
+  const scoreRows: EmployeeScoreRecord[] = params.employeeProfiles.map((profile) => {
+    const assignmentViews = assignmentsByProfileId.get(profile.id) ?? [];
+    const assignmentScore = assignmentViews.length
+      ? Math.round(
+          weightedAverage(
+            assignmentViews.map((view) => ({
+              score: view.score,
+              weight: view.individualWeight || 1,
+            }))
+          )
+        )
+      : null;
+    const activity = params.activityMap.get(profile.id);
+    const fallbackScore = Math.round(
+      latestScoreByEmployee.get(profile.id)?.score ?? scoreFromActivity(activity)
+    );
+
+    return {
+      employeeId: profile.id,
+      employeeName: `${profile.firstName} ${profile.lastName}`.trim(),
+      departmentName: profile.department?.name || "Unassigned",
+      managerName: profile.manager
+        ? `${profile.manager.firstName} ${profile.manager.lastName}`.trim()
+        : null,
+      roleId: profile.roleId ?? null,
+      score: assignmentScore ?? fallbackScore,
+    };
+  });
+
+  return {
+    assignmentsByProfileId,
+    scoreRows,
+  };
 };
 
 const resolveWorkspaceEvaluationCycle = async (evaluationCycleId?: number | null) => {
@@ -1391,25 +2207,229 @@ const buildEvaluationSummary = (
   };
 };
 
-export async function getBalancedScorecardWorkspace(params: {
-  role: WorkspaceRole;
-  profileId?: number | null;
-  evaluationCycleId?: number | null;
-}): Promise<BalancedScorecardWorkspace> {
-  const buckets = monthBuckets(6);
-  const currentMonthBucket = buckets[buckets.length - 1];
-  const evaluationCycle = await resolveWorkspaceEvaluationCycle(
-    params.evaluationCycleId ?? null
+// ---------------------------------------------------------------------------
+// Role-based data scoping
+// ---------------------------------------------------------------------------
+
+type RoleScopeFilter = {
+  /** Restrict people-data queries to these employee profile IDs. null = no filter (firm-wide). */
+  employeeIds: number[] | null;
+  /** Restrict people-data queries to employees in these departments. null = no filter (firm-wide). */
+  departmentIds: number[] | null;
+};
+
+type RoleScopeContext = RoleScopeFilter & {
+  requestingProfileId: number | null;
+  requestingProfileName: string | null;
+  visibleProfileIds: number[];
+  visibleProfileNames: string[];
+};
+
+/** Roles that always see full firm-wide data. */
+const FIRM_WIDE_ROLES = new Set<WorkspaceRole>(["hr", "gmp"]);
+
+/**
+ * Build the Prisma `where` fragment that scopes a query to the resolved filter.
+ * Pass the field names as used on the model being queried.
+ *
+ * Returns `{}` (no restriction) when the filter is firm-wide (both fields null).
+ */
+function scopeWhere(
+  filter: RoleScopeFilter,
+  employeeIdField: string,
+  departmentRelationField: string
+): Record<string, unknown> {
+  if (filter.employeeIds !== null) {
+    return { [employeeIdField]: { in: filter.employeeIds } };
+  }
+  if (filter.departmentIds !== null) {
+    return { [departmentRelationField]: { departmentId: { in: filter.departmentIds } } };
+  }
+  return {};
+}
+
+async function resolveRoleScopeFilter(
+  role: WorkspaceRole,
+  requestingProfileId: number | null
+): Promise<RoleScopeFilter> {
+  // No profile ID or privileged role → firm-wide access.
+  // Omitting requestingProfileId silently grants firm-wide scope, so callers
+  // should always supply it for non-privileged roles.
+  if (FIRM_WIDE_ROLES.has(role)) {
+    return { employeeIds: null, departmentIds: null };
+  }
+
+  if (!requestingProfileId) {
+    if (role === "finance" || role === "marketing") {
+      return { employeeIds: null, departmentIds: null };
+    }
+
+    return { employeeIds: [], departmentIds: [] };
+  }
+
+  if (role === "employee") {
+    return { employeeIds: [requestingProfileId], departmentIds: null };
+  }
+
+  if (role === "manager") {
+    const directReports = await prisma.profile.findMany({
+      where: { managerId: requestingProfileId },
+      select: { id: true },
+    });
+    // Use a Set for O(1) dedup, then include the manager so their own
+    // evaluations are visible alongside their team's.
+    const idSet = new Set(directReports.map((r) => r.id));
+    idSet.add(requestingProfileId);
+    return { employeeIds: Array.from(idSet), departmentIds: null };
+  }
+
+  if (role === "partner") {
+    const partnerDepts = await prisma.department.findMany({
+      where: { partnerProfileId: requestingProfileId },
+      select: { id: true },
+    });
+    // An unassigned partner sees an empty dataset, not firm-wide data.
+    return {
+      employeeIds: null,
+      departmentIds: partnerDepts.map((d) => d.id),
+    };
+  }
+
+  // finance / marketing — firm-wide KPI view, no people scoping.
+  return { employeeIds: null, departmentIds: null };
+}
+
+const normalizeDisplayName = (value: string | null | undefined) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+async function resolveRoleScopeContext(
+  role: WorkspaceRole,
+  requestingProfileId: number | null
+): Promise<RoleScopeContext> {
+  const baseScope = await resolveRoleScopeFilter(role, requestingProfileId);
+
+  if (!requestingProfileId) {
+    return {
+      ...baseScope,
+      requestingProfileId: null,
+      requestingProfileName: null,
+      visibleProfileIds: [],
+      visibleProfileNames: [],
+    };
+  }
+
+  const requestingProfile = await prisma.profile.findUnique({
+    where: { id: requestingProfileId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      departmentId: true,
+      departmentsHeaded: { select: { id: true } },
+    },
+  });
+
+  const requestingProfileName = requestingProfile
+    ? `${requestingProfile.firstName} ${requestingProfile.lastName}`.trim()
+    : null;
+
+  if (FIRM_WIDE_ROLES.has(role) || role === "finance" || role === "marketing") {
+    return {
+      ...baseScope,
+      requestingProfileId,
+      requestingProfileName,
+      visibleProfileIds: [],
+      visibleProfileNames: [],
+    };
+  }
+
+  let scopedEmployeeIds = baseScope.employeeIds;
+  let scopedDepartmentIds = baseScope.departmentIds;
+
+  if (role === "manager" && requestingProfile) {
+    const primaryDepartmentId =
+      requestingProfile.departmentId ?? requestingProfile.departmentsHeaded[0]?.id ?? null;
+    if (primaryDepartmentId) {
+      scopedDepartmentIds = [primaryDepartmentId];
+      scopedEmployeeIds = null;
+    }
+  }
+
+  const visibleProfiles =
+    scopedEmployeeIds !== null
+      ? await prisma.profile.findMany({
+          where: { id: { in: scopedEmployeeIds } },
+          select: { id: true, firstName: true, lastName: true },
+        })
+      : scopedDepartmentIds !== null
+        ? await prisma.profile.findMany({
+            where: { departmentId: { in: scopedDepartmentIds } },
+            select: { id: true, firstName: true, lastName: true },
+          })
+        : [];
+
+  const visibleProfileNames = Array.from(
+    new Set(
+      visibleProfiles
+        .map((profile) => normalizeDisplayName(`${profile.firstName} ${profile.lastName}`))
+        .filter(Boolean)
+    )
   );
-  const effectiveEvaluationCycleId = evaluationCycle?.id ?? null;
+  const visibleProfileIds = Array.from(new Set(visibleProfiles.map((profile) => profile.id)));
+
+  return {
+    employeeIds: scopedEmployeeIds,
+    departmentIds: scopedDepartmentIds,
+    requestingProfileId,
+    requestingProfileName,
+    visibleProfileIds,
+    visibleProfileNames,
+  };
+}
+
+const firmWideScopeContext: RoleScopeContext = {
+  employeeIds: null,
+  departmentIds: null,
+  requestingProfileId: null,
+  requestingProfileName: null,
+  visibleProfileIds: [],
+  visibleProfileNames: [],
+};
+
+const earlierDate = (left: Date, right: Date) =>
+  left.getTime() <= right.getTime() ? left : right;
+
+async function loadWorkspaceComputationContext(params: {
+  evaluationCycleId?: number | null;
+  scopeContext: RoleScopeContext;
+  measurementWindow: { start: Date; end: Date };
+  monthBuckets: WorkspaceComputationContext["monthBuckets"];
+  asOfDate: Date;
+}) {
+  const effectiveEvaluationCycleId = params.evaluationCycleId ?? null;
+  const currentMonthBucket = params.monthBuckets[params.monthBuckets.length - 1];
+  const windowDurationMs = Math.max(
+    0,
+    params.measurementWindow.end.getTime() - params.measurementWindow.start.getTime()
+  );
+  const priorWindowStart = new Date(params.measurementWindow.start.getTime() - windowDurationMs - 1);
+  const lowerBound = earlierDate(
+    earlierDate(params.measurementWindow.start, params.monthBuckets[0].start),
+    priorWindowStart
+  );
+  const upperBound = params.asOfDate;
+  const { scopeContext } = params;
 
   const [
-    structure,
     payments,
     projections,
     invoices,
     surveys,
     proposals,
+    timeEntries,
     jobs,
     projectEvaluations,
     evaluationAssignments,
@@ -1417,18 +2437,18 @@ export async function getBalancedScorecardWorkspace(params: {
     onboardingCases,
     tasks,
     latestScores,
+    kpiActualHistory,
   ] = await Promise.all([
-    listBalancedScorecardStructure(),
     prisma.clientPayment.findMany({
-      where: { paymentDate: { gte: buckets[0].start } },
+      where: { paymentDate: { gte: lowerBound, lte: upperBound } },
       select: { paymentAmount: true, paymentDate: true },
     }),
     prisma.revenueProjection.findMany({
-      where: { monthYear: { gte: buckets[0].start } },
+      where: { monthYear: { gte: lowerBound, lte: upperBound } },
       select: { projectedAmount: true, actualCollected: true, monthYear: true },
     }),
     prisma.jobInvoice.findMany({
-      where: { createdAt: { gte: buckets[0].start } },
+      where: { createdAt: { gte: lowerBound, lte: upperBound } },
       select: {
         totalAmount: true,
         amountPaid: true,
@@ -1441,15 +2461,30 @@ export async function getBalancedScorecardWorkspace(params: {
       },
     }),
     prisma.clientSatisfactionSurvey.findMany({
-      where: { OR: [{ createdAt: { gte: buckets[0].start } }, { completedAt: { gte: buckets[0].start } }] },
+      where: {
+        OR: [
+          { createdAt: { gte: lowerBound, lte: upperBound } },
+          { completedAt: { gte: lowerBound, lte: upperBound } },
+        ],
+      },
       select: { overallSatisfaction: true, wouldRecommend: true, completedAt: true, createdAt: true },
     }),
     prisma.proposal.findMany({
-      where: { proposalDate: { gte: buckets[0].start } },
+      where: { proposalDate: { gte: lowerBound, lte: upperBound } },
       select: { status: true, proposalDate: true, wonAt: true },
     }),
+    prisma.timeEntry.findMany({
+      where: { dateWorked: { gte: lowerBound, lte: upperBound } },
+      select: { hours: true, billable: true, billableAmount: true, dateWorked: true },
+    }),
     prisma.job.findMany({
-      where: { OR: [{ createdAt: { gte: buckets[0].start } }, { completionDate: { gte: buckets[0].start } }, { dueDate: { gte: buckets[0].start } }] },
+      where: {
+        OR: [
+          { createdAt: { gte: lowerBound, lte: upperBound } },
+          { completionDate: { gte: lowerBound, lte: upperBound } },
+          { dueDate: { gte: lowerBound, lte: upperBound } },
+        ],
+      },
       select: {
         id: true,
         clientId: true,
@@ -1463,13 +2498,16 @@ export async function getBalancedScorecardWorkspace(params: {
       },
     }),
     prisma.projectEvaluation.findMany({
-      where: { createdAt: { gte: buckets[0].start }, status: "submitted" },
+      where: { createdAt: { gte: lowerBound, lte: upperBound }, status: "submitted" },
       select: { overallScore: true, submittedAt: true, createdAt: true },
     }),
     prisma.evaluationAssignment.findMany({
-      where: effectiveEvaluationCycleId
-        ? { cycleId: effectiveEvaluationCycleId }
-        : { createdAt: { gte: buckets[0].start } },
+      where: {
+        ...(effectiveEvaluationCycleId
+          ? { cycleId: effectiveEvaluationCycleId }
+          : { createdAt: { gte: lowerBound, lte: upperBound } }),
+        ...scopeWhere(scopeContext, "evaluateeProfileId", "evaluatee"),
+      },
       select: {
         id: true,
         cycleId: true,
@@ -1490,7 +2528,10 @@ export async function getBalancedScorecardWorkspace(params: {
       },
     }),
     prisma.learningAssignment.findMany({
-      where: { createdAt: { gte: buckets[0].start } },
+      where: {
+        createdAt: { gte: lowerBound, lte: upperBound },
+        ...scopeWhere(scopeContext, "employeeProfileId", "employee"),
+      },
       select: {
         id: true,
         employeeProfileId: true,
@@ -1513,6 +2554,12 @@ export async function getBalancedScorecardWorkspace(params: {
       },
     }),
     prisma.employeeOnboardingCase.findMany({
+      where: {
+        OR: [
+          { createdAt: { gte: lowerBound, lte: upperBound } },
+          { dueDate: { gte: lowerBound, lte: upperBound } },
+        ],
+      },
       select: {
         status: true,
         startDate: true,
@@ -1522,7 +2569,13 @@ export async function getBalancedScorecardWorkspace(params: {
       },
     }),
     prisma.task.findMany({
-      where: { OR: [{ createdAt: { gte: buckets[0].start } }, { dueDate: { gte: buckets[0].start } }] },
+      where: {
+        OR: [
+          { createdAt: { gte: lowerBound, lte: upperBound } },
+          { dueDate: { gte: lowerBound, lte: upperBound } },
+        ],
+        ...scopeWhere(scopeContext, "assignedToProfileId", "assignee"),
+      },
       orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
       select: {
         id: true,
@@ -1542,7 +2595,12 @@ export async function getBalancedScorecardWorkspace(params: {
         job: { select: { jobName: true } },
       },
     }),
-    buildLatestScores(effectiveEvaluationCycleId),
+    buildLatestScores(effectiveEvaluationCycleId, scopeContext),
+    prisma.balancedScorecardKpiActualHistory.findMany({
+      where: { recordedAt: { gte: lowerBound, lte: upperBound } },
+      orderBy: { recordedAt: "asc" },
+      select: { kpiId: true, actualValue: true, recordedAt: true },
+    }),
   ]);
 
   const ctx: WorkspaceComputationContext = {
@@ -1551,6 +2609,7 @@ export async function getBalancedScorecardWorkspace(params: {
     invoices,
     surveys,
     proposals,
+    timeEntries,
     jobs,
     projectEvaluations,
     evaluationAssignments,
@@ -1558,28 +2617,277 @@ export async function getBalancedScorecardWorkspace(params: {
     onboardingCases,
     tasks,
     latestScores,
-    monthBuckets: buckets,
+    measurementWindow: params.measurementWindow,
+    asOfDate: params.asOfDate,
+    monthBuckets: params.monthBuckets,
     currentMonthBucket,
   };
+
+  return { ctx, kpiActualHistory };
+}
+
+export async function computeBalancedScorecardKpiRecords(params?: {
+  scorecardVersionId?: number | null;
+  evaluationCycleId?: number | null;
+  scopeContext?: RoleScopeContext;
+  measurementWindow?: { start: Date; end: Date };
+  monthBucketCount?: number;
+  asOfDate?: Date;
+}) {
+  const measurementWindow = params?.measurementWindow ?? {
+    start: monthBuckets(6)[0].start,
+    end: monthBuckets(6)[monthBuckets(6).length - 1].end,
+  };
+  const monthBucketCount = params?.monthBucketCount ?? 6;
+  const buckets = monthBuckets(monthBucketCount, measurementWindow.end);
+  const asOfDate = params?.asOfDate ?? new Date();
+  const scopeContext = params?.scopeContext ?? firmWideScopeContext;
+  const structure = await listBalancedScorecardStructure({
+    scorecardVersionId: params?.scorecardVersionId ?? undefined,
+  });
+  const { ctx, kpiActualHistory } = await loadWorkspaceComputationContext({
+    evaluationCycleId: params?.evaluationCycleId ?? null,
+    scopeContext,
+    measurementWindow,
+    monthBuckets: buckets,
+    asOfDate,
+  });
+
+  const perspectiveById = new Map(structure.perspectives.map((perspective) => [perspective.id, perspective]));
+  const perspectiveKeyById = new Map(
+    structure.perspectives.map((perspective) => [perspective.id, perspective.key as PerspectiveKey])
+  );
+  const goalById = new Map(structure.goals.map((goal) => [goal.id, goal]));
+
+  const kpis = structure.kpis
+    .map((record) => {
+      const goal = goalById.get(record.goalId);
+      const perspective = goal ? perspectiveById.get(goal.perspectiveId) : undefined;
+      const perspectiveKey = goal ? perspectiveKeyById.get(goal.perspectiveId) : undefined;
+      const catalogKpi = kpiCatalogByMetricKey.get(record.metricKey);
+      const manualActualValue =
+        record.currentActualValue !== null &&
+        record.currentActualValue !== undefined &&
+        Number.isFinite(Number(record.currentActualValue))
+          ? Number(record.currentActualValue)
+          : null;
+      const manualComputation =
+        record.trackingMode === "manual"
+          ? buildManualKpiComputation(
+              {
+                id: record.id,
+                measurementType: record.measurementType ?? null,
+                targetDirection: record.targetDirection ?? null,
+                targetValue: record.targetValue ?? null,
+                currentActualValue: manualActualValue,
+                unit: record.unit,
+                lastMeasurementNote: record.lastMeasurementNote ?? null,
+              },
+              kpiActualHistory,
+              buckets
+            )
+          : null;
+      const computed = catalogKpi
+        ? catalogKpi.compute(ctx)
+        : manualComputation
+          ? {
+              actualValue: manualComputation.actualValue,
+              actualLabel: manualComputation.actualLabel,
+              trend: manualComputation.trend,
+              ownerUpdate: manualComputation.ownerUpdate,
+              dataQualityStatus: manualComputation.dataQualityStatus,
+              dataQualityNote: manualComputation.dataQualityNote,
+              actualAsOf: manualComputation.actualAsOf,
+              traces: manualComputation.traces,
+            }
+          : {
+              actualValue: 0,
+              actualLabel: "Awaiting first update",
+              trend: [0, 0, 0, 0, 0, 0],
+              ownerUpdate: "",
+              dataQualityStatus: "missing_data" as BalancedScorecardComputedDataQualityStatus,
+              dataQualityNote: "No supporting measurement data was available for this KPI.",
+              actualAsOf: null,
+              traces: [] as BalancedScorecardComputedTrace[],
+            };
+      const resolvedActualValue = manualActualValue ?? computed.actualValue;
+      const resolvedActualLabel =
+        manualActualValue !== null
+          ? formatManualActual(record.measurementType ?? null, manualActualValue, record.unit)
+          : computed.actualLabel;
+      const targetValue =
+        record.targetValue !== null && record.targetValue !== undefined
+          ? Number(record.targetValue)
+          : catalogKpi?.targetValue ?? null;
+      const targetLabel =
+        record.firmTarget?.trim() || catalogKpi?.targetLabel || (targetValue !== null ? `${targetValue}` : null);
+      const weightedScore = Math.round(
+        catalogKpi
+          ? achievementToScore(
+              resolvedActualValue,
+              catalogKpi.targetValue,
+              catalogKpi.direction
+            )
+          : manualComputation
+            ? manualComputation.weightedScore
+            : 0
+      );
+      const status = catalogKpi
+        ? scoreToStatus(weightedScore)
+        : manualComputation
+          ? manualComputation.status
+          : scoreToStatus(weightedScore);
+      if (!goal || !perspective || !perspectiveKey) {
+        return null;
+      }
+      return {
+        recordId: record.id,
+        key: record.key,
+        metricKey: record.metricKey,
+        trackingMode: record.trackingMode as "template" | "manual",
+        perspectiveKey,
+        perspectiveName: perspective.name,
+        goalRecordId: goal.id,
+        goalKey: goal.key,
+        goalTitle: goal.title,
+        name: record.name,
+        description: record.description || catalogKpi?.description || "",
+        formula: record.formula || catalogKpi?.formula || "",
+        frequency: record.frequency,
+        unit: record.unit,
+        weight: record.weight,
+        firmTarget: record.firmTarget,
+        targetValue,
+        targetLabel,
+        actualValue: resolvedActualValue,
+        actualLabel: resolvedActualLabel,
+        weightedScore,
+        owner: record.ownerName || catalogKpi?.owner || "Unassigned",
+        status,
+        statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
+        updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
+        trend: computed.trend,
+        ownerUpdate: computed.ownerUpdate,
+        dataQualityStatus: computed.dataQualityStatus,
+        dataQualityNote: computed.dataQualityNote ?? null,
+        actualAsOf: computed.actualAsOf ?? null,
+        traces: computed.traces,
+      } satisfies BalancedScorecardComputedKpiRecord;
+    })
+    .filter((record): record is BalancedScorecardComputedKpiRecord => record !== null);
+
+  return {
+    structure,
+    kpis,
+    ctx,
+    kpiActualHistory,
+    monthBuckets: buckets,
+    currentMonthBucket: buckets[buckets.length - 1],
+  };
+}
+
+function isInitiativeVisibleToRole(
+  initiative: WorkspaceInitiative,
+  role: WorkspaceRole,
+  scope: RoleScopeContext
+) {
+  if (FIRM_WIDE_ROLES.has(role) || role === "finance" || role === "marketing") {
+    return true;
+  }
+
+  const ownerName = normalizeDisplayName(initiative.owner);
+  const requesterName = normalizeDisplayName(scope.requestingProfileName);
+  const ownerProfileId = initiative.ownerProfileId ?? null;
+  const visibleOwner =
+    (ownerProfileId !== null && scope.visibleProfileIds.includes(ownerProfileId)) ||
+    (ownerName && scope.visibleProfileNames.includes(ownerName)) ||
+    (requesterName && ownerName === requesterName);
+
+  if (role === "employee") {
+    return (
+      initiative.scopeRole === "employee" &&
+      ((ownerProfileId !== null && ownerProfileId === scope.requestingProfileId) ||
+        ownerName === requesterName)
+    );
+  }
+
+  if (role === "manager") {
+    return ["manager", "employee"].includes(initiative.scopeRole) && visibleOwner;
+  }
+
+  if (role === "partner") {
+    return ["partner", "manager", "employee"].includes(initiative.scopeRole) && visibleOwner;
+  }
+
+  return true;
+}
+
+const buildBalancedScorecardWorkspace = async (params: {
+  role: WorkspaceRole;
+  profileId?: number | null;
+  /**
+   * The profile ID of the user who is actually making the request.
+   * Used for role-based data scoping. When omitted, defaults to firm-wide
+   * access — callers must supply this for non-privileged roles.
+   */
+  requestingProfileId?: number | null;
+  evaluationCycleId?: number | null;
+}): Promise<BalancedScorecardWorkspace> => {
+  const buckets = monthBuckets(6);
+  const currentMonthBucket = buckets[buckets.length - 1];
+  const measurementWindow = {
+    start: buckets[0].start,
+    end: currentMonthBucket.end,
+  };
+  const asOfDate = new Date();
+
+  // Resolve evaluation cycle and role scope in parallel — they are independent.
+  const [evaluationCycle, scopeContext] = await Promise.all([
+    resolveWorkspaceEvaluationCycle(params.evaluationCycleId ?? null),
+    resolveRoleScopeContext(params.role, params.requestingProfileId ?? null),
+  ]);
+  const effectiveEvaluationCycleId = evaluationCycle?.id ?? null;
+
+  const { structure, ctx, kpiActualHistory } =
+    await computeBalancedScorecardKpiRecords({
+      evaluationCycleId: effectiveEvaluationCycleId,
+      scopeContext,
+      measurementWindow,
+      monthBucketCount: 6,
+      asOfDate,
+    });
+
+  const { invoices, jobs, evaluationAssignments, learningAssignments, latestScores } = ctx;
 
   const perspectiveKeyById = new Map(
     structure.perspectives.map((perspective) => [perspective.id, perspective.key as PerspectiveKey])
   );
   const goalById = new Map(structure.goals.map((goal) => [goal.id, goal]));
-  const rawKpis = structure.kpis.map((record) => {
+  const rawKpisWithNulls = structure.kpis.map((record) => {
     const goal = goalById.get(record.goalId);
     const perspectiveId = goal ? perspectiveKeyById.get(goal.perspectiveId) : undefined;
     const catalogKpi = kpiCatalogByMetricKey.get(record.metricKey);
+    const manualActualValue =
+      record.currentActualValue !== null &&
+      record.currentActualValue !== undefined &&
+      Number.isFinite(Number(record.currentActualValue))
+        ? Number(record.currentActualValue)
+        : null;
     const manualComputation =
       record.trackingMode === "manual"
-        ? buildManualKpiComputation({
-            measurementType: record.measurementType ?? null,
-            targetDirection: record.targetDirection ?? null,
-            targetValue: record.targetValue ?? null,
-            currentActualValue: record.currentActualValue ?? null,
-            unit: record.unit,
-            lastMeasurementNote: record.lastMeasurementNote ?? null,
-          })
+        ? buildManualKpiComputation(
+            {
+              id: record.id,
+              measurementType: record.measurementType ?? null,
+              targetDirection: record.targetDirection ?? null,
+              targetValue: record.targetValue ?? null,
+              currentActualValue: manualActualValue,
+              unit: record.unit,
+              lastMeasurementNote: record.lastMeasurementNote ?? null,
+            },
+            kpiActualHistory,
+            buckets
+          )
         : null;
     const computed = catalogKpi
       ? catalogKpi.compute(ctx)
@@ -1596,9 +2904,18 @@ export async function getBalancedScorecardWorkspace(params: {
             trend: [0, 0, 0, 0, 0, 0],
             ownerUpdate: "",
           };
+    const resolvedActualValue = manualActualValue ?? computed.actualValue;
+    const resolvedActualLabel =
+      manualActualValue !== null
+        ? `${manualActualValue} ${record.unit}`
+        : computed.actualLabel;
     const weightedScore = Math.round(
       catalogKpi
-        ? achievementToScore(computed.actualValue, catalogKpi.targetValue, catalogKpi.direction)
+        ? achievementToScore(
+            resolvedActualValue,
+            catalogKpi.targetValue,
+            catalogKpi.direction
+          )
         : manualComputation
           ? manualComputation.weightedScore
           : 0
@@ -1608,10 +2925,15 @@ export async function getBalancedScorecardWorkspace(params: {
       : manualComputation
         ? manualComputation.status
         : scoreToStatus(weightedScore);
+    if (!perspectiveId) {
+      // Goal's parent perspective is archived or missing — skip this KPI to avoid
+      // it appearing under the wrong perspective.
+      return null;
+    }
     return {
       id: record.key,
       name: record.name,
-      perspectiveId: perspectiveId || "financial",
+      perspectiveId,
       goalId: goal?.key || `goal-${record.goalId}`,
       description: record.description || catalogKpi?.description || "",
       formula: record.formula || catalogKpi?.formula || "",
@@ -1619,7 +2941,7 @@ export async function getBalancedScorecardWorkspace(params: {
       unit: record.unit,
       weight: record.weight,
       firmTarget: record.firmTarget,
-      actual: computed.actualLabel,
+      actual: resolvedActualLabel,
       weightedScore,
       owner: record.ownerName || catalogKpi?.owner || "Unassigned",
       status,
@@ -1630,6 +2952,9 @@ export async function getBalancedScorecardWorkspace(params: {
       ownerUpdate: computed.ownerUpdate,
     } satisfies WorkspaceKpi;
   });
+
+  // Drop KPIs whose parent goal's perspective has been archived/deleted.
+  const rawKpis = rawKpisWithNulls.filter((kpi): kpi is WorkspaceKpi => kpi !== null);
 
   const allInitiatives = structure.initiatives.map((record) => {
     const goal = goalById.get(record.goalId);
@@ -1662,6 +2987,7 @@ export async function getBalancedScorecardWorkspace(params: {
       kpiId: structure.kpis.find((item) => item.id === record.kpiId)?.key || `kpi-${record.kpiId}`,
       perspectiveId,
       owner: record.ownerName || "Unassigned",
+      ownerProfileId: record.ownerProfileId ?? null,
       timeline: record.timeline || "Open timeline",
       dueDate: formatDateLabel(record.dueDate),
       drilldownCount: descendantCount,
@@ -1682,10 +3008,17 @@ export async function getBalancedScorecardWorkspace(params: {
           .join(" "),
     } satisfies WorkspaceInitiative;
   });
-  const topLevelInitiativeRecords = structure.initiatives.filter(
+  const visibleInitiativesByRole = allInitiatives.filter((initiative) =>
+    isInitiativeVisibleToRole(initiative, params.role, scopeContext)
+  );
+  const visibleInitiativeRecordKeys = new Set(visibleInitiativesByRole.map((initiative) => initiative.id));
+  const visibleInitiativeRecords = structure.initiatives.filter((initiative) =>
+    visibleInitiativeRecordKeys.has(initiative.key)
+  );
+  const topLevelInitiativeRecords = visibleInitiativeRecords.filter(
     (initiative) => !initiative.parentInitiativeId && !initiative.key.startsWith("cascade-")
   );
-  const initiatives = allInitiatives.filter((initiative) =>
+  const initiatives = visibleInitiativesByRole.filter((initiative) =>
     topLevelInitiativeRecords.some((record) => record.key === initiative.id)
   );
 
@@ -1712,10 +3045,11 @@ export async function getBalancedScorecardWorkspace(params: {
       initiativeProgress,
     };
   });
-
-  const goals = structure.goals.map((goal) => {
+  const provisionalGoals = structure.goals.map((goal) => {
     const goalKpis = kpis.filter((kpi) => kpi.goalId === goal.key);
-    const score = Math.round(average(goalKpis.map((kpi) => kpi.weightedScore)));
+    const score = Math.round(
+      weightedAverage(goalKpis.map((kpi) => ({ score: kpi.weightedScore, weight: kpi.weight })))
+    );
     return {
       id: goal.key,
       perspectiveId: perspectiveKeyById.get(goal.perspectiveId) || "financial",
@@ -1728,14 +3062,257 @@ export async function getBalancedScorecardWorkspace(params: {
     } satisfies WorkspaceGoal;
   });
 
+  const visibleKpiIds = new Set<string>();
+  const visibleGoalIds = new Set<string>();
+
+  if (FIRM_WIDE_ROLES.has(params.role) || params.role === "finance" || params.role === "marketing") {
+    kpis.forEach((kpi) => visibleKpiIds.add(kpi.id));
+    provisionalGoals.forEach((goal) => visibleGoalIds.add(goal.id));
+  } else {
+    initiatives.forEach((initiative) => {
+      visibleKpiIds.add(initiative.kpiId);
+      visibleGoalIds.add(initiative.goalId);
+    });
+  }
+
+  const peopleGoalKeys = new Set(
+    provisionalGoals
+      .filter((goal) => goal.perspectiveId === "people")
+      .map((goal) => goal.id)
+  );
+  const provisionalPeopleKpiId =
+    kpis.find((kpi) => kpi.perspectiveId === "people")?.id ||
+    kpis.find((kpi) => peopleGoalKeys.has(kpi.goalId))?.id ||
+    "";
+  const provisionalPeopleInitiativeTitle =
+    visibleInitiativesByRole.find(
+      (initiative) =>
+        initiative.perspectiveId === "people" &&
+        ["hr", "manager", "employee"].includes(initiative.scopeRole)
+    )?.title ||
+    initiatives.find((initiative) => initiative.perspectiveId === "people")?.title ||
+    "";
+
+  const peopleKpiId =
+    params.role === "employee" ? provisionalPeopleKpiId : provisionalPeopleKpiId;
+  const peopleInitiativeTitle =
+    provisionalPeopleInitiativeTitle;
+  const activityMap = buildEmployeeActivityMap(evaluationAssignments, learningAssignments);
+  const employeeProfileIds = Array.from(
+    new Set(
+      [
+        ...activityMap.keys(),
+        ...latestScores.map((record) => record.employeeId),
+        ...structure.initiatives
+          .map((initiative) => initiative.ownerProfileId ?? null)
+          .filter((value): value is number => Boolean(value)),
+        params.profileId ?? null,
+      ].filter((value): value is number => Boolean(value))
+    )
+  );
+  const activeScorecardVersionId = await resolveActiveBalancedScorecardVersionId();
+  const employeeProfiles = employeeProfileIds.length
+    ? await prisma.profile.findMany({
+        where: { id: { in: employeeProfileIds } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          roleId: true,
+          department: { select: { name: true } },
+          manager: { select: { firstName: true, lastName: true } },
+        },
+      })
+    : [];
+  const rawKpiAssignments =
+    activeScorecardVersionId && employeeProfileIds.length
+      ? await prisma.balancedScorecardKpiAssignment.findMany({
+          where: {
+            scorecardVersionId: activeScorecardVersionId,
+            profileId: { in: employeeProfileIds },
+            kpiId: { in: structure.kpis.map((record) => record.id) },
+          },
+          select: {
+            id: true,
+            profileId: true,
+            kpiId: true,
+            individualTarget: true,
+            individualWeight: true,
+            kpi: {
+              select: {
+                id: true,
+                key: true,
+                name: true,
+                weight: true,
+              },
+            },
+          },
+        })
+      : [];
+  const roleIds = Array.from(
+    new Set(
+      employeeProfiles
+        .map((profile) => profile.roleId)
+        .filter((value): value is number => value !== null)
+    )
+  );
+  const performanceBandRecords =
+    roleIds.length || employeeProfiles.length
+      ? await prisma.performanceBand.findMany({
+          where: {
+            OR: [{ roleId: null }, ...(roleIds.length ? [{ roleId: { in: roleIds } }] : [])],
+          },
+          orderBy: [{ roleId: "asc" }, { id: "asc" }],
+        })
+      : [];
+  const performanceBandByRoleId = new Map<number | null, ScoreBandThresholds>();
+  performanceBandRecords.forEach((record) => {
+    const roleId = record.roleId ?? null;
+    if (performanceBandByRoleId.has(roleId)) return;
+    performanceBandByRoleId.set(roleId, {
+      onTrackMin: numberValue(record.onTrackMin) || DEFAULT_SCORE_BAND.onTrackMin,
+      atRiskMin: numberValue(record.atRiskMin) || DEFAULT_SCORE_BAND.atRiskMin,
+    });
+  });
+  if (!performanceBandByRoleId.has(null)) {
+    performanceBandByRoleId.set(null, DEFAULT_SCORE_BAND);
+  }
+  const employeeScoreViews = buildEmployeeScorecardViews({
+    employeeProfiles,
+    structure,
+    rawAssignments: rawKpiAssignments,
+    rawInitiatives: structure.initiatives,
+    activityMap,
+    latestScores,
+    performanceBandByRoleId,
+    perspectiveKeyById,
+    goalById,
+  });
+  const scorecardLatestScores =
+    employeeScoreViews.scoreRows.length > 0
+      ? employeeScoreViews.scoreRows
+      : latestScores.map((record) => ({ ...record, roleId: null }));
+
+  const employeeContributions = buildEmployeeContributions(
+    params.role,
+    params.profileId ?? null,
+    evaluationAssignments,
+    learningAssignments,
+    {
+      peopleKpiId,
+      peopleInitiativeTitle,
+    }
+  );
+  const contributionProfileCandidates = Array.from(
+    new Set([
+      ...evaluationAssignments.map((assignment) => assignment.evaluatee.id),
+      ...learningAssignments.map((assignment) => assignment.employee.id),
+    ])
+  );
+  const resolvedContributionProfileId =
+    params.profileId && contributionProfileCandidates.includes(params.profileId)
+      ? params.profileId
+      : contributionProfileCandidates[0] ?? params.profileId ?? null;
+  const employeeKpiAssignments =
+    resolvedContributionProfileId
+      ? (employeeScoreViews.assignmentsByProfileId.get(resolvedContributionProfileId) ?? []).sort(
+          (left, right) => right.individualWeight - left.individualWeight || left.kpiName.localeCompare(right.kpiName)
+        )
+      : [];
+
+  if (resolvedContributionProfileId && employeeContributions.length > 0) {
+    const contributionKeys = employeeContributions.map((item) => item.id);
+    const contributionRecords = await prisma.balancedScorecardEmployeeContribution.findMany({
+      where: {
+        profileId: resolvedContributionProfileId,
+        contributionKey: { in: contributionKeys },
+      },
+      select: {
+        id: true,
+        contributionKey: true,
+        acknowledgedAt: true,
+        latestProgress: true,
+        latestComment: true,
+        lastUpdatedAt: true,
+      },
+    });
+    const recordByKey = new Map(contributionRecords.map((record) => [record.contributionKey, record]));
+    const evidenceCounts = contributionRecords.length
+      ? await prisma.document.findMany({
+          where: {
+            entityType: "BalancedScorecardContribution",
+            entityId: { in: contributionRecords.map((record) => record.id) },
+          },
+          select: { entityId: true },
+        })
+      : [];
+    const evidenceCountByRecordId = new Map<number, number>();
+    evidenceCounts.forEach((document) => {
+      if (!document.entityId) return;
+      evidenceCountByRecordId.set(
+        document.entityId,
+        (evidenceCountByRecordId.get(document.entityId) || 0) + 1
+      );
+    });
+
+    employeeContributions.forEach((item, index) => {
+      const record = recordByKey.get(item.id);
+      if (!record) return;
+      const progress = record.latestProgress ?? item.progress;
+      employeeContributions[index] = {
+        ...item,
+        acknowledged: item.acknowledged || Boolean(record.acknowledgedAt),
+        progress,
+        score: progress,
+        status: scoreToStatus(progress),
+        employeeComment: record.latestComment ?? null,
+        lastUpdatedAt: record.lastUpdatedAt?.toISOString() ?? null,
+        workflowRecordId: record.id,
+        evidenceCount: evidenceCountByRecordId.get(record.id) || 0,
+      };
+    });
+  }
+  const peopleAssignment = employeeKpiAssignments.find((assignment) => assignment.kpiId === peopleKpiId);
+  if (peopleAssignment) {
+    employeeContributions.forEach((item, index) => {
+      if (item.kpiId !== peopleKpiId) return;
+      employeeContributions[index] = {
+        ...item,
+        progress: peopleAssignment.actualProgress,
+        score: peopleAssignment.score,
+        status: peopleAssignment.status,
+        managerComment:
+          peopleAssignment.individualTarget !== null
+            ? `Individual target ${peopleAssignment.individualTarget}. Current progress ${peopleAssignment.actualProgress}%.`
+            : item.managerComment,
+        rollup: `${item.rollup} Weighted contribution ${peopleAssignment.individualWeight}%.`,
+        individualTarget: peopleAssignment.individualTarget,
+        individualWeight: peopleAssignment.individualWeight,
+      };
+    });
+  }
+  employeeContributions.forEach((item) => {
+    if (item.kpiId) {
+      visibleKpiIds.add(item.kpiId);
+    }
+  });
+
+  const scopedKpis = kpis.filter((kpi) => visibleKpiIds.has(kpi.id));
+  scopedKpis.forEach((kpi) => visibleGoalIds.add(kpi.goalId));
+  const goals = provisionalGoals.filter((goal) => visibleGoalIds.has(goal.id));
+
   const perspectiveCards = structure.perspectives.map((perspective) => {
     const perspectiveId = perspective.key as PerspectiveKey;
     const perspectiveGoals = goals.filter((goal) => goal.perspectiveId === perspectiveId);
-    const perspectiveKpis = kpis.filter((kpi) => kpi.perspectiveId === perspectiveId);
+    const perspectiveKpis = scopedKpis.filter((kpi) => kpi.perspectiveId === perspectiveId);
     const perspectiveInitiatives = initiatives.filter((initiative) =>
       perspectiveGoals.some((goal) => goal.id === initiative.goalId)
     );
-    const score = Math.round(average(perspectiveKpis.map((kpi) => kpi.weightedScore)));
+    const score = Math.round(
+      weightedAverage(
+        perspectiveKpis.map((kpi) => ({ score: kpi.weightedScore, weight: kpi.weight }))
+      )
+    );
     const cascadeProgress = Math.round(
       average(perspectiveInitiatives.map((initiative) => initiative.progress))
     );
@@ -1750,54 +3327,24 @@ export async function getBalancedScorecardWorkspace(params: {
       kpis: perspectiveKpis.length,
       initiatives: perspectiveInitiatives.length,
       cascadeProgress: Number.isFinite(cascadeProgress) ? cascadeProgress : 0,
-      } satisfies WorkspacePerspectiveCard;
+    } satisfies WorkspacePerspectiveCard;
   });
-
-  const peopleGoalKeys = new Set(
-    goals
-      .filter((goal) => goal.perspectiveId === "people")
-      .map((goal) => goal.id)
-  );
-  const peopleKpiId =
-    kpis.find((kpi) => kpi.perspectiveId === "people")?.id ||
-    kpis.find((kpi) => peopleGoalKeys.has(kpi.goalId))?.id ||
-    kpis[0]?.id ||
-    "unmapped-kpi";
-  const peopleInitiativeTitle =
-    allInitiatives.find(
-      (initiative) =>
-        initiative.perspectiveId === "people" &&
-        ["hr", "manager", "employee"].includes(initiative.scopeRole)
-    )?.title ||
-    initiatives.find((initiative) => initiative.perspectiveId === "people")?.title ||
-    "People and evaluation readiness";
-
-  const employeeContributions = buildEmployeeContributions(
-    params.role,
-    params.profileId ?? null,
-    evaluationAssignments,
-    learningAssignments,
-    {
-      peopleKpiId,
-      peopleInitiativeTitle,
-    }
-  );
   const employeeContributionProgress = Math.round(
     average(employeeContributions.map((item) => item.progress))
   );
   const chainRoot =
-    structure.initiatives.find((initiative) => initiative.key === "cascade-growth-hr") ||
-    structure.initiatives.find(
+    visibleInitiativeRecords.find((initiative) => initiative.key === "cascade-growth-hr") ||
+    visibleInitiativeRecords.find(
       (initiative) =>
         initiative.scopeRole === "hr" &&
-        structure.initiatives.some((candidate) => candidate.parentInitiativeId === initiative.id)
+        visibleInitiativeRecords.some((candidate) => candidate.parentInitiativeId === initiative.id)
     );
   const featuredChainRecords: typeof structure.initiatives = [];
   let currentChainNode = chainRoot || null;
   while (currentChainNode) {
     featuredChainRecords.push(currentChainNode);
     currentChainNode =
-      structure.initiatives
+      visibleInitiativeRecords
         .filter((initiative) => initiative.parentInitiativeId === currentChainNode?.id)
         .sort((a, b) => a.sortOrder - b.sortOrder)[0] || null;
   }
@@ -1806,7 +3353,7 @@ export async function getBalancedScorecardWorkspace(params: {
       ? featuredChainRecords.map((record) => {
           const linkedKpiRecord = structure.kpis.find((item) => item.id === record.kpiId);
           const linkedKpi = linkedKpiRecord
-            ? kpis.find((item) => item.id === linkedKpiRecord.key)
+            ? scopedKpis.find((item) => item.id === linkedKpiRecord.key)
             : undefined;
           const isEmployeeLayer = record.scopeRole === "employee";
           return {
@@ -1858,22 +3405,51 @@ export async function getBalancedScorecardWorkspace(params: {
           } satisfies WorkspaceCascadeLevel;
         })
       : [];
+  const scopedFeaturedCascade = featuredCascade.filter((level) => {
+    if (FIRM_WIDE_ROLES.has(params.role) || params.role === "finance" || params.role === "marketing") {
+      return true;
+    }
+    if (params.role === "employee") {
+      return level.level === "Employee";
+    }
+    if (params.role === "manager") {
+      return level.level === "Manager" || level.level === "Employee";
+    }
+    if (params.role === "partner") {
+      return ["Partner", "Manager", "Employee"].includes(level.level);
+    }
+    return true;
+  });
 
   const evaluationSummary = buildEvaluationSummary(
     evaluationCycle,
-    latestScores,
+    scorecardLatestScores,
     evaluationAssignments
   );
   const hasLiveScorecardRollup =
-    goals.length > 0 && kpis.length > 0 && (initiatives.length > 0 || latestScores.length > 0);
+    goals.length > 0 &&
+    scopedKpis.length > 0 &&
+    (initiatives.length > 0 || scorecardLatestScores.length > 0);
   const departmentPerformance = hasLiveScorecardRollup
-    ? buildDepartmentRows(latestScores, evaluationAssignments, learningAssignments)
+    ? buildDepartmentRows(scorecardLatestScores, evaluationAssignments, learningAssignments, params.role)
     : [];
   const managerPerformance = hasLiveScorecardRollup
-    ? buildManagerRows(latestScores, evaluationAssignments, learningAssignments)
+    ? buildManagerRows(
+        scorecardLatestScores,
+        evaluationAssignments,
+        learningAssignments,
+        params.role,
+        scopeContext
+      )
     : [];
   const employeePerformance = hasLiveScorecardRollup
-    ? buildEmployeePerformanceRows(latestScores, evaluationAssignments, learningAssignments)
+    ? buildEmployeePerformanceRows(
+        scorecardLatestScores,
+        evaluationAssignments,
+        learningAssignments,
+        params.role,
+        scopeContext
+      )
     : [];
   const reportBlocks: WorkspaceReportBlock[] = [
     {
@@ -1907,15 +3483,35 @@ export async function getBalancedScorecardWorkspace(params: {
     effectiveRole: params.role,
     perspectiveCards,
     goals,
-    kpis,
+    kpis: scopedKpis,
     initiatives,
-    cascadeInitiatives: allInitiatives,
-    featuredCascade,
+    cascadeInitiatives: visibleInitiativesByRole,
+    featuredCascade: scopedFeaturedCascade,
     employeeContributions,
+    employeeKpiAssignments,
     evaluationSummary,
     reportBlocks,
     departmentPerformance,
     managerPerformance,
     employeePerformance,
   };
+};
+
+export async function getBalancedScorecardWorkspace(params: {
+  role: WorkspaceRole;
+  profileId?: number | null;
+  /**
+   * The profile ID of the user who is actually making the request.
+   * Used for role-based data scoping. When omitted, defaults to firm-wide
+   * access â€” callers must supply this for non-privileged roles.
+   */
+  requestingProfileId?: number | null;
+  evaluationCycleId?: number | null;
+}): Promise<BalancedScorecardWorkspace> {
+  const cacheKey = buildWorkspaceCacheKey(params);
+  return cacheService.getOrSet(
+    cacheKey,
+    () => buildBalancedScorecardWorkspace(params),
+    WORKSPACE_CACHE_TTL_MS
+  );
 }

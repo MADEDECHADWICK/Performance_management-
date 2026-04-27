@@ -571,7 +571,7 @@ export default function JobOperationsOverview({
             >
               <div className={showLocator ? "space-y-6" : "flex h-full flex-col gap-6"}>
                 <div className={showLocator ? "" : "shrink-0"}>
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-brand-orange">
+                  <p className="py-4 text-xs font-semibold uppercase tracking-[0.22em] text-brand-orange text-center">
                     Operations pulse
                   </p>
                   <h3 className="mt-2 text-xl font-semibold">{pulseHeading}</h3>

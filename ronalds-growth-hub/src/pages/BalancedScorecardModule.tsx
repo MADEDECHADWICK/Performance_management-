@@ -1,5 +1,6 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowRight,
@@ -43,6 +44,14 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -70,7 +79,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   performanceFrameworkAPI,
+  type BalancedScorecardContributionDetail,
+  type BalancedScorecardGovernanceCycle,
+  type BalancedScorecardKpiAssignmentRecord,
+  type BalancedScorecardGovernanceVersion,
+  type BalancedScorecardMeasurementPeriodSummary,
+  type BalancedScorecardMeasurementSnapshotPack,
   type BalancedScorecardPerspectiveRecord,
+  type BalancedScorecardGoalRecord,
+  type BalancedScorecardInitiativeRecord,
+  type BalancedScorecardKpiRecord,
+  type PerformanceBandRecord,
   type WorkspaceEvaluationSummary,
   type BalancedScorecardWorkspace,
   type BalancedScorecardMetricTemplate,
@@ -87,9 +106,11 @@ import {
   type WorkspacePerspectiveCard as PerspectiveCard,
   type WorkspaceReportBlock,
 } from "@/lib/api/performanceFramework";
-import evaluationsAPI, {
-  type EvaluationCycleSummary,
-} from "@/lib/api/evaluations";
+import documentsAPI from "@/lib/api/documents";
+import employeesAPI from "@/lib/api/employees";
+import evaluationsAPI from "@/lib/api/evaluations";
+import rolesAPI, { type Role } from "@/lib/api/roles";
+import type { Profile } from "@/lib/api/types";
 import {
   getPreferredRoleView,
   getRoleTabLabel,
@@ -98,7 +119,6 @@ import {
   kpiGovernanceRules,
   moduleTabs,
   roleHomeConfigs,
-  rolePerspectiveScope,
   roleProfiles,
   roleTabVisibility,
   strategyFlowSteps,
@@ -120,6 +140,7 @@ import {
   StatusBadge,
   TrendBars,
 } from "@/components/framework/BalancedScorecardPrimitives";
+import { BalancedScorecardPeopleAdminPanel } from "@/components/framework/BalancedScorecardPeopleAdminPanel";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -134,20 +155,13 @@ type KpiTrackingMode = "template" | "manual";
 export default function BalancedScorecardModule() {
   const navigate = useNavigate();
   const { workspaceRole } = useParams<{ workspaceRole?: string }>();
-  const { roles, hasAnyRole } = useAuth();
+  const { roles, hasAnyRole, profile } = useAuth();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<ModuleTabValue>("dashboard");
   const [selectedCycle, setSelectedCycle] = useState<string>("latest");
-  const [availableCycles, setAvailableCycles] = useState<EvaluationCycleSummary[]>([]);
   const [search, setSearch] = useState("");
-  const [trackingScope, setTrackingScope] = useState("all");
   const [setupSheetMode, setSetupSheetMode] = useState<SetupSheetMode>(null);
   const [kpiSheetMode, setKpiSheetMode] = useState<KpiSheetMode>(null);
-  const [workspaceData, setWorkspaceData] = useState<BalancedScorecardWorkspace | null>(null);
-  const [structureData, setStructureData] = useState<BalancedScorecardStructure | null>(null);
-  const [metricTemplates, setMetricTemplates] = useState<BalancedScorecardMetricTemplate[]>([]);
-  const [workspaceLoading, setWorkspaceLoading] = useState(false);
-  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [authoringSubmitting, setAuthoringSubmitting] = useState<string | null>(null);
   const [perspectiveForm, setPerspectiveForm] = useState({
     name: "",
@@ -155,11 +169,28 @@ export default function BalancedScorecardModule() {
     summary: "",
   });
   const [editingPerspectiveId, setEditingPerspectiveId] = useState<number | null>(null);
+  const [editingGoalId, setEditingGoalId] = useState<number | null>(null);
+  const [editingInitiativeId, setEditingInitiativeId] = useState<number | null>(null);
   const [goalForm, setGoalForm] = useState({
     perspectiveId: "",
     title: "",
     ownerName: "",
     description: "",
+  });
+  const [goalEditForm, setGoalEditForm] = useState({
+    title: "",
+    ownerName: "",
+    description: "",
+  });
+  const [initiativeEditForm, setInitiativeEditForm] = useState({
+    title: "",
+    summary: "",
+    ownerName: "",
+    timeline: "",
+    dueDate: "",
+    status: "at_risk" as StatusTone,
+    progress: "0",
+    scopeRole: "hr",
   });
   const [kpiForm, setKpiForm] = useState<{
     goalId: string;
@@ -213,23 +244,159 @@ export default function BalancedScorecardModule() {
     status: "at_risk" as StatusTone,
     progress: "0",
   });
+  const [kpiActualDialogOpen, setKpiActualDialogOpen] = useState(false);
+  const [kpiActualTarget, setKpiActualTarget] = useState<KpiDefinition | null>(null);
+  const [kpiActualForm, setKpiActualForm] = useState({
+    actualValue: "",
+    note: "",
+  });
+  const [selectedStructureVersionId, setSelectedStructureVersionId] = useState<string>("current");
+  const [cycleDialogOpen, setCycleDialogOpen] = useState(false);
+  const [versionDialogOpen, setVersionDialogOpen] = useState(false);
+  const [measurementPeriodDialogOpen, setMeasurementPeriodDialogOpen] = useState(false);
+  const [measurementSubmitting, setMeasurementSubmitting] = useState<string | null>(null);
+  const [contributionDialogMode, setContributionDialogMode] = useState<"detail" | "progress" | "evidence" | null>(null);
+  const [selectedContributionId, setSelectedContributionId] = useState<string | null>(null);
+  const [contributionSubmitting, setContributionSubmitting] = useState<string | null>(null);
+  const [selectedMeasurementPeriodId, setSelectedMeasurementPeriodId] = useState<string>("latest");
+  const [hasInitializedStructureVersion, setHasInitializedStructureVersion] = useState(false);
+  const [cycleForm, setCycleForm] = useState<{
+    name: string;
+    cadence: "monthly" | "quarterly" | "annual";
+    startDate: string;
+    endDate: string;
+  }>({
+    name: "",
+    cadence: "quarterly",
+    startDate: "",
+    endDate: "",
+  });
+  const [versionForm, setVersionForm] = useState({
+    cycleId: "",
+    label: "",
+    sourceVersionId: "auto",
+  });
+  const [measurementPeriodForm, setMeasurementPeriodForm] = useState({
+    label: "",
+    periodStart: "",
+    periodEnd: "",
+  });
+  const [contributionProgressForm, setContributionProgressForm] = useState({
+    progress: "",
+    comment: "",
+  });
+  const [contributionEvidenceNote, setContributionEvidenceNote] = useState("");
+  const [contributionEvidenceFile, setContributionEvidenceFile] = useState<File | null>(null);
 
   const canPreviewAllRoles = roles.includes("hr") || roles.includes("super_admin");
   const preferredRole = useMemo(() => getPreferredRoleView(roles), [roles]);
   const routeRole = isRoleKey(workspaceRole) ? workspaceRole : null;
   const selectedRole = canPreviewAllRoles ? routeRole ?? preferredRole : preferredRole;
 
+  const selectedCycleId =
+    selectedCycle !== "latest" && Number.isFinite(Number(selectedCycle))
+      ? Number(selectedCycle)
+      : undefined;
+  const resolvedStructureVersionId =
+    selectedStructureVersionId !== "current" && Number.isFinite(Number(selectedStructureVersionId))
+      ? Number(selectedStructureVersionId)
+      : undefined;
+
+  const queryClient = useQueryClient();
+
+  const { data: availableCycles = [] } = useQuery({
+    queryKey: ["evaluation-cycles"],
+    queryFn: () => evaluationsAPI.getMyCycles(),
+    staleTime: 60_000,
+  });
+
+  const {
+    data: workspaceData,
+    isLoading: workspaceLoading,
+    error: workspaceRawError,
+  } = useQuery({
+    queryKey: ["bsc-workspace", selectedRole, selectedCycleId, profile?.id],
+    queryFn: () =>
+      performanceFrameworkAPI.getWorkspace({
+        role: selectedRole,
+        profileId: profile?.id,
+        evaluationCycleId: selectedCycleId,
+      }),
+    enabled: !!profile,
+  });
+
+  const { data: structureData } = useQuery({
+    queryKey: ["bsc-structure", resolvedStructureVersionId ?? "current"],
+    queryFn: () =>
+      performanceFrameworkAPI.getScorecardStructure({
+        versionId: resolvedStructureVersionId,
+      }),
+    staleTime: 30_000,
+  });
+
+  const { data: metricTemplates = [] } = useQuery({
+    queryKey: ["bsc-kpi-templates"],
+    queryFn: () => performanceFrameworkAPI.getKpiTemplates(),
+    staleTime: Infinity,
+  });
+
+  const { data: governanceCycles = [] } = useQuery<BalancedScorecardGovernanceCycle[]>({
+    queryKey: ["bsc-governance"],
+    queryFn: () => performanceFrameworkAPI.getScorecardGovernance(),
+    enabled: canPreviewAllRoles,
+    staleTime: 30_000,
+  });
+
+  const { data: employeeDirectoryResponse } = useQuery({
+    queryKey: ["bsc-assignment-profiles"],
+    queryFn: () => employeesAPI.list({ page: 1, pageSize: 200, status: "active" }),
+    enabled: canPreviewAllRoles,
+    staleTime: 60_000,
+  });
+
+  const { data: positionRoles = [] } = useQuery<Role[]>({
+    queryKey: ["bsc-position-roles"],
+    queryFn: () => rolesAPI.list(),
+    enabled: canPreviewAllRoles,
+    staleTime: 60_000,
+  });
+
+  const workspaceError =
+    workspaceRawError instanceof Error
+      ? workspaceRawError.message.includes("Failed to fetch")
+        ? "Balanced scorecard workspace is unavailable. Check that the backend API is running and reachable."
+        : workspaceRawError.message
+      : workspaceRawError
+        ? "Failed to load the live balanced scorecard workspace."
+        : null;
+
+  const {
+    data: contributionDetail,
+    isFetching: contributionDetailLoading,
+  } = useQuery<BalancedScorecardContributionDetail>({
+    queryKey: ["bsc-contribution-detail", selectedContributionId, selectedCycleId, profile?.id],
+    queryFn: () =>
+      performanceFrameworkAPI.getContributionDetail(selectedContributionId!, {
+        profileId: profile?.id,
+        evaluationCycleId: selectedCycleId,
+      }),
+    enabled: Boolean(profile?.id && selectedContributionId && selectedRole === "employee"),
+    staleTime: 0,
+  });
+
   const deferredSearch = useDeferredValue(search);
   const searchTerm = deferredSearch.trim().toLowerCase();
   const perspectiveData: PerspectiveCard[] = workspaceData?.perspectiveCards ?? [];
   const goalData: GoalDefinition[] = workspaceData?.goals ?? [];
-  const kpiData: KpiDefinition[] = workspaceData?.kpis ?? [];
-  const initiativeData: InitiativeDefinition[] = workspaceData?.initiatives ?? [];
+  const kpiData: KpiDefinition[] = useMemo(() => workspaceData?.kpis ?? [], [workspaceData?.kpis]);
+  const initiativeData: InitiativeDefinition[] = useMemo(() => workspaceData?.initiatives ?? [], [workspaceData?.initiatives]);
   const cascadeInitiativeData: WorkspaceCascadeInitiative[] =
     workspaceData?.cascadeInitiatives ?? [];
   const featuredCascadeData: CascadeLevel[] = workspaceData?.featuredCascade ?? [];
   const employeeContributionData: EmployeeContribution[] =
     workspaceData?.employeeContributions ?? [];
+  const selectedContributionItem =
+    employeeContributionData.find((item) => item.id === selectedContributionId) ?? null;
   const evaluationSummary: WorkspaceEvaluationSummary = workspaceData?.evaluationSummary ?? {
     cycleId: null,
     cycleTitle: null,
@@ -256,10 +423,76 @@ export default function BalancedScorecardModule() {
   const employeePerformanceData: WorkspaceEmployeeRow[] =
     workspaceData?.employeePerformance ?? [];
   const structureSnapshot = structureData ?? emptyStructure;
+  const allGovernanceVersions = governanceCycles.flatMap((cycle) => cycle.versions);
+  const selectedGovernanceVersion: BalancedScorecardGovernanceVersion | null =
+    resolvedStructureVersionId !== undefined
+      ? allGovernanceVersions.find((version) => version.id === resolvedStructureVersionId) ?? null
+      : null;
+  const selectedGovernanceCycle =
+    selectedGovernanceVersion
+      ? governanceCycles.find((cycle) => cycle.id === selectedGovernanceVersion.cycleId) ?? null
+      : null;
+  const activeGovernanceCycle =
+    governanceCycles.find((cycle) => cycle.status === "active") ?? governanceCycles[0] ?? null;
+  const activeGovernanceVersion =
+    activeGovernanceCycle?.versions.find(
+      (version) => version.id === activeGovernanceCycle.activeVersionId
+    ) ?? null;
+  const adminVersionId = resolvedStructureVersionId ?? activeGovernanceVersion?.id ?? null;
+  const adminVersionLabel =
+    selectedGovernanceVersion?.label ||
+    (selectedGovernanceVersion
+      ? `v${selectedGovernanceVersion.versionNumber}`
+      : activeGovernanceVersion?.label ||
+        (activeGovernanceVersion ? `v${activeGovernanceVersion.versionNumber}` : "No published version"));
+  const measurementVersionId = resolvedStructureVersionId ?? activeGovernanceVersion?.id ?? undefined;
+  const { data: kpiAssignments = [] } = useQuery<BalancedScorecardKpiAssignmentRecord[]>({
+    queryKey: ["bsc-kpi-assignments", adminVersionId ?? "current"],
+    queryFn: () =>
+      performanceFrameworkAPI.getKpiAssignments(
+        adminVersionId ? { scorecardVersionId: adminVersionId } : undefined
+      ),
+    enabled: canPreviewAllRoles,
+    staleTime: 30_000,
+  });
+  const { data: performanceBands = [] } = useQuery<PerformanceBandRecord[]>({
+    queryKey: ["bsc-performance-bands"],
+    queryFn: () => performanceFrameworkAPI.getPerformanceBands(),
+    enabled: canPreviewAllRoles,
+    staleTime: 30_000,
+  });
+  const { data: measurementPeriods = [] } = useQuery<BalancedScorecardMeasurementPeriodSummary[]>({
+    queryKey: ["bsc-measurement-periods", measurementVersionId ?? "none"],
+    queryFn: () =>
+      performanceFrameworkAPI.getMeasurementPeriods({
+        versionId: measurementVersionId,
+      }),
+    enabled: canPreviewAllRoles && Boolean(measurementVersionId),
+    staleTime: 30_000,
+  });
+  const selectedMeasurementPeriod =
+    selectedMeasurementPeriodId !== "latest" && Number.isFinite(Number(selectedMeasurementPeriodId))
+      ? measurementPeriods.find((period) => period.id === Number(selectedMeasurementPeriodId)) ?? null
+      : measurementPeriods[0] ?? null;
+  const {
+    data: measurementSnapshotPack,
+  } = useQuery<BalancedScorecardMeasurementSnapshotPack>({
+    queryKey: ["bsc-measurement-snapshots", selectedMeasurementPeriod?.id ?? "none"],
+    queryFn: () =>
+      performanceFrameworkAPI.getMeasurementSnapshots(selectedMeasurementPeriod!.id),
+    enabled: canPreviewAllRoles && Boolean(selectedMeasurementPeriod?.id),
+    staleTime: 30_000,
+  });
   const perspectiveRecords = structureSnapshot.perspectives;
   const goalRecords = structureSnapshot.goals;
   const kpiRecords = structureSnapshot.kpis;
   const initiativeRecords = structureSnapshot.initiatives;
+  const employeeDirectory: Profile[] = employeeDirectoryResponse?.data ?? [];
+  const measurementSnapshots = measurementSnapshotPack?.snapshots ?? [];
+  const highlightedMeasurementSnapshot =
+    measurementSnapshots.find((snapshot) => snapshot.status !== "on_track") ??
+    measurementSnapshots[0] ??
+    null;
   const filteredKpis = kpiData.filter((kpi) => {
     if (!searchTerm) return true;
     const goal = goalData.find((candidate) => candidate.id === kpi.goalId);
@@ -295,6 +528,11 @@ export default function BalancedScorecardModule() {
   const initiativeKpiOptions = Number.isFinite(initiativeGoalId) && initiativeGoalId > 0
     ? kpiRecords.filter((kpi) => kpi.goalId === initiativeGoalId)
     : kpiRecords;
+  const kpiFormGoalId = Number(kpiForm.goalId);
+  const existingGoalKpiWeightTotal = Number.isFinite(kpiFormGoalId) && kpiFormGoalId > 0
+    ? kpiRecords.filter((k) => k.goalId === kpiFormGoalId).reduce((sum, k) => sum + (k.weight || 0), 0)
+    : 0;
+  const projectedWeightTotal = existingGoalKpiWeightTotal + (Number(kpiForm.weight) || 0);
   const activeFeaturedRootInitiative =
     initiativeRecords.find(
       (initiative) =>
@@ -318,11 +556,9 @@ export default function BalancedScorecardModule() {
   const closeSetupSheet = () => {
     setSetupSheetMode(null);
     setEditingPerspectiveId(null);
-    setPerspectiveForm({
-      name: "",
-      ownerName: "",
-      summary: "",
-    });
+    setEditingGoalId(null);
+    setPerspectiveForm({ name: "", ownerName: "", summary: "" });
+    setGoalEditForm({ title: "", ownerName: "", description: "" });
   };
 
   const openCreatePerspective = () => {
@@ -344,14 +580,8 @@ export default function BalancedScorecardModule() {
     });
     setSetupSheetMode("editPerspective");
   };
-  const scopedPerspectives = perspectiveData.filter((perspective) =>
-    rolePerspectiveScope[selectedRole].includes(perspective.id)
-  );
-  const selectedCycleId =
-    selectedCycle !== "latest" && Number.isFinite(Number(selectedCycle))
-      ? Number(selectedCycle)
-      : undefined;
-  const visibleTabs = roleTabVisibility[selectedRole]
+  const scopedPerspectives = perspectiveData;
+  const visibleTabs = (roleTabVisibility[selectedRole] ?? roleTabVisibility.employee)
     .map((value) => moduleTabs.find((tab) => tab.value === value))
     .filter((tab): tab is (typeof moduleTabs)[number] => Boolean(tab))
     .map((tab) => ({ ...tab, label: getRoleTabLabel(selectedRole, tab.value) }));
@@ -377,7 +607,7 @@ export default function BalancedScorecardModule() {
       },
       {
         label: "Evaluation cycle",
-        value: evaluationSummary.cycleTitle || "No active cycle",
+        value: evaluationSummary.cycleId ? evaluationSummary.cycleTitle : "0",
         hint: evaluationSummary.cycleId
           ? `${evaluationSummary.completionPercent}% review completion aligned to the current BSC window.`
           : "Select a live evaluation cycle to join scorecard and review signals.",
@@ -443,6 +673,50 @@ export default function BalancedScorecardModule() {
   const averageContributionScore = averageScore(
     employeeContributionData.map((contribution) => contribution.score)
   );
+  const employeeContributionDetails = useMemo(
+    () =>
+      employeeContributionData.map((item) => {
+        const kpi = item.kpiId
+          ? kpiData.find((candidate) => candidate.id === item.kpiId) ?? null
+          : null;
+        const goal = kpi
+          ? goalData.find((candidate) => candidate.id === kpi.goalId) ?? null
+          : null;
+        const perspective = kpi
+          ? perspectiveData.find((candidate) => candidate.id === kpi.perspectiveId) ?? null
+          : null;
+        return {
+          item,
+          kpi,
+          goal,
+          perspective,
+        };
+      }),
+    [employeeContributionData, goalData, kpiData, perspectiveData]
+  );
+  const employeeLinkedKpiCount = new Set(
+    employeeContributionDetails
+      .map((entry) => entry.kpi?.id)
+      .filter((value): value is string => Boolean(value))
+  ).size;
+  const employeeGoalCount = new Set(
+    employeeContributionDetails
+      .map((entry) => entry.goal?.id)
+      .filter((value): value is string => Boolean(value))
+  ).size;
+  const employeePrimaryContribution = employeeContributionDetails[0] ?? null;
+  const employeePendingUpdateCount = employeeContributionData.filter(
+    (item) => !item.acknowledged || item.status !== "on_track"
+  ).length;
+  const employeeAcknowledgedCount = employeeContributionData.filter((item) => item.acknowledged).length;
+  const employeeOverallStatus: StatusTone | null =
+    employeeContributionDetails.length === 0
+      ? null
+      : employeePendingUpdateCount === 0
+        ? "on_track"
+        : averageContributionProgress >= 70
+          ? "at_risk"
+          : "off_track";
   const atRiskGoalCount = goalData.filter((goal) => goal.status !== "on_track").length;
   const atRiskKpiCount = kpiData.filter((kpi) => kpi.status !== "on_track").length;
   const atRiskInitiativeCount = initiativeData.filter((initiative) => initiative.status !== "on_track").length;
@@ -541,19 +815,12 @@ export default function BalancedScorecardModule() {
     employeePerformanceData.length > 0
       ? Math.round((acknowledgedEmployeeCount / employeePerformanceData.length) * 100)
       : 0;
-  const managerEmployeeItems = employeePerformanceData.map((employee, index) => {
+  const managerEmployeeItems = employeePerformanceData.map((employee) => {
     const ackState = parseAcknowledgementState(employee.ack);
     return {
       id: `team-${employee.name.replace(/\s+/g, "-").toLowerCase()}`,
       employee: employee.name,
-      title:
-        index === 0
-          ? "Priority contribution follow-through"
-          : index === 1
-            ? "Client and delivery action mix"
-            : index === 2
-              ? "Coaching and readiness action"
-              : "Acknowledgement and update follow-up",
+      title: `${employee.name} contribution follow-up`,
       dueDate: ackState.overdue ? "Immediate follow-up" : "Next weekly check-in",
       progress: employee.score,
       acknowledged: ackState.acknowledged,
@@ -608,7 +875,7 @@ export default function BalancedScorecardModule() {
           secondaryBoardItems: [
             {
               label: "Evaluation cycle",
-              value: evaluationSummary.cycleTitle || "No active cycle",
+              value: evaluationSummary.cycleId ? evaluationSummary.cycleTitle : "0",
               note: evaluationSummary.cycleId
                 ? `${evaluationSummary.pendingAssignments} assignments are pending and ${evaluationSummary.overdueAssignments} are overdue.`
                 : "Create or select an evaluation cycle to connect scorecard progress to reviews.",
@@ -706,7 +973,7 @@ export default function BalancedScorecardModule() {
             },
             {
               label: "Review completion",
-              value: evaluationSummary.cycleId ? `${evaluationSummary.completionPercent}%` : "No active cycle",
+              value: evaluationSummary.cycleId ? `${evaluationSummary.completionPercent}%` : "0",
               note: evaluationSummary.cycleId
                 ? `${evaluationSummary.submittedAssignments} of ${evaluationSummary.totalAssignments} assignments are submitted.`
                 : "Start an evaluation cycle to join scorecard and review signals.",
@@ -1094,7 +1361,10 @@ export default function BalancedScorecardModule() {
               note: evaluationSummary.cycleId
                 ? `${evaluationSummary.cycleTitle} is the active cycle for these contribution items.`
                 : `${employeeContributionData.filter((item) => item.status !== "on_track").length} assigned items are currently amber or red.`,
-              status: scoreToStatus(averageContributionProgress),
+              status:
+                employeeContributionData.length > 0
+                  ? scoreToStatus(averageContributionProgress)
+                  : undefined,
               progress: averageContributionProgress,
             },
             {
@@ -1353,25 +1623,12 @@ export default function BalancedScorecardModule() {
   })();
 
   const trackingView = (() => {
-    const employeeScopedKpiIds = new Set(employeeContributionData.map((item) => item.kpiId));
-    const baseKpis = filteredKpis.filter((kpi) =>
-      selectedRole === "employee"
-        ? employeeScopedKpiIds.has(kpi.id)
-        : rolePerspectiveScope[selectedRole].includes(kpi.perspectiveId)
+    const employeeScopedKpiIds = new Set(
+      employeeContributionData.map((item) => item.kpiId).filter(Boolean)
     );
-    const scopedKpisByOwnership = baseKpis.filter((kpi) => {
-      if (trackingScope === "firm") {
-        return ["GMP Office", "Finance", "HR / Strategy Office", "Operations Council"].some((owner) => kpi.owner.includes(owner));
-      }
-      if (trackingScope === "team") {
-        return ["Partner", "Manager", "Operations", "HR", "Marketing"].some((owner) => kpi.owner.includes(owner));
-      }
-      if (trackingScope === "employee") {
-        return ["kpi-7", "kpi-8", "kpi-9", "kpi-10"].includes(kpi.id);
-      }
-      return true;
-    });
-    const kpis = scopedKpisByOwnership.length > 0 ? scopedKpisByOwnership : baseKpis;
+    const kpis = filteredKpis.filter((kpi) =>
+      selectedRole === "employee" ? employeeScopedKpiIds.has(kpi.id) : true
+    );
     const averageScore = kpis.length > 0 ? Math.round(kpis.reduce((sum, kpi) => sum + kpi.weightedScore, 0) / kpis.length) : 0;
     const riskCount = kpis.filter((kpi) => kpi.status !== "on_track").length;
     const averageInitiativeProgress = kpis.length > 0 ? Math.round(kpis.reduce((sum, kpi) => sum + kpi.initiativeProgress, 0) / kpis.length) : 0;
@@ -1384,8 +1641,6 @@ export default function BalancedScorecardModule() {
         { label: "At risk / off track", value: String(riskCount), hint: "Signals that need commentary, intervention, or closer follow-up.", icon: CircleAlert },
         { label: "Initiative completion", value: `${averageInitiativeProgress}%`, hint: "Average execution-layer health across the tracked KPIs.", icon: Workflow },
       ] satisfies RoleHomeMetric[],
-      legendTitle: "Status legend",
-      legendDescription: "Use subtle signal colors only where decision-makers need them.",
     };
 
     switch (selectedRole) {
@@ -1396,13 +1651,6 @@ export default function BalancedScorecardModule() {
           description: "GMP should see a compact KPI watchlist that combines strategic movement, execution health, and owner commentary.",
           boardTitle: "Executive KPI watchlist",
           boardDescription: "Small, decision-ready list of KPIs requiring executive review.",
-          insightTitle: "What GMP should read here",
-          insightDescription: "Executive tracking is about risk, ownership, and escalation quality.",
-          insightLines: [
-            "Focus on KPIs that can change strategic outcomes, not every operational update.",
-            "Owner commentary should explain what decision is needed from GMP.",
-            "Linked initiative progress matters because it shows whether execution is catching up to the KPI signal.",
-          ],
         };
       case "partner":
         return {
@@ -1411,13 +1659,6 @@ export default function BalancedScorecardModule() {
           description: "Partners need KPI tracking that stays close to client portfolios, account risk, and manager execution quality.",
           boardTitle: "Portfolio KPI board",
           boardDescription: "Partner-owned or partner-relevant KPIs with clear account and manager commentary.",
-          insightTitle: "What Partner should read here",
-          insightDescription: "This board is about portfolio movement, account risk, and whether manager action is strong enough.",
-          insightLines: [
-            "A KPI can be at risk even when the portfolio feels active.",
-            "Conversion and retention movement must stay tied to named manager actions.",
-            "Commentary should explain which accounts need partner attention now.",
-          ],
         };
       case "manager":
         return {
@@ -1426,13 +1667,6 @@ export default function BalancedScorecardModule() {
           description: "Managers should see delivery KPIs, coaching-linked people signals, and execution commentary in one operational board.",
           boardTitle: "Team contribution board",
           boardDescription: "Target vs actual, progress, and commentary for the KPIs managers influence most directly.",
-          insightTitle: "What Manager should read here",
-          insightDescription: "Tracking is only useful if it drives the next coaching or delivery action.",
-          insightLines: [
-            "Use the board to see which employee actions are not turning into KPI movement.",
-            "Commentary should identify blockers early, before the next review cycle.",
-            "Team and people KPIs belong together because coaching discipline affects delivery performance.",
-          ],
         };
       case "finance":
         return {
@@ -1441,13 +1675,6 @@ export default function BalancedScorecardModule() {
           description: "Finance needs a financial-only lens with actuals, close commentary, and linked recovery initiatives.",
           boardTitle: "Financial watchlist",
           boardDescription: "Collections, realization, and recovery KPIs with finance-owned commentary.",
-          insightTitle: "What Finance should read here",
-          insightDescription: "Finance owns inputs, accuracy, and period-close explanation for the financial perspective.",
-          insightLines: [
-            "Watch target vs actual and aging pressure together.",
-            "Initiative progress matters only if it changes recovery and collection behavior.",
-            "Close notes should explain what moved and what still depends on partner follow-through.",
-          ],
         };
       case "marketing":
         return {
@@ -1456,13 +1683,6 @@ export default function BalancedScorecardModule() {
           description: "Marketing should see the customer-growth KPIs, insight commentary, and initiative support signals in one lightweight board.",
           boardTitle: "Customer-growth watchlist",
           boardDescription: "Retention, conversion, and sponsor-review support tracked with clear commentary.",
-          insightTitle: "What Marketing should read here",
-          insightDescription: "Marketing tracking is about how insight and growth actions affect shared customer KPIs.",
-          insightLines: [
-            "Watch retention and cross-sell movement together because both depend on handoff quality.",
-            "Client commentary should explain the next action, not just repeat the metric.",
-            "Marketing-owned initiatives should map directly to the shared growth KPI chain.",
-          ],
         };
       default:
         return {
@@ -1471,13 +1691,6 @@ export default function BalancedScorecardModule() {
           description: "Tracking shows target versus actual, weighted score, trend, linked initiative progress, and owner commentary in one clean operational view.",
           boardTitle: "Tracking board",
           boardDescription: "Target vs actual, trend, initiative progress, and comments all in one board.",
-          insightTitle: "How tracking and initiatives work together",
-          insightDescription: "Execution progress should never be separated from the KPI it is intended to move.",
-          insightLines: [
-            "A KPI can look at risk even when activity volume looks busy. That is why target vs actual and initiative completion must sit together.",
-            "Owner commentary is part of the tracking contract. Managers and partners need a place to explain why a KPI is moving.",
-            "The best tracking screens are action-oriented, not just numeric.",
-          ],
         };
     }
   })();
@@ -1554,53 +1767,53 @@ export default function BalancedScorecardModule() {
             icon: CircleAlert,
           },
         ],
-        items: employeePerformanceData.map((employee, index) => ({
+        items: employeePerformanceData.map((employee) => ({
           id: `hr-workforce-${employee.name}`,
           employee: employee.name,
-          title: index === 0 ? "Client growth contribution mix" : index === 1 ? "Delivery quality contribution mix" : index === 2 ? "Coaching and readiness mix" : "Follow-up and acknowledgement mix",
-          dueDate: index === 3 ? "Immediate follow-up" : "Monthly review pack",
+          title: `${employee.name} contribution health`,
+          dueDate: parseAcknowledgementState(employee.ack).overdue ? "Immediate follow-up" : "Monthly review pack",
           progress: employee.score,
           acknowledged: employee.ack.toLowerCase().includes("all") || employee.ack.startsWith("2/3"),
           status: employee.score >= 75 ? "on_track" : employee.score >= 60 ? "at_risk" : "off_track",
           note: employee.ack,
         })),
-        sideTitle: "HR focus",
-        sideDescription: "This view helps HR spot workforce friction in the cascade before it becomes a strategic problem.",
-        sideLines: [
-          "Use acknowledgement and contribution health as leading indicators.",
-          "Escalate teams where employee actions are piling up without progress.",
-          "Do not turn HR into the owner of every employee task; use this as a governance lens.",
-        ],
       };
     }
 
     return {
       title: "Employee view",
-      // description: "A lightweight employee dashboard focused on what the employee owns, how they are progressing, and how their work contributes upward.",
       metrics: [
         {
-          label: "My assigned items",
-          value: String(employeeContributionData.length),
-          hint: "Active work items linked to live initiatives.",
-          icon: ClipboardCheck,
+          label: "Current period",
+          value: evaluationSummary.cycleTitle || "Live KPI view",
+          hint: evaluationSummary.startDate && evaluationSummary.endDate
+            ? `${new Date(evaluationSummary.startDate).toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+              })} to ${new Date(evaluationSummary.endDate).toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+              })}.`
+            : "Your current contribution window and review pack.",
+          icon: Calendar,
         },
         {
-          label: "My average progress",
-          value: `${averageContributionProgress}%`,
-          hint: "Across my active contribution items.",
-          icon: Activity,
+          label: "Strategic links",
+          value: `${employeeGoalCount} goals · ${employeeLinkedKpiCount} KPIs`,
+          hint: "The goals and KPIs this employee currently supports.",
+          icon: Target,
+        },
+        {
+          label: "Updates needed",
+          value: String(employeePendingUpdateCount),
+          hint: "Items needing acknowledgement, progress, or recovery action.",
+          icon: ClipboardCheck,
         },
         {
           label: "My score",
           value: String(averageContributionScore),
-          hint: "Weighted contribution score for the current cycle.",
+          hint: "Current contribution score from assigned work items.",
           icon: BarChart3,
-        },
-        {
-          label: "Acknowledged",
-          value: `${employeeContributionData.filter((item) => item.acknowledged).length}/${employeeContributionData.length || 0}`,
-          hint: "Contribution items already acknowledged by the employee.",
-          icon: CheckCircle2,
         },
       ],
       items: employeeContributionData.map((item) => ({
@@ -1613,27 +1826,11 @@ export default function BalancedScorecardModule() {
         status: item.status,
         note: item.managerComment,
       })),
-      sideTitle: "Employee design rules",
-      sideDescription: "Keep the experience light, clear, and role-relevant.",
-      sideLines: [
-        "Show only my assigned items, due dates, progress, score, and the most recent manager note.",
-        "Keep the upward roll-up explanation compact and easy to scan.",
-        "Avoid exposing the full strategy tree unless the employee intentionally drills deeper.",
-      ],
     };
   })();
 
   const reportsView = (() => {
-    // Keep the reporting tab BSC-native. Manager/employee rows previously leaked
-    // evaluation and learning rollups into the scorecard surface.
-    const perspectiveRows =
-      selectedRole === "finance"
-        ? perspectiveData.filter((perspective) => perspective.id === "financial")
-        : selectedRole === "marketing"
-          ? perspectiveData.filter((perspective) => perspective.id === "customer")
-          : selectedRole === "partner"
-            ? perspectiveData.filter((perspective) => ["financial", "customer", "internal"].includes(perspective.id))
-            : perspectiveData;
+    const perspectiveRows = perspectiveData;
     const departmentRows =
       selectedRole === "finance"
         ? departmentPerformanceData.slice(0, 3)
@@ -1642,15 +1839,23 @@ export default function BalancedScorecardModule() {
           : selectedRole === "partner"
             ? departmentPerformanceData.filter((department) => department.status !== "off_track").slice(0, 4)
             : departmentPerformanceData;
-    const managerRows: WorkspaceManagerRow[] = [];
-    const employeeRows: WorkspaceEmployeeRow[] = [];
+    const managerRows: WorkspaceManagerRow[] =
+      selectedRole === "gmp" || selectedRole === "hr" || selectedRole === "partner"
+        ? managerPerformanceData
+        : [];
+    const employeeRows: WorkspaceEmployeeRow[] =
+      selectedRole === "gmp" || selectedRole === "hr" || selectedRole === "partner"
+        ? employeePerformanceData
+        : [];
     const reportBlocks = reportBlockData.map((block) =>
       block.label === "Performance by manager"
         ? {
             ...block,
             value: `${managerRows.length} managers`,
             hint:
-              "Manager roll-up is hidden until live BSC-owned manager data is explicitly modeled.",
+              managerRows.length > 0
+                ? block.hint
+                : "No manager rows are in scope for the current workspace.",
           }
         : block
     );
@@ -1753,18 +1958,154 @@ export default function BalancedScorecardModule() {
     }
   })();
 
-  const refreshBalancedScorecardData = async (role: RoleKey = selectedRole) => {
-    const [workspace, structure, templates] = await Promise.all([
-      performanceFrameworkAPI.getWorkspace({
-        role,
+  const refreshBalancedScorecardData = (_role?: RoleKey) => {
+    queryClient.invalidateQueries({ queryKey: ["bsc-workspace"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-structure"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-governance"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-kpi-assignments"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-performance-bands"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-measurement-periods"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-measurement-snapshots"] });
+    queryClient.invalidateQueries({ queryKey: ["bsc-contribution-detail"] });
+  };
+
+  const closeContributionDialogs = () => {
+    setContributionDialogMode(null);
+    setSelectedContributionId(null);
+    setContributionProgressForm({ progress: "", comment: "" });
+    setContributionEvidenceNote("");
+    setContributionEvidenceFile(null);
+  };
+
+  const openContributionDetail = (item: EmployeeContribution) => {
+    setSelectedContributionId(item.id);
+    setContributionDialogMode("detail");
+  };
+
+  const openContributionProgressDialog = (item: EmployeeContribution) => {
+    setSelectedContributionId(item.id);
+    setContributionProgressForm({
+      progress: String(item.progress),
+      comment: item.employeeComment || "",
+    });
+    setContributionDialogMode("progress");
+  };
+
+  const openContributionEvidenceDialog = (item: EmployeeContribution) => {
+    setSelectedContributionId(item.id);
+    setContributionEvidenceNote("");
+    setContributionEvidenceFile(null);
+    setContributionDialogMode("evidence");
+  };
+
+  const handleAcknowledgeContribution = async (item: EmployeeContribution) => {
+    if (!profile?.id) return;
+    try {
+      setContributionSubmitting(`ack:${item.id}`);
+      await performanceFrameworkAPI.acknowledgeContribution(item.id, {
+        profileId: profile.id,
         evaluationCycleId: selectedCycleId,
-      }),
-      performanceFrameworkAPI.getScorecardStructure(),
-      performanceFrameworkAPI.getKpiTemplates(),
-    ]);
-    setWorkspaceData(workspace);
-    setStructureData(structure);
-    setMetricTemplates(templates);
+      });
+      refreshBalancedScorecardData();
+      toast({
+        title: "Contribution acknowledged",
+        description: "Your acknowledgement has been recorded for this scorecard item.",
+      });
+    } catch (error) {
+      toast({
+        title: "Acknowledgement failed",
+        description: error instanceof Error ? error.message : "The contribution could not be acknowledged.",
+        variant: "destructive",
+      });
+    } finally {
+      setContributionSubmitting(null);
+    }
+  };
+
+  const handleSubmitContributionProgress = async () => {
+    if (!profile?.id || !selectedContributionId) return;
+    const progress = Number(contributionProgressForm.progress);
+    if (!Number.isFinite(progress) || progress < 0 || progress > 100) {
+      toast({
+        title: "Progress is required",
+        description: "Enter a progress value between 0 and 100.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      setContributionSubmitting(`progress:${selectedContributionId}`);
+      await performanceFrameworkAPI.updateContributionProgress(selectedContributionId, {
+        profileId: profile.id,
+        evaluationCycleId: selectedCycleId,
+        progress,
+        comment: contributionProgressForm.comment || undefined,
+      });
+      refreshBalancedScorecardData();
+      setContributionDialogMode("detail");
+      toast({
+        title: "Progress updated",
+        description: "Your contribution update has been saved.",
+      });
+    } catch (error) {
+      toast({
+        title: "Progress update failed",
+        description: error instanceof Error ? error.message : "The contribution update could not be saved.",
+        variant: "destructive",
+      });
+    } finally {
+      setContributionSubmitting(null);
+    }
+  };
+
+  const handleUploadContributionEvidence = async () => {
+    if (!selectedContributionId || !contributionDetail) return;
+    if (!contributionEvidenceFile) {
+      toast({
+        title: "Evidence file required",
+        description: "Choose a file before uploading evidence.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      setContributionSubmitting(`evidence:${selectedContributionId}`);
+      await documentsAPI.uploadFile(contributionEvidenceFile, {
+        documentType: "other",
+        entityType: "BalancedScorecardContribution",
+        entityId: contributionDetail.workflowId,
+        accessLevel: "employee",
+        description: contributionEvidenceNote || undefined,
+      });
+      refreshBalancedScorecardData();
+      setContributionDialogMode("detail");
+      setContributionEvidenceFile(null);
+      setContributionEvidenceNote("");
+      toast({
+        title: "Evidence uploaded",
+        description: "The evidence file is now linked to this contribution item.",
+      });
+    } catch (error) {
+      toast({
+        title: "Evidence upload failed",
+        description: error instanceof Error ? error.message : "The evidence file could not be uploaded.",
+        variant: "destructive",
+      });
+    } finally {
+      setContributionSubmitting(null);
+    }
+  };
+
+  const handleOpenContributionReviewContext = (item: EmployeeContribution | null) => {
+    if (!item?.reviewContextPath) {
+      toast({
+        title: "No review context linked",
+        description: "This contribution item does not yet have a linked review path.",
+        variant: "destructive",
+      });
+      return;
+    }
+    navigate(item.reviewContextPath);
   };
 
   const applyMetricTemplate = (metricKey: string) => {
@@ -1799,6 +2140,339 @@ export default function BalancedScorecardModule() {
     }));
   };
 
+  const handleCreateScorecardCycle = async () => {
+    try {
+      setAuthoringSubmitting("createScorecardCycle");
+      await performanceFrameworkAPI.createScorecardCycle({
+        name: cycleForm.name,
+        cadence: cycleForm.cadence,
+        startDate: cycleForm.startDate,
+        endDate: cycleForm.endDate,
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      setCycleDialogOpen(false);
+      setCycleForm({
+        name: "",
+        cadence: "quarterly",
+        startDate: "",
+        endDate: "",
+      });
+      toast({
+        title: "Scorecard cycle created",
+        description: "You can now create a draft scorecard version inside this cycle.",
+      });
+    } catch (error) {
+      toast({
+        title: "Cycle creation failed",
+        description: error instanceof Error ? error.message : "The scorecard cycle could not be created.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleBootstrapScorecardStructure = async () => {
+    try {
+      setAuthoringSubmitting("bootstrapScorecardStructure");
+      await performanceFrameworkAPI.bootstrapScorecardStructure();
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Scorecard library bootstrapped",
+        description: "Default perspectives, goals, KPIs, and initiatives are now available for governance.",
+      });
+    } catch (error) {
+      toast({
+        title: "Bootstrap failed",
+        description:
+          error instanceof Error ? error.message : "The scorecard library could not be bootstrapped.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleCreateScorecardVersion = async () => {
+    const cycleId = Number(versionForm.cycleId);
+    if (!Number.isFinite(cycleId) || cycleId <= 0) return;
+
+    try {
+      setAuthoringSubmitting("createScorecardVersion");
+      const createdVersion = await performanceFrameworkAPI.createScorecardVersion(cycleId, {
+        label: versionForm.label.trim() || undefined,
+        sourceVersionId:
+          versionForm.sourceVersionId === "auto"
+            ? undefined
+            : versionForm.sourceVersionId === "baseline"
+              ? null
+              : Number(versionForm.sourceVersionId),
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      setSelectedStructureVersionId(String(createdVersion.id));
+      setVersionDialogOpen(false);
+      setVersionForm({
+        cycleId: String(cycleId),
+        label: "",
+        sourceVersionId: "auto",
+      });
+      toast({
+        title: "Scorecard version created",
+        description: "The draft version was cloned and is ready for strategy authoring.",
+      });
+    } catch (error) {
+      toast({
+        title: "Version creation failed",
+        description: error instanceof Error ? error.message : "The scorecard version could not be created.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handlePublishScorecardVersion = async () => {
+    if (!selectedGovernanceVersion) return;
+    if (
+      !window.confirm(
+        `Publish scorecard version ${selectedGovernanceVersion.versionNumber}${
+          selectedGovernanceCycle ? ` for ${selectedGovernanceCycle.name}` : ""
+        }?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setAuthoringSubmitting(`publishScorecardVersion:${selectedGovernanceVersion.id}`);
+      await performanceFrameworkAPI.publishScorecardVersion(selectedGovernanceVersion.id);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Scorecard published",
+        description: "This version is now the active scorecard for the workspace.",
+      });
+    } catch (error) {
+      toast({
+        title: "Publish failed",
+        description: error instanceof Error ? error.message : "The scorecard version could not be published.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleCreateMeasurementPeriod = async () => {
+    if (!measurementVersionId) return;
+    try {
+      setMeasurementSubmitting("createMeasurementPeriod");
+      const created = await performanceFrameworkAPI.createMeasurementPeriod({
+        versionId: measurementVersionId,
+        label: measurementPeriodForm.label.trim() || undefined,
+        periodStart: measurementPeriodForm.periodStart,
+        periodEnd: measurementPeriodForm.periodEnd,
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      setMeasurementPeriodDialogOpen(false);
+      setSelectedMeasurementPeriodId(String(created.id));
+      setMeasurementPeriodForm({
+        label: "",
+        periodStart: "",
+        periodEnd: "",
+      });
+      toast({
+        title: "Measurement period created",
+        description: "The period is ready for KPI snapshot generation.",
+      });
+    } catch (error) {
+      toast({
+        title: "Measurement period creation failed",
+        description:
+          error instanceof Error ? error.message : "The measurement period could not be created.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleGenerateMeasurementPeriod = async () => {
+    if (!selectedMeasurementPeriod) return;
+    try {
+      setMeasurementSubmitting(`generateMeasurement:${selectedMeasurementPeriod.id}`);
+      await performanceFrameworkAPI.generateMeasurementPeriod(selectedMeasurementPeriod.id);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Measurement snapshots generated",
+        description: "The KPI pack has been recalculated for the selected period.",
+      });
+    } catch (error) {
+      toast({
+        title: "Snapshot generation failed",
+        description:
+          error instanceof Error ? error.message : "The measurement snapshot pack could not be generated.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleSubmitMeasurementPeriod = async () => {
+    if (!selectedMeasurementPeriod) return;
+    try {
+      setMeasurementSubmitting(`submitMeasurement:${selectedMeasurementPeriod.id}`);
+      await performanceFrameworkAPI.submitMeasurementPeriod(selectedMeasurementPeriod.id);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Measurement period submitted",
+        description: "The period is now in the review workflow.",
+      });
+    } catch (error) {
+      toast({
+        title: "Measurement submit failed",
+        description:
+          error instanceof Error ? error.message : "The measurement period could not be submitted.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleReviewMeasurementPeriod = async (
+    decision: "start_review" | "request_changes" | "approve"
+  ) => {
+    if (!selectedMeasurementPeriod) return;
+    try {
+      setMeasurementSubmitting(`${decision}:${selectedMeasurementPeriod.id}`);
+      await performanceFrameworkAPI.reviewMeasurementPeriod(selectedMeasurementPeriod.id, {
+        decision,
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title:
+          decision === "approve"
+            ? "Measurement period approved"
+            : decision === "request_changes"
+              ? "Changes requested"
+              : "Review started",
+        description:
+          decision === "approve"
+            ? "The KPI pack is approved and ready to close."
+            : decision === "request_changes"
+              ? "The period has been returned to draft for another generation or edit."
+              : "The KPI pack is now formally in review.",
+      });
+    } catch (error) {
+      toast({
+        title: "Measurement review failed",
+        description:
+          error instanceof Error ? error.message : "The measurement review action could not be completed.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleCloseMeasurementPeriod = async () => {
+    if (!selectedMeasurementPeriod) return;
+    try {
+      setMeasurementSubmitting(`closeMeasurement:${selectedMeasurementPeriod.id}`);
+      await performanceFrameworkAPI.closeMeasurementPeriod(selectedMeasurementPeriod.id);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Measurement period closed",
+        description: "The selected KPI pack is now frozen for this period.",
+      });
+    } catch (error) {
+      toast({
+        title: "Measurement close failed",
+        description:
+          error instanceof Error ? error.message : "The measurement period could not be closed.",
+        variant: "destructive",
+      });
+    } finally {
+      setMeasurementSubmitting(null);
+    }
+  };
+
+  const handleSaveKpiAssignment = async (payload: {
+    kpiId: number;
+    profileId: number;
+    individualTarget?: number;
+    individualWeight?: number;
+  }) => {
+    try {
+      setAuthoringSubmitting("saveKpiAssignment");
+      await performanceFrameworkAPI.saveKpiAssignment({
+        ...payload,
+        scorecardVersionId: adminVersionId ?? undefined,
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "KPI assignment saved",
+        description: "The employee target is now linked to the active scorecard version.",
+      });
+    } catch (error) {
+      toast({
+        title: "Assignment save failed",
+        description: error instanceof Error ? error.message : "The KPI assignment could not be saved.",
+        variant: "destructive",
+      });
+      throw error;
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleDeleteKpiAssignment = async (assignmentId: number) => {
+    try {
+      setAuthoringSubmitting(`deleteKpiAssignment:${assignmentId}`);
+      await performanceFrameworkAPI.deleteKpiAssignment(assignmentId);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "KPI assignment removed",
+        description: "The employee-level KPI target has been removed from this version.",
+      });
+    } catch (error) {
+      toast({
+        title: "Assignment removal failed",
+        description: error instanceof Error ? error.message : "The KPI assignment could not be removed.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleSavePerformanceBand = async (payload: {
+    roleId?: number | null;
+    onTrackMin: number;
+    atRiskMin: number;
+    label?: string;
+  }) => {
+    try {
+      setAuthoringSubmitting("savePerformanceBand");
+      await performanceFrameworkAPI.savePerformanceBand(payload);
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "Performance band saved",
+        description: "Score-to-status thresholds have been updated.",
+      });
+    } catch (error) {
+      toast({
+        title: "Performance band save failed",
+        description: error instanceof Error ? error.message : "The performance band could not be saved.",
+        variant: "destructive",
+      });
+      throw error;
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
   const handleCreatePerspective = async () => {
     try {
       setAuthoringSubmitting("createPerspective");
@@ -1806,6 +2480,7 @@ export default function BalancedScorecardModule() {
         name: perspectiveForm.name,
         ownerName: perspectiveForm.ownerName || undefined,
         summary: perspectiveForm.summary || undefined,
+        versionId: resolvedStructureVersionId,
       });
       await refreshBalancedScorecardData(selectedRole);
       closeSetupSheet();
@@ -1957,6 +2632,128 @@ export default function BalancedScorecardModule() {
     }
   };
 
+  const openEditGoal = (goal: BalancedScorecardGoalRecord) => {
+    setEditingGoalId(goal.id);
+    setGoalEditForm({
+      title: goal.title,
+      ownerName: goal.ownerName ?? "",
+      description: goal.description ?? "",
+    });
+    setSetupSheetMode("editGoal");
+  };
+
+  const handleUpdateGoal = async () => {
+    if (!editingGoalId) return;
+    try {
+      setAuthoringSubmitting("editGoal");
+      await performanceFrameworkAPI.updateGoal(editingGoalId, {
+        title: goalEditForm.title,
+        ownerName: goalEditForm.ownerName || undefined,
+        description: goalEditForm.description || undefined,
+      });
+      refreshBalancedScorecardData();
+      closeSetupSheet();
+      toast({ title: "Goal updated", description: "The strategic goal has been saved." });
+    } catch (error) {
+      toast({
+        title: "Goal update failed",
+        description: error instanceof Error ? error.message : "The goal could not be updated.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleArchiveGoal = async (goal: BalancedScorecardGoalRecord) => {
+    if (!window.confirm(`Archive "${goal.title}"? This will also archive its linked KPIs and initiatives.`)) {
+      return;
+    }
+    try {
+      setAuthoringSubmitting(`archiveGoal:${goal.id}`);
+      await performanceFrameworkAPI.archiveGoal(goal.id);
+      refreshBalancedScorecardData();
+      if (editingGoalId === goal.id) closeSetupSheet();
+      toast({ title: "Goal archived", description: "The goal and its linked items were archived." });
+    } catch (error) {
+      toast({
+        title: "Goal archive failed",
+        description: error instanceof Error ? error.message : "The goal could not be archived.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const openEditInitiative = (initiative: BalancedScorecardInitiativeRecord) => {
+    setEditingInitiativeId(initiative.id);
+    setInitiativeEditForm({
+      title: initiative.title,
+      summary: initiative.summary ?? "",
+      ownerName: initiative.ownerName ?? "",
+      timeline: initiative.timeline ?? "",
+      dueDate: initiative.dueDate ?? "",
+      status: (initiative.status as StatusTone) ?? "at_risk",
+      progress: String(initiative.progress ?? 0),
+      scopeRole: initiative.scopeRole ?? "hr",
+    });
+    setKpiSheetMode("editInitiative" as KpiSheetMode);
+  };
+
+  const handleUpdateInitiative = async () => {
+    if (!editingInitiativeId) return;
+    try {
+      setAuthoringSubmitting("editInitiative");
+      await performanceFrameworkAPI.updateInitiative(editingInitiativeId, {
+        title: initiativeEditForm.title || undefined,
+        summary: initiativeEditForm.summary || null,
+        ownerName: initiativeEditForm.ownerName || null,
+        timeline: initiativeEditForm.timeline || null,
+        dueDate: initiativeEditForm.dueDate || null,
+        status: initiativeEditForm.status,
+        progress: Number(initiativeEditForm.progress),
+        scopeRole: initiativeEditForm.scopeRole || undefined,
+      });
+      refreshBalancedScorecardData();
+      setKpiSheetMode(null);
+      setEditingInitiativeId(null);
+      toast({ title: "Initiative updated", description: "The initiative has been saved." });
+    } catch (error) {
+      toast({
+        title: "Initiative update failed",
+        description: error instanceof Error ? error.message : "The initiative could not be updated.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleArchiveInitiative = async (initiative: BalancedScorecardInitiativeRecord) => {
+    if (!window.confirm(`Archive "${initiative.title}"? Child initiatives will also be archived.`)) {
+      return;
+    }
+    try {
+      setAuthoringSubmitting(`archiveInitiative:${initiative.id}`);
+      await performanceFrameworkAPI.archiveInitiative(initiative.id);
+      refreshBalancedScorecardData();
+      if (editingInitiativeId === initiative.id) {
+        setKpiSheetMode(null);
+        setEditingInitiativeId(null);
+      }
+      toast({ title: "Initiative archived", description: "The initiative was removed from the cascade." });
+    } catch (error) {
+      toast({
+        title: "Initiative archive failed",
+        description: error instanceof Error ? error.message : "The initiative could not be archived.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
   const handleCreateKpi = async () => {
     try {
       setAuthoringSubmitting("createKpi");
@@ -2068,6 +2865,70 @@ export default function BalancedScorecardModule() {
     }
   };
 
+  const canUpdateKpiActuals = hasAnyRole(["hr", "finance", "marketing", "super_admin"]);
+
+  const handleUpdateKpiActual = async (kpi: KpiDefinition) => {
+    if (!canUpdateKpiActuals) return;
+
+    setKpiActualTarget(kpi);
+    setKpiActualForm({
+      actualValue: "",
+      note: "",
+    });
+    setKpiActualDialogOpen(true);
+  };
+
+  const closeKpiActualDialog = () => {
+    setKpiActualDialogOpen(false);
+    setKpiActualTarget(null);
+    setKpiActualForm({ actualValue: "", note: "" });
+  };
+
+  const submitKpiActualUpdate = async () => {
+    if (!kpiActualTarget) return;
+    const actualValue = Number(kpiActualForm.actualValue);
+    if (!Number.isFinite(actualValue)) {
+      toast({
+        title: "Invalid value",
+        description: "Please enter a numeric value for the KPI actual.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const record = kpiRecords.find((item) => item.key === kpiActualTarget.id);
+    if (!record) {
+      toast({
+        title: "KPI mapping missing",
+        description: "This KPI could not be mapped back to a scorecard contract.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setAuthoringSubmitting(`updateKpiActual:${kpiActualTarget.id}`);
+      await performanceFrameworkAPI.updateKpiActual(record.id, {
+        currentActualValue: actualValue,
+        lastMeasurementNote: kpiActualForm.note.trim() ? kpiActualForm.note.trim() : undefined,
+      });
+      await refreshBalancedScorecardData(selectedRole);
+      toast({
+        title: "KPI actual updated",
+        description: "The latest actual has been recorded on the KPI contract.",
+      });
+      closeKpiActualDialog();
+    } catch (error) {
+      toast({
+        title: "KPI update failed",
+        description: error instanceof Error ? error.message : "The KPI actual could not be updated.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
   const handlePrimaryActionClick = () => {
     switch (selectedRole) {
       case "hr":
@@ -2102,68 +2963,89 @@ export default function BalancedScorecardModule() {
   }, [canPreviewAllRoles, navigate, preferredRole, routeRole, selectedRole]);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadCycles = async () => {
-      try {
-        const cycles = await evaluationsAPI.getMyCycles();
-        if (cancelled) return;
-        setAvailableCycles(cycles);
-        setSelectedCycle((current) => {
-          if (current !== "latest" && cycles.some((cycle) => String(cycle.id) === current)) {
-            return current;
-          }
-          const activeCycle = cycles.find((cycle) => cycle.status === "active");
-          return activeCycle ? String(activeCycle.id) : "latest";
-        });
-      } catch {
-        if (!cancelled) {
-          setAvailableCycles([]);
-          setSelectedCycle("latest");
-        }
+    if (availableCycles.length === 0) return;
+    setSelectedCycle((current) => {
+      if (current !== "latest" && availableCycles.some((c) => String(c.id) === current)) {
+        return current;
       }
-    };
-    loadCycles();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      const active = availableCycles.find((c) => c.status === "active");
+      return active ? String(active.id) : "latest";
+    });
+  }, [availableCycles]);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadWorkspace = async () => {
-      setWorkspaceLoading(true);
-      try {
-        const [workspace, structure, templates] = await Promise.all([
-          performanceFrameworkAPI.getWorkspace({
-            role: selectedRole,
-            evaluationCycleId: selectedCycleId,
-          }),
-          performanceFrameworkAPI.getScorecardStructure(),
-          performanceFrameworkAPI.getKpiTemplates(),
-        ]);
-        if (!cancelled) {
-          setWorkspaceData(workspace);
-          setStructureData(structure);
-          setMetricTemplates(templates);
-          setWorkspaceError(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          const message =
-            error instanceof Error ? error.message : "Failed to load the live balanced scorecard workspace.";
-          setWorkspaceError(message);
-        }
-      } finally {
-        if (!cancelled) {
-          setWorkspaceLoading(false);
-        }
+    if (!canPreviewAllRoles) {
+      setSelectedStructureVersionId("current");
+      setHasInitializedStructureVersion(false);
+      return;
+    }
+    if (governanceCycles.length === 0) {
+      if (selectedStructureVersionId !== "current") {
+        setSelectedStructureVersionId("current");
       }
-    };
-    loadWorkspace();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedCycleId, selectedRole]);
+      setHasInitializedStructureVersion(false);
+      return;
+    }
+
+    const hasSelectedVersion =
+      selectedStructureVersionId !== "current" &&
+      allGovernanceVersions.some((version) => String(version.id) === selectedStructureVersionId);
+    if (!hasSelectedVersion && selectedStructureVersionId !== "current") {
+      setSelectedStructureVersionId("current");
+      return;
+    }
+
+    if (!hasInitializedStructureVersion && selectedStructureVersionId === "current") {
+      const latestDraft =
+        allGovernanceVersions.find((version) => version.status === "draft") ?? null;
+      if (latestDraft) {
+        setSelectedStructureVersionId(String(latestDraft.id));
+        setHasInitializedStructureVersion(true);
+        return;
+      }
+      if (activeGovernanceVersion) {
+        setSelectedStructureVersionId(String(activeGovernanceVersion.id));
+        setHasInitializedStructureVersion(true);
+        return;
+      }
+      setHasInitializedStructureVersion(true);
+    }
+  }, [
+    activeGovernanceVersion,
+    allGovernanceVersions,
+    canPreviewAllRoles,
+    governanceCycles.length,
+    hasInitializedStructureVersion,
+    selectedStructureVersionId,
+  ]);
+
+  useEffect(() => {
+    if (!canPreviewAllRoles) return;
+    if (!versionDialogOpen) return;
+    if (versionForm.cycleId) return;
+    if (activeGovernanceCycle) {
+      setVersionForm((current) => ({ ...current, cycleId: String(activeGovernanceCycle.id) }));
+    }
+  }, [activeGovernanceCycle, canPreviewAllRoles, versionDialogOpen, versionForm.cycleId]);
+
+  useEffect(() => {
+    if (!canPreviewAllRoles) {
+      setSelectedMeasurementPeriodId("latest");
+      return;
+    }
+    if (measurementPeriods.length === 0) {
+      if (selectedMeasurementPeriodId !== "latest") {
+        setSelectedMeasurementPeriodId("latest");
+      }
+      return;
+    }
+    if (
+      selectedMeasurementPeriodId !== "latest" &&
+      !measurementPeriods.some((period) => String(period.id) === selectedMeasurementPeriodId)
+    ) {
+      setSelectedMeasurementPeriodId("latest");
+    }
+  }, [canPreviewAllRoles, measurementPeriods, selectedMeasurementPeriodId]);
 
   useEffect(() => {
     if (!goalForm.perspectiveId && perspectiveRecords[0]) {
@@ -2289,25 +3171,21 @@ export default function BalancedScorecardModule() {
                   <MetricCard
                     label="Strategic perspectives"
                     value={String(overviewMetrics.perspectives)}
-                    hint="Financial, customer, internal process, and people."
                     icon={Layers}
                   />
                   <MetricCard
                     label="Active strategic goals"
                     value={String(overviewMetrics.goals)}
-                    hint="Firm-owned goals linked to measurable KPIs."
                     icon={Flag}
                   />
                   <MetricCard
                     label="Tracked KPIs"
                     value={String(overviewMetrics.kpis)}
-                    hint="Every KPI is linked back to a BSC goal and owner."
                     icon={Target}
                   />
                   <MetricCard
                     label="Cascade readiness"
                     value={overviewMetrics.cascadeReadiness}
-                    hint="Average roll-down coverage from firm initiative to employee action."
                     icon={Workflow}
                   />
                 </div>
@@ -2318,7 +3196,6 @@ export default function BalancedScorecardModule() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <CardTitle className="text-lg">{selectedRoleProfile.label} view</CardTitle>
-                    <CardDescription>{selectedRoleProfile.scope}</CardDescription>
                   </div>
                   <StatusBadge
                     status={
@@ -2446,13 +3323,12 @@ export default function BalancedScorecardModule() {
           <TabsContent value="dashboard" className="space-y-6">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
               {selectedRoleHome.metrics.map((metric) => (
-                <MetricCard
-                  key={metric.label}
-                  label={metric.label}
-                  value={metric.value}
-                  hint={metric.hint}
-                  icon={metric.icon}
-                />
+                  <MetricCard
+                    key={metric.label}
+                    label={metric.label}
+                    value={metric.value}
+                    icon={metric.icon}
+                  />
               ))}
             </div>
 
@@ -2462,7 +3338,6 @@ export default function BalancedScorecardModule() {
                   <SectionTitle
                     icon={Layers}
                     title={selectedRoleHome.title}
-                    description={selectedRoleHome.description}
                   />
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -2476,7 +3351,6 @@ export default function BalancedScorecardModule() {
                           </div>
                           {item.status ? <StatusBadge status={item.status} /> : null}
                         </div>
-                        <p className="mt-3 text-sm text-muted-foreground">{item.note}</p>
                         {typeof item.progress === "number" ? (
                           <div className="mt-4 space-y-2">
                             <div className="flex items-center justify-between text-xs">
@@ -2493,7 +3367,6 @@ export default function BalancedScorecardModule() {
                   <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">{selectedRoleHome.primaryBoardTitle}</CardTitle>
-                      <CardDescription>{selectedRoleHome.primaryBoardDescription}</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       {selectedRoleHome.primaryBoardItems.map((item) => (
@@ -2501,7 +3374,6 @@ export default function BalancedScorecardModule() {
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0 space-y-1">
                               <p className="font-medium text-foreground">{item.label}</p>
-                              <p className="text-sm text-muted-foreground">{item.note}</p>
                             </div>
                             <div className="text-right">
                               <p className="font-semibold text-foreground">{item.value}</p>
@@ -2520,7 +3392,6 @@ export default function BalancedScorecardModule() {
                   <Card className="rounded-[28px] border-border/70 shadow-sm">
                     <CardHeader>
                       <CardTitle className="text-lg">{selectedRoleHome.secondaryBoardTitle}</CardTitle>
-                      <CardDescription>{selectedRoleHome.secondaryBoardDescription}</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       {selectedRoleHome.secondaryBoardItems.map((item) => (
@@ -2528,7 +3399,6 @@ export default function BalancedScorecardModule() {
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="font-medium text-foreground">{item.label}</p>
-                              <p className="mt-2 text-sm text-muted-foreground">{item.note}</p>
                             </div>
                             <Badge variant="outline" className="rounded-full bg-background">
                               {item.value}
@@ -2543,7 +3413,6 @@ export default function BalancedScorecardModule() {
                 <Card className="rounded-[28px] border-border/70 shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-lg">Enabled sections</CardTitle>
-                    <CardDescription>Tabs currently available in this live workspace.</CardDescription>
                   </CardHeader>
                   <CardContent className="flex flex-wrap gap-2">
                     {visibleTabs.map((tab) => (
@@ -2557,57 +3426,60 @@ export default function BalancedScorecardModule() {
               </div>
             </div>
 
-            <Card className="rounded-[28px] border-border/70 shadow-sm">
-              <CardHeader>
-                <SectionTitle
-                  icon={BarChart3}
-                  title="Perspective lens for this role"
-                  description="Each role should see only the strategic perspectives that matter most to its decisions."
-                />
-              </CardHeader>
-              <CardContent>
-                <div className={cn("grid gap-4", scopedPerspectives.length === 1 ? "md:grid-cols-1" : scopedPerspectives.length === 2 ? "xl:grid-cols-2" : "xl:grid-cols-3")}>
-                  {scopedPerspectives.map((perspective) => (
-                    <Card key={perspective.id} className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                      <CardHeader className="space-y-3">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <CardTitle className="text-base">{perspective.name}</CardTitle>
-                            <CardDescription>{perspective.summary}</CardDescription>
+            {selectedRole !== "employee" ? (
+              <Card className="rounded-[28px] border-border/70 shadow-sm">
+                <CardHeader>
+                  <SectionTitle
+                    icon={BarChart3}
+                    title="Perspective lens for this role"
+                  />
+                </CardHeader>
+                <CardContent>
+                  <div className={cn("grid gap-4", scopedPerspectives.length === 1 ? "md:grid-cols-1" : scopedPerspectives.length === 2 ? "xl:grid-cols-2" : "xl:grid-cols-3")}>
+                    {scopedPerspectives.map((perspective) => (
+                      <Card key={perspective.id} className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                        <CardHeader className="space-y-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <CardTitle className="text-base">{perspective.name}</CardTitle>
+                              {perspective.summary ? (
+                                <CardDescription>{perspective.summary}</CardDescription>
+                              ) : null}
+                            </div>
+                            <StatusBadge status={perspective.status} />
                           </div>
-                          <StatusBadge status={perspective.status} />
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">Perspective score</span>
-                            <span className="font-medium text-foreground">{perspective.score}%</span>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Perspective score</span>
+                              <span className="font-medium text-foreground">{perspective.score}%</span>
+                            </div>
+                            <Progress value={perspective.score} className="h-2.5 rounded-full" />
                           </div>
-                          <Progress value={perspective.score} className="h-2.5 rounded-full" />
-                        </div>
-                        <div className="space-y-2">
-                          {goalData
-                            .filter((goal) => goal.perspectiveId === perspective.id)
-                            .slice(0, 2)
-                            .map((goal) => (
-                              <div key={goal.id} className="rounded-2xl border border-border/60 bg-background p-3">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="font-medium text-foreground">{goal.title}</p>
-                                    <p className="text-xs text-muted-foreground">{goal.owner}</p>
+                          <div className="space-y-2">
+                            {goalData
+                              .filter((goal) => goal.perspectiveId === perspective.id)
+                              .slice(0, 2)
+                              .map((goal) => (
+                                <div key={goal.id} className="rounded-2xl border border-border/60 bg-background p-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="font-medium text-foreground">{goal.title}</p>
+                                      <p className="text-xs text-muted-foreground">{goal.owner}</p>
+                                    </div>
+                                    <StatusBadge status={goal.status} />
                                   </div>
-                                  <StatusBadge status={goal.status} />
                                 </div>
-                              </div>
-                            ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                              ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="setup" className="space-y-6">
@@ -2616,7 +3488,6 @@ export default function BalancedScorecardModule() {
                 <SectionTitle
                   icon={Settings2}
                   title="Strategy setup"
-                  description="HR defines the scorecard structure here. This is the BSC authoring surface, not an operational workspace."
                 />
                 <div className="flex flex-wrap gap-3">
                   <Button className="rounded-2xl" onClick={() => setSetupSheetMode("flow")}>
@@ -2643,7 +3514,83 @@ export default function BalancedScorecardModule() {
                   >
                     Review governance checks
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-2xl"
+                    disabled={authoringSubmitting === "bootstrapScorecardStructure"}
+                    onClick={handleBootstrapScorecardStructure}
+                  >
+                    {authoringSubmitting === "bootstrapScorecardStructure"
+                      ? "Bootstrapping..."
+                      : "Bootstrap KPI library"}
+                  </Button>
+                  {canPreviewAllRoles ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={() => setCycleDialogOpen(true)}
+                      >
+                        Create scorecard cycle
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={() => setVersionDialogOpen(true)}
+                      >
+                        Create draft scorecard
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        disabled={
+                          !selectedGovernanceVersion ||
+                          selectedGovernanceVersion.status === "published" ||
+                          authoringSubmitting ===
+                            `publishScorecardVersion:${selectedGovernanceVersion?.id}`
+                        }
+                        onClick={handlePublishScorecardVersion}
+                      >
+                        {selectedGovernanceVersion &&
+                        authoringSubmitting ===
+                          `publishScorecardVersion:${selectedGovernanceVersion.id}`
+                          ? "Publishing..."
+                          : "Publish selected scorecard"}
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
+                {canPreviewAllRoles ? (
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="rounded-2xl border border-border/60 bg-muted/15 px-4 py-3">
+                      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
+                        Authoring target
+                      </p>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Draft authoring uses the selected scorecard version. The live workspace continues to read the published scorecard.
+                      </p>
+                    </div>
+                    <Select
+                      value={selectedStructureVersionId}
+                      onValueChange={setSelectedStructureVersionId}
+                    >
+                      <SelectTrigger className="h-11 rounded-2xl">
+                        <SelectValue placeholder="Select scorecard version" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="current">Current live structure</SelectItem>
+                        {governanceCycles.map((cycle) =>
+                          cycle.versions.map((version) => (
+                            <SelectItem key={version.id} value={String(version.id)}>
+                              {cycle.name} · Scorecard {version.versionNumber}
+                              {version.label ? ` · ${version.label}` : ""} · {version.status}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
               </CardHeader>
               <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
                 <div className="space-y-4">
@@ -2653,7 +3600,6 @@ export default function BalancedScorecardModule() {
                         key={metric.label}
                         label={metric.label}
                         value={metric.value}
-                        hint={metric.hint}
                         icon={metric.icon}
                       />
                     ))}
@@ -2661,7 +3607,6 @@ export default function BalancedScorecardModule() {
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">Goal registry</CardTitle>
-                      <CardDescription>Perspective-owned goals with owners, descriptions, and linked KPI counts.</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <Table>
@@ -2675,21 +3620,24 @@ export default function BalancedScorecardModule() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {goalData.map((goal) => {
-                            const perspective = perspectiveData.find((candidate) => candidate.id === goal.perspectiveId);
+                          {goalRecords.map((goal) => {
+                            const perspective = perspectiveRecords.find(
+                              (candidate) => candidate.id === goal.perspectiveId
+                            );
+                            const linkedKpis = kpiRecords.filter((candidate) => candidate.goalId === goal.id);
                             return (
                               <TableRow key={goal.id}>
                                 <TableCell className="font-medium">{perspective?.name}</TableCell>
                                 <TableCell>
                                   <div>
                                     <p className="font-medium text-foreground">{goal.title}</p>
-                                    <p className="text-xs text-muted-foreground">{goal.description}</p>
+                                    <p className="text-xs text-muted-foreground">{goal.description || "No description yet."}</p>
                                   </div>
                                 </TableCell>
-                                <TableCell>{goal.owner}</TableCell>
-                                <TableCell>{goal.linkedKpis.length}</TableCell>
+                                <TableCell>{goal.ownerName || "Unassigned"}</TableCell>
+                                <TableCell>{linkedKpis.length}</TableCell>
                                 <TableCell>
-                                  <StatusBadge status={goal.status} />
+                                  <StatusBadge status={linkedKpis.length > 0 ? "on_track" : "at_risk"} />
                                 </TableCell>
                               </TableRow>
                             );
@@ -2701,10 +3649,78 @@ export default function BalancedScorecardModule() {
                 </div>
 
                 <div className="space-y-4">
+                  {canPreviewAllRoles ? (
+                    <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                      <CardHeader>
+                        <CardTitle className="text-base">Scorecard governance</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
+                            Active cycle
+                          </p>
+                          <p className="mt-2 font-medium text-foreground">
+                            {activeGovernanceCycle?.name || "No active cycle"}
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {activeGovernanceVersion
+                              ? `Published scorecard ${activeGovernanceVersion.versionNumber}${
+                                  activeGovernanceVersion.label
+                                    ? ` · ${activeGovernanceVersion.label}`
+                                    : ""
+                                }`
+                              : "No published scorecard version yet."}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
+                            Selected authoring version
+                          </p>
+                          <p className="mt-2 font-medium text-foreground">
+                            {selectedGovernanceVersion
+                              ? `${selectedGovernanceCycle?.name || "Draft cycle"} · Scorecard ${
+                                  selectedGovernanceVersion.versionNumber
+                                }`
+                              : "Current live structure"}
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {selectedGovernanceVersion
+                              ? `${selectedGovernanceVersion.perspectiveCount} perspectives, ${selectedGovernanceVersion.goalCount} goals, ${selectedGovernanceVersion.kpiCount} KPIs, ${selectedGovernanceVersion.initiativeCount} initiatives`
+                              : "Legacy or live structure fallback with no explicit published scorecard version selected."}
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          {governanceCycles.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No governed scorecard cycles exist yet. Create one, then clone a draft scorecard into it.
+                            </p>
+                          ) : (
+                            governanceCycles.slice(0, 3).map((cycle) => (
+                              <div
+                                key={cycle.id}
+                                className="rounded-2xl border border-border/60 bg-background p-4"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="font-medium text-foreground">{cycle.name}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      {cycle.cadence} cadence · {cycle.status}
+                                    </p>
+                                  </div>
+                                  <Badge variant="outline" className="rounded-full">
+                                    {cycle.versions.length} versions
+                                  </Badge>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : null}
                   <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">Scorecard structure</CardTitle>
-                      <CardDescription>Current perspectives and linked goals in the live scorecard structure.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       {perspectiveRecords.map((perspective) => {
@@ -2728,15 +3744,38 @@ export default function BalancedScorecardModule() {
                               {perspectiveGoals.length} goals
                             </Badge>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {perspectiveGoals.map((goal) => (
-                              <Badge key={goal.id} variant="secondary" className="rounded-full">
-                                {goal.title}
-                              </Badge>
-                            ))}
-                          </div>
-                          {perspectiveGoals.length === 0 ? (
-                            <p className="mt-3 text-sm text-muted-foreground">No active goals linked yet.</p>
+                          {perspectiveGoals.length > 0 ? (
+                            <div className="mt-3 space-y-2">
+                              {perspectiveGoals.map((goal) => (
+                                <div key={goal.id} className="flex items-center justify-between gap-2 rounded-xl border border-border/50 bg-muted/20 px-3 py-2">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-medium text-foreground">{goal.title}</p>
+                                    {goal.ownerName ? (
+                                      <p className="text-xs text-muted-foreground">{goal.ownerName}</p>
+                                    ) : null}
+                                  </div>
+                                  <div className="flex shrink-0 gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 rounded-lg px-2 text-xs"
+                                      onClick={() => openEditGoal(goal)}
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 rounded-lg px-2 text-xs text-destructive hover:text-destructive"
+                                      disabled={authoringSubmitting === `archiveGoal:${goal.id}`}
+                                      onClick={() => handleArchiveGoal(goal)}
+                                    >
+                                      {authoringSubmitting === `archiveGoal:${goal.id}` ? "..." : "Archive"}
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           ) : null}
                           <div className="mt-4 flex flex-wrap justify-end gap-2">
                             <Button
@@ -2788,7 +3827,9 @@ export default function BalancedScorecardModule() {
                             ? "Edit perspective"
                           : setupSheetMode === "createGoal"
                             ? "Create strategic goal"
-                            : "Strategy governance checks"}
+                            : setupSheetMode === "editGoal"
+                              ? "Edit strategic goal"
+                              : "Strategy governance checks"}
                     </SheetTitle>
                     <SheetDescription>
                       {setupSheetMode === "flow"
@@ -2799,7 +3840,9 @@ export default function BalancedScorecardModule() {
                             ? "Update the selected perspective in the persisted scorecard structure."
                           : setupSheetMode === "createGoal"
                             ? "Create a strategic goal under one persisted BSC perspective."
-                            : "Use these checks to keep the strategy layer clean before execution begins."}
+                            : setupSheetMode === "editGoal"
+                              ? "Update the title, owner, or description of this strategic goal."
+                              : "Use these checks to keep the strategy layer clean before execution begins."}
                     </SheetDescription>
                   </SheetHeader>
                   <div className="mt-6 space-y-4">
@@ -2963,6 +4006,54 @@ export default function BalancedScorecardModule() {
                           </Button>
                         </div>
                       </div>
+                    ) : setupSheetMode === "editGoal" ? (
+                      <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/15 p-5">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground">Goal title</label>
+                          <Input
+                            value={goalEditForm.title}
+                            onChange={(e) =>
+                              setGoalEditForm((c) => ({ ...c, title: e.target.value }))
+                            }
+                            placeholder="Enter goal title"
+                            className="rounded-2xl"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground">Goal owner</label>
+                          <Input
+                            value={goalEditForm.ownerName}
+                            onChange={(e) =>
+                              setGoalEditForm((c) => ({ ...c, ownerName: e.target.value }))
+                            }
+                            placeholder="Enter goal owner"
+                            className="rounded-2xl"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground">Description</label>
+                          <Textarea
+                            value={goalEditForm.description}
+                            onChange={(e) =>
+                              setGoalEditForm((c) => ({ ...c, description: e.target.value }))
+                            }
+                            placeholder="What strategic outcome does this goal drive?"
+                            className="min-h-[120px] rounded-2xl"
+                          />
+                        </div>
+                        <div className="flex items-center justify-end gap-3">
+                          <Button variant="outline" className="rounded-2xl" onClick={closeSetupSheet}>
+                            Cancel
+                          </Button>
+                          <Button
+                            className="rounded-2xl"
+                            disabled={!goalEditForm.title.trim() || authoringSubmitting !== null}
+                            onClick={handleUpdateGoal}
+                          >
+                            {authoringSubmitting === "editGoal" ? "Saving..." : "Save changes"}
+                          </Button>
+                        </div>
+                      </div>
                     ) : (
                       strategyReviewPoints.map((group) => (
                         <div key={group.title} className="rounded-2xl border border-border/60 bg-muted/15 p-5">
@@ -2987,7 +4078,6 @@ export default function BalancedScorecardModule() {
                 <SectionTitle
                   icon={Target}
                   title="KPI governance"
-                  description="This is the HR-owned KPI contract layer: definition, measurement logic, ownership, weighting, and review readiness."
                 />
                 <div className="flex flex-wrap gap-3">
                   <Button className="rounded-2xl" onClick={() => setKpiSheetMode("contract")}>
@@ -3015,7 +4105,7 @@ export default function BalancedScorecardModule() {
                     Review governance rules
                   </Button>
                 </div>
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_220px]">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -3057,7 +4147,6 @@ export default function BalancedScorecardModule() {
                         key={metric.label}
                         label={metric.label}
                         value={metric.value}
-                        hint={metric.hint}
                         icon={metric.icon}
                       />
                     ))}
@@ -3066,7 +4155,6 @@ export default function BalancedScorecardModule() {
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">KPI definitions</CardTitle>
-                      <CardDescription>Scan the governed KPI list, then inspect the full measurement contract in the side sheet.</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <Table>
@@ -3100,13 +4188,25 @@ export default function BalancedScorecardModule() {
                                   <StatusBadge status={kpi.status} />
                                 </TableCell>
                                 <TableCell className="text-right">
-                                  <Sheet>
-                                    <SheetTrigger asChild>
-                                      <Button variant="outline" size="sm" className="rounded-xl">
-                                        Inspect
+                                  <div className="flex flex-col items-end gap-2 sm:flex-row sm:justify-end">
+                                    {canUpdateKpiActuals && (
+                                      <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="rounded-xl"
+                                        onClick={() => handleUpdateKpiActual(kpi)}
+                                        disabled={authoringSubmitting !== null}
+                                      >
+                                        Update actual
                                       </Button>
-                                    </SheetTrigger>
-                                    <SheetContent className="w-full sm:max-w-xl">
+                                    )}
+                                    <Sheet>
+                                      <SheetTrigger asChild>
+                                        <Button variant="outline" size="sm" className="rounded-xl">
+                                          Inspect
+                                        </Button>
+                                      </SheetTrigger>
+                                      <SheetContent className="w-full sm:max-w-xl">
                                       <ScrollArea className="h-full pr-4">
                                         <SheetHeader className="space-y-2">
                                           <SheetTitle>{kpi.name}</SheetTitle>
@@ -3165,8 +4265,9 @@ export default function BalancedScorecardModule() {
                                           </div>
                                         </div>
                                       </ScrollArea>
-                                    </SheetContent>
-                                  </Sheet>
+                                      </SheetContent>
+                                    </Sheet>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             );
@@ -3177,6 +4278,80 @@ export default function BalancedScorecardModule() {
                   </Card>
               </CardContent>
             </Card>
+
+            <Card className="rounded-[28px] border-border/70 shadow-sm">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Initiative library</CardTitle>
+                    </div>
+                    <Button size="sm" variant="outline" className="rounded-xl" onClick={() => setKpiSheetMode("createInitiative")}>
+                      Add initiative
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Title</TableHead>
+                        <TableHead>Scope</TableHead>
+                        <TableHead>Owner</TableHead>
+                        <TableHead>Progress</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {initiativeRecords.map((initiative) => (
+                        <TableRow key={initiative.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-foreground">{initiative.title}</p>
+                              {initiative.summary ? (
+                                <p className="text-xs text-muted-foreground line-clamp-1">{initiative.summary}</p>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm">{initiative.scopeRole}</TableCell>
+                          <TableCell className="text-sm">{initiative.ownerName || "—"}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Progress value={initiative.progress} className="h-2 w-16 rounded-full" />
+                              <span className="text-xs text-muted-foreground">{initiative.progress}%</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={initiative.status as StatusTone} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="rounded-xl"
+                                onClick={() => openEditInitiative(initiative)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="rounded-xl text-destructive hover:text-destructive"
+                                disabled={authoringSubmitting === `archiveInitiative:${initiative.id}`}
+                                onClick={() => handleArchiveInitiative(initiative)}
+                              >
+                                {authoringSubmitting === `archiveInitiative:${initiative.id}` ? "..." : "Archive"}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+            </Card>
+
             <Sheet open={kpiSheetMode !== null} onOpenChange={(open) => !open && setKpiSheetMode(null)}>
               <SheetContent className="w-full sm:max-w-2xl">
                 <ScrollArea className="h-full pr-4">
@@ -3188,7 +4363,9 @@ export default function BalancedScorecardModule() {
                           ? "Create KPI contract"
                           : kpiSheetMode === "createInitiative"
                             ? "Create initiative"
-                            : "KPI governance rules"}
+                            : kpiSheetMode === "editInitiative"
+                              ? "Edit initiative"
+                              : "KPI governance rules"}
                     </SheetTitle>
                     <SheetDescription>
                       {kpiSheetMode === "contract"
@@ -3197,7 +4374,9 @@ export default function BalancedScorecardModule() {
                           ? "Persist a KPI contract against one strategic goal using a template or a custom tracking setup."
                           : kpiSheetMode === "createInitiative"
                             ? "Create the execution layer that will carry the KPI downward through the cascade."
-                            : "Keep the KPI layer controlled before any initiative or employee contribution begins to move."}
+                            : kpiSheetMode === "editInitiative"
+                              ? "Update the title, owner, timeline, status, or progress of this initiative."
+                              : "Keep the KPI layer controlled before any initiative or employee contribution begins to move."}
                     </SheetDescription>
                   </SheetHeader>
                   <div className="mt-6 space-y-4">
@@ -3424,7 +4603,23 @@ export default function BalancedScorecardModule() {
                             </>
                           ) : null}
                           <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Weight</label>
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-foreground">Weight</label>
+                              {kpiForm.goalId ? (
+                                <span className={cn(
+                                  "text-xs font-medium",
+                                  projectedWeightTotal > 100
+                                    ? "text-destructive"
+                                    : projectedWeightTotal === 100
+                                      ? "text-green-600"
+                                      : "text-muted-foreground"
+                                )}>
+                                  {existingGoalKpiWeightTotal} existing
+                                  {kpiForm.weight ? ` + ${kpiForm.weight} = ${projectedWeightTotal}` : ""} / 100
+                                  {projectedWeightTotal > 100 ? " — over budget" : ""}
+                                </span>
+                              ) : null}
+                            </div>
                             <Input
                               type="number"
                               min="0"
@@ -3434,7 +4629,7 @@ export default function BalancedScorecardModule() {
                                 setKpiForm((current) => ({ ...current, weight: event.target.value }))
                               }
                               placeholder="10"
-                              className="rounded-2xl"
+                              className={cn("rounded-2xl", projectedWeightTotal > 100 && kpiForm.weight ? "border-destructive focus-visible:ring-destructive" : "")}
                             />
                           </div>
                           <div className="space-y-2">
@@ -3729,6 +4924,99 @@ export default function BalancedScorecardModule() {
 	                          </Button>
 	                        </div>
 	                      </div>
+	                    ) : kpiSheetMode === "editInitiative" ? (
+                      <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/15 p-5">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground">Title</label>
+                          <Input
+                            value={initiativeEditForm.title}
+                            onChange={(e) => setInitiativeEditForm((c) => ({ ...c, title: e.target.value }))}
+                            placeholder="Initiative title"
+                            className="rounded-2xl"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground">Summary</label>
+                          <Textarea
+                            value={initiativeEditForm.summary}
+                            onChange={(e) => setInitiativeEditForm((c) => ({ ...c, summary: e.target.value }))}
+                            placeholder="What does this initiative deliver?"
+                            className="min-h-[100px] rounded-2xl"
+                          />
+                        </div>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Owner</label>
+                            <Input
+                              value={initiativeEditForm.ownerName}
+                              onChange={(e) => setInitiativeEditForm((c) => ({ ...c, ownerName: e.target.value }))}
+                              placeholder="Owner name"
+                              className="rounded-2xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Scope role</label>
+                            <Select value={initiativeEditForm.scopeRole} onValueChange={(v) => setInitiativeEditForm((c) => ({ ...c, scopeRole: v }))}>
+                              <SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {["hr","gmp","partner","manager","finance","marketing","employee"].map((r) => (
+                                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Timeline</label>
+                            <Input
+                              value={initiativeEditForm.timeline}
+                              onChange={(e) => setInitiativeEditForm((c) => ({ ...c, timeline: e.target.value }))}
+                              placeholder="e.g. Q2 2026"
+                              className="rounded-2xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Due date</label>
+                            <Input
+                              type="date"
+                              value={initiativeEditForm.dueDate}
+                              onChange={(e) => setInitiativeEditForm((c) => ({ ...c, dueDate: e.target.value }))}
+                              className="rounded-2xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Status</label>
+                            <Select value={initiativeEditForm.status} onValueChange={(v) => setInitiativeEditForm((c) => ({ ...c, status: v as StatusTone }))}>
+                              <SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="on_track">On track</SelectItem>
+                                <SelectItem value="at_risk">At risk</SelectItem>
+                                <SelectItem value="off_track">Off track</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground">Progress — {initiativeEditForm.progress}%</label>
+                            <Input
+                              type="number" min={0} max={100}
+                              value={initiativeEditForm.progress}
+                              onChange={(e) => setInitiativeEditForm((c) => ({ ...c, progress: e.target.value }))}
+                              className="rounded-2xl"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-3">
+                          <Button variant="outline" className="rounded-2xl" onClick={() => { setKpiSheetMode(null); setEditingInitiativeId(null); }}>
+                            Cancel
+                          </Button>
+                          <Button
+                            className="rounded-2xl"
+                            disabled={!initiativeEditForm.title.trim() || authoringSubmitting !== null}
+                            onClick={handleUpdateInitiative}
+                          >
+                            {authoringSubmitting === "editInitiative" ? "Saving..." : "Save changes"}
+                          </Button>
+                        </div>
+                      </div>
 	                    ) : (
 	                      kpiGovernanceRules.map((rule) => (
                         <div key={rule} className="rounded-2xl border border-border/60 bg-muted/15 p-5 text-sm text-muted-foreground">
@@ -3742,13 +5030,28 @@ export default function BalancedScorecardModule() {
             </Sheet>
           </TabsContent>
 
+          <TabsContent value="peopleAdmin" className="space-y-6">
+            <BalancedScorecardPeopleAdminPanel
+              currentVersionId={adminVersionId}
+              currentVersionLabel={adminVersionLabel}
+              assignments={kpiAssignments}
+              performanceBands={performanceBands}
+              kpis={kpiRecords as BalancedScorecardKpiRecord[]}
+              employeeOptions={employeeDirectory}
+              roleOptions={positionRoles}
+              submittingKey={authoringSubmitting}
+              onSaveAssignment={handleSaveKpiAssignment}
+              onDeleteAssignment={handleDeleteKpiAssignment}
+              onSavePerformanceBand={handleSavePerformanceBand}
+            />
+          </TabsContent>
+
           <TabsContent value="cascade" className="space-y-6">
             <Card className="rounded-[28px] border-border/70 shadow-sm">
               <CardHeader className="space-y-4">
                 <SectionTitle
                   icon={Workflow}
                   title={cascadeView.title}
-                  description={cascadeView.description}
                 />
               </CardHeader>
               <CardContent className="space-y-6">
@@ -3758,7 +5061,6 @@ export default function BalancedScorecardModule() {
                       key={metric.label}
                       label={metric.label}
                       value={metric.value}
-                      hint={metric.hint}
                       icon={metric.icon}
                     />
                   ))}
@@ -3767,7 +5069,6 @@ export default function BalancedScorecardModule() {
                   <Card className="rounded-[28px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-xl">{cascadeView.boardTitle}</CardTitle>
-                      <CardDescription>{cascadeView.boardDescription}</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="rounded-[24px] border border-primary/20 bg-primary/5 p-5">
@@ -3775,23 +5076,23 @@ export default function BalancedScorecardModule() {
                           <div className="space-y-2">
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">BSC Goal</p>
                             <p className="text-lg font-semibold text-foreground">
-                              {featuredGoalRecord?.title || linkedGoal?.title || "No strategic goal linked yet"}
+                              {featuredGoalRecord?.title || linkedGoal?.title || "0"}
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {featuredGoalRecord?.description ||
                                 linkedGoal?.description ||
-                                "No goal description is available yet."}
+                                ""}
                             </p>
                           </div>
                           <div className="space-y-2">
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
                             <p className="text-lg font-semibold text-foreground">
-                              {featuredLiveKpi?.name || highlightedKpi?.name || "No KPI linked yet"}
+                              {featuredLiveKpi?.name || highlightedKpi?.name || "0"}
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {featuredLiveKpi || highlightedKpi
                                 ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} · Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} · Shared measurement layer across every role.`
-                                : "Add a KPI contract to connect this cascade to a measurable scorecard outcome."}
+                                : ""}
                             </p>
                           </div>
                         </div>
@@ -3846,33 +5147,32 @@ export default function BalancedScorecardModule() {
 
                   <div className="space-y-4">
                     <Card className="rounded-[28px] border-border/60 bg-muted/20 shadow-none">
-                      <CardHeader>
-                        <CardTitle className="text-base">Active cascade chain</CardTitle>
-                        <CardDescription>One live goal-to-KPI-to-initiative chain drawn from the current workspace.</CardDescription>
-                      </CardHeader>
+                    <CardHeader>
+                      <CardTitle className="text-base">Active cascade chain</CardTitle>
+                    </CardHeader>
                       <CardContent className="space-y-3">
                         <div className="rounded-[24px] border border-primary/20 bg-primary/5 p-5">
                           <div className="grid gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">BSC Goal</p>
                               <p className="text-lg font-semibold text-foreground">
-                                {featuredGoalRecord?.title || linkedGoal?.title || "No strategic goal linked yet"}
+                                {featuredGoalRecord?.title || linkedGoal?.title || "0"}
                               </p>
                               <p className="text-sm text-muted-foreground">
                                 {featuredGoalRecord?.description ||
                                   linkedGoal?.description ||
-                                  "No goal description is available yet."}
+                                  ""}
                               </p>
                             </div>
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
                               <p className="text-lg font-semibold text-foreground">
-                                {featuredLiveKpi?.name || highlightedKpi?.name || "No KPI linked yet"}
+                                {featuredLiveKpi?.name || highlightedKpi?.name || "0"}
                               </p>
                               <p className="text-sm text-muted-foreground">
                                 {featuredLiveKpi || highlightedKpi
                                   ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} - Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} - Shared measurement layer across every role.`
-                                  : "Add a KPI contract to connect this cascade to a measurable scorecard outcome."}
+                                  : ""}
                               </p>
                             </div>
                           </div>
@@ -3884,7 +5184,6 @@ export default function BalancedScorecardModule() {
                               <p className="text-sm font-medium text-foreground">
                                 {node.level}: {node.initiative}
                               </p>
-                              <p className="text-sm text-muted-foreground">{node.note}</p>
                             </div>
                           </div>
                         ))}
@@ -3903,9 +5202,8 @@ export default function BalancedScorecardModule() {
                 <SectionTitle
                   icon={LineChart}
                   title={trackingView.title}
-                  description={trackingView.description}
                 />
-                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_220px]">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -3915,22 +5213,82 @@ export default function BalancedScorecardModule() {
                       className="h-11 rounded-2xl pl-9"
                     />
                   </div>
-                  <Select value={trackingScope} onValueChange={setTrackingScope}>
-                    <SelectTrigger className="h-11 rounded-2xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All ownership levels</SelectItem>
-                      <SelectItem value="firm">Firm-owned KPIs</SelectItem>
-                      <SelectItem value="team">Department and manager view</SelectItem>
-                      <SelectItem value="employee">Employee contribution view</SelectItem>
-                    </SelectContent>
-                  </Select>
                   <Button variant="outline" className="h-11 rounded-2xl justify-start gap-2">
                     <Filter className="h-4 w-4" />
                     Advanced filters
                   </Button>
                 </div>
+                {canPreviewAllRoles ? (
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_auto_auto_auto_auto]">
+                    <Select
+                      value={selectedMeasurementPeriodId}
+                      onValueChange={setSelectedMeasurementPeriodId}
+                    >
+                      <SelectTrigger className="h-11 rounded-2xl">
+                        <SelectValue placeholder="Select measurement period" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {measurementPeriods.map((period) => (
+                          <SelectItem key={period.id} value={String(period.id)}>
+                            {period.label} · {period.status}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-2xl"
+                      onClick={() => setMeasurementPeriodDialogOpen(true)}
+                      disabled={!measurementVersionId}
+                    >
+                      Create period
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-2xl"
+                      onClick={handleGenerateMeasurementPeriod}
+                      disabled={
+                        !selectedMeasurementPeriod ||
+                        measurementSubmitting === `generateMeasurement:${selectedMeasurementPeriod?.id}`
+                      }
+                    >
+                      {selectedMeasurementPeriod &&
+                      measurementSubmitting === `generateMeasurement:${selectedMeasurementPeriod.id}`
+                        ? "Generating..."
+                        : "Generate pack"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-2xl"
+                      onClick={handleSubmitMeasurementPeriod}
+                      disabled={
+                        !selectedMeasurementPeriod ||
+                        !["draft", "generated"].includes(selectedMeasurementPeriod.status) ||
+                        measurementSubmitting === `submitMeasurement:${selectedMeasurementPeriod?.id}`
+                      }
+                    >
+                      {selectedMeasurementPeriod &&
+                      measurementSubmitting === `submitMeasurement:${selectedMeasurementPeriod.id}`
+                        ? "Submitting..."
+                        : "Submit"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 rounded-2xl"
+                      onClick={handleCloseMeasurementPeriod}
+                      disabled={
+                        !selectedMeasurementPeriod ||
+                        selectedMeasurementPeriod.status !== "approved" ||
+                        measurementSubmitting === `closeMeasurement:${selectedMeasurementPeriod?.id}`
+                      }
+                    >
+                      {selectedMeasurementPeriod &&
+                      measurementSubmitting === `closeMeasurement:${selectedMeasurementPeriod.id}`
+                        ? "Closing..."
+                        : "Close"}
+                    </Button>
+                  </div>
+                ) : null}
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-2 xl:grid-cols-4">
@@ -3939,15 +5297,92 @@ export default function BalancedScorecardModule() {
                       key={metric.label}
                       label={metric.label}
                       value={metric.value}
-                      hint={metric.hint}
                       icon={metric.icon}
                     />
                   ))}
                 </div>
+                {canPreviewAllRoles && selectedMeasurementPeriod ? (
+                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                    <CardHeader>
+                      <CardTitle className="text-base">Measurement workflow</CardTitle>
+                      <CardDescription>
+                        {selectedMeasurementPeriod.label} · {selectedMeasurementPeriod.status}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_320px]">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Snapshots</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">{selectedMeasurementPeriod.snapshotCount}</p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">At risk / off track</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">
+                            {selectedMeasurementPeriod.atRiskCount + selectedMeasurementPeriod.offTrackCount}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Warnings</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">{selectedMeasurementPeriod.warningCount}</p>
+                        </div>
+                        <div className="rounded-2xl border border-border/60 bg-background p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Missing data</p>
+                          <p className="mt-2 text-2xl font-semibold text-foreground">{selectedMeasurementPeriod.missingDataCount}</p>
+                        </div>
+                      </div>
+                      <div className="space-y-2 rounded-2xl border border-border/60 bg-background p-4">
+                        <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Review actions</p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={
+                              !selectedMeasurementPeriod ||
+                              selectedMeasurementPeriod.status !== "submitted" ||
+                              measurementSubmitting === `start_review:${selectedMeasurementPeriod.id}`
+                            }
+                            onClick={() => handleReviewMeasurementPeriod("start_review")}
+                          >
+                            Start review
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={
+                              !selectedMeasurementPeriod ||
+                              !["submitted", "in_review"].includes(selectedMeasurementPeriod.status) ||
+                              measurementSubmitting === `request_changes:${selectedMeasurementPeriod.id}`
+                            }
+                            onClick={() => handleReviewMeasurementPeriod("request_changes")}
+                          >
+                            Request changes
+                          </Button>
+                          <Button
+                            className="rounded-xl"
+                            disabled={
+                              !selectedMeasurementPeriod ||
+                              !["submitted", "in_review"].includes(selectedMeasurementPeriod.status) ||
+                              measurementSubmitting === `approve:${selectedMeasurementPeriod.id}`
+                            }
+                            onClick={() => handleReviewMeasurementPeriod("approve")}
+                          >
+                            Approve pack
+                          </Button>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Generated snapshots stay editable until the period is closed, then the pack freezes.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
                 <Card className="rounded-[24px] border-border/60 shadow-none">
                   <CardHeader>
-                    <CardTitle className="text-base">{trackingView.boardTitle}</CardTitle>
-                    <CardDescription>{trackingView.boardDescription}</CardDescription>
+                    <CardTitle className="text-base">
+                      {canPreviewAllRoles && selectedMeasurementPeriod
+                        ? "Measurement snapshot pack"
+                        : trackingView.boardTitle}
+                    </CardTitle>
                   </CardHeader>
                   <CardContent>
                     <Table>
@@ -3959,24 +5394,30 @@ export default function BalancedScorecardModule() {
                           <TableHead>Update frequency</TableHead>
                           <TableHead>Trend</TableHead>
                           <TableHead>Initiative progress</TableHead>
+                          {canPreviewAllRoles && selectedMeasurementPeriod ? (
+                            <TableHead>Data quality</TableHead>
+                          ) : null}
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {trackingView.kpis.map((kpi) => (
+                        {(canPreviewAllRoles && selectedMeasurementPeriod
+                          ? measurementSnapshots
+                          : trackingView.kpis
+                        ).map((kpi) => (
                           <TableRow key={kpi.id}>
                             <TableCell className="min-w-[240px]">
                               <div className="space-y-1">
-                                <p className="font-medium text-foreground">{kpi.name}</p>
-                                <p className="text-xs text-muted-foreground">{kpi.ownerUpdate}</p>
+                                <p className="font-medium text-foreground">
+                                  {"kpiName" in kpi ? kpi.kpiName : kpi.name}
+                                </p>
                               </div>
                             </TableCell>
                             <TableCell>
                               <div className="space-y-1">
                                 <p className="font-medium text-foreground">
-                                  {kpi.actual} / {kpi.firmTarget}
+                                  {"actualLabel" in kpi ? kpi.actualLabel : kpi.actual} / {kpi.firmTarget}
                                 </p>
-                                <p className="text-xs text-muted-foreground">{kpi.statusLogic}</p>
                               </div>
                             </TableCell>
                             <TableCell className="font-semibold text-foreground">{kpi.weightedScore}</TableCell>
@@ -3993,6 +5434,15 @@ export default function BalancedScorecardModule() {
                                 <Progress value={kpi.initiativeProgress} className="h-2.5 rounded-full" />
                               </div>
                             </TableCell>
+                            {canPreviewAllRoles && selectedMeasurementPeriod ? (
+                              <TableCell>
+                                {"dataQualityStatus" in kpi ? (
+                                  <Badge variant="outline" className="rounded-full">
+                                    {kpi.dataQualityStatus.replace(/_/g, " ")}
+                                  </Badge>
+                                ) : null}
+                              </TableCell>
+                            ) : null}
                             <TableCell>
                               <StatusBadge status={kpi.status} />
                             </TableCell>
@@ -4002,45 +5452,64 @@ export default function BalancedScorecardModule() {
                     </Table>
                   </CardContent>
                 </Card>
-
-                <div className="grid gap-4 lg:grid-cols-2">
+                {canPreviewAllRoles && selectedMeasurementPeriod && highlightedMeasurementSnapshot ? (
                   <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                     <CardHeader>
-                      <CardTitle className="text-base">{trackingView.insightTitle}</CardTitle>
-                      <CardDescription>{trackingView.insightDescription}</CardDescription>
+                      <CardTitle className="text-base">Trace and data quality</CardTitle>
+                      <CardDescription>
+                        {highlightedMeasurementSnapshot.kpiName} · {highlightedMeasurementSnapshot.dataQualityStatus.replace(/_/g, " ")}
+                      </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-3 text-sm text-muted-foreground">
-                      {trackingView.insightLines.map((line) => (
-                        <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
-                          {line}
-                        </div>
-                      ))}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">{trackingView.legendTitle}</CardTitle>
-                      <CardDescription>{trackingView.legendDescription}</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {(["on_track", "at_risk", "off_track"] as StatusTone[]).map((status) => (
-                        <div key={status} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-border/60 bg-background p-4">
-                          <div>
-                            <StatusBadge status={status} />
-                            <p className="mt-3 text-sm text-muted-foreground">
-                              {status === "on_track"
-                                ? "Progress is aligned to target and the linked initiative is moving as intended."
-                                : status === "at_risk"
-                                  ? "The KPI needs intervention, tighter ownership, or stronger initiative completion."
-                                  : "The KPI is materially off target and needs a decision, not just another update."}
-                            </p>
+                    <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
+                      <div className="space-y-3">
+                        {highlightedMeasurementSnapshot.traces.map((trace) => (
+                          <div key={trace.id} className="rounded-2xl border border-border/60 bg-background p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium text-foreground">{trace.sourceLabel}</p>
+                                <p className="text-sm text-muted-foreground">{trace.note || "No supporting note yet."}</p>
+                              </div>
+                              <Badge variant="outline" className="rounded-full">
+                                {trace.dataQualityStatus.replace(/_/g, " ")}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                              <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
+                                <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Records</p>
+                                <p className="mt-2 font-medium text-foreground">{trace.recordCount ?? 0}</p>
+                              </div>
+                              <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
+                                <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Raw value</p>
+                                <p className="mt-2 font-medium text-foreground">{trace.rawValue ?? "-"}</p>
+                              </div>
+                              <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
+                                <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Normalized</p>
+                                <p className="mt-2 font-medium text-foreground">{trace.normalizedValue ?? "-"}</p>
+                              </div>
+                            </div>
                           </div>
+                        ))}
+                      </div>
+                      <div className="space-y-3 rounded-[24px] border border-border/60 bg-background p-4">
+                        <p className="text-sm font-medium text-foreground">Snapshot summary</p>
+                        <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Owner update</p>
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            {highlightedMeasurementSnapshot.ownerUpdate || "No owner commentary captured in this snapshot."}
+                          </p>
                         </div>
-                      ))}
+                        <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                          <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Data-quality note</p>
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            {highlightedMeasurementSnapshot.dataQualityNote || "No additional data-quality note for this KPI."}
+                          </p>
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
-                </div>
+                ) : null}
+
+                
               </CardContent>
             </Card>
           </TabsContent>
@@ -4051,7 +5520,6 @@ export default function BalancedScorecardModule() {
                 <SectionTitle
                   icon={User}
                   title={employeeView.title}
-                  description={employeeView.description}
                 />
                 {/* <div className="flex flex-wrap gap-2">
                   <Badge variant="outline" className="rounded-full">
@@ -4073,12 +5541,7 @@ export default function BalancedScorecardModule() {
                   </Badge>
                 </div> */}
               </CardHeader>
-              <CardContent
-                className={cn(
-                  "grid gap-6",
-                  selectedRole === "employee" && "xl:grid-cols-[minmax(0,1.3fr)_360px]"
-                )}
-              >
+              <CardContent className="space-y-6">
                 <div className="space-y-4">
                   <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4">
                     {employeeView.metrics.map((metric) => (
@@ -4086,7 +5549,6 @@ export default function BalancedScorecardModule() {
                         key={metric.label}
                         label={metric.label}
                         value={metric.value}
-                        hint={metric.hint}
                         icon={metric.icon}
                       />
                     ))}
@@ -4094,8 +5556,188 @@ export default function BalancedScorecardModule() {
 
                   <div className="space-y-4">
                     {selectedRole === "employee"
-                      ? employeeContributionData.map((item) => {
-                          const kpi = kpiData.find((candidate) => candidate.id === item.kpiId);
+                      ? (
+                        <>
+                          {employeePrimaryContribution ? (
+                            <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                              <CardContent className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.35fr)_320px]">
+                                <div className="space-y-4">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0 space-y-2">
+                                      <p className="text-lg font-semibold text-foreground">Current contribution line of sight</p>
+                                      <p className="text-sm text-muted-foreground">
+                                        This shows the strategic goal, KPI contract, and initiative your current work is feeding.
+                                      </p>
+                                    </div>
+                                    {employeeOverallStatus ? <StatusBadge status={employeeOverallStatus} /> : null}
+                                  </div>
+                                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Perspective</p>
+                                      <p className="mt-2 font-medium text-foreground">
+                                        {employeePrimaryContribution.perspective?.name || "Not linked yet"}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Strategic goal</p>
+                                      <p className="mt-2 font-medium text-foreground">
+                                        {employeePrimaryContribution.goal?.title || "No goal linked"}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Linked KPI</p>
+                                      <p className="mt-2 font-medium text-foreground">
+                                        {employeePrimaryContribution.kpi?.name || "No KPI linked"}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Initiative</p>
+                                      <p className="mt-2 font-medium text-foreground">
+                                        {employeePrimaryContribution.item.initiative || employeePrimaryContribution.item.title}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="grid gap-3 lg:grid-cols-2">
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">KPI contract</p>
+                                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                        <div>
+                                          <p className="text-xs text-muted-foreground">Target</p>
+                                          <p className="mt-1 text-base font-semibold text-foreground">
+                                            {employeePrimaryContribution.kpi?.firmTarget || "Not set"}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs text-muted-foreground">Current actual</p>
+                                          <p className="mt-1 text-base font-semibold text-foreground">
+                                            {employeePrimaryContribution.kpi?.actual || "Awaiting update"}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <p className="mt-3 text-sm text-muted-foreground">
+                                        {employeePrimaryContribution.item.rollup ||
+                                          "This contribution is linked into the active scorecard cascade, but the roll-up note is still missing."}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">What needs my attention</p>
+                                      <div className="mt-3 space-y-3 text-sm text-muted-foreground">
+                                        <div className="flex items-center justify-between gap-3">
+                                          <span>Pending updates</span>
+                                          <span className="font-medium text-foreground">{employeePendingUpdateCount}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-3">
+                                          <span>Acknowledged items</span>
+                                          <span className="font-medium text-foreground">
+                                            {employeeAcknowledgedCount}/{employeeContributionData.length}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-3">
+                                          <span>Next due date</span>
+                                          <span className="font-medium text-foreground">{employeePrimaryContribution.item.dueDate}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="space-y-3 rounded-[24px] border border-border/60 bg-background p-4">
+                                  <p className="text-sm font-medium text-foreground">Current period</p>
+                                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                                    <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Review window</p>
+                                    <p className="mt-2 font-medium text-foreground">
+                                      {evaluationSummary.cycleTitle || "Live KPI view"}
+                                    </p>
+                                    <p className="mt-2 text-sm text-muted-foreground">
+                                      {evaluationSummary.startDate && evaluationSummary.endDate
+                                        ? `${new Date(evaluationSummary.startDate).toLocaleDateString("en-GB", {
+                                            day: "2-digit",
+                                            month: "short",
+                                          })} to ${new Date(evaluationSummary.endDate).toLocaleDateString("en-GB", {
+                                            day: "2-digit",
+                                            month: "short",
+                                          })}`
+                                        : "This workspace is currently using the live KPI view."}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                                    <p className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Execution health</p>
+                                    <p className="mt-2 text-2xl font-semibold text-foreground">{averageContributionProgress}%</p>
+                                    <p className="mt-1 text-sm text-muted-foreground">
+                                      Based on your assigned action progress in the current window.
+                                    </p>
+                                  </div>
+                                  <Button
+                                    className="h-10 rounded-2xl w-full"
+                                    disabled={contributionSubmitting === `ack:${employeePrimaryContribution.item.id}`}
+                                    onClick={() =>
+                                      employeePrimaryContribution.item.acknowledged
+                                        ? openContributionProgressDialog(employeePrimaryContribution.item)
+                                        : handleAcknowledgeContribution(employeePrimaryContribution.item)
+                                    }
+                                  >
+                                    {contributionSubmitting === `ack:${employeePrimaryContribution.item.id}`
+                                      ? "Recording..."
+                                      : employeePrimaryContribution.item.acknowledged
+                                        ? "Update my progress"
+                                        : "Acknowledge my item"}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    className="h-10 rounded-2xl w-full"
+                                    onClick={() => handleOpenContributionReviewContext(employeePrimaryContribution.item)}
+                                  >
+                                    Open evaluation context
+                                  </Button>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ) : (
+                            <Card className="rounded-[24px] border-border/60 shadow-none">
+                              <CardContent className="space-y-3 p-5">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-lg font-semibold text-foreground">No current contribution items</p>
+                                    <p className="mt-1 text-sm text-muted-foreground">
+                                      No initiative, KPI, or acknowledgement item is currently assigned to this employee in the active window.
+                                    </p>
+                                  </div>
+                                  <Badge variant="outline" className="rounded-full">Awaiting allocation</Badge>
+                                </div>
+                                <div className="grid gap-3 md:grid-cols-3">
+                                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Current period</p>
+                                    <p className="mt-2 font-medium text-foreground">{evaluationSummary.cycleTitle || "Live KPI view"}</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Next expectation</p>
+                                    <p className="mt-2 font-medium text-foreground">Await assignment or manager cascade</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">My score</p>
+                                    <p className="mt-2 font-medium text-foreground">{averageContributionScore}</p>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          )}
+                          {employeeContributionData.map((item) => {
+                          const kpi = item.kpiId
+                            ? kpiData.find((candidate) => candidate.id === item.kpiId)
+                            : undefined;
+                          const goal = kpi
+                            ? goalData.find((candidate) => candidate.id === kpi.goalId)
+                            : undefined;
+                          const perspective = kpi
+                            ? perspectiveData.find((candidate) => candidate.id === kpi.perspectiveId)
+                            : undefined;
+                          const contributionContext = [
+                            perspective?.name ? `Perspective: ${perspective.name}` : null,
+                            goal?.title ? `Goal: ${goal.title}` : null,
+                            kpi?.name ? `KPI: ${kpi.name}` : null,
+                            item.initiative ? `Initiative: ${item.initiative}` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ");
                           return (
                             <Card key={item.id} className="rounded-[24px] border-border/60 shadow-none">
                               <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.4fr)_220px]">
@@ -4103,9 +5745,11 @@ export default function BalancedScorecardModule() {
                                   <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div className="min-w-0">
                                       <p className="text-lg font-semibold text-foreground break-words">{item.title}</p>
-                                      <p className="text-sm text-muted-foreground break-words">
-                                        KPI contribution: {kpi?.name} · Initiative: {item.initiative}
-                                      </p>
+                                      {contributionContext ? (
+                                        <p className="text-sm text-muted-foreground break-words">
+                                          {contributionContext}
+                                        </p>
+                                      ) : null}
                                     </div>
                                     <StatusBadge status={item.status} />
                                   </div>
@@ -4130,6 +5774,24 @@ export default function BalancedScorecardModule() {
                                     </div>
                                     <Progress value={item.progress} className="h-2.5 rounded-full" />
                                   </div>
+                                  <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4">
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-background p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Perspective</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{perspective?.name || "Pending link"}</p>
+                                    </div>
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-background p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Strategic goal</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{goal?.title || "Pending link"}</p>
+                                    </div>
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-background p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">KPI target</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{kpi?.firmTarget || "Not set"}</p>
+                                    </div>
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-background p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">KPI actual</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{kpi?.actual || "Awaiting update"}</p>
+                                    </div>
+                                  </div>
                                   <div className="rounded-2xl border border-border/60 bg-primary/5 p-4">
                                     <div className="flex items-start gap-2">
                                       <MessageSquare className="mt-0.5 h-4 w-4 text-primary" />
@@ -4142,22 +5804,53 @@ export default function BalancedScorecardModule() {
                                 </div>
 
                                 <div className="space-y-3 rounded-[24px] border border-border/60 bg-muted/20 p-4">
-                                  <p className="text-sm font-medium text-foreground">What I own</p>
-                                  <p className="text-sm text-muted-foreground">
-                                    Employees do not need the whole firm structure by default. They need clarity, due dates, and a visible link upward.
-                                  </p>
-                                  <Button className="h-10 rounded-2xl w-full">{item.acknowledged ? "Update progress" : "Acknowledge item"}</Button>
-                                  <Button variant="outline" className="h-10 rounded-2xl w-full">
+                                  <p className="text-sm font-medium text-foreground">My next move</p>
+                                  <div className="rounded-2xl border border-border/60 bg-background p-3">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Acknowledgement</p>
+                                    <p className="mt-2 font-medium text-foreground">
+                                      {item.acknowledged ? "Acknowledged" : "Pending acknowledgement"}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-background p-3">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Contribution score</p>
+                                    <p className="mt-2 font-medium text-foreground">{item.score}</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-background p-3">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Evidence linked</p>
+                                    <p className="mt-2 font-medium text-foreground">{item.evidenceCount}</p>
+                                  </div>
+                                  <Button
+                                    className="h-10 rounded-2xl w-full"
+                                    disabled={contributionSubmitting === `ack:${item.id}`}
+                                    onClick={() =>
+                                      item.acknowledged
+                                        ? openContributionProgressDialog(item)
+                                        : handleAcknowledgeContribution(item)
+                                    }
+                                  >
+                                    {contributionSubmitting === `ack:${item.id}`
+                                      ? "Recording..."
+                                      : item.acknowledged
+                                        ? "Update progress"
+                                        : "Acknowledge item"}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    className="h-10 rounded-2xl w-full"
+                                    onClick={() => openContributionDetail(item)}
+                                  >
                                     View contribution detail
                                   </Button>
                                 </div>
                               </CardContent>
                             </Card>
                           );
-                        })
+                        })}
+                        </>
+                      )
                       : employeeView.items.map((item) => (
                           <Card key={item.id} className="rounded-[24px] border-border/60 shadow-none">
-                            <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.35fr)_240px]">
+                            <CardContent className="p-5">
                               <div className="space-y-3">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                   <div className="min-w-0">
@@ -4199,65 +5892,11 @@ export default function BalancedScorecardModule() {
                                   </div>
                                 </div>
                               </div>
-
-                              <div className="space-y-3 rounded-[24px] border border-border/60 bg-muted/20 p-4">
-                                <p className="text-sm font-medium text-foreground">
-                                  {selectedRole === "manager" ? "Manager action" : "HR governance"}
-                                </p>
-                                <p className="text-sm text-muted-foreground">
-                                  {selectedRole === "manager"
-                                    ? "Managers need clarity on acknowledgements, overdue updates, and who needs coaching next."
-                                    : "HR should watch acknowledgement and contribution health without inheriting every team task."}
-                                </p>
-                                <Button className="h-10 rounded-2xl w-full">
-                                  {selectedRole === "manager" ? "Open team action" : "Open workforce detail"}
-                                </Button>
-                                <Button variant="outline" className="h-10 rounded-2xl w-full">
-                                  View contribution context
-                                </Button>
-                              </div>
                             </CardContent>
                           </Card>
                         ))}
                   </div>
                 </div>
-
-                {selectedRole === "employee" ? (
-                  <div className="space-y-4">
-                    <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                      <CardHeader>
-                        <CardTitle className="text-base">How this connects upward</CardTitle>
-                        <CardDescription>
-                          A small section is enough to make upward contribution clear.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        {employeeContributionData.map((item) => (
-                          <div key={item.id} className="rounded-2xl border border-border/60 bg-background p-4">
-                            <p className="font-medium text-foreground">{item.title}</p>
-                            <p className="mt-2 text-sm text-muted-foreground">{item.rollup}</p>
-                          </div>
-                        ))}
-                      </CardContent>
-                    </Card>
-
-                    <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                      <CardHeader>
-                        <CardTitle className="text-base">Employee design rules</CardTitle>
-                        <CardDescription>
-                          Keep the experience light, clear, and role-relevant.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-3 text-sm text-muted-foreground">
-                        {employeeView.sideLines.map((line) => (
-                          <div key={line} className="rounded-2xl border border-border/60 bg-background p-4">
-                            {line}
-                          </div>
-                        ))}
-                      </CardContent>
-                    </Card>
-                  </div>
-                ) : null}
               </CardContent>
             </Card>
           </TabsContent>
@@ -4268,7 +5907,6 @@ export default function BalancedScorecardModule() {
                 <SectionTitle
                   icon={FileText}
                   title={reportsView.title}
-                  description={reportsView.description}
                 />
               </CardHeader>
               <CardContent className="space-y-6">
@@ -4278,7 +5916,6 @@ export default function BalancedScorecardModule() {
                       <CardContent className="space-y-2 p-5">
                         <p className="text-sm font-medium text-foreground">{report.label}</p>
                         <p className="text-2xl font-semibold tracking-tight text-foreground">{report.value}</p>
-                        <p className="text-sm text-muted-foreground">{report.hint}</p>
                       </CardContent>
                     </Card>
                   ))}
@@ -4360,13 +5997,7 @@ export default function BalancedScorecardModule() {
                                 <TableCell>{manager.score}</TableCell>
                               </TableRow>
                             ))
-                          ) : (
-                            <TableRow>
-                              <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
-                                No live manager score data is available yet.
-                              </TableCell>
-                            </TableRow>
-                          )}
+                          ) : null}
                         </TableBody>
                       </Table>
                     </CardContent>
@@ -4394,13 +6025,7 @@ export default function BalancedScorecardModule() {
                                 <TableCell>{employee.ack}</TableCell>
                               </TableRow>
                             ))
-                          ) : (
-                            <TableRow>
-                              <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
-                                No live employee contribution data is available yet.
-                              </TableCell>
-                            </TableRow>
-                          )}
+                          ) : null}
                         </TableBody>
                       </Table>
                     </CardContent>
@@ -4411,7 +6036,559 @@ export default function BalancedScorecardModule() {
           </TabsContent>
         </Tabs>
 
+        <Dialog
+          open={contributionDialogMode === "detail" && Boolean(selectedContributionId)}
+          onOpenChange={(open) => {
+            if (!open) closeContributionDialogs();
+          }}
+        >
+          <DialogContent className="sm:max-w-[760px]">
+            <DialogHeader>
+              <DialogTitle>{selectedContributionItem?.title || "Contribution detail"}</DialogTitle>
+              <DialogDescription>
+                Linked KPI context, employee update history, evidence, and review navigation for this contribution item.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {contributionDetailLoading ? (
+                <p className="text-sm text-muted-foreground">Loading contribution detail...</p>
+              ) : contributionDetail ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Progress</p>
+                      <p className="mt-2 text-xl font-semibold text-foreground">{contributionDetail.progress}%</p>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Acknowledged</p>
+                      <p className="mt-2 text-xl font-semibold text-foreground">
+                        {contributionDetail.acknowledged ? "Yes" : "No"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Evidence files</p>
+                      <p className="mt-2 text-xl font-semibold text-foreground">{contributionDetail.evidence.length}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Due date</p>
+                      <p className="mt-2 text-base font-semibold text-foreground">{contributionDetail.dueDate}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-sm font-medium text-foreground">Manager note</p>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {contributionDetail.managerComment || "No manager note has been recorded yet."}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-sm font-medium text-foreground">My latest update</p>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {contributionDetail.employeeComment || "No employee update note has been submitted yet."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-border/60 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-foreground">Update history</p>
+                      <Badge variant="outline" className="rounded-full">
+                        {contributionDetail.updates.length} entries
+                      </Badge>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {contributionDetail.updates.length > 0 ? (
+                        contributionDetail.updates.map((update) => (
+                          <div key={update.id} className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-foreground">{update.progress}% progress</p>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  {update.comment || "No note was added to this progress update."}
+                                </p>
+                              </div>
+                              <div className="text-right text-xs text-muted-foreground">
+                                <p>{new Date(update.createdAt).toLocaleDateString("en-GB")}</p>
+                                <p>{update.createdByName || "Unknown actor"}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No progress updates have been recorded yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-border/60 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-foreground">Evidence</p>
+                      <Badge variant="outline" className="rounded-full">
+                        {contributionDetail.evidence.length} files
+                      </Badge>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {contributionDetail.evidence.length > 0 ? (
+                        contributionDetail.evidence.map((evidence) => (
+                          <div key={evidence.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-muted/20 p-4">
+                            <div>
+                              <p className="font-medium text-foreground">{evidence.fileName}</p>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                {evidence.description || "No evidence note was added."}
+                              </p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              className="rounded-2xl"
+                              onClick={() => window.open(documentsAPI.getDownloadUrl(evidence.id), "_blank")}
+                            >
+                              Open file
+                            </Button>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No evidence files are linked to this contribution yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Contribution detail is unavailable.</p>
+              )}
+            </div>
+            <DialogFooter className="gap-2 sm:justify-between">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => selectedContributionItem && handleOpenContributionReviewContext(selectedContributionItem)}
+                  disabled={!selectedContributionItem?.reviewContextPath}
+                >
+                  Open review context
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => selectedContributionItem && openContributionEvidenceDialog(selectedContributionItem)}
+                  disabled={!selectedContributionItem}
+                >
+                  Attach evidence
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={closeContributionDialogs}>
+                  Close
+                </Button>
+                <Button
+                  onClick={() =>
+                    selectedContributionItem &&
+                    (selectedContributionItem.acknowledged
+                      ? openContributionProgressDialog(selectedContributionItem)
+                      : handleAcknowledgeContribution(selectedContributionItem))
+                  }
+                  disabled={!selectedContributionItem || contributionSubmitting === `ack:${selectedContributionItem?.id}`}
+                >
+                  {selectedContributionItem?.acknowledged ? "Update progress" : "Acknowledge item"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={contributionDialogMode === "progress" && Boolean(selectedContributionId)}
+          onOpenChange={(open) => {
+            if (!open) closeContributionDialogs();
+          }}
+        >
+          <DialogContent className="sm:max-w-[560px]">
+            <DialogHeader>
+              <DialogTitle>Update contribution progress</DialogTitle>
+              <DialogDescription>
+                Submit your latest progress and note so the contribution history stays traceable.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Progress percent</p>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={contributionProgressForm.progress}
+                  onChange={(event) =>
+                    setContributionProgressForm((current) => ({
+                      ...current,
+                      progress: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Update note</p>
+                <Textarea
+                  value={contributionProgressForm.comment}
+                  onChange={(event) =>
+                    setContributionProgressForm((current) => ({
+                      ...current,
+                      comment: event.target.value,
+                    }))
+                  }
+                  placeholder="What changed, what is blocked, and what still needs follow-through?"
+                  rows={5}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeContributionDialogs}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSubmitContributionProgress}
+                disabled={contributionSubmitting === `progress:${selectedContributionId}`}
+              >
+                {contributionSubmitting === `progress:${selectedContributionId}` ? "Saving..." : "Save update"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={contributionDialogMode === "evidence" && Boolean(selectedContributionId)}
+          onOpenChange={(open) => {
+            if (!open) closeContributionDialogs();
+          }}
+        >
+          <DialogContent className="sm:max-w-[560px]">
+            <DialogHeader>
+              <DialogTitle>Attach contribution evidence</DialogTitle>
+              <DialogDescription>
+                Upload a file that supports your contribution update for manager and review visibility.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Evidence file</p>
+                <Input
+                  type="file"
+                  onChange={(event) => setContributionEvidenceFile(event.target.files?.[0] ?? null)}
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Evidence note</p>
+                <Textarea
+                  value={contributionEvidenceNote}
+                  onChange={(event) => setContributionEvidenceNote(event.target.value)}
+                  placeholder="Describe what this file proves or supports."
+                  rows={4}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeContributionDialogs}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleUploadContributionEvidence}
+                disabled={contributionSubmitting === `evidence:${selectedContributionId}`}
+              >
+                {contributionSubmitting === `evidence:${selectedContributionId}` ? "Uploading..." : "Upload evidence"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={cycleDialogOpen} onOpenChange={setCycleDialogOpen}>
+          <DialogContent className="sm:max-w-[540px]">
+            <DialogHeader>
+              <DialogTitle>Create scorecard cycle</DialogTitle>
+              <DialogDescription>
+                Define the governance window that will hold one or more draft and published scorecard versions.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Cycle name</p>
+                <Input
+                  value={cycleForm.name}
+                  onChange={(event) =>
+                    setCycleForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Performance year 2026"
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Cadence</p>
+                <Select
+                  value={cycleForm.cadence}
+                  onValueChange={(value: "monthly" | "quarterly" | "annual") =>
+                    setCycleForm((current) => ({ ...current, cadence: value }))
+                  }
+                >
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="Select cadence" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Start date</p>
+                  <Input
+                    type="date"
+                    value={cycleForm.startDate}
+                    onChange={(event) =>
+                      setCycleForm((current) => ({ ...current, startDate: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">End date</p>
+                  <Input
+                    type="date"
+                    value={cycleForm.endDate}
+                    onChange={(event) =>
+                      setCycleForm((current) => ({ ...current, endDate: event.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCycleDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  !cycleForm.name.trim() ||
+                  !cycleForm.startDate ||
+                  !cycleForm.endDate ||
+                  authoringSubmitting === "createScorecardCycle"
+                }
+                onClick={handleCreateScorecardCycle}
+              >
+                {authoringSubmitting === "createScorecardCycle" ? "Saving..." : "Save cycle"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={versionDialogOpen} onOpenChange={setVersionDialogOpen}>
+          <DialogContent className="sm:max-w-[540px]">
+            <DialogHeader>
+              <DialogTitle>Create draft scorecard</DialogTitle>
+              <DialogDescription>
+                Clone the current structure into a governed scorecard version so strategy changes can be prepared before publication.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Cycle</p>
+                <Select
+                  value={versionForm.cycleId}
+                  onValueChange={(value) =>
+                    setVersionForm((current) => ({ ...current, cycleId: value }))
+                  }
+                >
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="Select cycle" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {governanceCycles.map((cycle) => (
+                      <SelectItem key={cycle.id} value={String(cycle.id)}>
+                        {cycle.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Label</p>
+                <Input
+                  value={versionForm.label}
+                  onChange={(event) =>
+                    setVersionForm((current) => ({ ...current, label: event.target.value }))
+                  }
+                  placeholder="Quarter close working draft"
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Clone from</p>
+                <Select
+                  value={versionForm.sourceVersionId}
+                  onValueChange={(value) =>
+                    setVersionForm((current) => ({ ...current, sourceVersionId: value }))
+                  }
+                >
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="Auto-select source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Current live structure</SelectItem>
+                    <SelectItem value="baseline">Baseline KPI library</SelectItem>
+                    {allGovernanceVersions.map((version) => {
+                      const cycle = governanceCycles.find((candidate) => candidate.id === version.cycleId);
+                      return (
+                        <SelectItem key={version.id} value={String(version.id)}>
+                          {cycle?.name || "Scorecard cycle"} · Scorecard {version.versionNumber}
+                          {version.label ? ` · ${version.label}` : ""}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setVersionDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!versionForm.cycleId || authoringSubmitting === "createScorecardVersion"}
+                onClick={handleCreateScorecardVersion}
+              >
+                {authoringSubmitting === "createScorecardVersion" ? "Cloning..." : "Create draft"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={measurementPeriodDialogOpen} onOpenChange={setMeasurementPeriodDialogOpen}>
+          <DialogContent className="sm:max-w-[540px]">
+            <DialogHeader>
+              <DialogTitle>Create measurement period</DialogTitle>
+              <DialogDescription>
+                Define the exact scorecard window that will hold a frozen KPI snapshot pack.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Label</label>
+                <Input
+                  value={measurementPeriodForm.label}
+                  onChange={(event) =>
+                    setMeasurementPeriodForm((current) => ({
+                      ...current,
+                      label: event.target.value,
+                    }))
+                  }
+                  placeholder="April 2026 monthly close"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">Start date</label>
+                  <Input
+                    type="date"
+                    value={measurementPeriodForm.periodStart}
+                    onChange={(event) =>
+                      setMeasurementPeriodForm((current) => ({
+                        ...current,
+                        periodStart: event.target.value,
+                      }))
+                    }
+                    className="rounded-2xl"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">End date</label>
+                  <Input
+                    type="date"
+                    value={measurementPeriodForm.periodEnd}
+                    onChange={(event) =>
+                      setMeasurementPeriodForm((current) => ({
+                        ...current,
+                        periodEnd: event.target.value,
+                      }))
+                    }
+                    className="rounded-2xl"
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setMeasurementPeriodDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateMeasurementPeriod}
+                disabled={
+                  !measurementVersionId ||
+                  !measurementPeriodForm.periodStart ||
+                  !measurementPeriodForm.periodEnd ||
+                  measurementSubmitting === "createMeasurementPeriod"
+                }
+              >
+                {measurementSubmitting === "createMeasurementPeriod"
+                  ? "Creating..."
+                  : "Create period"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={kpiActualDialogOpen} onOpenChange={(open) => (open ? setKpiActualDialogOpen(true) : closeKpiActualDialog())}>
+          <DialogContent className="sm:max-w-[520px]">
+            <DialogHeader>
+              <DialogTitle>Update KPI actual</DialogTitle>
+              <DialogDescription>
+                Enter the latest measured value. Progress and status update automatically based on the KPI's target direction.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                <p className="text-sm font-medium text-foreground">{kpiActualTarget?.name ?? "Selected KPI"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Target: {kpiActualTarget?.firmTarget ?? "-"} | Frequency: {kpiActualTarget?.frequency ?? "-"}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Actual value</p>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Enter latest actual"
+                  value={kpiActualForm.actualValue}
+                  onChange={(event) =>
+                    setKpiActualForm((current) => ({ ...current, actualValue: event.target.value }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Unit: {kpiActualTarget?.unit ?? "-"}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Update note (optional)</p>
+                <Textarea
+                  rows={3}
+                  placeholder="Add context for this measurement update"
+                  value={kpiActualForm.note}
+                  onChange={(event) =>
+                    setKpiActualForm((current) => ({ ...current, note: event.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button variant="outline" onClick={closeKpiActualDialog}>
+                Cancel
+              </Button>
+              <Button
+                onClick={submitKpiActualUpdate}
+                disabled={authoringSubmitting?.startsWith("updateKpiActual")}
+              >
+                Save actual
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
       </div>
     </DashboardLayout>
   );
 }
+

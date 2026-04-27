@@ -34,8 +34,9 @@ export type SetupSheetMode =
   | "createPerspective"
   | "editPerspective"
   | "createGoal"
+  | "editGoal"
   | null;
-export type KpiSheetMode = "contract" | "rules" | "createKpi" | "createInitiative" | null;
+export type KpiSheetMode = "contract" | "rules" | "createKpi" | "createInitiative" | "editInitiative" | null;
 
 export type RoleProfile = {
   label: string;
@@ -48,26 +49,26 @@ export type RoleProfile = {
 export type RoleHomeMetric = {
   label: string;
   value: string;
-  hint: string;
+  hint?: string;
   icon: LucideIcon;
 };
 
 export type RoleBoardItem = {
   label: string;
   value: string;
-  note: string;
+  note?: string;
   status?: StatusTone;
   progress?: number;
 };
 
 export type RoleHomeConfig = {
   title: string;
-  description: string;
+  description?: string;
   primaryBoardTitle: string;
-  primaryBoardDescription: string;
+  primaryBoardDescription?: string;
   primaryBoardItems: RoleBoardItem[];
   secondaryBoardTitle: string;
-  secondaryBoardDescription: string;
+  secondaryBoardDescription?: string;
   secondaryBoardItems: RoleBoardItem[];
   allowedActions: string[];
   hiddenByDefault: string[];
@@ -716,6 +717,7 @@ export const moduleTabs = [
   { value: "dashboard", label: "Role Home" },
   { value: "setup", label: "BSC Setup" },
   { value: "kpis", label: "KPI Library" },
+  { value: "peopleAdmin", label: "People Controls" },
   { value: "cascade", label: "Initiative Cascade" },
   { value: "tracking", label: "Performance Tracking" },
   { value: "employee", label: "Employee View" },
@@ -725,7 +727,7 @@ export const moduleTabs = [
 export type ModuleTabValue = (typeof moduleTabs)[number]["value"];
 
 export const roleTabVisibility: Record<RoleKey, ModuleTabValue[]> = {
-  hr: ["dashboard", "setup", "kpis", "cascade", "tracking", "employee", "reports"],
+  hr: ["dashboard", "setup", "kpis", "peopleAdmin", "cascade", "tracking", "employee", "reports"],
   gmp: ["dashboard", "cascade", "tracking", "reports"],
   partner: ["dashboard", "cascade", "tracking", "reports"],
   manager: ["dashboard", "cascade", "tracking", "employee"],
@@ -738,6 +740,7 @@ export function getRoleTabLabel(role: RoleKey, value: ModuleTabValue) {
   if (role === "hr") {
     if (value === "setup") return "Strategy Setup";
     if (value === "kpis") return "KPI Governance";
+    if (value === "peopleAdmin") return "People Controls";
     if (value === "reports") return "Review Packs";
     if (value === "employee") return "Workforce View";
   }

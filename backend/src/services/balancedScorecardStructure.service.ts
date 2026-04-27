@@ -1,4 +1,13 @@
 import prisma from "../prisma";
+import { randomUUID } from "crypto";
+import { resolveActiveBalancedScorecardVersionId } from "./balancedScorecardGovernance.service";
+import cacheService from "./cache.service";
+import {
+  baselineGoals,
+  baselineInitiatives,
+  baselineKpis,
+  baselinePerspectives,
+} from "./balancedScorecardBaseline";
 
 const slugify = (value: string) =>
   value
@@ -8,12 +17,99 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
 
+// Uses a UUID suffix to prevent key collisions during bulk inserts or concurrent requests.
 const uniqueKey = (prefix: string, value: string) =>
-  `${prefix}-${slugify(value) || "item"}-${Date.now()}`;
+  `${prefix}-${slugify(value) || "item"}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
 const decimalValueOrNull = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const resolveOwnerReference = async (input: {
+  ownerName?: string | null;
+  ownerProfileId?: number | null;
+}) => {
+  const ownerName = input.ownerName?.trim() || null;
+
+  if (input.ownerProfileId === undefined) {
+    return { ownerName, ownerProfileId: undefined as number | null | undefined };
+  }
+
+  if (input.ownerProfileId === null) {
+    return { ownerName, ownerProfileId: null };
+  }
+
+  const ownerProfile = await prisma.profile.findUnique({
+    where: { id: input.ownerProfileId },
+    select: { id: true, firstName: true, lastName: true },
+  });
+
+  if (!ownerProfile) {
+    const err = new Error("Owner profile not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return {
+    ownerName: ownerName || `${ownerProfile.firstName} ${ownerProfile.lastName}`.trim() || null,
+    ownerProfileId: ownerProfile.id,
+  };
+};
+
+const resolveVersionScope = async (scorecardVersionId?: number | null) => {
+  const resolvedVersionId =
+    scorecardVersionId !== undefined
+      ? scorecardVersionId
+      : await resolveActiveBalancedScorecardVersionId();
+  return {
+    resolvedVersionId,
+    versionWhere:
+      resolvedVersionId !== null
+        ? { scorecardVersionId: resolvedVersionId }
+        : { scorecardVersionId: null },
+  };
+};
+
+const invalidateBalancedScorecardWorkspaceCache = () => {
+  cacheService.invalidate("^bsc:workspace:");
+};
+
+const mapConflict = (message: string) => {
+  const err = new Error(message) as Error & { statusCode?: number };
+  err.statusCode = 409;
+  throw err;
+};
+
+const assertGoalKpiWeightBudget = async (params: {
+  goalId: number;
+  incomingWeight: number;
+  excludeKpiId?: number | null;
+}) => {
+  if (!Number.isFinite(params.incomingWeight) || params.incomingWeight < 0 || params.incomingWeight > 100) {
+    const err = new Error("KPI weight must be between 0 and 100") as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const aggregate = await prisma.balancedScorecardKpi.aggregate({
+    where: {
+      goalId: params.goalId,
+      isActive: true,
+      ...(params.excludeKpiId ? { id: { not: params.excludeKpiId } } : {}),
+    },
+    _sum: {
+      weight: true,
+    },
+  });
+
+  const currentWeight = Number(aggregate._sum.weight ?? 0);
+  const proposedTotal = currentWeight + Math.round(params.incomingWeight);
+  if (proposedTotal > 100) {
+    mapConflict(
+      `KPI weights for this goal would total ${proposedTotal}%. Reduce the new KPI weight so the goal stays within 100%.`
+    );
+  }
 };
 
 export type StructurePerspective = {
@@ -54,6 +150,7 @@ export type StructureKpi = {
   weight: number;
   firmTarget: string;
   ownerName: string | null;
+  ownerProfileId: number | null;
   statusLogic: string | null;
   updateFrequency: string | null;
   sortOrder: number;
@@ -69,11 +166,40 @@ export type StructureInitiative = {
   title: string;
   summary: string | null;
   ownerName: string | null;
+  ownerProfileId: number | null;
   timeline: string | null;
   dueDate: Date | null;
   status: string;
   progress: number;
   sortOrder: number;
+};
+
+export type BalancedScorecardKpiAssignmentRecord = {
+  id: number;
+  kpiId: number;
+  kpiKey: string;
+  kpiName: string;
+  profileId: number;
+  profileName: string;
+  roleId: number | null;
+  roleName: string | null;
+  scorecardVersionId: number;
+  individualTarget: number | null;
+  individualWeight: number;
+  createdByProfileId: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PerformanceBandRecord = {
+  id: number;
+  roleId: number | null;
+  roleName: string | null;
+  onTrackMin: number;
+  atRiskMin: number;
+  label: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type BalancedScorecardMetricTemplate = {
@@ -256,6 +382,9 @@ const legacySeedGoals: SeedGoal[] = [
   },
 ];
 
+// These templates MUST stay in sync with the kpiCatalog in balancedScorecardWorkspace.service.ts.
+// The catalog is the authoritative computation engine. These templates drive the KPI creation UI
+// and the seeded default structure. If the catalog formula changes, update here too.
 const metricTemplates: BalancedScorecardMetricTemplate[] = [
   {
     metricKey: "kpi-1",
@@ -263,15 +392,15 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     perspectiveId: "financial",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
-    defaultTargetValue: 12,
-    defaultFormula: "((Current period revenue - Prior period revenue) / Prior period revenue) * 100",
+    defaultTargetValue: 90,
+    defaultFormula: "Current month collected revenue / current month projected revenue",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
     defaultWeight: 20,
-    defaultTarget: "12%",
+    defaultTarget: "90%",
     defaultOwnerName: "HR / Strategy Office",
-    defaultStatusLogic: "On track at 10%+, at risk between 7%-9.9%, off track below 7%.",
-    defaultUpdateFrequency: "Monthly pack + quarter review",
+    defaultStatusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
+    defaultUpdateFrequency: "Monthly finance close",
   },
   {
     metricKey: "kpi-2",
@@ -279,15 +408,15 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     perspectiveId: "financial",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
-    defaultTargetValue: 88,
-    defaultFormula: "Recovered fees / standard billable value",
+    defaultTargetValue: 85,
+    defaultFormula: "Invoice amount paid / total issued invoice value",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
     defaultWeight: 18,
-    defaultTarget: "88%",
+    defaultTarget: "85%",
     defaultOwnerName: "Finance",
-    defaultStatusLogic: "Green at 88%+, amber at 82%-87.9%, red below 82%.",
-    defaultUpdateFrequency: "Monthly with finance close",
+    defaultStatusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
+    defaultUpdateFrequency: "Monthly collections review",
   },
   {
     metricKey: "kpi-3",
@@ -296,14 +425,30 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     defaultMeasurementType: "days",
     defaultTargetDirection: "lower_better",
     defaultTargetValue: 42,
-    defaultFormula: "Average days from invoice issuance to cash collection",
+    defaultFormula: "Average days from invoice issue date to paid date",
     defaultFrequency: "Weekly",
     defaultUnit: "Days",
     defaultWeight: 14,
     defaultTarget: "42 days",
     defaultOwnerName: "Finance",
-    defaultStatusLogic: "Green at 42 days or better, amber 43-46, red 47+.",
+    defaultStatusLogic: "Green at 42 days or better, amber 43-50, red above 50 days.",
     defaultUpdateFrequency: "Weekly collections huddle",
+  },
+  {
+    metricKey: "kpi-11",
+    name: "Billable utilization",
+    perspectiveId: "financial",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 80,
+    defaultFormula: "Billable hours / total recorded hours",
+    defaultFrequency: "Monthly",
+    defaultUnit: "%",
+    defaultWeight: 12,
+    defaultTarget: "80%",
+    defaultOwnerName: "Finance",
+    defaultStatusLogic: "Green at 80%+, amber at 65%-79.9%, red below 65%.",
+    defaultUpdateFrequency: "Monthly time entry close",
   },
   {
     metricKey: "kpi-4",
@@ -311,111 +456,111 @@ const metricTemplates: BalancedScorecardMetricTemplate[] = [
     perspectiveId: "customer",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
-    defaultTargetValue: 92,
-    defaultFormula: "Retained strategic clients / total strategic clients",
+    defaultTargetValue: 70,
+    defaultFormula: "Clients retained from prior period / clients in prior period",
     defaultFrequency: "Quarterly",
     defaultUnit: "%",
     defaultWeight: 16,
-    defaultTarget: "92%",
+    defaultTarget: "70%",
     defaultOwnerName: "GMP Office",
-    defaultStatusLogic: "Green at 92%+, amber 88%-91.9%, red below 88%.",
-    defaultUpdateFrequency: "Quarterly client review cadence",
+    defaultStatusLogic: "Green at 70%+, amber at 55%-69.9%, red below 55%.",
+    defaultUpdateFrequency: "Quarterly sponsor review",
   },
   {
     metricKey: "kpi-5",
-    name: "Cross-practice conversion rate",
+    name: "Cross-practice expansion wins",
     perspectiveId: "customer",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
     defaultTargetValue: 35,
-    defaultFormula: "Won cross-practice opportunities / qualified opportunities",
+    defaultFormula: "Won proposals / total proposals raised in the period",
     defaultFrequency: "Monthly",
     defaultUnit: "%",
-    defaultWeight: 12,
+    defaultWeight: 14,
     defaultTarget: "35%",
-    defaultOwnerName: "Partner Leadership",
-    defaultStatusLogic: "Green at 35%+, amber 30%-34.9%, red below 30%.",
+    defaultOwnerName: "Marketing",
+    defaultStatusLogic: "Green at 35%+, amber at 22%-34.9%, red below 22%.",
     defaultUpdateFrequency: "Monthly pipeline review",
   },
   {
     metricKey: "kpi-6",
-    name: "Executive review completion",
+    name: "Stakeholder satisfaction score",
     perspectiveId: "customer",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
-    defaultTargetValue: 100,
-    defaultFormula: "Completed executive reviews / scheduled executive reviews",
+    defaultTargetValue: 88,
+    defaultFormula: "Average overall satisfaction score from completed client surveys",
     defaultFrequency: "Monthly",
-    defaultUnit: "%",
-    defaultWeight: 10,
-    defaultTarget: "100%",
-    defaultOwnerName: "GMP Office",
-    defaultStatusLogic: "Green at 90%+, amber 75%-89.9%, red below 75%.",
-    defaultUpdateFrequency: "Monthly leadership review",
+    defaultUnit: "Score",
+    defaultWeight: 12,
+    defaultTarget: "88%",
+    defaultOwnerName: "Partner Office",
+    defaultStatusLogic: "Green at 88%+, amber at 75%-87.9%, red below 75%.",
+    defaultUpdateFrequency: "Monthly client-listening pack",
   },
   {
     metricKey: "kpi-7",
-    name: "Turnaround SLA adherence",
+    name: "Turnaround and SLA adherence",
     perspectiveId: "internal",
-    defaultMeasurementType: "percentage",
-    defaultTargetDirection: "higher_better",
-    defaultTargetValue: 95,
-    defaultFormula: "Assignments delivered within SLA / total assignments",
-    defaultFrequency: "Weekly",
-    defaultUnit: "%",
-    defaultWeight: 16,
-    defaultTarget: "95%",
-    defaultOwnerName: "Operations Council",
-    defaultStatusLogic: "Green at 93%+, amber 89%-92.9%, red below 89%.",
-    defaultUpdateFrequency: "Weekly delivery stand-up",
-  },
-  {
-    metricKey: "kpi-8",
-    name: "Review rework ratio",
-    perspectiveId: "internal",
-    defaultMeasurementType: "percentage",
-    defaultTargetDirection: "lower_better",
-    defaultTargetValue: 10,
-    defaultFormula: "Assignments with major rework / total reviewed assignments",
-    defaultFrequency: "Monthly",
-    defaultUnit: "%",
-    defaultWeight: 12,
-    defaultTarget: "10%",
-    defaultOwnerName: "Manager Community",
-    defaultStatusLogic: "Green at 10% or lower, amber 10.1%-12%, red above 12%.",
-    defaultUpdateFrequency: "Monthly review quality panel",
-  },
-  {
-    metricKey: "kpi-9",
-    name: "Monthly coaching completion",
-    perspectiveId: "people",
-    defaultMeasurementType: "percentage",
-    defaultTargetDirection: "higher_better",
-    defaultTargetValue: 95,
-    defaultFormula: "Completed coaching sessions / scheduled coaching sessions",
-    defaultFrequency: "Monthly",
-    defaultUnit: "%",
-    defaultWeight: 14,
-    defaultTarget: "95%",
-    defaultOwnerName: "HR Business Partnering",
-    defaultStatusLogic: "Green at 95%+, amber 85%-94.9%, red below 85%.",
-    defaultUpdateFrequency: "Monthly people check-in",
-  },
-  {
-    metricKey: "kpi-10",
-    name: "Priority skill readiness",
-    perspectiveId: "people",
     defaultMeasurementType: "percentage",
     defaultTargetDirection: "higher_better",
     defaultTargetValue: 85,
-    defaultFormula: "Ready staff / total staff in target pool",
-    defaultFrequency: "Quarterly",
+    defaultFormula: "Completed jobs on or before due date / completed jobs with due dates",
+    defaultFrequency: "Weekly",
+    defaultUnit: "%",
+    defaultWeight: 12,
+    defaultTarget: "85%",
+    defaultOwnerName: "Operations Council",
+    defaultStatusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
+    defaultUpdateFrequency: "Weekly delivery board",
+  },
+  {
+    metricKey: "kpi-8",
+    name: "Quality review pass rate",
+    perspectiveId: "internal",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 84,
+    defaultFormula: "Average submitted project evaluation score",
+    defaultFrequency: "Monthly",
     defaultUnit: "%",
     defaultWeight: 10,
-    defaultTarget: "85%",
-    defaultOwnerName: "HR + Practice Leads",
-    defaultStatusLogic: "Green at 85%+, amber 78%-84.9%, red below 78%.",
-    defaultUpdateFrequency: "Quarterly readiness review",
+    defaultTarget: "84%",
+    defaultOwnerName: "Manager Quality Forum",
+    defaultStatusLogic: "Green at 84%+, amber at 70%-83.9%, red below 70%.",
+    defaultUpdateFrequency: "Monthly quality review",
+  },
+  {
+    metricKey: "kpi-9",
+    name: "Coaching and review completion",
+    perspectiveId: "people",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 90,
+    defaultFormula: "Submitted evaluation assignments / total assignments created in the period",
+    defaultFrequency: "Monthly",
+    defaultUnit: "%",
+    defaultWeight: 12,
+    defaultTarget: "90%",
+    defaultOwnerName: "HR Business Partnering",
+    defaultStatusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
+    defaultUpdateFrequency: "Monthly people review",
+  },
+  {
+    metricKey: "kpi-10",
+    name: "Readiness and learning completion",
+    perspectiveId: "people",
+    defaultMeasurementType: "percentage",
+    defaultTargetDirection: "higher_better",
+    defaultTargetValue: 88,
+    defaultFormula: "Average of learning assignment completion rate and onboarding completion rate",
+    defaultFrequency: "Monthly",
+    defaultUnit: "%",
+    defaultWeight: 12,
+    defaultTarget: "88%",
+    defaultOwnerName: "HR Capability Office",
+    defaultStatusLogic: "Green at 88%+, amber at 72%-87.9%, red below 72%.",
+    defaultUpdateFrequency: "Monthly readiness checkpoint",
   },
 ];
 
@@ -425,15 +570,15 @@ const legacySeedKpis: SeedKpi[] = [
     goalKey: "goal-1",
     metricKey: "kpi-1",
     name: "Priority account revenue growth",
-    description: "Measures incremental year-on-year revenue from the top 20 accounts.",
-    formula: "((Current period revenue - Prior period revenue) / Prior period revenue) * 100",
+    description: "Tracks revenue collected against the current projection pack for priority account work.",
+    formula: "Current month collected revenue / current month projected revenue",
     frequency: "Monthly",
     unit: "%",
     weight: 20,
-    firmTarget: "12%",
+    firmTarget: "90%",
     ownerName: "HR / Strategy Office",
-    statusLogic: "On track at 10%+, at risk between 7%-9.9%, off track below 7%.",
-    updateFrequency: "Monthly pack + quarter review",
+    statusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
+    updateFrequency: "Monthly finance close",
     sortOrder: 1,
   },
   {
@@ -441,15 +586,15 @@ const legacySeedKpis: SeedKpi[] = [
     goalKey: "goal-1",
     metricKey: "kpi-2",
     name: "Matter realization rate",
-    description: "Tracks recovered value versus standard billable value on priority account matters.",
-    formula: "Recovered fees / standard billable value",
+    description: "Shows how much of issued invoice value has already been recovered as cash.",
+    formula: "Invoice amount paid / total issued invoice value",
     frequency: "Monthly",
     unit: "%",
     weight: 18,
-    firmTarget: "88%",
+    firmTarget: "85%",
     ownerName: "Finance",
-    statusLogic: "Green at 88%+, amber at 82%-87.9%, red below 82%.",
-    updateFrequency: "Monthly with finance close",
+    statusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
+    updateFrequency: "Monthly collections review",
     sortOrder: 2,
   },
   {
@@ -457,14 +602,14 @@ const legacySeedKpis: SeedKpi[] = [
     goalKey: "goal-2",
     metricKey: "kpi-3",
     name: "Collection cycle days",
-    description: "Average days from invoice issuance to cash collection for recurring work.",
-    formula: "Average invoice age at collection",
+    description: "Average elapsed days from invoice issue to payment or current aging for unresolved invoices.",
+    formula: "Average days from invoice issue date to paid date",
     frequency: "Weekly",
     unit: "Days",
     weight: 14,
     firmTarget: "42 days",
     ownerName: "Finance",
-    statusLogic: "Green at 42 days or better, amber 43-46, red 47+.",
+    statusLogic: "Green at 42 days or better, amber 43-50, red above 50 days.",
     updateFrequency: "Weekly collections huddle",
     sortOrder: 1,
   },
@@ -473,30 +618,30 @@ const legacySeedKpis: SeedKpi[] = [
     goalKey: "goal-3",
     metricKey: "kpi-4",
     name: "Strategic client retention",
-    description: "Share of strategic clients retained through the annual planning cycle.",
-    formula: "Retained strategic clients / total strategic clients",
+    description: "Share of prior-period clients who are also active in the current period — true carry-forward retention.",
+    formula: "Clients retained from prior period / clients in prior period",
     frequency: "Quarterly",
     unit: "%",
     weight: 16,
-    firmTarget: "92%",
+    firmTarget: "70%",
     ownerName: "GMP Office",
-    statusLogic: "Green at 92%+, amber 88%-91.9%, red below 88%.",
-    updateFrequency: "Quarterly client review cadence",
+    statusLogic: "Green at 70%+, amber at 55%-69.9%, red below 55%.",
+    updateFrequency: "Quarterly sponsor review",
     sortOrder: 1,
   },
   {
     key: "kpi-5",
     goalKey: "goal-3",
     metricKey: "kpi-5",
-    name: "Cross-practice conversion rate",
-    description: "Conversion of qualified cross-practice opportunities into active work.",
-    formula: "Won cross-practice opportunities / qualified opportunities",
+    name: "Cross-practice expansion wins",
+    description: "Tracks proposal conversion as a live proxy for turning growth opportunities into active work.",
+    formula: "Won proposals / total proposals raised in the period",
     frequency: "Monthly",
     unit: "%",
-    weight: 12,
+    weight: 14,
     firmTarget: "35%",
-    ownerName: "Partner Leadership",
-    statusLogic: "Green at 35%+, amber 30%-34.9%, red below 30%.",
+    ownerName: "Marketing",
+    statusLogic: "Green at 35%+, amber at 22%-34.9%, red below 22%.",
     updateFrequency: "Monthly pipeline review",
     sortOrder: 2,
   },
@@ -504,80 +649,80 @@ const legacySeedKpis: SeedKpi[] = [
     key: "kpi-6",
     goalKey: "goal-4",
     metricKey: "kpi-6",
-    name: "Executive review completion",
-    description: "Completion of agreed executive sponsor reviews for strategic accounts.",
-    formula: "Completed executive reviews / scheduled executive reviews",
+    name: "Stakeholder satisfaction score",
+    description: "Average satisfaction signal from completed client surveys.",
+    formula: "Average overall satisfaction score from completed client surveys",
     frequency: "Monthly",
-    unit: "%",
-    weight: 10,
-    firmTarget: "100%",
-    ownerName: "GMP Office",
-    statusLogic: "Green at 90%+, amber 75%-89.9%, red below 75%.",
-    updateFrequency: "Monthly leadership review",
+    unit: "Score",
+    weight: 12,
+    firmTarget: "88%",
+    ownerName: "Partner Office",
+    statusLogic: "Green at 88%+, amber at 75%-87.9%, red below 75%.",
+    updateFrequency: "Monthly client-listening pack",
     sortOrder: 1,
   },
   {
     key: "kpi-7",
     goalKey: "goal-5",
     metricKey: "kpi-7",
-    name: "Turnaround SLA adherence",
-    description: "Measures assignments delivered within agreed turnaround standards.",
-    formula: "Assignments delivered within SLA / total assignments",
+    name: "Turnaround and SLA adherence",
+    description: "Completed jobs delivered on or before the committed due date.",
+    formula: "Completed jobs on or before due date / completed jobs with due dates",
     frequency: "Weekly",
     unit: "%",
-    weight: 16,
-    firmTarget: "95%",
+    weight: 12,
+    firmTarget: "85%",
     ownerName: "Operations Council",
-    statusLogic: "Green at 93%+, amber 89%-92.9%, red below 89%.",
-    updateFrequency: "Weekly delivery stand-up",
+    statusLogic: "Green at 85%+, amber at 70%-84.9%, red below 70%.",
+    updateFrequency: "Weekly delivery board",
     sortOrder: 1,
   },
   {
     key: "kpi-8",
     goalKey: "goal-6",
     metricKey: "kpi-8",
-    name: "Review rework ratio",
-    description: "Measures the share of assignments requiring significant review rework.",
-    formula: "Assignments with major rework / total reviewed assignments",
+    name: "Quality review pass rate",
+    description: "Average project evaluation score across submitted quality reviews.",
+    formula: "Average submitted project evaluation score",
     frequency: "Monthly",
     unit: "%",
-    weight: 12,
-    firmTarget: "10%",
-    ownerName: "Manager Community",
-    statusLogic: "Green at 10% or lower, amber 10.1%-12%, red above 12%.",
-    updateFrequency: "Monthly review quality panel",
+    weight: 10,
+    firmTarget: "84%",
+    ownerName: "Manager Quality Forum",
+    statusLogic: "Green at 84%+, amber at 70%-83.9%, red below 70%.",
+    updateFrequency: "Monthly quality review",
     sortOrder: 1,
   },
   {
     key: "kpi-9",
     goalKey: "goal-7",
     metricKey: "kpi-9",
-    name: "Monthly coaching completion",
-    description: "Share of scheduled coaching touchpoints completed by managers with direct reports.",
-    formula: "Completed coaching sessions / scheduled coaching sessions",
+    name: "Coaching and review completion",
+    description: "Share of evaluation assignments already submitted within the active review window.",
+    formula: "Submitted evaluation assignments / total assignments created in the period",
     frequency: "Monthly",
     unit: "%",
-    weight: 14,
-    firmTarget: "95%",
+    weight: 12,
+    firmTarget: "90%",
     ownerName: "HR Business Partnering",
-    statusLogic: "Green at 95%+, amber 85%-94.9%, red below 85%.",
-    updateFrequency: "Monthly people check-in",
+    statusLogic: "Green at 90%+, amber at 75%-89.9%, red below 75%.",
+    updateFrequency: "Monthly people review",
     sortOrder: 1,
   },
   {
     key: "kpi-10",
     goalKey: "goal-8",
     metricKey: "kpi-10",
-    name: "Priority skill readiness",
-    description: "Share of staff in critical delivery pools marked ready for priority client work.",
-    formula: "Ready staff / total staff in target pool",
-    frequency: "Quarterly",
+    name: "Readiness and learning completion",
+    description: "Blended readiness signal from learning assignment completion and employee onboarding completion.",
+    formula: "Average of learning completion rate and onboarding completion rate",
+    frequency: "Monthly",
     unit: "%",
-    weight: 10,
-    firmTarget: "85%",
-    ownerName: "HR + Practice Leads",
-    statusLogic: "Green at 85%+, amber 78%-84.9%, red below 78%.",
-    updateFrequency: "Quarterly readiness review",
+    weight: 12,
+    firmTarget: "88%",
+    ownerName: "HR Capability Office",
+    statusLogic: "Green at 88%+, amber at 72%-87.9%, red below 72%.",
+    updateFrequency: "Monthly readiness checkpoint",
     sortOrder: 1,
   },
 ];
@@ -779,6 +924,9 @@ const legacyKpiByKey = new Map(legacySeedKpis.map((record) => [record.key, recor
 const legacyInitiativeByKey = new Map(
   legacySeedInitiatives.map((record) => [record.key, record])
 );
+const legacyGoalKeys = new Set(legacySeedGoals.map((record) => record.key));
+const legacyKpiKeys = new Set(legacySeedKpis.map((record) => record.key));
+const legacyInitiativeKeys = new Set(legacySeedInitiatives.map((record) => record.key));
 
 const isLegacySeedPerspective = (record: {
   key: string;
@@ -806,11 +954,12 @@ const isLegacySeedGoal = (record: {
 }) => {
   const legacy = legacyGoalByKey.get(record.key);
   return (
-    !record.createdByProfileId &&
-    !!legacy &&
-    record.title === legacy.title &&
-    cleanText(record.description) === cleanText(legacy.description) &&
-    cleanText(record.ownerName) === cleanText(legacy.ownerName)
+    legacyGoalKeys.has(record.key) &&
+    (!legacy ||
+      !record.createdByProfileId ||
+      (record.title === legacy.title &&
+        cleanText(record.description) === cleanText(legacy.description) &&
+        cleanText(record.ownerName) === cleanText(legacy.ownerName)))
   );
 };
 
@@ -831,19 +980,20 @@ const isLegacySeedKpi = (record: {
 }) => {
   const legacy = legacyKpiByKey.get(record.key);
   return (
-    !record.createdByProfileId &&
-    !!legacy &&
-    record.metricKey === legacy.metricKey &&
-    record.name === legacy.name &&
-    cleanText(record.description) === cleanText(legacy.description) &&
-    cleanText(record.formula) === cleanText(legacy.formula) &&
-    record.frequency === legacy.frequency &&
-    record.unit === legacy.unit &&
-    record.weight === legacy.weight &&
-    record.firmTarget === legacy.firmTarget &&
-    cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
-    cleanText(record.statusLogic) === cleanText(legacy.statusLogic) &&
-    cleanText(record.updateFrequency) === cleanText(legacy.updateFrequency)
+    legacyKpiKeys.has(record.key) &&
+    (!legacy ||
+      !record.createdByProfileId ||
+      (record.metricKey === legacy.metricKey &&
+        record.name === legacy.name &&
+        cleanText(record.description) === cleanText(legacy.description) &&
+        cleanText(record.formula) === cleanText(legacy.formula) &&
+        record.frequency === legacy.frequency &&
+        record.unit === legacy.unit &&
+        record.weight === legacy.weight &&
+        record.firmTarget === legacy.firmTarget &&
+        cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
+        cleanText(record.statusLogic) === cleanText(legacy.statusLogic) &&
+        cleanText(record.updateFrequency) === cleanText(legacy.updateFrequency)))
   );
 };
 
@@ -861,29 +1011,36 @@ const isLegacySeedInitiative = (record: {
 }) => {
   const legacy = legacyInitiativeByKey.get(record.key);
   return (
-    !record.createdByProfileId &&
-    !!legacy &&
-    record.scopeRole === legacy.scopeRole &&
-    record.title === legacy.title &&
-    cleanText(record.summary) === cleanText(legacy.summary) &&
-    cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
-    cleanText(record.timeline) === cleanText(legacy.timeline) &&
-    toDateKey(record.dueDate) === toDateKey(legacy.dueDate) &&
-    record.status === legacy.status &&
-    record.progress === legacy.progress
+    legacyInitiativeKeys.has(record.key) &&
+    (!legacy ||
+      !record.createdByProfileId ||
+      (record.scopeRole === legacy.scopeRole &&
+        record.title === legacy.title &&
+        cleanText(record.summary) === cleanText(legacy.summary) &&
+        cleanText(record.ownerName) === cleanText(legacy.ownerName) &&
+        cleanText(record.timeline) === cleanText(legacy.timeline) &&
+        toDateKey(record.dueDate) === toDateKey(legacy.dueDate) &&
+        record.status === legacy.status &&
+        record.progress === legacy.progress))
   );
 };
 
 export async function ensureBalancedScorecardSeed() {
-  const existingCount = await prisma.balancedScorecardPerspective.count();
-  if (existingCount > 0) return;
-
   await prisma.$transaction(async (tx) => {
     const perspectiveIdByKey = new Map<string, number>();
-    for (const perspective of defaultPerspectives) {
+    for (const perspective of baselinePerspectives) {
+      const existing = await tx.balancedScorecardPerspective.findUnique({
+        where: { key: perspective.key },
+        select: { id: true },
+      });
+      if (existing) {
+        perspectiveIdByKey.set(perspective.key, existing.id);
+        continue;
+      }
       const created = await tx.balancedScorecardPerspective.create({
         data: {
           key: perspective.key,
+          scorecardVersionId: null,
           name: perspective.name,
           ownerName: perspective.ownerName || null,
           summary: perspective.summary || null,
@@ -894,10 +1051,19 @@ export async function ensureBalancedScorecardSeed() {
     }
 
     const goalIdByKey = new Map<string, number>();
-    for (const goal of defaultGoals) {
+    for (const goal of baselineGoals) {
+      const existing = await tx.balancedScorecardGoal.findUnique({
+        where: { key: goal.key },
+        select: { id: true },
+      });
+      if (existing) {
+        goalIdByKey.set(goal.key, existing.id);
+        continue;
+      }
       const created = await tx.balancedScorecardGoal.create({
         data: {
           key: goal.key,
+          scorecardVersionId: null,
           perspectiveId: perspectiveIdByKey.get(goal.perspectiveKey)!,
           title: goal.title,
           description: goal.description,
@@ -909,12 +1075,27 @@ export async function ensureBalancedScorecardSeed() {
     }
 
     const kpiIdByKey = new Map<string, number>();
-    for (const kpi of defaultKpis) {
+    for (const kpi of baselineKpis) {
+      const existing = await tx.balancedScorecardKpi.findUnique({
+        where: { key: kpi.key },
+        select: { id: true },
+      });
+      if (existing) {
+        kpiIdByKey.set(kpi.key, existing.id);
+        continue;
+      }
       const created = await tx.balancedScorecardKpi.create({
         data: {
           key: kpi.key,
+          scorecardVersionId: null,
           goalId: goalIdByKey.get(kpi.goalKey)!,
           metricKey: kpi.metricKey,
+          trackingMode: kpi.trackingMode,
+          measurementType: kpi.measurementType,
+          targetDirection: kpi.targetDirection,
+          targetValue: kpi.targetValue,
+          currentActualValue: kpi.currentActualValue ?? null,
+          lastMeasurementNote: kpi.lastMeasurementNote ?? null,
           name: kpi.name,
           description: kpi.description,
           formula: kpi.formula,
@@ -923,6 +1104,7 @@ export async function ensureBalancedScorecardSeed() {
           weight: kpi.weight,
           firmTarget: kpi.firmTarget,
           ownerName: kpi.ownerName,
+          ownerProfileId: null,
           statusLogic: kpi.statusLogic,
           updateFrequency: kpi.updateFrequency,
           sortOrder: kpi.sortOrder,
@@ -932,17 +1114,29 @@ export async function ensureBalancedScorecardSeed() {
     }
 
     const initiativeIdByKey = new Map<string, number>();
-    for (const initiative of defaultInitiatives) {
+    for (const initiative of baselineInitiatives) {
+      const existing = await tx.balancedScorecardInitiative.findUnique({
+        where: { key: initiative.key },
+        select: { id: true },
+      });
+      if (existing) {
+        initiativeIdByKey.set(initiative.key, existing.id);
+        continue;
+      }
       const created = await tx.balancedScorecardInitiative.create({
         data: {
           key: initiative.key,
+          scorecardVersionId: null,
           goalId: goalIdByKey.get(initiative.goalKey)!,
           kpiId: kpiIdByKey.get(initiative.kpiKey)!,
-          parentInitiativeId: initiative.parentKey ? initiativeIdByKey.get(initiative.parentKey) ?? null : null,
+          parentInitiativeId: initiative.parentKey
+            ? initiativeIdByKey.get(initiative.parentKey) ?? null
+            : null,
           scopeRole: initiative.scopeRole,
           title: initiative.title,
           summary: initiative.summary,
           ownerName: initiative.ownerName,
+          ownerProfileId: null,
           timeline: initiative.timeline,
           dueDate: initiative.dueDate ? new Date(initiative.dueDate) : null,
           status: initiative.status,
@@ -953,26 +1147,28 @@ export async function ensureBalancedScorecardSeed() {
       initiativeIdByKey.set(initiative.key, created.id);
     }
   });
+  invalidateBalancedScorecardWorkspaceCache();
 }
 
-export async function listBalancedScorecardStructure() {
-  await ensureBalancedScorecardSeed();
-
+export async function listBalancedScorecardStructure(input?: {
+  scorecardVersionId?: number | null;
+}) {
+  const { versionWhere } = await resolveVersionScope(input?.scorecardVersionId);
   const [rawPerspectives, rawGoals, rawKpis, rawInitiatives] = await Promise.all([
     prisma.balancedScorecardPerspective.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...versionWhere },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     }),
     prisma.balancedScorecardGoal.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...versionWhere },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     }),
     prisma.balancedScorecardKpi.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...versionWhere },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     }),
     prisma.balancedScorecardInitiative.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...versionWhere },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     }),
   ]);
@@ -999,6 +1195,7 @@ export async function listBalancedScorecardStructure() {
       targetValue: decimalValueOrNull(record.targetValue),
       currentActualValue: decimalValueOrNull(record.currentActualValue),
       lastMeasurementNote: record.lastMeasurementNote ?? null,
+      ownerProfileId: record.ownerProfileId ?? null,
     }));
   const visibleKpiIds = new Set(kpis.map((kpi) => kpi.id));
 
@@ -1037,12 +1234,18 @@ export async function createBalancedScorecardPerspective(input: {
   name: string;
   ownerName?: string | null;
   summary?: string | null;
+  scorecardVersionId?: number | null;
   createdByProfileId?: number | null;
 }) {
-  const sortOrder = (await prisma.balancedScorecardPerspective.count({ where: { isActive: true } })) + 1;
-  return prisma.balancedScorecardPerspective.create({
+  const { resolvedVersionId, versionWhere } = await resolveVersionScope(input.scorecardVersionId);
+  const sortOrder =
+    (await prisma.balancedScorecardPerspective.count({
+      where: { isActive: true, ...versionWhere },
+    })) + 1;
+  const created = await prisma.balancedScorecardPerspective.create({
     data: {
       key: uniqueKey("perspective", input.name),
+      scorecardVersionId: resolvedVersionId,
       name: input.name.trim(),
       ownerName: input.ownerName?.trim() || null,
       summary: input.summary?.trim() || null,
@@ -1050,6 +1253,8 @@ export async function createBalancedScorecardPerspective(input: {
       createdByProfileId: input.createdByProfileId ?? null,
     },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return created;
 }
 
 export async function updateBalancedScorecardPerspective(
@@ -1071,7 +1276,7 @@ export async function updateBalancedScorecardPerspective(
     throw err;
   }
 
-  return prisma.balancedScorecardPerspective.update({
+  const updated = await prisma.balancedScorecardPerspective.update({
     where: { id: perspectiveId },
     data: {
       name: input.name.trim(),
@@ -1079,6 +1284,8 @@ export async function updateBalancedScorecardPerspective(
       summary: input.summary?.trim() || null,
     },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return updated;
 }
 
 export async function archiveBalancedScorecardPerspective(perspectiveId: number) {
@@ -1118,7 +1325,7 @@ export async function archiveBalancedScorecardPerspective(perspectiveId: number)
 
   const goalIds = activeGoals.map((goal) => goal.id);
 
-  return prisma.$transaction(async (tx) => {
+  const archived = await prisma.$transaction(async (tx) => {
     if (goalIds.length > 0) {
       await tx.balancedScorecardInitiative.updateMany({
         where: { goalId: { in: goalIds }, isActive: true },
@@ -1141,6 +1348,8 @@ export async function archiveBalancedScorecardPerspective(perspectiveId: number)
       data: { isActive: false },
     });
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return archived;
 }
 
 export async function deleteBalancedScorecardPerspective(perspectiveId: number) {
@@ -1167,9 +1376,11 @@ export async function deleteBalancedScorecardPerspective(perspectiveId: number) 
     throw err;
   }
 
-  return prisma.balancedScorecardPerspective.delete({
+  const deleted = await prisma.balancedScorecardPerspective.delete({
     where: { id: perspectiveId },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return deleted;
 }
 
 export async function createBalancedScorecardGoal(input: {
@@ -1179,14 +1390,26 @@ export async function createBalancedScorecardGoal(input: {
   ownerName?: string | null;
   createdByProfileId?: number | null;
 }) {
+  const perspective = await prisma.balancedScorecardPerspective.findUnique({
+    where: { id: input.perspectiveId },
+    select: { id: true, isActive: true, scorecardVersionId: true },
+  });
+
+  if (!perspective || !perspective.isActive) {
+    const err = new Error("Perspective not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
   const sortOrder =
     (await prisma.balancedScorecardGoal.count({
       where: { perspectiveId: input.perspectiveId, isActive: true },
     })) + 1;
-  return prisma.balancedScorecardGoal.create({
+  const created = await prisma.balancedScorecardGoal.create({
     data: {
       key: uniqueKey("goal", input.title),
       perspectiveId: input.perspectiveId,
+      scorecardVersionId: perspective.scorecardVersionId ?? null,
       title: input.title.trim(),
       description: input.description?.trim() || null,
       ownerName: input.ownerName?.trim() || null,
@@ -1194,6 +1417,8 @@ export async function createBalancedScorecardGoal(input: {
       createdByProfileId: input.createdByProfileId ?? null,
     },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return created;
 }
 
 export async function createBalancedScorecardKpi(input: {
@@ -1213,22 +1438,43 @@ export async function createBalancedScorecardKpi(input: {
   weight: number;
   firmTarget: string;
   ownerName?: string | null;
+  ownerProfileId?: number | null;
   statusLogic?: string | null;
   updateFrequency?: string | null;
   createdByProfileId?: number | null;
 }) {
+  const goal = await prisma.balancedScorecardGoal.findUnique({
+    where: { id: input.goalId },
+    select: { id: true, isActive: true, scorecardVersionId: true },
+  });
+
+  if (!goal || !goal.isActive) {
+    const err = new Error("Goal not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
   const trimmedName = input.name.trim();
-  const metricKey = input.metricKey?.trim() || `custom-${slugify(trimmedName) || "metric"}-${Date.now()}`;
+  const metricKey = input.metricKey?.trim() || `custom-${slugify(trimmedName) || "metric"}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
   const trackingMode =
     input.trackingMode ?? (input.metricKey && input.metricKey.trim() ? "template" : "manual");
+  await assertGoalKpiWeightBudget({
+    goalId: input.goalId,
+    incomingWeight: input.weight,
+  });
+  const owner = await resolveOwnerReference({
+    ownerName: input.ownerName,
+    ownerProfileId: input.ownerProfileId,
+  });
   const sortOrder =
     (await prisma.balancedScorecardKpi.count({
       where: { goalId: input.goalId, isActive: true },
     })) + 1;
-  return prisma.balancedScorecardKpi.create({
+  const created = await prisma.balancedScorecardKpi.create({
     data: {
       key: uniqueKey("kpi", trimmedName),
       goalId: input.goalId,
+      scorecardVersionId: goal.scorecardVersionId ?? null,
       metricKey,
       trackingMode,
       measurementType: input.measurementType ?? null,
@@ -1253,13 +1499,16 @@ export async function createBalancedScorecardKpi(input: {
       unit: input.unit.trim(),
       weight: Math.max(0, Math.round(input.weight)),
       firmTarget: input.firmTarget.trim(),
-      ownerName: input.ownerName?.trim() || null,
+      ownerName: owner.ownerName,
+      ownerProfileId: owner.ownerProfileId ?? null,
       statusLogic: input.statusLogic?.trim() || null,
       updateFrequency: input.updateFrequency?.trim() || null,
       sortOrder,
       createdByProfileId: input.createdByProfileId ?? null,
     },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return created;
 }
 
 export async function createBalancedScorecardInitiative(input: {
@@ -1270,26 +1519,62 @@ export async function createBalancedScorecardInitiative(input: {
   title: string;
   summary?: string | null;
   ownerName?: string | null;
+  ownerProfileId?: number | null;
   timeline?: string | null;
   dueDate?: string | null;
   status?: "on_track" | "at_risk" | "off_track";
   progress?: number | null;
   createdByProfileId?: number | null;
 }) {
+  const [goal, kpi] = await Promise.all([
+    prisma.balancedScorecardGoal.findUnique({
+      where: { id: input.goalId },
+      select: { id: true, isActive: true, scorecardVersionId: true },
+    }),
+    prisma.balancedScorecardKpi.findUnique({
+      where: { id: input.kpiId },
+      select: { id: true, isActive: true, scorecardVersionId: true },
+    }),
+  ]);
+
+  if (!goal || !goal.isActive) {
+    const err = new Error("Goal not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!kpi || !kpi.isActive) {
+    const err = new Error("KPI not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+  if ((goal.scorecardVersionId ?? null) !== (kpi.scorecardVersionId ?? null)) {
+    const err = new Error("Goal and KPI must belong to the same scorecard version") as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const owner = await resolveOwnerReference({
+    ownerName: input.ownerName,
+    ownerProfileId: input.ownerProfileId,
+  });
   const sortOrder =
     (await prisma.balancedScorecardInitiative.count({
       where: { goalId: input.goalId, isActive: true },
     })) + 1;
-  return prisma.balancedScorecardInitiative.create({
+  const created = await prisma.balancedScorecardInitiative.create({
     data: {
       key: uniqueKey("initiative", input.title),
       goalId: input.goalId,
       kpiId: input.kpiId,
+      scorecardVersionId: goal.scorecardVersionId ?? null,
       parentInitiativeId: input.parentInitiativeId ?? null,
       scopeRole: input.scopeRole.trim().toLowerCase(),
       title: input.title.trim(),
       summary: input.summary?.trim() || null,
-      ownerName: input.ownerName?.trim() || null,
+      ownerName: owner.ownerName,
+      ownerProfileId: owner.ownerProfileId ?? null,
       timeline: input.timeline?.trim() || null,
       dueDate: input.dueDate ? new Date(input.dueDate) : null,
       status: input.status || "at_risk",
@@ -1298,4 +1583,499 @@ export async function createBalancedScorecardInitiative(input: {
       createdByProfileId: input.createdByProfileId ?? null,
     },
   });
+  invalidateBalancedScorecardWorkspaceCache();
+  return created;
+}
+
+export async function updateBalancedScorecardKpiActual(
+  kpiId: number,
+  input: {
+    currentActualValue: number;
+    lastMeasurementNote?: string | null;
+    recordedByProfileId?: number | null;
+  }
+) {
+  const existing = await prisma.balancedScorecardKpi.findUnique({
+    where: { id: kpiId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("KPI not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    // Append an immutable history record before overwriting the current value.
+    await tx.balancedScorecardKpiActualHistory.create({
+      data: {
+        kpiId,
+        actualValue: input.currentActualValue,
+        note: input.lastMeasurementNote?.trim() || null,
+        recordedByProfileId: input.recordedByProfileId ?? null,
+      },
+    });
+
+    return tx.balancedScorecardKpi.update({
+      where: { id: kpiId },
+      data: {
+        currentActualValue: input.currentActualValue,
+        lastMeasurementNote: input.lastMeasurementNote?.trim() || null,
+      },
+    });
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return updated;
+}
+
+export async function updateBalancedScorecardGoal(
+  goalId: number,
+  input: {
+    title: string;
+    description?: string | null;
+    ownerName?: string | null;
+  }
+) {
+  const existing = await prisma.balancedScorecardGoal.findUnique({
+    where: { id: goalId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Goal not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const updated = await prisma.balancedScorecardGoal.update({
+    where: { id: goalId },
+    data: {
+      title: input.title.trim(),
+      description: input.description?.trim() || null,
+      ownerName: input.ownerName?.trim() || null,
+    },
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return updated;
+}
+
+export async function archiveBalancedScorecardGoal(goalId: number) {
+  const existing = await prisma.balancedScorecardGoal.findUnique({
+    where: { id: goalId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Goal not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const archived = await prisma.$transaction(async (tx) => {
+    // Cascade archive KPIs and their initiatives
+    const kpis = await tx.balancedScorecardKpi.findMany({
+      where: { goalId, isActive: true },
+      select: { id: true },
+    });
+    const kpiIds = kpis.map((k) => k.id);
+
+    if (kpiIds.length > 0) {
+      await tx.balancedScorecardInitiative.updateMany({
+        where: { kpiId: { in: kpiIds }, isActive: true },
+        data: { isActive: false },
+      });
+      await tx.balancedScorecardKpi.updateMany({
+        where: { id: { in: kpiIds } },
+        data: { isActive: false },
+      });
+    }
+
+    await tx.balancedScorecardInitiative.updateMany({
+      where: { goalId, isActive: true },
+      data: { isActive: false },
+    });
+
+    return tx.balancedScorecardGoal.update({
+      where: { id: goalId },
+      data: { isActive: false },
+    });
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return archived;
+}
+
+export async function updateBalancedScorecardInitiative(
+  initiativeId: number,
+  input: {
+    title?: string;
+    summary?: string | null;
+    ownerName?: string | null;
+    ownerProfileId?: number | null;
+    timeline?: string | null;
+    dueDate?: string | null;
+    status?: "on_track" | "at_risk" | "off_track";
+    progress?: number;
+    scopeRole?: string;
+  }
+) {
+  const existing = await prisma.balancedScorecardInitiative.findUnique({
+    where: { id: initiativeId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Initiative not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const owner =
+    input.ownerName !== undefined || input.ownerProfileId !== undefined
+      ? await resolveOwnerReference({
+          ownerName: input.ownerName,
+          ownerProfileId: input.ownerProfileId,
+        })
+      : null;
+  const updated = await prisma.balancedScorecardInitiative.update({
+    where: { id: initiativeId },
+    data: {
+      ...(input.title !== undefined && { title: input.title.trim() }),
+      ...(input.summary !== undefined && { summary: input.summary?.trim() || null }),
+      ...(owner && {
+        ownerName: owner.ownerName,
+        ownerProfileId: owner.ownerProfileId ?? null,
+      }),
+      ...(input.timeline !== undefined && { timeline: input.timeline?.trim() || null }),
+      ...(input.dueDate !== undefined && { dueDate: input.dueDate ? new Date(input.dueDate) : null }),
+      ...(input.status !== undefined && { status: input.status }),
+      ...(input.progress !== undefined && {
+        progress: Math.max(0, Math.min(100, Math.round(input.progress))),
+      }),
+      ...(input.scopeRole !== undefined && { scopeRole: input.scopeRole.trim().toLowerCase() }),
+    },
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return updated;
+}
+
+export async function archiveBalancedScorecardInitiative(initiativeId: number) {
+  const existing = await prisma.balancedScorecardInitiative.findUnique({
+    where: { id: initiativeId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!existing || !existing.isActive) {
+    const err = new Error("Initiative not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  // Also archive all child initiatives in the cascade tree
+  const allInitiatives = await prisma.balancedScorecardInitiative.findMany({
+    where: { isActive: true },
+    select: { id: true, parentInitiativeId: true },
+  });
+
+  const toArchive = new Set<number>([initiativeId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    allInitiatives.forEach((record) => {
+      if (record.parentInitiativeId && toArchive.has(record.parentInitiativeId) && !toArchive.has(record.id)) {
+        toArchive.add(record.id);
+        changed = true;
+      }
+    });
+  }
+
+  const archived = await prisma.balancedScorecardInitiative.updateMany({
+    where: { id: { in: Array.from(toArchive) } },
+    data: { isActive: false },
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return archived;
+}
+
+export async function listBalancedScorecardKpiAssignments(input?: {
+  scorecardVersionId?: number | null;
+  profileId?: number | null;
+}) {
+  const { resolvedVersionId } = await resolveVersionScope(input?.scorecardVersionId);
+  if (resolvedVersionId === null) {
+    return [] as BalancedScorecardKpiAssignmentRecord[];
+  }
+
+  const records = await prisma.balancedScorecardKpiAssignment.findMany({
+    where: {
+      scorecardVersionId: resolvedVersionId,
+      ...(input?.profileId ? { profileId: input.profileId } : {}),
+    },
+    orderBy: [
+      { profile: { lastName: "asc" } },
+      { profile: { firstName: "asc" } },
+      { kpi: { sortOrder: "asc" } },
+      { id: "asc" },
+    ],
+    include: {
+      kpi: { select: { id: true, key: true, name: true } },
+      profile: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          roleId: true,
+          role: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  return records.map(
+    (record) =>
+      ({
+        id: record.id,
+        kpiId: record.kpiId,
+        kpiKey: record.kpi.key,
+        kpiName: record.kpi.name,
+        profileId: record.profileId,
+        profileName: `${record.profile.firstName} ${record.profile.lastName}`.trim(),
+        roleId: record.profile.roleId ?? null,
+        roleName: record.profile.role?.name ?? null,
+        scorecardVersionId: record.scorecardVersionId,
+        individualTarget: decimalValueOrNull(record.individualTarget),
+        individualWeight: record.individualWeight,
+        createdByProfileId: record.createdByProfileId ?? null,
+        createdAt: record.createdAt.toISOString(),
+        updatedAt: record.updatedAt.toISOString(),
+      }) satisfies BalancedScorecardKpiAssignmentRecord
+  );
+}
+
+export async function upsertBalancedScorecardKpiAssignment(input: {
+  kpiId: number;
+  profileId: number;
+  scorecardVersionId?: number | null;
+  individualTarget?: number | null;
+  individualWeight?: number | null;
+  createdByProfileId?: number | null;
+}) {
+  const [kpi, profile] = await Promise.all([
+    prisma.balancedScorecardKpi.findUnique({
+      where: { id: input.kpiId },
+      select: { id: true, isActive: true, scorecardVersionId: true, weight: true },
+    }),
+    prisma.profile.findUnique({
+      where: { id: input.profileId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        roleId: true,
+        role: { select: { name: true } },
+      },
+    }),
+  ]);
+
+  if (!kpi || !kpi.isActive) {
+    const err = new Error("KPI not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!profile) {
+    const err = new Error("Profile not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const resolvedVersionId =
+    input.scorecardVersionId ??
+    kpi.scorecardVersionId ??
+    (await resolveActiveBalancedScorecardVersionId());
+  if (!resolvedVersionId) {
+    const err = new Error("KPI assignments require a published scorecard version") as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 409;
+    throw err;
+  }
+  if (kpi.scorecardVersionId && kpi.scorecardVersionId !== resolvedVersionId) {
+    const err = new Error("Assignment version must match the KPI scorecard version") as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const record = await prisma.balancedScorecardKpiAssignment.upsert({
+    where: {
+      kpiId_profileId_scorecardVersionId: {
+        kpiId: input.kpiId,
+        profileId: input.profileId,
+        scorecardVersionId: resolvedVersionId,
+      },
+    },
+    update: {
+      individualTarget:
+        input.individualTarget !== undefined && input.individualTarget !== null
+          ? input.individualTarget
+          : null,
+      individualWeight:
+        input.individualWeight !== undefined && input.individualWeight !== null
+          ? Math.max(0, Math.round(input.individualWeight))
+          : kpi.weight,
+      createdByProfileId: input.createdByProfileId ?? undefined,
+    },
+    create: {
+      kpiId: input.kpiId,
+      profileId: input.profileId,
+      scorecardVersionId: resolvedVersionId,
+      individualTarget:
+        input.individualTarget !== undefined && input.individualTarget !== null
+          ? input.individualTarget
+          : null,
+      individualWeight:
+        input.individualWeight !== undefined && input.individualWeight !== null
+          ? Math.max(0, Math.round(input.individualWeight))
+          : kpi.weight,
+      createdByProfileId: input.createdByProfileId ?? null,
+    },
+    include: {
+      kpi: { select: { key: true, name: true } },
+      profile: {
+        select: {
+          firstName: true,
+          lastName: true,
+          roleId: true,
+          role: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  const assignment = {
+    id: record.id,
+    kpiId: record.kpiId,
+    kpiKey: record.kpi.key,
+    kpiName: record.kpi.name,
+    profileId: record.profileId,
+    profileName: `${record.profile.firstName} ${record.profile.lastName}`.trim(),
+    roleId: record.profile.roleId ?? null,
+    roleName: record.profile.role?.name ?? null,
+    scorecardVersionId: record.scorecardVersionId,
+    individualTarget: decimalValueOrNull(record.individualTarget),
+    individualWeight: record.individualWeight,
+    createdByProfileId: record.createdByProfileId ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  } satisfies BalancedScorecardKpiAssignmentRecord;
+  invalidateBalancedScorecardWorkspaceCache();
+  return assignment;
+}
+
+export async function deleteBalancedScorecardKpiAssignment(assignmentId: number) {
+  const existing = await prisma.balancedScorecardKpiAssignment.findUnique({
+    where: { id: assignmentId },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    const err = new Error("KPI assignment not found") as Error & { statusCode?: number };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const deleted = await prisma.balancedScorecardKpiAssignment.delete({
+    where: { id: assignmentId },
+  });
+  invalidateBalancedScorecardWorkspaceCache();
+  return deleted;
+}
+
+export async function listPerformanceBands() {
+  const records = await prisma.performanceBand.findMany({
+    orderBy: [{ roleId: "asc" }, { id: "asc" }],
+    include: {
+      role: { select: { id: true, name: true } },
+    },
+  });
+
+  return records.map(
+    (record) =>
+      ({
+        id: record.id,
+        roleId: record.roleId ?? null,
+        roleName: record.role?.name ?? null,
+        onTrackMin: decimalValueOrNull(record.onTrackMin) ?? 85,
+        atRiskMin: decimalValueOrNull(record.atRiskMin) ?? 65,
+        label: record.label ?? null,
+        createdAt: record.createdAt.toISOString(),
+        updatedAt: record.updatedAt.toISOString(),
+      }) satisfies PerformanceBandRecord
+  );
+}
+
+export async function upsertPerformanceBand(input: {
+  roleId?: number | null;
+  onTrackMin: number;
+  atRiskMin: number;
+  label?: string | null;
+}) {
+  if (input.atRiskMin > input.onTrackMin) {
+    const err = new Error("At-risk threshold cannot exceed the on-track threshold") as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (input.roleId !== undefined && input.roleId !== null) {
+    const role = await prisma.positionRole.findUnique({
+      where: { id: input.roleId },
+      select: { id: true },
+    });
+    if (!role) {
+      const err = new Error("Role not found") as Error & { statusCode?: number };
+      err.statusCode = 404;
+      throw err;
+    }
+  }
+
+  const existing = await prisma.performanceBand.findFirst({
+    where: { roleId: input.roleId ?? null },
+    orderBy: { id: "asc" },
+  });
+
+  const record = existing
+    ? await prisma.performanceBand.update({
+        where: { id: existing.id },
+        data: {
+          onTrackMin: input.onTrackMin,
+          atRiskMin: input.atRiskMin,
+          label: input.label?.trim() || null,
+        },
+        include: { role: { select: { id: true, name: true } } },
+      })
+    : await prisma.performanceBand.create({
+        data: {
+          roleId: input.roleId ?? null,
+          onTrackMin: input.onTrackMin,
+          atRiskMin: input.atRiskMin,
+          label: input.label?.trim() || null,
+        },
+        include: { role: { select: { id: true, name: true } } },
+      });
+
+  const band = {
+    id: record.id,
+    roleId: record.roleId ?? null,
+    roleName: record.role?.name ?? null,
+    onTrackMin: decimalValueOrNull(record.onTrackMin) ?? 85,
+    atRiskMin: decimalValueOrNull(record.atRiskMin) ?? 65,
+    label: record.label ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  } satisfies PerformanceBandRecord;
+  invalidateBalancedScorecardWorkspaceCache();
+  return band;
 }

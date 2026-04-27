@@ -20,7 +20,31 @@ import {
   WorkspaceRole,
 } from "../services/balancedScorecardWorkspace.service";
 import {
+  createBalancedScorecardCycle,
+  createBalancedScorecardVersion,
+  listBalancedScorecardGovernance,
+  publishBalancedScorecardVersion,
+} from "../services/balancedScorecardGovernance.service";
+import {
+  closeBalancedScorecardMeasurementPeriod,
+  createBalancedScorecardMeasurementPeriod,
+  generateBalancedScorecardMeasurementPeriod,
+  getBalancedScorecardMeasurementSnapshots,
+  listBalancedScorecardMeasurementPeriods,
+  reviewBalancedScorecardMeasurementPeriod,
+  submitBalancedScorecardMeasurementPeriod,
+} from "../services/balancedScorecardMeasurement.service";
+import {
+  acknowledgeBalancedScorecardContribution,
+  getBalancedScorecardContributionDetail,
+  uploadBalancedScorecardContributionEvidence,
+  updateBalancedScorecardContributionProgress,
+} from "../services/balancedScorecardContribution.service";
+import {
   archiveBalancedScorecardPerspective,
+  archiveBalancedScorecardGoal,
+  archiveBalancedScorecardInitiative,
+  deleteBalancedScorecardKpiAssignment,
   deleteBalancedScorecardPerspective,
   createBalancedScorecardGoal,
   createBalancedScorecardInitiative,
@@ -30,14 +54,23 @@ import {
   KpiTrackingMode,
   createBalancedScorecardPerspective,
   ensureBalancedScorecardSeed,
+  listBalancedScorecardKpiAssignments,
   listBalancedScorecardMetricTemplates,
+  listPerformanceBands,
   listBalancedScorecardStructure,
+  upsertBalancedScorecardKpiAssignment,
+  upsertPerformanceBand,
+  updateBalancedScorecardGoal,
+  updateBalancedScorecardInitiative,
+  updateBalancedScorecardKpiActual,
   updateBalancedScorecardPerspective,
 } from "../services/balancedScorecardStructure.service";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, successResponse } from "../utils/response";
+import { buildDiskUpload, deleteStoredUpload, storeUploadedFile } from "../config/uploads";
 
 const router = Router();
+const contributionEvidenceUpload = buildDiskUpload("documents");
 
 const parseIntSafe = (value: unknown) => {
   const parsed = Number(value);
@@ -57,6 +90,18 @@ const canManageBalancedScorecard = (req: AuthRequest) => {
   return roles.includes("hr") || roles.includes("super_admin");
 };
 
+const canUpdateKpiActuals = (req: AuthRequest) => {
+  const roles = normalizeUserRoles(req);
+  return roles.includes("hr") || roles.includes("super_admin") || roles.includes("finance") || roles.includes("marketing");
+};
+
+const canManageContributionForProfile = (req: AuthRequest, profileId: number) => {
+  const requesterProfileId = parseIntSafe(req.user?.profileId);
+  if (requesterProfileId && requesterProfileId === profileId) return true;
+  const roles = normalizeUserRoles(req);
+  return roles.includes("hr") || roles.includes("super_admin");
+};
+
 const isPyramidLevel = (value: string): value is PyramidLevel =>
   [
     "level_1_corporate_vision",
@@ -70,6 +115,16 @@ const isBscPerspective = (value: string): value is BscPerspective =>
 
 const isWorkspaceRole = (value: string): value is WorkspaceRole =>
   ["hr", "gmp", "partner", "manager", "finance", "marketing", "employee"].includes(value);
+
+const isScorecardCadence = (
+  value: string
+): value is "monthly" | "quarterly" | "annual" =>
+  ["monthly", "quarterly", "annual"].includes(value);
+
+const isMeasurementReviewDecision = (
+  value: string
+): value is "start_review" | "request_changes" | "approve" =>
+  ["start_review", "request_changes", "approve"].includes(value);
 
 const isKpiMeasurementType = (value: string): value is KpiMeasurementType =>
   ["percentage", "currency", "number", "count", "days", "boolean", "milestone"].includes(value);
@@ -245,7 +300,12 @@ router.get("/coverage", async (_req, res) => {
 
 router.get("/workspace", async (req: AuthRequest, res) => {
   try {
-    const profileId = parseIntSafe(req.query.profileId) ?? parseIntSafe(req.user?.profileId);
+    // The requesting user's own profile ID — always used for role-based scoping.
+    const requestingProfileId = parseIntSafe(req.user?.profileId);
+    // An optional override: HR can pass ?profileId=X to view another employee's contributions.
+    const profileIdOverride = parseIntSafe(req.query.profileId);
+    const profileId = profileIdOverride ?? requestingProfileId;
+
     const requestedRoleRaw = typeof req.query.role === "string" ? req.query.role.toLowerCase() : undefined;
     const requestedRole = requestedRoleRaw && isWorkspaceRole(requestedRoleRaw) ? requestedRoleRaw : undefined;
     const evaluationCycleId = parseIntSafe(req.query.evaluationCycleId);
@@ -280,19 +340,538 @@ router.get("/workspace", async (req: AuthRequest, res) => {
     const workspace = await getBalancedScorecardWorkspace({
       role: requestedRole ?? resolvedRole,
       profileId: profileId ?? null,
+      requestingProfileId: requestingProfileId ?? null,
       evaluationCycleId: evaluationCycleId ?? null,
     });
 
     return res.json(successResponse(workspace, "Balanced scorecard workspace loaded"));
   } catch (error: any) {
     console.error("Error loading balanced scorecard workspace:", error);
-    return res.status(500).json(errorResponse("Failed to load balanced scorecard workspace", 500));
+    const message =
+      process.env.NODE_ENV !== "production" && error instanceof Error
+        ? error.message || "Failed to load balanced scorecard workspace"
+        : "Failed to load balanced scorecard workspace";
+    return res.status(500).json(errorResponse(message, 500));
+  }
+});
+
+router.get("/employee-contributions/:contributionKey", async (req: AuthRequest, res) => {
+  try {
+    const requestedProfileId = parseIntSafe(req.query.profileId);
+    const fallbackProfileId = parseIntSafe(req.user?.profileId);
+    const profileId = requestedProfileId ?? fallbackProfileId;
+    const evaluationCycleId = parseIntSafe(req.query.evaluationCycleId);
+    const contributionKey = decodeURIComponent(String(req.params.contributionKey || "")).trim();
+
+    if (!profileId) {
+      return res.status(400).json(errorResponse("Profile is required", 400));
+    }
+    if (!contributionKey) {
+      return res.status(400).json(errorResponse("Contribution key is required", 400));
+    }
+    if (!canManageContributionForProfile(req, profileId)) {
+      return res.status(403).json(errorResponse("You cannot access this contribution item", 403));
+    }
+
+    const detail = await getBalancedScorecardContributionDetail({
+      profileId,
+      contributionKey,
+      evaluationCycleId: evaluationCycleId ?? null,
+    });
+    return res.json(successResponse(detail, "Employee contribution detail loaded"));
+  } catch (error: any) {
+    console.error("Error loading employee contribution detail:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to load contribution detail" : error.message, statusCode));
+  }
+});
+
+router.post("/employee-contributions/:contributionKey/acknowledge", async (req: AuthRequest, res) => {
+  try {
+    const requestedProfileId = parseIntSafe(req.body?.profileId);
+    const fallbackProfileId = parseIntSafe(req.user?.profileId);
+    const profileId = requestedProfileId ?? fallbackProfileId;
+    const evaluationCycleId = parseIntSafe(req.body?.evaluationCycleId);
+    const contributionKey = decodeURIComponent(String(req.params.contributionKey || "")).trim();
+
+    if (!profileId) {
+      return res.status(400).json(errorResponse("Profile is required", 400));
+    }
+    if (!contributionKey) {
+      return res.status(400).json(errorResponse("Contribution key is required", 400));
+    }
+    if (!canManageContributionForProfile(req, profileId)) {
+      return res.status(403).json(errorResponse("You cannot acknowledge this contribution item", 403));
+    }
+
+    const detail = await acknowledgeBalancedScorecardContribution({
+      profileId,
+      contributionKey,
+      actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      evaluationCycleId: evaluationCycleId ?? null,
+    });
+    return res.json(successResponse(detail, "Contribution acknowledged"));
+  } catch (error: any) {
+    console.error("Error acknowledging employee contribution:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to acknowledge contribution" : error.message, statusCode));
+  }
+});
+
+router.post("/employee-contributions/:contributionKey/progress", async (req: AuthRequest, res) => {
+  try {
+    const requestedProfileId = parseIntSafe(req.body?.profileId);
+    const fallbackProfileId = parseIntSafe(req.user?.profileId);
+    const profileId = requestedProfileId ?? fallbackProfileId;
+    const evaluationCycleId = parseIntSafe(req.body?.evaluationCycleId);
+    const contributionKey = decodeURIComponent(String(req.params.contributionKey || "")).trim();
+    const progress = parseNumberSafe(req.body?.progress);
+    const comment = typeof req.body?.comment === "string" ? req.body.comment : undefined;
+
+    if (!profileId) {
+      return res.status(400).json(errorResponse("Profile is required", 400));
+    }
+    if (!contributionKey) {
+      return res.status(400).json(errorResponse("Contribution key is required", 400));
+    }
+    if (!Number.isFinite(progress)) {
+      return res.status(400).json(errorResponse("Progress is required", 400));
+    }
+    if (!canManageContributionForProfile(req, profileId)) {
+      return res.status(403).json(errorResponse("You cannot update this contribution item", 403));
+    }
+
+    const detail = await updateBalancedScorecardContributionProgress({
+      profileId,
+      contributionKey,
+      progress: Number(progress),
+      comment,
+      actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      evaluationCycleId: evaluationCycleId ?? null,
+    });
+    return res.json(successResponse(detail, "Contribution progress updated"));
+  } catch (error: any) {
+    console.error("Error updating employee contribution progress:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to update contribution progress" : error.message, statusCode));
+  }
+});
+
+router.post(
+  "/employee-contributions/:contributionKey/evidence",
+  contributionEvidenceUpload.single("file"),
+  async (req: AuthRequest, res) => {
+    let storedUpload:
+      | {
+          storedName: string;
+          publicPath: string;
+          fileSize: number;
+          mimeType: string | null;
+          originalName: string;
+        }
+      | undefined;
+
+    try {
+      const requestedProfileId = parseIntSafe(req.body?.profileId);
+      const fallbackProfileId = parseIntSafe(req.user?.profileId);
+      const profileId = requestedProfileId ?? fallbackProfileId;
+      const evaluationCycleId = parseIntSafe(req.body?.evaluationCycleId);
+      const contributionKey = decodeURIComponent(String(req.params.contributionKey || "")).trim();
+      const uploadedFile = (req as any).file as Express.Multer.File | undefined;
+      if (uploadedFile) {
+        storedUpload = await storeUploadedFile("documents", uploadedFile);
+      }
+      const filePath =
+        storedUpload?.publicPath ||
+        (typeof req.body?.filePath === "string" ? String(req.body.filePath).trim() : "");
+      const fileName =
+        (typeof req.body?.fileName === "string" ? String(req.body.fileName).trim() : "") ||
+        storedUpload?.originalName ||
+        uploadedFile?.originalname ||
+        "";
+      const mimeType =
+        (typeof req.body?.mimeType === "string" ? String(req.body.mimeType).trim() : "") ||
+        storedUpload?.mimeType ||
+        uploadedFile?.mimetype ||
+        "";
+      const description =
+        typeof req.body?.description === "string" ? String(req.body.description) : undefined;
+      const documentType =
+        typeof req.body?.documentType === "string" ? String(req.body.documentType) : undefined;
+
+      if (!profileId) {
+        return res.status(400).json(errorResponse("Profile is required", 400));
+      }
+      if (!contributionKey) {
+        return res.status(400).json(errorResponse("Contribution key is required", 400));
+      }
+      if (!canManageContributionForProfile(req, profileId)) {
+        return res.status(403).json(errorResponse("You cannot upload evidence for this contribution item", 403));
+      }
+      if (!filePath || !fileName) {
+        return res.status(400).json(errorResponse("File upload or filePath is required", 400));
+      }
+
+      const detail = await uploadBalancedScorecardContributionEvidence({
+        profileId,
+        contributionKey,
+        actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+        actedByUserId: parseIntSafe(req.user?.userId) ?? null,
+        actedByRoles: req.userRoles ?? [],
+        fileName,
+        filePath,
+        fileSize: storedUpload?.fileSize ?? uploadedFile?.size,
+        mimeType: mimeType || undefined,
+        description,
+        documentType,
+        evaluationCycleId: evaluationCycleId ?? null,
+      });
+      return res.status(201).json(successResponse(detail, "Contribution evidence uploaded", 201));
+    } catch (error: any) {
+      if (storedUpload?.publicPath) {
+        await deleteStoredUpload("documents", storedUpload.publicPath).catch(() => undefined);
+      }
+      console.error("Error uploading contribution evidence:", error);
+      const statusCode = Number(error?.statusCode || 500);
+      return res
+        .status(statusCode)
+        .json(errorResponse(statusCode >= 500 ? "Failed to upload contribution evidence" : error.message, statusCode));
+    }
+  }
+);
+
+router.get("/scorecard-governance", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review scorecard governance", 403));
+    }
+    const governance = await listBalancedScorecardGovernance();
+    return res.json(successResponse(governance, "Balanced scorecard governance loaded"));
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard governance:", error);
+    return res.status(500).json(errorResponse("Failed to load balanced scorecard governance", 500));
+  }
+});
+
+router.post("/scorecard-cycles", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create scorecard cycles", 403));
+    }
+    const { name, cadence, startDate, endDate } = req.body || {};
+    if (!name || String(name).trim().length < 3) {
+      return res.status(400).json(errorResponse("Cycle name is required", 400));
+    }
+    const resolvedCadence = String(cadence || "").trim().toLowerCase();
+    if (!isScorecardCadence(resolvedCadence)) {
+      return res.status(400).json(errorResponse("Valid cadence is required", 400));
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json(errorResponse("Start date and end date are required", 400));
+    }
+
+    const created = await createBalancedScorecardCycle({
+      name: String(name),
+      cadence: resolvedCadence,
+      startDate: String(startDate),
+      endDate: String(endDate),
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Balanced scorecard cycle created"));
+  } catch (error: any) {
+    console.error("Error creating balanced scorecard cycle:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to create scorecard cycle" : error.message, statusCode));
+  }
+});
+
+router.post("/scorecard-cycles/:id/versions", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create scorecard versions", 403));
+    }
+    const cycleId = parseIntSafe(req.params.id);
+    if (!cycleId) {
+      return res.status(400).json(errorResponse("Scorecard cycle is required", 400));
+    }
+    const { label, sourceVersionId } = req.body || {};
+    const parsedSourceVersionId =
+      sourceVersionId === null || sourceVersionId === "baseline"
+        ? null
+        : sourceVersionId === undefined
+          ? undefined
+          : parseIntSafe(sourceVersionId);
+    const created = await createBalancedScorecardVersion({
+      cycleId,
+      label: label ? String(label) : null,
+      sourceVersionId: parsedSourceVersionId,
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Balanced scorecard version created"));
+  } catch (error: any) {
+    console.error("Error creating balanced scorecard version:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to create scorecard version" : error.message, statusCode));
+  }
+});
+
+router.post("/scorecard-versions/:id/publish", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can publish scorecard versions", 403));
+    }
+    const versionId = parseIntSafe(req.params.id);
+    if (!versionId) {
+      return res.status(400).json(errorResponse("Scorecard version is required", 400));
+    }
+    const published = await publishBalancedScorecardVersion(versionId);
+    return res.json(successResponse(published, "Balanced scorecard version published"));
+  } catch (error: any) {
+    console.error("Error publishing balanced scorecard version:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to publish scorecard version" : error.message, statusCode));
+  }
+});
+
+router.get("/measurement-periods", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review measurement periods", 403));
+    }
+    const versionId =
+      typeof req.query.versionId === "string" ? parseIntSafe(req.query.versionId) : undefined;
+    const periods = await listBalancedScorecardMeasurementPeriods({
+      scorecardVersionId: versionId ?? undefined,
+    });
+    return res.json(successResponse(periods, "Balanced scorecard measurement periods loaded"));
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard measurement periods:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to load balanced scorecard measurement periods"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.post("/measurement-periods", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can create measurement periods", 403));
+    }
+    const { versionId, label, periodStart, periodEnd } = req.body || {};
+    if (!periodStart || !periodEnd) {
+      return res
+        .status(400)
+        .json(errorResponse("Measurement period start and end dates are required", 400));
+    }
+    const created = await createBalancedScorecardMeasurementPeriod({
+      scorecardVersionId: parseIntSafe(versionId) ?? undefined,
+      label: label ? String(label) : null,
+      periodStart: String(periodStart),
+      periodEnd: String(periodEnd),
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(created, "Balanced scorecard measurement period created"));
+  } catch (error: any) {
+    console.error("Error creating balanced scorecard measurement period:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to create balanced scorecard measurement period"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.post("/measurement-periods/:id/generate", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can generate measurement snapshots", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const generated = await generateBalancedScorecardMeasurementPeriod({
+      periodId,
+      generatedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      comment: req.body?.comment ? String(req.body.comment) : null,
+    });
+    return res.json(successResponse(generated, "Balanced scorecard measurement snapshots generated"));
+  } catch (error: any) {
+    console.error("Error generating balanced scorecard measurement snapshots:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to generate balanced scorecard measurement snapshots"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.get("/measurement-periods/:id/snapshots", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review measurement snapshots", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const snapshotPack = await getBalancedScorecardMeasurementSnapshots(periodId);
+    return res.json(successResponse(snapshotPack, "Balanced scorecard measurement snapshot pack loaded"));
+  } catch (error: any) {
+    console.error("Error loading balanced scorecard measurement snapshot pack:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to load balanced scorecard measurement snapshot pack"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.post("/measurement-periods/:id/submit", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can submit measurement periods", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const submitted = await submitBalancedScorecardMeasurementPeriod({
+      periodId,
+      actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      comment: req.body?.comment ? String(req.body.comment) : null,
+    });
+    return res.json(successResponse(submitted, "Balanced scorecard measurement period submitted"));
+  } catch (error: any) {
+    console.error("Error submitting balanced scorecard measurement period:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to submit balanced scorecard measurement period"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.post("/measurement-periods/:id/review", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review measurement periods", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const decision = String(req.body?.decision || "").trim().toLowerCase();
+    if (!isMeasurementReviewDecision(decision)) {
+      return res
+        .status(400)
+        .json(errorResponse("Valid review decision is required", 400));
+    }
+    const reviewed = await reviewBalancedScorecardMeasurementPeriod({
+      periodId,
+      decision,
+      actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      comment: req.body?.comment ? String(req.body.comment) : null,
+    });
+    return res.json(successResponse(reviewed, "Balanced scorecard measurement period reviewed"));
+  } catch (error: any) {
+    console.error("Error reviewing balanced scorecard measurement period:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to review balanced scorecard measurement period"
+            : error.message,
+          statusCode
+        )
+      );
+  }
+});
+
+router.post("/measurement-periods/:id/close", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can close measurement periods", 403));
+    }
+    const periodId = parseIntSafe(req.params.id);
+    if (!periodId) {
+      return res.status(400).json(errorResponse("Measurement period is required", 400));
+    }
+    const closed = await closeBalancedScorecardMeasurementPeriod({
+      periodId,
+      actedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+      comment: req.body?.comment ? String(req.body.comment) : null,
+    });
+    return res.json(successResponse(closed, "Balanced scorecard measurement period closed"));
+  } catch (error: any) {
+    console.error("Error closing balanced scorecard measurement period:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(
+        errorResponse(
+          statusCode >= 500
+            ? "Failed to close balanced scorecard measurement period"
+            : error.message,
+          statusCode
+        )
+      );
   }
 });
 
 router.get("/scorecard-structure", async (_req, res) => {
   try {
-    const structure = await listBalancedScorecardStructure();
+    const versionId =
+      typeof _req.query.versionId === "string" ? parseIntSafe(_req.query.versionId) : undefined;
+    const structure = await listBalancedScorecardStructure({
+      scorecardVersionId: versionId ?? undefined,
+    });
     return res.json(successResponse(structure, "Balanced scorecard structure loaded"));
   } catch (error: any) {
     console.error("Error loading balanced scorecard structure:", error);
@@ -330,7 +909,7 @@ router.post("/perspectives", async (req: AuthRequest, res) => {
     if (!canManageBalancedScorecard(req)) {
       return res.status(403).json(errorResponse("Only HR can create scorecard perspectives", 403));
     }
-    const { name, ownerName, summary } = req.body || {};
+    const { name, ownerName, summary, versionId } = req.body || {};
     if (!name || String(name).trim().length < 2) {
       return res.status(400).json(errorResponse("Perspective name is required", 400));
     }
@@ -338,6 +917,7 @@ router.post("/perspectives", async (req: AuthRequest, res) => {
       name: String(name),
       ownerName: ownerName ? String(ownerName) : null,
       summary: summary ? String(summary) : null,
+      scorecardVersionId: parseIntSafe(versionId) ?? undefined,
       createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
     });
     return res.json(successResponse(created, "Perspective created"));
@@ -450,6 +1030,74 @@ router.post("/goals", async (req: AuthRequest, res) => {
   }
 });
 
+router.patch("/goals/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can update strategic goals", 403));
+    }
+    const goalId = parseIntSafe(req.params.id);
+    if (!goalId) {
+      return res.status(400).json(errorResponse("Goal is required", 400));
+    }
+    const { title, description, ownerName } = req.body || {};
+    if (!title || String(title).trim().length < 3) {
+      return res.status(400).json(errorResponse("Goal title is required", 400));
+    }
+    const updated = await updateBalancedScorecardGoal(goalId, {
+      title: String(title),
+      description: description ? String(description) : null,
+      ownerName: ownerName ? String(ownerName) : null,
+    });
+    return res.json(successResponse(updated, "Strategic goal updated"));
+  } catch (error: any) {
+    console.error("Error updating goal:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json(
+      errorResponse(statusCode >= 500 ? "Failed to update strategic goal" : error.message, statusCode)
+    );
+  }
+});
+
+router.delete("/goals/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can archive strategic goals", 403));
+    }
+    const goalId = parseIntSafe(req.params.id);
+    if (!goalId) {
+      return res.status(400).json(errorResponse("Goal is required", 400));
+    }
+    const archived = await archiveBalancedScorecardGoal(goalId);
+    return res.json(successResponse(archived, "Strategic goal archived"));
+  } catch (error: any) {
+    console.error("Error archiving goal:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json(
+      errorResponse(statusCode >= 500 ? "Failed to archive strategic goal" : error.message, statusCode)
+    );
+  }
+});
+
+router.get("/goals/:id/weight-summary", async (req: AuthRequest, res) => {
+  try {
+    const goalId = parseIntSafe(req.params.id);
+    if (!goalId) {
+      return res.status(400).json(errorResponse("Goal ID is required", 400));
+    }
+    const kpis = await prisma.balancedScorecardKpi.findMany({
+      where: { goalId, isActive: true },
+      select: { weight: true },
+    });
+    const totalWeight = kpis.reduce((sum, k) => sum + (k.weight || 0), 0);
+    return res.json(
+      successResponse({ goalId, totalWeight, kpiCount: kpis.length }, "Goal weight summary")
+    );
+  } catch (error: any) {
+    console.error("Error fetching goal weight summary:", error);
+    return res.status(500).json(errorResponse("Failed to fetch weight summary", 500));
+  }
+});
+
 router.post("/kpis", async (req: AuthRequest, res) => {
   try {
     if (!canManageBalancedScorecard(req)) {
@@ -472,6 +1120,7 @@ router.post("/kpis", async (req: AuthRequest, res) => {
       weight,
       firmTarget,
       ownerName,
+      ownerProfileId,
       statusLogic,
       updateFrequency,
     } = req.body || {};
@@ -509,6 +1158,17 @@ router.post("/kpis", async (req: AuthRequest, res) => {
     if (!frequency || !unit || !firmTarget) {
       return res.status(400).json(errorResponse("Frequency, unit, and firm target are required", 400));
     }
+    const parsedWeight = Number(weight ?? 0);
+    if (!Number.isFinite(parsedWeight) || parsedWeight <= 0 || parsedWeight > 100) {
+      return res.status(400).json(errorResponse("KPI weight must be between 1 and 100", 400));
+    }
+    // Warn if total weights for this goal already reach 100 — caller should redistribute
+    const existingKpis = await prisma.balancedScorecardKpi.findMany({
+      where: { goalId: resolvedGoalId, isActive: true },
+      select: { weight: true },
+    });
+    const currentTotal = existingKpis.reduce((sum, k) => sum + (k.weight || 0), 0);
+    const newTotal = currentTotal + parsedWeight;
     const created = await createBalancedScorecardKpi({
       goalId: resolvedGoalId,
       metricKey: metricKey ? String(metricKey) : null,
@@ -526,14 +1186,53 @@ router.post("/kpis", async (req: AuthRequest, res) => {
       weight: Number(weight ?? 0),
       firmTarget: String(firmTarget),
       ownerName: ownerName ? String(ownerName) : null,
+      ownerProfileId:
+        ownerProfileId === undefined ? undefined : parseIntSafe(ownerProfileId) ?? null,
       statusLogic: statusLogic ? String(statusLogic) : null,
       updateFrequency: updateFrequency ? String(updateFrequency) : null,
       createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
     });
-    return res.json(successResponse(created, "KPI contract created"));
+    return res.json(successResponse(
+      { ...created, goalWeightTotal: newTotal },
+      newTotal > 100
+        ? `KPI created. Note: total goal weight is now ${newTotal}% — consider redistributing weights to sum to 100%.`
+        : "KPI contract created"
+    ));
   } catch (error: any) {
     console.error("Error creating KPI:", error);
     return res.status(500).json(errorResponse("Failed to create KPI contract", 500));
+  }
+});
+
+router.patch("/kpis/:id/actual", async (req: AuthRequest, res) => {
+  try {
+    if (!canUpdateKpiActuals(req)) {
+      return res.status(403).json(errorResponse("You do not have access to update KPI actuals", 403));
+    }
+
+    const kpiId = parseIntSafe(req.params.id);
+    if (!kpiId) {
+      return res.status(400).json(errorResponse("KPI is required", 400));
+    }
+
+    const { currentActualValue, lastMeasurementNote } = req.body || {};
+    const actualValue = parseNumberSafe(currentActualValue);
+    if (actualValue === undefined) {
+      return res.status(400).json(errorResponse("Actual value is required", 400));
+    }
+
+    const updated = await updateBalancedScorecardKpiActual(kpiId, {
+      currentActualValue: actualValue,
+      lastMeasurementNote: lastMeasurementNote ? String(lastMeasurementNote) : null,
+      recordedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(updated, "KPI actual updated"));
+  } catch (error: any) {
+    console.error("Error updating KPI actual:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to update KPI actual" : error.message, statusCode));
   }
 });
 
@@ -550,6 +1249,7 @@ router.post("/initiatives", async (req: AuthRequest, res) => {
       title,
       summary,
       ownerName,
+      ownerProfileId,
       timeline,
       dueDate,
       status,
@@ -575,6 +1275,8 @@ router.post("/initiatives", async (req: AuthRequest, res) => {
       title: String(title),
       summary: summary ? String(summary) : null,
       ownerName: ownerName ? String(ownerName) : null,
+      ownerProfileId:
+        ownerProfileId === undefined ? undefined : parseIntSafe(ownerProfileId) ?? null,
       timeline: timeline ? String(timeline) : null,
       dueDate: dueDate ? String(dueDate) : null,
       status:
@@ -588,6 +1290,203 @@ router.post("/initiatives", async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error("Error creating initiative:", error);
     return res.status(500).json(errorResponse("Failed to create initiative", 500));
+  }
+});
+
+router.patch("/initiatives/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can update initiatives", 403));
+    }
+    const initiativeId = parseIntSafe(req.params.id);
+    if (!initiativeId) {
+      return res.status(400).json(errorResponse("Initiative is required", 400));
+    }
+    const { title, summary, ownerName, ownerProfileId, timeline, dueDate, status, progress, scopeRole } = req.body || {};
+    if (title !== undefined && String(title).trim().length < 3) {
+      return res.status(400).json(errorResponse("Initiative title must be at least 3 characters", 400));
+    }
+    if (
+      status !== undefined &&
+      !["on_track", "at_risk", "off_track"].includes(String(status))
+    ) {
+      return res.status(400).json(errorResponse("Invalid initiative status", 400));
+    }
+    const updated = await updateBalancedScorecardInitiative(initiativeId, {
+      title: title ? String(title) : undefined,
+      summary: summary !== undefined ? (summary ? String(summary) : null) : undefined,
+      ownerName: ownerName !== undefined ? (ownerName ? String(ownerName) : null) : undefined,
+      ownerProfileId:
+        ownerProfileId === undefined ? undefined : parseIntSafe(ownerProfileId) ?? null,
+      timeline: timeline !== undefined ? (timeline ? String(timeline) : null) : undefined,
+      dueDate: dueDate !== undefined ? (dueDate ? String(dueDate) : null) : undefined,
+      status: status ? (String(status) as "on_track" | "at_risk" | "off_track") : undefined,
+      progress: progress !== undefined ? parseNumberSafe(progress) : undefined,
+      scopeRole: scopeRole ? String(scopeRole) : undefined,
+    });
+    return res.json(successResponse(updated, "Initiative updated"));
+  } catch (error: any) {
+    console.error("Error updating initiative:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json(
+      errorResponse(statusCode >= 500 ? "Failed to update initiative" : error.message, statusCode)
+    );
+  }
+});
+
+router.delete("/initiatives/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can archive initiatives", 403));
+    }
+    const initiativeId = parseIntSafe(req.params.id);
+    if (!initiativeId) {
+      return res.status(400).json(errorResponse("Initiative is required", 400));
+    }
+    const archived = await archiveBalancedScorecardInitiative(initiativeId);
+    return res.json(successResponse(archived, "Initiative archived"));
+  } catch (error: any) {
+    console.error("Error archiving initiative:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res.status(statusCode).json(
+      errorResponse(statusCode >= 500 ? "Failed to archive initiative" : error.message, statusCode)
+    );
+  }
+});
+
+router.get("/kpi-assignments", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review KPI assignments", 403));
+    }
+
+    const assignments = await listBalancedScorecardKpiAssignments({
+      scorecardVersionId: parseIntSafe(req.query.scorecardVersionId),
+      profileId: parseIntSafe(req.query.profileId),
+    });
+    return res.json(successResponse(assignments, "KPI assignments loaded"));
+  } catch (error: any) {
+    console.error("Error loading KPI assignments:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to load KPI assignments" : error.message, statusCode));
+  }
+});
+
+router.post("/kpi-assignments", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can manage KPI assignments", 403));
+    }
+
+    const kpiId = parseIntSafe(req.body?.kpiId);
+    const profileId = parseIntSafe(req.body?.profileId);
+    const scorecardVersionId =
+      req.body?.scorecardVersionId === undefined
+        ? undefined
+        : parseIntSafe(req.body?.scorecardVersionId) ?? null;
+    const individualTarget =
+      req.body?.individualTarget === undefined ? undefined : parseNumberSafe(req.body?.individualTarget);
+    const individualWeight =
+      req.body?.individualWeight === undefined ? undefined : parseNumberSafe(req.body?.individualWeight);
+
+    if (!kpiId || !profileId) {
+      return res.status(400).json(errorResponse("KPI and profile are required", 400));
+    }
+    if (individualTarget !== undefined && !Number.isFinite(individualTarget)) {
+      return res.status(400).json(errorResponse("individualTarget must be numeric", 400));
+    }
+    if (individualWeight !== undefined && !Number.isFinite(individualWeight)) {
+      return res.status(400).json(errorResponse("individualWeight must be numeric", 400));
+    }
+
+    const assignment = await upsertBalancedScorecardKpiAssignment({
+      kpiId,
+      profileId,
+      scorecardVersionId,
+      individualTarget: individualTarget ?? undefined,
+      individualWeight: individualWeight ?? undefined,
+      createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(assignment, "KPI assignment saved"));
+  } catch (error: any) {
+    console.error("Error saving KPI assignment:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to save KPI assignment" : error.message, statusCode));
+  }
+});
+
+router.delete("/kpi-assignments/:id", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can manage KPI assignments", 403));
+    }
+
+    const assignmentId = parseIntSafe(req.params.id);
+    if (!assignmentId) {
+      return res.status(400).json(errorResponse("Assignment is required", 400));
+    }
+
+    const deleted = await deleteBalancedScorecardKpiAssignment(assignmentId);
+    return res.json(successResponse(deleted, "KPI assignment removed"));
+  } catch (error: any) {
+    console.error("Error deleting KPI assignment:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to delete KPI assignment" : error.message, statusCode));
+  }
+});
+
+router.get("/performance-bands", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can review performance bands", 403));
+    }
+
+    const bands = await listPerformanceBands();
+    return res.json(successResponse(bands, "Performance bands loaded"));
+  } catch (error: any) {
+    console.error("Error loading performance bands:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to load performance bands" : error.message, statusCode));
+  }
+});
+
+router.post("/performance-bands", async (req: AuthRequest, res) => {
+  try {
+    if (!canManageBalancedScorecard(req)) {
+      return res.status(403).json(errorResponse("Only HR can manage performance bands", 403));
+    }
+
+    const roleId =
+      req.body?.roleId === undefined ? undefined : parseIntSafe(req.body?.roleId) ?? null;
+    const onTrackMin = parseNumberSafe(req.body?.onTrackMin);
+    const atRiskMin = parseNumberSafe(req.body?.atRiskMin);
+    const label = typeof req.body?.label === "string" ? String(req.body.label) : undefined;
+
+    if (!Number.isFinite(onTrackMin) || !Number.isFinite(atRiskMin)) {
+      return res.status(400).json(errorResponse("onTrackMin and atRiskMin are required", 400));
+    }
+
+    const band = await upsertPerformanceBand({
+      roleId,
+      onTrackMin: Number(onTrackMin),
+      atRiskMin: Number(atRiskMin),
+      label,
+    });
+    return res.json(successResponse(band, "Performance band saved"));
+  } catch (error: any) {
+    console.error("Error saving performance band:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to save performance band" : error.message, statusCode));
   }
 });
 

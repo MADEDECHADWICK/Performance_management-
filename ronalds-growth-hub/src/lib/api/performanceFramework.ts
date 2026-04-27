@@ -169,6 +169,8 @@ export interface BalancedScorecardWorkspace {
   }>;
   employeeContributions: Array<{
     id: string;
+    sourceType: "evaluation_cycle" | "learning_assignment";
+    sourceReferenceId: number | null;
     title: string;
     kpiId: string;
     initiative: string;
@@ -179,6 +181,25 @@ export interface BalancedScorecardWorkspace {
     acknowledged: boolean;
     managerComment: string;
     rollup: string;
+    employeeComment: string | null;
+    lastUpdatedAt: string | null;
+    workflowRecordId: number | null;
+    evidenceCount: number;
+    reviewContextPath: string | null;
+  }>;
+  employeeKpiAssignments: Array<{
+    id: number;
+    profileId: number;
+    kpiId: string;
+    kpiName: string;
+    individualTarget: number | null;
+    individualWeight: number;
+    actualProgress: number;
+    score: number;
+    status: WorkspaceStatusTone;
+    initiativeTitles: string[];
+    dueDate: string | null;
+    owner: string;
   }>;
   evaluationSummary: {
     cycleId: number | null;
@@ -227,6 +248,7 @@ export type WorkspaceInitiative = BalancedScorecardWorkspace['initiatives'][numb
 export type WorkspaceCascadeInitiative = BalancedScorecardWorkspace['cascadeInitiatives'][number];
 export type WorkspaceCascadeLevel = BalancedScorecardWorkspace['featuredCascade'][number];
 export type WorkspaceEmployeeContribution = BalancedScorecardWorkspace['employeeContributions'][number];
+export type WorkspaceEmployeeKpiAssignment = BalancedScorecardWorkspace['employeeKpiAssignments'][number];
 export type WorkspaceEvaluationSummary = BalancedScorecardWorkspace['evaluationSummary'];
 export type WorkspaceReportBlock = BalancedScorecardWorkspace['reportBlocks'][number];
 export type WorkspaceDepartmentRow = BalancedScorecardWorkspace['departmentPerformance'][number];
@@ -271,6 +293,7 @@ export interface BalancedScorecardKpiRecord {
   weight: number;
   firmTarget: string;
   ownerName: string | null;
+  ownerProfileId: number | null;
   statusLogic: string | null;
   updateFrequency: string | null;
   sortOrder: number;
@@ -286,11 +309,40 @@ export interface BalancedScorecardInitiativeRecord {
   title: string;
   summary: string | null;
   ownerName: string | null;
+  ownerProfileId: number | null;
   timeline: string | null;
   dueDate: string | null;
   status: WorkspaceStatusTone;
   progress: number;
   sortOrder: number;
+}
+
+export interface BalancedScorecardKpiAssignmentRecord {
+  id: number;
+  kpiId: number;
+  kpiKey: string;
+  kpiName: string;
+  profileId: number;
+  profileName: string;
+  roleId: number | null;
+  roleName: string | null;
+  scorecardVersionId: number;
+  individualTarget: number | null;
+  individualWeight: number;
+  createdByProfileId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PerformanceBandRecord {
+  id: number;
+  roleId: number | null;
+  roleName: string | null;
+  onTrackMin: number;
+  atRiskMin: number;
+  label: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BalancedScorecardStructure {
@@ -315,6 +367,167 @@ export interface BalancedScorecardMetricTemplate {
   defaultOwnerName: string;
   defaultStatusLogic: string;
   defaultUpdateFrequency: string;
+}
+
+export interface BalancedScorecardGovernanceVersion {
+  id: number;
+  cycleId: number;
+  versionNumber: number;
+  label: string | null;
+  status: "draft" | "published" | "superseded" | "archived";
+  publishedAt: string | null;
+  createdAt: string;
+  perspectiveCount: number;
+  goalCount: number;
+  kpiCount: number;
+  initiativeCount: number;
+}
+
+export interface BalancedScorecardGovernanceCycle {
+  id: number;
+  key: string;
+  name: string;
+  cadence: "monthly" | "quarterly" | "annual";
+  status: "draft" | "active" | "closed" | "archived";
+  startDate: string;
+  endDate: string;
+  activeVersionId: number | null;
+  versions: BalancedScorecardGovernanceVersion[];
+}
+
+export interface BalancedScorecardMeasurementReviewRecord {
+  id: number;
+  action:
+    | "generated"
+    | "submitted"
+    | "review_started"
+    | "changes_requested"
+    | "approved"
+    | "closed"
+    | "reopened";
+  fromStatus: "draft" | "generated" | "submitted" | "in_review" | "approved" | "closed" | null;
+  toStatus: "draft" | "generated" | "submitted" | "in_review" | "approved" | "closed";
+  comment: string | null;
+  actedByProfileId: number | null;
+  actedAt: string;
+}
+
+export interface BalancedScorecardMeasurementPeriodSummary {
+  id: number;
+  key: string;
+  scorecardVersionId: number;
+  scorecardCycleId: number;
+  scorecardCycleName: string;
+  scorecardLabel: string | null;
+  cadence: "monthly" | "quarterly" | "annual";
+  label: string;
+  periodStart: string;
+  periodEnd: string;
+  status: "draft" | "generated" | "submitted" | "in_review" | "approved" | "closed";
+  generatedAt: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  approvedAt: string | null;
+  closedAt: string | null;
+  latestComment: string | null;
+  snapshotCount: number;
+  offTrackCount: number;
+  atRiskCount: number;
+  warningCount: number;
+  missingDataCount: number;
+  reviewHistory: BalancedScorecardMeasurementReviewRecord[];
+}
+
+export interface BalancedScorecardMeasurementSnapshotTrace {
+  id: number;
+  sourceType: "metric_catalog" | "manual_actual" | "initiative_rollup" | "operational_signal";
+  sourceKey: string;
+  sourceLabel: string;
+  dataQualityStatus: "healthy" | "warning" | "missing_data" | "stale_data" | "manual_override";
+  recordCount: number | null;
+  rawValue: number | null;
+  normalizedValue: number | null;
+  note: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface BalancedScorecardMeasurementSnapshotRecord {
+  id: number;
+  kpiId: number;
+  kpiKey: string;
+  kpiName: string;
+  metricKey: string;
+  goalKey: string;
+  goalTitle: string;
+  perspectiveKey: string;
+  perspectiveName: string;
+  trackingMode: string;
+  frequency: string;
+  unit: string;
+  weight: number;
+  firmTarget: string;
+  targetValue: number | null;
+  targetLabel: string | null;
+  actualValue: number | null;
+  actualLabel: string;
+  weightedScore: number;
+  status: WorkspaceStatusTone;
+  statusLogic: string | null;
+  updateFrequency: string | null;
+  initiativeProgress: number;
+  trend: number[];
+  ownerName: string | null;
+  ownerUpdate: string | null;
+  snapshotStatus: "generated" | "frozen" | "stale";
+  dataQualityStatus: "healthy" | "warning" | "missing_data" | "stale_data" | "manual_override";
+  dataQualityNote: string | null;
+  actualAsOf: string | null;
+  measuredAt: string;
+  traces: BalancedScorecardMeasurementSnapshotTrace[];
+}
+
+export interface BalancedScorecardContributionDetail {
+  workflowId: number;
+  profileId: number;
+  contributionKey: string;
+  title: string;
+  initiative: string;
+  kpiId: string;
+  dueDate: string;
+  progress: number;
+  score: number;
+  status: WorkspaceStatusTone;
+  acknowledged: boolean;
+  acknowledgedAt: string | null;
+  managerComment: string;
+  employeeComment: string | null;
+  rollup: string;
+  lastUpdatedAt: string | null;
+  evidenceCount: number;
+  reviewContextPath: string | null;
+  updates: Array<{
+    id: number;
+    progress: number;
+    comment: string | null;
+    createdAt: string;
+    createdByProfileId: number | null;
+    createdByName: string | null;
+  }>;
+  evidence: Array<{
+    id: number;
+    fileName: string;
+    filePath: string;
+    mimeType: string | null;
+    description: string | null;
+    createdAt: string;
+    uploadedBy: number | null;
+    uploaderName: string | null;
+  }>;
+}
+
+export interface BalancedScorecardMeasurementSnapshotPack {
+  period: BalancedScorecardMeasurementPeriodSummary;
+  snapshots: BalancedScorecardMeasurementSnapshotRecord[];
 }
 
 const buildQuery = (params: Record<string, string | number | undefined>) => {
@@ -393,8 +606,143 @@ export const performanceFrameworkAPI = {
     evaluationCycleId?: number;
   }) => api.get<BalancedScorecardWorkspace>(`/performance-framework/workspace${buildQuery(params || {})}`),
 
-  getScorecardStructure: () =>
-    api.get<BalancedScorecardStructure>('/performance-framework/scorecard-structure'),
+  getContributionDetail: (contributionKey: string, params?: { profileId?: number; evaluationCycleId?: number }) =>
+    api.get<BalancedScorecardContributionDetail>(
+      `/performance-framework/employee-contributions/${encodeURIComponent(contributionKey)}${buildQuery(params || {})}`
+    ),
+
+  acknowledgeContribution: (
+    contributionKey: string,
+    payload?: { profileId?: number; evaluationCycleId?: number }
+  ) =>
+    api.post<BalancedScorecardContributionDetail>(
+      `/performance-framework/employee-contributions/${encodeURIComponent(contributionKey)}/acknowledge`,
+      payload || {}
+    ),
+
+  updateContributionProgress: (
+    contributionKey: string,
+    payload: { profileId?: number; evaluationCycleId?: number; progress: number; comment?: string }
+  ) =>
+    api.post<BalancedScorecardContributionDetail>(
+      `/performance-framework/employee-contributions/${encodeURIComponent(contributionKey)}/progress`,
+      payload
+    ),
+
+  getScorecardGovernance: () =>
+    api.get<BalancedScorecardGovernanceCycle[]>('/performance-framework/scorecard-governance'),
+
+  createScorecardCycle: (payload: {
+    name: string;
+    cadence: "monthly" | "quarterly" | "annual";
+    startDate: string;
+    endDate: string;
+  }) => api.post<BalancedScorecardGovernanceCycle>('/performance-framework/scorecard-cycles', payload),
+
+  createScorecardVersion: (
+    cycleId: number,
+    payload?: {
+      label?: string;
+      sourceVersionId?: number | null;
+    }
+  ) =>
+    api.post<BalancedScorecardGovernanceVersion>(
+      `/performance-framework/scorecard-cycles/${cycleId}/versions`,
+      payload || {}
+    ),
+
+  publishScorecardVersion: (versionId: number) =>
+    api.post<BalancedScorecardGovernanceVersion>(
+      `/performance-framework/scorecard-versions/${versionId}/publish`
+    ),
+
+  getMeasurementPeriods: (params?: { versionId?: number }) =>
+    api.get<BalancedScorecardMeasurementPeriodSummary[]>(
+      `/performance-framework/measurement-periods${buildQuery(params || {})}`
+    ),
+
+  createMeasurementPeriod: (payload: {
+    versionId?: number;
+    label?: string;
+    periodStart: string;
+    periodEnd: string;
+  }) =>
+    api.post<BalancedScorecardMeasurementPeriodSummary>(
+      "/performance-framework/measurement-periods",
+      payload
+    ),
+
+  generateMeasurementPeriod: (periodId: number, payload?: { comment?: string }) =>
+    api.post<BalancedScorecardMeasurementPeriodSummary>(
+      `/performance-framework/measurement-periods/${periodId}/generate`,
+      payload || {}
+    ),
+
+  getMeasurementSnapshots: (periodId: number) =>
+    api.get<BalancedScorecardMeasurementSnapshotPack>(
+      `/performance-framework/measurement-periods/${periodId}/snapshots`
+    ),
+
+  submitMeasurementPeriod: (periodId: number, payload?: { comment?: string }) =>
+    api.post<BalancedScorecardMeasurementPeriodSummary>(
+      `/performance-framework/measurement-periods/${periodId}/submit`,
+      payload || {}
+    ),
+
+  reviewMeasurementPeriod: (
+    periodId: number,
+    payload: { decision: "start_review" | "request_changes" | "approve"; comment?: string }
+  ) =>
+    api.post<BalancedScorecardMeasurementPeriodSummary>(
+      `/performance-framework/measurement-periods/${periodId}/review`,
+      payload
+    ),
+
+  closeMeasurementPeriod: (periodId: number, payload?: { comment?: string }) =>
+    api.post<BalancedScorecardMeasurementPeriodSummary>(
+      `/performance-framework/measurement-periods/${periodId}/close`,
+      payload || {}
+    ),
+
+  getKpiAssignments: (params?: { scorecardVersionId?: number; profileId?: number }) =>
+    api.get<BalancedScorecardKpiAssignmentRecord[]>(
+      `/performance-framework/kpi-assignments${buildQuery(params || {})}`
+    ),
+
+  saveKpiAssignment: (payload: {
+    kpiId: number;
+    profileId: number;
+    scorecardVersionId?: number;
+    individualTarget?: number;
+    individualWeight?: number;
+  }) =>
+    api.post<BalancedScorecardKpiAssignmentRecord>(
+      "/performance-framework/kpi-assignments",
+      payload
+    ),
+
+  deleteKpiAssignment: (assignmentId: number) =>
+    api.delete<BalancedScorecardKpiAssignmentRecord>(
+      `/performance-framework/kpi-assignments/${assignmentId}`
+    ),
+
+  getPerformanceBands: () =>
+    api.get<PerformanceBandRecord[]>("/performance-framework/performance-bands"),
+
+  savePerformanceBand: (payload: {
+    roleId?: number | null;
+    onTrackMin: number;
+    atRiskMin: number;
+    label?: string;
+  }) =>
+    api.post<PerformanceBandRecord>("/performance-framework/performance-bands", payload),
+
+  getScorecardStructure: (params?: {
+    versionId?: number;
+  }) =>
+    api.get<BalancedScorecardStructure>(
+      `/performance-framework/scorecard-structure${buildQuery(params || {})}`
+    ),
 
   getKpiTemplates: () =>
     api.get<BalancedScorecardMetricTemplate[]>('/performance-framework/kpi-templates'),
@@ -406,6 +754,7 @@ export const performanceFrameworkAPI = {
     name: string;
     ownerName?: string;
     summary?: string;
+    versionId?: number;
   }) => api.post<BalancedScorecardPerspectiveRecord>('/performance-framework/perspectives', payload),
 
   updatePerspective: (
@@ -432,6 +781,14 @@ export const performanceFrameworkAPI = {
     ownerName?: string;
   }) => api.post<BalancedScorecardGoalRecord>('/performance-framework/goals', payload),
 
+  updateGoal: (
+    goalId: number,
+    payload: { title: string; description?: string; ownerName?: string }
+  ) => api.patch<BalancedScorecardGoalRecord>(`/performance-framework/goals/${goalId}`, payload),
+
+  archiveGoal: (goalId: number) =>
+    api.delete<BalancedScorecardGoalRecord>(`/performance-framework/goals/${goalId}`),
+
   createKpi: (payload: {
     goalId: number;
     trackingMode?: "template" | "manual";
@@ -449,9 +806,18 @@ export const performanceFrameworkAPI = {
     weight: number;
     firmTarget: string;
     ownerName?: string;
+    ownerProfileId?: number | null;
     statusLogic?: string;
     updateFrequency?: string;
   }) => api.post<BalancedScorecardKpiRecord>('/performance-framework/kpis', payload),
+
+  updateKpiActual: (
+    kpiId: number,
+    payload: {
+      currentActualValue: number;
+      lastMeasurementNote?: string;
+    }
+  ) => api.patch<BalancedScorecardKpiRecord>(`/performance-framework/kpis/${kpiId}/actual`, payload),
 
   createInitiative: (payload: {
     goalId: number;
@@ -461,11 +827,35 @@ export const performanceFrameworkAPI = {
     title: string;
     summary?: string;
     ownerName?: string;
+    ownerProfileId?: number | null;
     timeline?: string;
     dueDate?: string;
     status?: WorkspaceStatusTone;
     progress?: number;
   }) => api.post<BalancedScorecardInitiativeRecord>('/performance-framework/initiatives', payload),
+
+  updateInitiative: (
+    initiativeId: number,
+    payload: {
+      title?: string;
+      summary?: string | null;
+      ownerName?: string | null;
+      ownerProfileId?: number | null;
+      timeline?: string | null;
+      dueDate?: string | null;
+      status?: WorkspaceStatusTone;
+      progress?: number;
+      scopeRole?: string;
+    }
+  ) => api.patch<BalancedScorecardInitiativeRecord>(`/performance-framework/initiatives/${initiativeId}`, payload),
+
+  archiveInitiative: (initiativeId: number) =>
+    api.delete<{ count: number }>(`/performance-framework/initiatives/${initiativeId}`),
+
+  getGoalWeightTotal: (goalId: number) =>
+    api.get<{ goalId: number; totalWeight: number; kpiCount: number }>(
+      `/performance-framework/goals/${goalId}/weight-summary`
+    ),
 };
 
 export default performanceFrameworkAPI;

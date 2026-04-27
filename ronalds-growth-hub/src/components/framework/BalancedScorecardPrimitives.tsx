@@ -38,8 +38,8 @@ export function averageScore(values: number[]) {
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
-export function parseAcknowledgementState(ack: string) {
-  const normalized = ack.toLowerCase();
+export function parseAcknowledgementState(ack?: string | null) {
+  const normalized = String(ack ?? "").toLowerCase();
   const ratioMatch = normalized.match(/(\d+)\/(\d+)/);
   const current = ratioMatch ? Number(ratioMatch[1]) : 0;
   const total = ratioMatch ? Number(ratioMatch[2]) : 0;
@@ -63,11 +63,12 @@ export function StatusBadge({ status }: { status: StatusTone }) {
   );
 }
 
-export function TrendBars({ points }: { points: number[] }) {
-  const maxPoint = Math.max(...points, 1);
+export function TrendBars({ points }: { points?: number[] }) {
+  const safePoints = Array.isArray(points) && points.length > 0 ? points : [0, 0, 0, 0, 0];
+  const maxPoint = Math.max(...safePoints, 1);
   return (
     <div className="flex h-10 items-end gap-1">
-      {points.map((point, index) => (
+      {safePoints.map((point, index) => (
         <div
           key={`${point}-${index}`}
           className="w-2 rounded-full bg-primary/70"
@@ -86,7 +87,7 @@ export function MetricCard({
 }: {
   label: string;
   value: string;
-  hint: string;
+  hint?: string;
   icon: LucideIcon;
 }) {
   return (
@@ -104,9 +105,11 @@ export function MetricCard({
           <p className="text-2xl font-semibold tracking-tight text-foreground break-words">
             {value}
           </p>
-          <p className="text-sm leading-6 text-muted-foreground break-words">
-            {hint}
-          </p>
+          {hint ? (
+            <p className="text-sm leading-6 text-muted-foreground break-words">
+              {hint}
+            </p>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -120,7 +123,7 @@ export function SectionTitle({
 }: {
   icon: LucideIcon;
   title: string;
-  description: string;
+  description?: string;
 }) {
   return (
     <div className="flex items-start gap-3">
@@ -129,7 +132,7 @@ export function SectionTitle({
       </div>
       <div className="space-y-1">
         <h2 className="text-xl font-semibold text-foreground">{title}</h2>
-        <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
+        {description ? <p className="max-w-3xl text-sm text-muted-foreground">{description}</p> : null}
       </div>
     </div>
   );

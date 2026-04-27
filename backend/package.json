@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate dev",
     "seed": "ts-node prisma/seed.ts",
     "seed:uat-team": "ts-node prisma/scripts/seed-uat-team.ts",
+    "bsc:pilot": "ts-node --transpile-only prisma/scripts/bootstrap-bsc-pilot.ts",
     "onboarding:bypass-seeded": "ts-node --transpile-only prisma/scripts/bypass-seeded-onboarding.ts",
     "recompute:time-entries": "ts-node prisma/scripts/recompute-time-entry-amounts.ts",
     "test": "jest --config jest.config.cjs",
