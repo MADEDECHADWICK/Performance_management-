@@ -74,8 +74,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   performanceFrameworkAPI,
@@ -93,8 +93,8 @@ import {
   type PerformanceBandRecord,
   type WorkspaceEvaluationSummary,
   type BalancedScorecardWorkspace,
-  type BalancedScorecardMetricTemplate,
   type BalancedScorecardStructure,
+  type KpiEngineDetail,
   type WorkspaceCascadeInitiative,
   type WorkspaceCascadeLevel as CascadeLevel,
   type WorkspaceDepartmentRow,
@@ -142,6 +142,7 @@ import {
   TrendBars,
 } from "@/components/framework/BalancedScorecardPrimitives";
 import { BalancedScorecardPeopleAdminPanel } from "@/components/framework/BalancedScorecardPeopleAdminPanel";
+import { KpiEngineDesigner } from "@/components/framework/KpiEngineDesigner";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -152,7 +153,6 @@ const emptyStructure: BalancedScorecardStructure = {
   initiatives: [],
 };
 
-type KpiTrackingMode = "template" | "manual";
 export default function BalancedScorecardModule() {
   const navigate = useNavigate();
   const { workspaceRole } = useParams<{ workspaceRole?: string }>();
@@ -193,45 +193,6 @@ export default function BalancedScorecardModule() {
     progress: "0",
     scopeRole: "hr",
   });
-  const [kpiForm, setKpiForm] = useState<{
-    goalId: string;
-    trackingMode: KpiTrackingMode;
-    metricKey: string;
-    name: string;
-    description: string;
-    formula: string;
-    frequency: string;
-    unit: string;
-    weight: string;
-    firmTarget: string;
-    ownerName: string;
-    statusLogic: string;
-    updateFrequency: string;
-    measurementType: string;
-    targetDirection: string;
-    targetValue: string;
-    currentActualValue: string;
-    lastMeasurementNote: string;
-  }>({
-    goalId: "",
-    trackingMode: "template",
-    metricKey: "",
-    name: "",
-    description: "",
-    formula: "",
-    frequency: "",
-    unit: "",
-    weight: "",
-    firmTarget: "",
-    ownerName: "",
-    statusLogic: "",
-    updateFrequency: "",
-    measurementType: "",
-    targetDirection: "",
-    targetValue: "",
-    currentActualValue: "",
-    lastMeasurementNote: "",
-  });
   const [initiativeForm, setInitiativeForm] = useState({
     goalId: "",
     kpiId: "",
@@ -247,6 +208,8 @@ export default function BalancedScorecardModule() {
   });
   const [kpiActualDialogOpen, setKpiActualDialogOpen] = useState(false);
   const [kpiActualTarget, setKpiActualTarget] = useState<KpiDefinition | null>(null);
+  const [kpiActualEngine, setKpiActualEngine] = useState<KpiEngineDetail | null>(null);
+  const [kpiActualValues, setKpiActualValues] = useState<Record<string, string>>({});
   const [kpiActualForm, setKpiActualForm] = useState({
     actualValue: "",
     note: "",
@@ -334,12 +297,6 @@ export default function BalancedScorecardModule() {
         versionId: resolvedStructureVersionId,
       }),
     staleTime: 30_000,
-  });
-
-  const { data: metricTemplates = [] } = useQuery({
-    queryKey: ["bsc-kpi-templates"],
-    queryFn: () => performanceFrameworkAPI.getKpiTemplates(),
-    staleTime: Infinity,
   });
 
   const { data: governanceCycles = [] } = useQuery<BalancedScorecardGovernanceCycle[]>({
@@ -521,30 +478,10 @@ export default function BalancedScorecardModule() {
   const selectedRoleHomeBase = roleHomeConfigs[selectedRole];
   const linkedGoal = goalData.find((goal) => goal.id === highlightedKpi?.goalId);
   const highlightedPerspective = perspectiveData.find((perspective) => perspective.id === highlightedKpi?.perspectiveId);
-  const selectedMetricTemplate =
-    metricTemplates.find((template) => template.metricKey === kpiForm.metricKey) ?? null;
-  const isTemplateMode = kpiForm.trackingMode === "template";
-  const hasManualRequirements =
-    Boolean(kpiForm.measurementType) &&
-    Boolean(kpiForm.targetDirection) &&
-    Boolean(kpiForm.targetValue);
-  const canSaveKpi =
-    Boolean(kpiForm.goalId) &&
-    Boolean(kpiForm.name.trim()) &&
-    Boolean(kpiForm.frequency.trim()) &&
-    Boolean(kpiForm.unit.trim()) &&
-    Boolean(kpiForm.firmTarget.trim()) &&
-    (isTemplateMode ? Boolean(kpiForm.metricKey) : hasManualRequirements) &&
-    authoringSubmitting === null;
   const initiativeGoalId = Number(initiativeForm.goalId);
   const initiativeKpiOptions = Number.isFinite(initiativeGoalId) && initiativeGoalId > 0
     ? kpiRecords.filter((kpi) => kpi.goalId === initiativeGoalId)
     : kpiRecords;
-  const kpiFormGoalId = Number(kpiForm.goalId);
-  const existingGoalKpiWeightTotal = Number.isFinite(kpiFormGoalId) && kpiFormGoalId > 0
-    ? kpiRecords.filter((k) => k.goalId === kpiFormGoalId).reduce((sum, k) => sum + (k.weight || 0), 0)
-    : 0;
-  const projectedWeightTotal = existingGoalKpiWeightTotal + (Number(kpiForm.weight) || 0);
   const activeFeaturedRootInitiative =
     initiativeRecords.find(
       (initiative) =>
@@ -893,12 +830,12 @@ export default function BalancedScorecardModule() {
                 : "Create or select an evaluation cycle to connect scorecard progress to reviews.",
             },
             {
-              label: "KPI contracts",
+              label: "KPIs",
               value: `${kpiData.length} configured`,
               note:
                 atRiskKpiCount > 0
-                  ? `${atRiskKpiCount} KPI contracts are currently amber or red.`
-                  : "All live KPI contracts are currently on track.",
+                  ? `${atRiskKpiCount} KPIs are currently amber or red.`
+                  : "All live KPIs are currently on track.",
             },
             {
               label: "Cascade chain",
@@ -994,7 +931,7 @@ export default function BalancedScorecardModule() {
               label: "Strategic KPI risks",
               value: String(atRiskKpiCount),
               note: atRiskKpiCount > 0
-                ? `${atRiskKpiCount} KPI contracts need executive attention.`
+                ? `${atRiskKpiCount} KPIs need executive attention.`
                 : "No KPI risks are currently flagged in the live scorecard.",
             },
           ],
@@ -1058,8 +995,8 @@ export default function BalancedScorecardModule() {
               label: "Client/account risk",
               value: `${customerKpis.filter((kpi) => kpi.status !== "on_track").length} KPI risks`,
               note: customerKpis.length > 0
-                ? `${customerKpis.length} customer KPI contracts are feeding this portfolio slice.`
-                : "No customer KPI contracts are mapped into this portfolio slice yet.",
+                ? `${customerKpis.length} customer KPIs are feeding this portfolio slice.`
+                : "No customer KPIs are mapped into this portfolio slice yet.",
               status:
                 customerKpis.some((kpi) => kpi.status !== "on_track") ? "at_risk" : "on_track",
               progress: averageScore(customerKpis.map((kpi) => kpi.weightedScore)),
@@ -1070,8 +1007,8 @@ export default function BalancedScorecardModule() {
               label: "Customer KPI risks",
               value: String(customerKpis.filter((kpi) => kpi.status !== "on_track").length),
               note: customerKpis.length > 0
-                ? `${customerKpis.length} customer-facing KPI contracts are in scope for this portfolio view.`
-                : "No customer KPI contracts are mapped into this view yet.",
+                ? `${customerKpis.length} customer-facing KPIs are in scope for this portfolio view.`
+                : "No customer KPIs are mapped into this view yet.",
             },
             {
               label: "Manager coverage",
@@ -1144,7 +1081,7 @@ export default function BalancedScorecardModule() {
               value: coachingKpi?.actual || `${averageScore(peopleKpis.map((kpi) => kpi.weightedScore))}%`,
               note:
                 coachingKpi?.ownerUpdate ||
-                `${peopleKpis.filter((kpi) => kpi.status !== "on_track").length} people KPI contracts need coaching follow-through.`,
+                `${peopleKpis.filter((kpi) => kpi.status !== "on_track").length} people KPIs need coaching follow-through.`,
               status: coachingKpi?.status || scoreToStatus(averageScore(peopleKpis.map((kpi) => kpi.weightedScore))),
               progress: coachingKpi?.weightedScore || averageScore(peopleKpis.map((kpi) => kpi.weightedScore)),
             },
@@ -2120,38 +2057,6 @@ export default function BalancedScorecardModule() {
     navigate(item.reviewContextPath);
   };
 
-  const applyMetricTemplate = (metricKey: string) => {
-    const template = metricTemplates.find((candidate) => candidate.metricKey === metricKey);
-    setKpiForm((current) => ({
-      ...current,
-      trackingMode: "template",
-      metricKey,
-      name: template?.name ?? current.name,
-      formula: template?.defaultFormula ?? current.formula,
-      frequency: template?.defaultFrequency ?? current.frequency,
-      unit: template?.defaultUnit ?? current.unit,
-      weight: template ? String(template.defaultWeight) : current.weight,
-      firmTarget: template?.defaultTarget ?? current.firmTarget,
-      ownerName: template?.defaultOwnerName ?? current.ownerName,
-      statusLogic: template?.defaultStatusLogic ?? current.statusLogic,
-      updateFrequency: template?.defaultUpdateFrequency ?? current.updateFrequency,
-      measurementType: template?.defaultMeasurementType ?? current.measurementType,
-      targetDirection: template?.defaultTargetDirection ?? current.targetDirection,
-      targetValue:
-        template?.defaultTargetValue !== undefined
-          ? String(template.defaultTargetValue)
-          : current.targetValue,
-    }));
-  };
-
-  const updateTrackingMode = (mode: KpiTrackingMode) => {
-    setKpiForm((current) => ({
-      ...current,
-      trackingMode: mode,
-      metricKey: mode === "manual" ? "" : current.metricKey,
-    }));
-  };
-
   const handleCreateScorecardCycle = async () => {
     try {
       setAuthoringSubmitting("createScorecardCycle");
@@ -2798,68 +2703,6 @@ export default function BalancedScorecardModule() {
     }
   };
 
-  const handleCreateKpi = async () => {
-    try {
-      setAuthoringSubmitting("createKpi");
-      await performanceFrameworkAPI.createKpi({
-        goalId: Number(kpiForm.goalId),
-        trackingMode: kpiForm.trackingMode,
-        metricKey: kpiForm.metricKey || undefined,
-        measurementType: kpiForm.measurementType || undefined,
-        targetDirection: kpiForm.targetDirection || undefined,
-        targetValue: kpiForm.targetValue ? Number(kpiForm.targetValue) : undefined,
-        currentActualValue: kpiForm.currentActualValue
-          ? Number(kpiForm.currentActualValue)
-          : undefined,
-        lastMeasurementNote: kpiForm.lastMeasurementNote || undefined,
-        name: kpiForm.name,
-        description: kpiForm.description || undefined,
-        formula: kpiForm.formula || undefined,
-        frequency: kpiForm.frequency,
-        unit: kpiForm.unit,
-        weight: Number(kpiForm.weight),
-        firmTarget: kpiForm.firmTarget,
-        ownerName: kpiForm.ownerName || undefined,
-        statusLogic: kpiForm.statusLogic || undefined,
-        updateFrequency: kpiForm.updateFrequency || undefined,
-      });
-      await refreshBalancedScorecardData(selectedRole);
-      setKpiForm((current) => ({
-        goalId: current.goalId,
-        trackingMode: current.trackingMode,
-        metricKey: current.metricKey,
-        name: "",
-        description: "",
-        formula: current.formula,
-        frequency: current.frequency,
-        unit: current.unit,
-        weight: current.weight,
-        firmTarget: current.firmTarget,
-        ownerName: current.ownerName,
-        statusLogic: current.statusLogic,
-        updateFrequency: current.updateFrequency,
-        measurementType: current.measurementType,
-        targetDirection: current.targetDirection,
-        targetValue: current.targetValue,
-        currentActualValue: current.currentActualValue,
-        lastMeasurementNote: "",
-      }));
-      setKpiSheetMode(null);
-      toast({
-        title: "KPI contract created",
-        description: "The KPI is now persisted and linked to the selected strategic goal.",
-      });
-    } catch (error) {
-      toast({
-        title: "KPI creation failed",
-        description: error instanceof Error ? error.message : "The KPI contract could not be saved.",
-        variant: "destructive",
-      });
-    } finally {
-      setAuthoringSubmitting(null);
-    }
-  };
-
   const handleCreateInitiative = async () => {
     try {
       setAuthoringSubmitting("createInitiative");
@@ -2914,37 +2757,83 @@ export default function BalancedScorecardModule() {
   const handleUpdateKpiActual = async (kpi: KpiDefinition) => {
     if (!canUpdateKpiActuals) return;
 
-    setKpiActualTarget(kpi);
-    setKpiActualForm({
-      actualValue: "",
-      note: "",
-    });
-    setKpiActualDialogOpen(true);
-  };
-
-  const closeKpiActualDialog = () => {
-    setKpiActualDialogOpen(false);
-    setKpiActualTarget(null);
-    setKpiActualForm({ actualValue: "", note: "" });
-  };
-
-  const submitKpiActualUpdate = async () => {
-    if (!kpiActualTarget) return;
-    const actualValue = Number(kpiActualForm.actualValue);
-    if (!Number.isFinite(actualValue)) {
+    const record = kpiRecords.find((item) => item.key === kpi.id);
+    if (!record) {
       toast({
-        title: "Invalid value",
-        description: "Please enter a numeric value for the KPI actual.",
+        title: "KPI mapping missing",
+        description: "This KPI could not be mapped back to a scorecard record.",
         variant: "destructive",
       });
       return;
     }
 
+    try {
+      setAuthoringSubmitting(`loadKpiEngine:${kpi.id}`);
+      const engine = await performanceFrameworkAPI.getKpiEngine(record.id);
+      const values = Object.fromEntries(
+        (engine.trackingPlan?.inputs ?? []).map((input) => [
+          input.inputKey,
+          input.inputType === "boolean" ? "false" : "",
+        ])
+      );
+      setKpiActualTarget(kpi);
+      setKpiActualEngine(engine);
+      setKpiActualValues(values);
+      setKpiActualForm({ actualValue: "", note: "" });
+      setKpiActualDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: "KPI engine failed to load",
+        description: error instanceof Error ? error.message : "The KPI tracking plan could not be opened.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const handleRecalculateKpi = async (kpi: KpiDefinition) => {
+    const record = kpiRecords.find((item) => item.key === kpi.id);
+    if (!record) {
+      toast({
+        title: "KPI mapping missing",
+        description: "This KPI could not be mapped to a scorecard record.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      setAuthoringSubmitting(`recalculateKpi:${kpi.id}`);
+      await performanceFrameworkAPI.calculateKpiResult(record.id);
+      await queryClient.invalidateQueries({ queryKey: ["bsc-workspace", selectedRole, selectedCycleId, profile?.id] });
+      toast({ title: "KPI recalculated", description: `${kpi.name} result has been refreshed.` });
+    } catch (error) {
+      toast({
+        title: "Recalculation failed",
+        description: error instanceof Error ? error.message : "Could not recalculate this KPI.",
+        variant: "destructive",
+      });
+    } finally {
+      setAuthoringSubmitting(null);
+    }
+  };
+
+  const closeKpiActualDialog = () => {
+    setKpiActualDialogOpen(false);
+    setKpiActualTarget(null);
+    setKpiActualEngine(null);
+    setKpiActualValues({});
+    setKpiActualForm({ actualValue: "", note: "" });
+  };
+
+  const submitKpiActualUpdate = async () => {
+    if (!kpiActualTarget) return;
+
     const record = kpiRecords.find((item) => item.key === kpiActualTarget.id);
     if (!record) {
       toast({
         title: "KPI mapping missing",
-        description: "This KPI could not be mapped back to a scorecard contract.",
+        description: "This KPI could not be mapped back to a scorecard record.",
         variant: "destructive",
       });
       return;
@@ -2952,14 +2841,54 @@ export default function BalancedScorecardModule() {
 
     try {
       setAuthoringSubmitting(`updateKpiActual:${kpiActualTarget.id}`);
-      await performanceFrameworkAPI.updateKpiActual(record.id, {
-        currentActualValue: actualValue,
-        lastMeasurementNote: kpiActualForm.note.trim() ? kpiActualForm.note.trim() : undefined,
-      });
+      if (kpiActualEngine?.trackingPlan?.inputs?.length) {
+        const missingInput = kpiActualEngine.trackingPlan.inputs.find(
+          (input) =>
+            input.inputType !== "boolean" &&
+            input.isRequired &&
+            !String(kpiActualValues[input.inputKey] ?? "").trim()
+        );
+        if (missingInput) {
+          toast({
+            title: "Missing tracking input",
+            description: `${missingInput.label} is required before the KPI can be scored.`,
+            variant: "destructive",
+          });
+          setAuthoringSubmitting(null);
+          return;
+        }
+
+        await performanceFrameworkAPI.submitKpiDataPoints(record.id, {
+          values: kpiActualEngine.trackingPlan.inputs.map((input) => ({
+            inputKey: input.inputKey,
+            rawValue:
+              input.inputType === "boolean"
+                ? kpiActualValues[input.inputKey] === "true"
+                : kpiActualValues[input.inputKey] ?? "",
+            note: kpiActualForm.note.trim() ? kpiActualForm.note.trim() : undefined,
+            sourceType: input.sourceType,
+          })),
+        });
+      } else {
+        const actualValue = Number(kpiActualForm.actualValue);
+        if (!Number.isFinite(actualValue)) {
+          toast({
+            title: "Invalid value",
+            description: "Please enter a numeric value for the KPI actual.",
+            variant: "destructive",
+          });
+          setAuthoringSubmitting(null);
+          return;
+        }
+        await performanceFrameworkAPI.updateKpiActual(record.id, {
+          currentActualValue: actualValue,
+          lastMeasurementNote: kpiActualForm.note.trim() ? kpiActualForm.note.trim() : undefined,
+        });
+      }
       await refreshBalancedScorecardData(selectedRole);
       toast({
-        title: "KPI actual updated",
-        description: "The latest actual has been recorded on the KPI contract.",
+        title: "KPI tracking updated",
+        description: "The engine recalculated the result, status, and trend.",
       });
       closeKpiActualDialog();
     } catch (error) {
@@ -3101,15 +3030,6 @@ export default function BalancedScorecardModule() {
   }, [goalForm.perspectiveId, perspectiveRecords]);
 
   useEffect(() => {
-    if (!kpiForm.goalId && goalRecords[0]) {
-      setKpiForm((current) => ({
-        ...current,
-        goalId: String(goalRecords[0].id),
-      }));
-    }
-  }, [goalRecords, kpiForm.goalId]);
-
-  useEffect(() => {
     if (!initiativeForm.goalId && goalRecords[0]) {
       setInitiativeForm((current) => ({
         ...current,
@@ -3126,12 +3046,6 @@ export default function BalancedScorecardModule() {
       }));
     }
   }, [initiativeForm.kpiId, initiativeKpiOptions]);
-
-  useEffect(() => {
-    if (kpiForm.trackingMode === "template" && !kpiForm.metricKey && metricTemplates[0]) {
-      applyMetricTemplate(metricTemplates[0].metricKey);
-    }
-  }, [kpiForm.metricKey, kpiForm.trackingMode, metricTemplates]);
 
   useEffect(() => {
     if (
@@ -3350,19 +3264,19 @@ export default function BalancedScorecardModule() {
         </Card>
 
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ModuleTabValue)}>
-          <ScrollArea className="w-full whitespace-nowrap rounded-[24px] border border-border/70 bg-card px-2 py-2 shadow-sm">
-            <TabsList className="h-auto bg-transparent p-0">
+          <div className="w-full rounded-[24px] border border-border/70 bg-card px-2 py-2 shadow-sm">
+            <TabsList className="flex w-full h-auto bg-transparent p-0">
               {visibleTabs.map((tab) => (
                 <TabsTrigger
                   key={tab.value}
                   value={tab.value}
-                  className="rounded-2xl px-4 py-2.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+                  className="flex-1 rounded-2xl px-2 py-2 text-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
                 >
                   {tab.label}
                 </TabsTrigger>
               ))}
             </TabsList>
-          </ScrollArea>
+          </div>
 
           <TabsContent value="dashboard" className="space-y-6">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
@@ -3542,99 +3456,16 @@ export default function BalancedScorecardModule() {
                     className="rounded-2xl"
                     onClick={openCreatePerspective}
                   >
-                    Create perspective
+                    Add perspective
                   </Button>
                   <Button
                     variant="outline"
                     className="rounded-2xl"
                     onClick={() => setSetupSheetMode("createGoal")}
                   >
-                    Create strategic goal
+                    Add strategic goal
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="rounded-2xl"
-                    onClick={() => setSetupSheetMode("governance")}
-                  >
-                    Review governance checks
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="rounded-2xl"
-                    disabled={authoringSubmitting === "bootstrapScorecardStructure"}
-                    onClick={handleBootstrapScorecardStructure}
-                  >
-                    {authoringSubmitting === "bootstrapScorecardStructure"
-                      ? "Bootstrapping..."
-                      : "Bootstrap KPI library"}
-                  </Button>
-                  {canPreviewAllRoles ? (
-                    <>
-                      <Button
-                        variant="outline"
-                        className="rounded-2xl"
-                        onClick={() => setCycleDialogOpen(true)}
-                      >
-                        Create scorecard cycle
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="rounded-2xl"
-                        onClick={() => setVersionDialogOpen(true)}
-                      >
-                        Create draft scorecard
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="rounded-2xl"
-                        disabled={
-                          !selectedGovernanceVersion ||
-                          selectedGovernanceVersion.status === "published" ||
-                          authoringSubmitting ===
-                            `publishScorecardVersion:${selectedGovernanceVersion?.id}`
-                        }
-                        onClick={handlePublishScorecardVersion}
-                      >
-                        {selectedGovernanceVersion &&
-                        authoringSubmitting ===
-                          `publishScorecardVersion:${selectedGovernanceVersion.id}`
-                          ? "Publishing..."
-                          : "Publish selected scorecard"}
-                      </Button>
-                    </>
-                  ) : null}
                 </div>
-                {canPreviewAllRoles ? (
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-                    <div className="rounded-2xl border border-border/60 bg-muted/15 px-4 py-3">
-                      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
-                        Authoring target
-                      </p>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        Draft authoring uses the selected scorecard version. The live workspace continues to read the published scorecard.
-                      </p>
-                    </div>
-                    <Select
-                      value={selectedStructureVersionId}
-                      onValueChange={setSelectedStructureVersionId}
-                    >
-                      <SelectTrigger className="h-11 rounded-2xl">
-                        <SelectValue placeholder="Select scorecard version" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="current">Current live structure</SelectItem>
-                        {governanceCycles.map((cycle) =>
-                          cycle.versions.map((version) => (
-                            <SelectItem key={version.id} value={String(version.id)}>
-                              {cycle.name} · Scorecard {version.versionNumber}
-                              {version.label ? ` · ${version.label}` : ""} · {version.status}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
               </CardHeader>
               <CardContent className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
                 <div className="space-y-4">
@@ -3698,67 +3529,128 @@ export default function BalancedScorecardModule() {
                       <CardHeader>
                         <CardTitle className="text-base">Scorecard governance</CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-4">
+                      <CardContent className="space-y-3">
+                        {/* Active cycle status */}
                         <div className="rounded-2xl border border-border/60 bg-background p-4">
                           <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
                             Active cycle
                           </p>
-                          <p className="mt-2 font-medium text-foreground">
-                            {activeGovernanceCycle?.name || "No active cycle"}
-                          </p>
-                          <p className="mt-1 text-sm text-muted-foreground">
-                            {activeGovernanceVersion
-                              ? `Published scorecard ${activeGovernanceVersion.versionNumber}${
-                                  activeGovernanceVersion.label
-                                    ? ` · ${activeGovernanceVersion.label}`
-                                    : ""
-                                }`
-                              : "No published scorecard version yet."}
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-border/60 bg-background p-4">
-                          <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
-                            Selected authoring version
-                          </p>
-                          <p className="mt-2 font-medium text-foreground">
-                            {selectedGovernanceVersion
-                              ? `${selectedGovernanceCycle?.name || "Draft cycle"} · Scorecard ${
-                                  selectedGovernanceVersion.versionNumber
-                                }`
-                              : "Current live structure"}
-                          </p>
-                          <p className="mt-1 text-sm text-muted-foreground">
-                            {selectedGovernanceVersion
-                              ? `${selectedGovernanceVersion.perspectiveCount} perspectives, ${selectedGovernanceVersion.goalCount} goals, ${selectedGovernanceVersion.kpiCount} KPIs, ${selectedGovernanceVersion.initiativeCount} initiatives`
-                              : "Legacy or live structure fallback with no explicit published scorecard version selected."}
-                          </p>
-                        </div>
-                        <div className="space-y-2">
-                          {governanceCycles.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">
-                              No governed scorecard cycles exist yet. Create one, then clone a draft scorecard into it.
-                            </p>
+                          {activeGovernanceCycle ? (
+                            <>
+                              <p className="mt-2 font-medium text-foreground">
+                                {activeGovernanceCycle.name}
+                              </p>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                {activeGovernanceVersion
+                                  ? `Scorecard v${activeGovernanceVersion.versionNumber}${activeGovernanceVersion.label ? ` · ${activeGovernanceVersion.label}` : ""} · published`
+                                  : "No published version yet"}
+                              </p>
+                            </>
                           ) : (
-                            governanceCycles.slice(0, 3).map((cycle) => (
+                            <>
+                              <p className="mt-2 text-sm text-muted-foreground">
+                                No scorecard cycle exists. Create one to get started.
+                              </p>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="mt-3 rounded-xl"
+                                onClick={() => setCycleDialogOpen(true)}
+                              >
+                                Create scorecard cycle
+                              </Button>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Authoring version selector + next action */}
+                        {governanceCycles.length > 0 ? (
+                          <div className="rounded-2xl border border-border/60 bg-background p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">
+                                Authoring version
+                              </p>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 rounded-lg px-2 text-xs"
+                                onClick={() => setVersionDialogOpen(true)}
+                              >
+                                + New draft
+                              </Button>
+                            </div>
+                            <Select
+                              value={selectedStructureVersionId}
+                              onValueChange={setSelectedStructureVersionId}
+                            >
+                              <SelectTrigger className="h-9 rounded-xl text-sm">
+                                <SelectValue placeholder="Select version" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="current">Current live structure</SelectItem>
+                                {governanceCycles.map((cycle) =>
+                                  cycle.versions.map((version) => (
+                                    <SelectItem key={version.id} value={String(version.id)}>
+                                      {cycle.name} · v{version.versionNumber}
+                                      {version.label ? ` · ${version.label}` : ""} · {version.status}
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
+                            {selectedGovernanceVersion && selectedGovernanceVersion.status !== "published" ? (
+                              <Button
+                                className="w-full rounded-xl"
+                                disabled={
+                                  authoringSubmitting ===
+                                  `publishScorecardVersion:${selectedGovernanceVersion.id}`
+                                }
+                                onClick={handlePublishScorecardVersion}
+                              >
+                                {authoringSubmitting ===
+                                `publishScorecardVersion:${selectedGovernanceVersion.id}`
+                                  ? "Publishing..."
+                                  : `Publish v${selectedGovernanceVersion.versionNumber}`}
+                              </Button>
+                            ) : selectedGovernanceVersion?.status === "published" ? (
+                              <p className="text-xs text-muted-foreground text-center">
+                                This version is live. Select a draft to publish.
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {/* Cycle list */}
+                        {governanceCycles.length > 0 ? (
+                          <div className="space-y-2">
+                            {governanceCycles.slice(0, 3).map((cycle) => (
                               <div
                                 key={cycle.id}
-                                className="rounded-2xl border border-border/60 bg-background p-4"
+                                className="rounded-2xl border border-border/60 bg-background px-4 py-3"
                               >
-                                <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center justify-between gap-3">
                                   <div>
-                                    <p className="font-medium text-foreground">{cycle.name}</p>
-                                    <p className="text-sm text-muted-foreground">
-                                      {cycle.cadence} cadence · {cycle.status}
+                                    <p className="text-sm font-medium text-foreground">{cycle.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {cycle.cadence} · {cycle.status}
                                     </p>
                                   </div>
-                                  <Badge variant="outline" className="rounded-full">
-                                    {cycle.versions.length} versions
+                                  <Badge variant="outline" className="rounded-full text-xs">
+                                    {cycle.versions.length}v
                                   </Badge>
                                 </div>
                               </div>
-                            ))
-                          )}
-                        </div>
+                            ))}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="w-full rounded-xl text-xs text-muted-foreground"
+                              onClick={() => setCycleDialogOpen(true)}
+                            >
+                              + New cycle
+                            </Button>
+                          </div>
+                        ) : null}
                       </CardContent>
                     </Card>
                   ) : null}
@@ -4125,7 +4017,7 @@ export default function BalancedScorecardModule() {
                 />
                 <div className="flex flex-wrap gap-3">
                   <Button className="rounded-2xl" onClick={() => setKpiSheetMode("contract")}>
-                    Open KPI contract flow
+                    Open KPI engine flow
                   </Button>
                   <Button
                     variant="outline"
@@ -4244,6 +4136,19 @@ export default function BalancedScorecardModule() {
                                         Update actual
                                       </Button>
                                     )}
+                                    {canUpdateKpiActuals && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="rounded-xl"
+                                        onClick={() => handleRecalculateKpi(kpi)}
+                                        disabled={authoringSubmitting !== null}
+                                      >
+                                        {authoringSubmitting === `recalculateKpi:${kpi.id}`
+                                          ? "Recalculating..."
+                                          : "Recalculate"}
+                                      </Button>
+                                    )}
                                     <Sheet>
                                       <SheetTrigger asChild>
                                         <Button variant="outline" size="sm" className="rounded-xl">
@@ -4282,11 +4187,11 @@ export default function BalancedScorecardModule() {
                                             </div>
                                           </div>
                                           <div className="rounded-2xl border border-border/60 p-4">
-                                            <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Formula / definition</p>
+                                            <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Formula</p>
                                             <p className="mt-2 text-sm text-foreground">{kpi.formula}</p>
                                           </div>
                                           <div className="rounded-2xl border border-border/60 p-4">
-                                            <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Status logic</p>
+                                            <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Scoring rule</p>
                                             <p className="mt-2 text-sm text-foreground">{kpi.statusLogic}</p>
                                           </div>
                                           <div className="rounded-2xl border border-border/60 p-4">
@@ -4402,9 +4307,9 @@ export default function BalancedScorecardModule() {
                   <SheetHeader className="space-y-2">
                     <SheetTitle>
                       {kpiSheetMode === "contract"
-                        ? "KPI contract flow"
+                        ? "KPI engine flow"
                         : kpiSheetMode === "createKpi"
-                          ? "Create KPI contract"
+                          ? "Create KPI"
                           : kpiSheetMode === "createInitiative"
                             ? "Create initiative"
                             : kpiSheetMode === "editInitiative"
@@ -4413,9 +4318,9 @@ export default function BalancedScorecardModule() {
                     </SheetTitle>
                     <SheetDescription>
                       {kpiSheetMode === "contract"
-                        ? "Move through the KPI contract in a guided sequence instead of a long governance page."
+                        ? "Review how KPI definition, tracking, formula, scoring, and action fit together."
                         : kpiSheetMode === "createKpi"
-                          ? "Persist a KPI contract against one strategic goal using a template or a custom tracking setup."
+                          ? "Create a KPI with a tracking plan, formula, scoring rule, and period results."
                           : kpiSheetMode === "createInitiative"
                             ? "Create the execution layer that will carry the KPI downward through the cascade."
                             : kpiSheetMode === "editInitiative"
@@ -4475,299 +4380,15 @@ export default function BalancedScorecardModule() {
                         ) : null}
                       </>
                     ) : kpiSheetMode === "createKpi" ? (
-                      <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/15 p-5">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Strategic goal</label>
-                          <Select
-                            value={kpiForm.goalId}
-                            onValueChange={(value) =>
-                              setKpiForm((current) => ({ ...current, goalId: value }))
-                            }
-                          >
-                            <SelectTrigger className="rounded-2xl">
-                              <SelectValue placeholder="Select strategic goal" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {goalRecords.map((goal) => (
-                                <SelectItem key={goal.id} value={String(goal.id)}>
-                                  {goal.title}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Tracking setup</label>
-                          <ToggleGroup
-                            type="single"
-                            value={kpiForm.trackingMode}
-                            onValueChange={(value) => {
-                              if (value === "template" || value === "manual") {
-                                updateTrackingMode(value);
-                              }
-                            }}
-                            className="justify-start"
-                          >
-                            <ToggleGroupItem value="template">Template</ToggleGroupItem>
-                            <ToggleGroupItem value="manual">Custom</ToggleGroupItem>
-                          </ToggleGroup>
-                        </div>
-                        {isTemplateMode ? (
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Metric template</label>
-                            <Select value={kpiForm.metricKey} onValueChange={applyMetricTemplate}>
-                              <SelectTrigger className="rounded-2xl">
-                                <SelectValue placeholder="Select template" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {metricTemplates.map((template) => (
-                                  <SelectItem key={template.metricKey} value={template.metricKey}>
-                                    {template.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        ) : null}
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">KPI name</label>
-                            <Input
-                              value={kpiForm.name}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, name: event.target.value }))
-                              }
-                              placeholder="KPI name"
-                              className="rounded-2xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Owner</label>
-                            <Input
-                              value={kpiForm.ownerName}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, ownerName: event.target.value }))
-                              }
-                              placeholder="KPI owner"
-                              className="rounded-2xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Frequency</label>
-                            <Input
-                              value={kpiForm.frequency}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, frequency: event.target.value }))
-                              }
-                              placeholder="Monthly"
-                              className="rounded-2xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Unit</label>
-                            <Input
-                              value={kpiForm.unit}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, unit: event.target.value }))
-                              }
-                              placeholder="%"
-                              className="rounded-2xl"
-                            />
-                          </div>
-                          {!isTemplateMode ? (
-                            <>
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium text-foreground">Measurement type</label>
-                                <Select
-                                  value={kpiForm.measurementType}
-                                  onValueChange={(value) =>
-                                    setKpiForm((current) => ({ ...current, measurementType: value }))
-                                  }
-                                >
-                                  <SelectTrigger className="rounded-2xl">
-                                    <SelectValue placeholder="Select measurement type" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="percentage">Percentage</SelectItem>
-                                    <SelectItem value="currency">Currency</SelectItem>
-                                    <SelectItem value="number">Number</SelectItem>
-                                    <SelectItem value="count">Count</SelectItem>
-                                    <SelectItem value="days">Days</SelectItem>
-                                    <SelectItem value="boolean">Yes / No</SelectItem>
-                                    <SelectItem value="milestone">Milestone</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium text-foreground">Target direction</label>
-                                <Select
-                                  value={kpiForm.targetDirection}
-                                  onValueChange={(value) =>
-                                    setKpiForm((current) => ({ ...current, targetDirection: value }))
-                                  }
-                                >
-                                  <SelectTrigger className="rounded-2xl">
-                                    <SelectValue placeholder="Select direction" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="higher_better">Higher is better</SelectItem>
-                                    <SelectItem value="lower_better">Lower is better</SelectItem>
-                                    <SelectItem value="exact_match">Exact match</SelectItem>
-                                    <SelectItem value="milestone_complete">Milestone complete</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium text-foreground">Target value</label>
-                                <Input
-                                  type="number"
-                                  value={kpiForm.targetValue}
-                                  onChange={(event) =>
-                                    setKpiForm((current) => ({ ...current, targetValue: event.target.value }))
-                                  }
-                                  placeholder="Target value"
-                                  className="rounded-2xl"
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-sm font-medium text-foreground">Current actual (optional)</label>
-                                <Input
-                                  type="number"
-                                  value={kpiForm.currentActualValue}
-                                  onChange={(event) =>
-                                    setKpiForm((current) => ({
-                                      ...current,
-                                      currentActualValue: event.target.value,
-                                    }))
-                                  }
-                                  placeholder="Actual value"
-                                  className="rounded-2xl"
-                                />
-                              </div>
-                            </>
-                          ) : null}
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-sm font-medium text-foreground">Weight</label>
-                              {kpiForm.goalId ? (
-                                <span className={cn(
-                                  "text-xs font-medium",
-                                  projectedWeightTotal > 100
-                                    ? "text-destructive"
-                                    : projectedWeightTotal === 100
-                                      ? "text-green-600"
-                                      : "text-muted-foreground"
-                                )}>
-                                  {existingGoalKpiWeightTotal} existing
-                                  {kpiForm.weight ? ` + ${kpiForm.weight} = ${projectedWeightTotal}` : ""} / 100
-                                  {projectedWeightTotal > 100 ? " — over budget" : ""}
-                                </span>
-                              ) : null}
-                            </div>
-                            <Input
-                              type="number"
-                              min="0"
-                              max="100"
-                              value={kpiForm.weight}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, weight: event.target.value }))
-                              }
-                              placeholder="10"
-                              className={cn("rounded-2xl", projectedWeightTotal > 100 && kpiForm.weight ? "border-destructive focus-visible:ring-destructive" : "")}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Firm target</label>
-                            <Input
-                              value={kpiForm.firmTarget}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, firmTarget: event.target.value }))
-                              }
-                              placeholder="92%"
-                              className="rounded-2xl"
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Description</label>
-                          <Textarea
-                            value={kpiForm.description}
-                            onChange={(event) =>
-                              setKpiForm((current) => ({ ...current, description: event.target.value }))
-                            }
-                            placeholder="What does this KPI measure?"
-                            className="min-h-[96px] rounded-2xl"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground">Formula / definition</label>
-                          <Textarea
-                            value={kpiForm.formula}
-                            onChange={(event) =>
-                              setKpiForm((current) => ({ ...current, formula: event.target.value }))
-                            }
-                            placeholder="How should this KPI be measured?"
-                            className="min-h-[96px] rounded-2xl"
-                          />
-                        </div>
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Status logic</label>
-                            <Textarea
-                              value={kpiForm.statusLogic}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, statusLogic: event.target.value }))
-                              }
-                              placeholder="How is green / amber / red determined?"
-                              className="min-h-[96px] rounded-2xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Update cadence</label>
-                            <Textarea
-                              value={kpiForm.updateFrequency}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({ ...current, updateFrequency: event.target.value }))
-                              }
-                              placeholder="Monthly pack + quarter review"
-                              className="min-h-[96px] rounded-2xl"
-                            />
-                          </div>
-                        </div>
-                        {!isTemplateMode ? (
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground">Last measurement note</label>
-                            <Textarea
-                              value={kpiForm.lastMeasurementNote}
-                              onChange={(event) =>
-                                setKpiForm((current) => ({
-                                  ...current,
-                                  lastMeasurementNote: event.target.value,
-                                }))
-                              }
-                              placeholder="Optional context for the latest measurement update."
-                              className="min-h-[90px] rounded-2xl"
-                            />
-                          </div>
-                        ) : null}
-                        {isTemplateMode && selectedMetricTemplate ? (
-                          <div className="rounded-2xl border border-border/60 bg-background p-4 text-sm text-muted-foreground">
-                            Template defaults come from the live metric catalog: <span className="font-medium text-foreground">{selectedMetricTemplate.name}</span>.
-                          </div>
-                        ) : null}
-                        <div className="flex items-center justify-end gap-3">
-                          <Button variant="outline" className="rounded-2xl" onClick={() => setKpiSheetMode(null)}>
-                            Cancel
-                          </Button>
-                          <Button
-                            className="rounded-2xl"
-                            disabled={!canSaveKpi}
-                            onClick={handleCreateKpi}
-                          >
-                            {authoringSubmitting === "createKpi" ? "Saving..." : "Save KPI"}
-                          </Button>
-                        </div>
-                      </div>
+                      <KpiEngineDesigner
+                        goals={goalRecords}
+                        kpis={kpiRecords}
+                        onCancel={() => setKpiSheetMode(null)}
+                        onCreated={async () => {
+                          await refreshBalancedScorecardData(selectedRole);
+                          setKpiSheetMode(null);
+                        }}
+                      />
                     ) : kpiSheetMode === "createInitiative" ? (
                       <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/15 p-5">
                         <div className="grid gap-4 md:grid-cols-2">
@@ -5109,7 +4730,7 @@ export default function BalancedScorecardModule() {
                     />
                   ))}
                 </div>
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
+                <div>
                   <Card className="rounded-[28px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-xl">{cascadeView.boardTitle}</CardTitle>
@@ -5188,53 +4809,6 @@ export default function BalancedScorecardModule() {
                       </div>
                     </CardContent>
                   </Card>
-
-                  <div className="space-y-4">
-                    <Card className="rounded-[28px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Active cascade chain</CardTitle>
-                    </CardHeader>
-                      <CardContent className="space-y-3">
-                        <div className="rounded-[24px] border border-primary/20 bg-primary/5 p-5">
-                          <div className="grid gap-4 md:grid-cols-2">
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">BSC Goal</p>
-                              <p className="text-lg font-semibold text-foreground">
-                                {featuredGoalRecord?.title || linkedGoal?.title || "0"}
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                {featuredGoalRecord?.description ||
-                                  linkedGoal?.description ||
-                                  ""}
-                              </p>
-                            </div>
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
-                              <p className="text-lg font-semibold text-foreground">
-                                {featuredLiveKpi?.name || highlightedKpi?.name || "0"}
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                {featuredLiveKpi || highlightedKpi
-                                  ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} - Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} - Shared measurement layer across every role.`
-                                  : ""}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                        {featuredCascadeData.map((node) => (
-                          <div key={node.level} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background p-4">
-                            <ArrowRight className="mt-0.5 h-4 w-4 text-primary" />
-                            <div className="space-y-1">
-                              <p className="text-sm font-medium text-foreground">
-                                {node.level}: {node.initiative}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
-                      </CardContent>
-                    </Card>
-
-                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -5622,7 +5196,7 @@ export default function BalancedScorecardModule() {
                                     <div className="min-w-0 space-y-2">
                                       <p className="text-lg font-semibold text-foreground">Current contribution line of sight</p>
                                       <p className="text-sm text-muted-foreground">
-                                        This shows the strategic goal, KPI contract, and initiative your current work is feeding.
+                                        This shows the strategic goal, KPI, and initiative your current work is feeding.
                                       </p>
                                     </div>
                                     {employeeOverallStatus ? <StatusBadge status={employeeOverallStatus} /> : null}
@@ -5655,7 +5229,7 @@ export default function BalancedScorecardModule() {
                                   </div>
                                   <div className="grid gap-3 lg:grid-cols-2">
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
-                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">KPI contract</p>
+                                      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">KPI</p>
                                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
                                         <div>
                                           <p className="text-xs text-muted-foreground">Target</p>
@@ -6689,33 +6263,73 @@ export default function BalancedScorecardModule() {
         <Dialog open={kpiActualDialogOpen} onOpenChange={(open) => (open ? setKpiActualDialogOpen(true) : closeKpiActualDialog())}>
           <DialogContent className="sm:max-w-[520px]">
             <DialogHeader>
-              <DialogTitle>Update KPI actual</DialogTitle>
+              <DialogTitle>Update KPI tracking</DialogTitle>
               <DialogDescription>
-                Enter the latest measured value. Progress and status update automatically based on the KPI's target direction.
+                Submit the period inputs required by the KPI engine.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
                 <p className="text-sm font-medium text-foreground">{kpiActualTarget?.name ?? "Selected KPI"}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Target: {kpiActualTarget?.firmTarget ?? "-"} | Frequency: {kpiActualTarget?.frequency ?? "-"}
                 </p>
               </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Actual value</p>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  placeholder="Enter latest actual"
-                  value={kpiActualForm.actualValue}
-                  onChange={(event) =>
-                    setKpiActualForm((current) => ({ ...current, actualValue: event.target.value }))
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Unit: {kpiActualTarget?.unit ?? "-"}
-                </p>
-              </div>
+              {kpiActualEngine?.trackingPlan?.inputs?.length ? (
+                <div className="space-y-3">
+                  {kpiActualEngine.trackingPlan.inputs.map((input) => (
+                    <div key={input.inputKey} className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {input.label}
+                        {input.isRequired ? <span className="text-destructive"> *</span> : null}
+                      </p>
+                      {input.inputType === "boolean" ? (
+                        <label className="flex items-center gap-2 text-sm text-foreground">
+                          <Checkbox
+                            checked={kpiActualValues[input.inputKey] === "true"}
+                            onCheckedChange={(checked) =>
+                              setKpiActualValues((current) => ({
+                                ...current,
+                                [input.inputKey]: checked === true ? "true" : "false",
+                              }))
+                            }
+                          />
+                          Complete
+                        </label>
+                      ) : (
+                        <Input
+                          type={input.inputType === "text" ? "text" : "number"}
+                          inputMode={input.inputType === "text" ? "text" : "decimal"}
+                          placeholder={input.sourceType.replace(/_/g, " ")}
+                          value={kpiActualValues[input.inputKey] ?? ""}
+                          onChange={(event) =>
+                            setKpiActualValues((current) => ({
+                              ...current,
+                              [input.inputKey]: event.target.value,
+                            }))
+                          }
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Actual value</p>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Enter latest actual"
+                    value={kpiActualForm.actualValue}
+                    onChange={(event) =>
+                      setKpiActualForm((current) => ({ ...current, actualValue: event.target.value }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Unit: {kpiActualTarget?.unit ?? "-"}
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Update note (optional)</p>
                 <Textarea
@@ -6736,7 +6350,7 @@ export default function BalancedScorecardModule() {
                 onClick={submitKpiActualUpdate}
                 disabled={authoringSubmitting?.startsWith("updateKpiActual")}
               >
-                Save actual
+                Save tracking data
               </Button>
             </DialogFooter>
           </DialogContent>

@@ -598,7 +598,7 @@ const buildManualKpiComputation = (
         note:
           record.lastMeasurementNote ||
           (hasActualValue
-            ? "Manual measurement captured on the KPI contract."
+            ? "Manual measurement captured on the KPI."
             : "Awaiting the first manual measurement update."),
         metadata: latestHistory
           ? { lastRecordedAt: latestHistory.recordedAt.toISOString() }
@@ -607,6 +607,54 @@ const buildManualKpiComputation = (
     ] satisfies BalancedScorecardComputedTrace[],
   };
 };
+
+const loadLatestKpiEngineResults = async (kpiIds: number[]) => {
+  if (kpiIds.length === 0) return new Map<number, {
+    kpiId: number;
+    actualValue: unknown;
+    score: number;
+    status: StatusTone;
+    trend: unknown;
+    calculatedAt: Date;
+  }>();
+
+  const results = await prisma.balancedScorecardKpiResult.findMany({
+    where: { kpiId: { in: kpiIds } },
+    orderBy: [{ calculatedAt: "desc" }, { id: "desc" }],
+    select: {
+      kpiId: true,
+      actualValue: true,
+      score: true,
+      status: true,
+      trend: true,
+      calculatedAt: true,
+    },
+  });
+
+  const latest = new Map<number, {
+    kpiId: number;
+    actualValue: unknown;
+    score: number;
+    status: StatusTone;
+    trend: unknown;
+    calculatedAt: Date;
+  }>();
+  results.forEach((result) => {
+    if (!latest.has(result.kpiId)) {
+      latest.set(result.kpiId, {
+        ...result,
+        status: result.status as StatusTone,
+      });
+    }
+  });
+  return latest;
+};
+
+const normalizeEngineTrend = (trend: unknown) =>
+  Array.isArray(trend)
+    ? trend.map((point) => numberValue(point)).filter((point) => Number.isFinite(point))
+    : [];
+
 const monthKey = (value: Date) =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
 const formatDateLabel = (value: Date | null | undefined) => {
@@ -2693,6 +2741,9 @@ export async function computeBalancedScorecardKpiRecords(params?: {
     structure.perspectives.map((perspective) => [perspective.id, perspective.key as PerspectiveKey])
   );
   const goalById = new Map(structure.goals.map((goal) => [goal.id, goal]));
+  const latestEngineResultByKpiId = await loadLatestKpiEngineResults(
+    structure.kpis.map((kpi) => kpi.id)
+  );
 
   const kpis = structure.kpis
     .map((record) => {
@@ -2758,22 +2809,32 @@ export async function computeBalancedScorecardKpiRecords(params?: {
           : catalogKpi?.targetValue ?? null;
       const targetLabel =
         record.firmTarget?.trim() || catalogKpi?.targetLabel || (targetValue !== null ? `${targetValue}` : null);
+      const engineResult = latestEngineResultByKpiId.get(record.id);
+      const engineActualValue =
+        engineResult?.actualValue !== null && engineResult?.actualValue !== undefined
+          ? Number(engineResult.actualValue)
+          : null;
+      const engineTrend = engineResult ? normalizeEngineTrend(engineResult.trend) : [];
       const weightedScore = Math.round(
-        catalogKpi
-          ? achievementToScore(
-              resolvedActualValue,
-              catalogKpi.targetValue,
-              catalogKpi.direction
-            )
-          : manualComputation
-            ? manualComputation.weightedScore
-            : 0
+        engineResult
+          ? engineResult.score
+          : catalogKpi
+            ? achievementToScore(
+                resolvedActualValue,
+                catalogKpi.targetValue,
+                catalogKpi.direction
+              )
+            : manualComputation
+              ? manualComputation.weightedScore
+              : 0
       );
-      const status = catalogKpi
-        ? scoreToStatus(weightedScore)
-        : manualComputation
-          ? manualComputation.status
-          : scoreToStatus(weightedScore);
+      const status = engineResult
+        ? engineResult.status
+        : catalogKpi
+          ? scoreToStatus(weightedScore)
+          : manualComputation
+            ? manualComputation.status
+            : scoreToStatus(weightedScore);
       if (!goal || !perspective || !perspectiveKey) {
         return null;
       }
@@ -2796,15 +2857,21 @@ export async function computeBalancedScorecardKpiRecords(params?: {
         firmTarget: record.firmTarget,
         targetValue,
         targetLabel,
-        actualValue: resolvedActualValue,
-        actualLabel: resolvedActualLabel,
+        actualValue: engineResult ? engineActualValue : resolvedActualValue,
+        actualLabel:
+          engineResult && engineActualValue !== null
+            ? formatManualActual(record.measurementType ?? null, engineActualValue, record.unit)
+            : resolvedActualLabel,
         weightedScore,
         owner: record.ownerName || catalogKpi?.owner || "Unassigned",
         status,
         statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
         updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
-        trend: resolvedTrend,
-        ownerUpdate: computed.ownerUpdate,
+        trend: engineTrend.length > 0 ? engineTrend : resolvedTrend,
+        ownerUpdate:
+          engineResult
+            ? `Engine calculated ${formatDateLabel(engineResult.calculatedAt)}.`
+            : computed.ownerUpdate,
         dataQualityStatus: computed.dataQualityStatus,
         dataQualityNote: computed.dataQualityNote ?? null,
         actualAsOf: computed.actualAsOf ?? null,
@@ -2900,6 +2967,9 @@ const buildBalancedScorecardWorkspace = async (params: {
     structure.perspectives.map((perspective) => [perspective.id, perspective.key as PerspectiveKey])
   );
   const goalById = new Map(structure.goals.map((goal) => [goal.id, goal]));
+  const latestEngineResultByKpiId = await loadLatestKpiEngineResults(
+    structure.kpis.map((kpi) => kpi.id)
+  );
   const rawKpisWithNulls = structure.kpis.map((record) => {
     const goal = goalById.get(record.goalId);
     const perspectiveId = goal ? perspectiveKeyById.get(goal.perspectiveId) : undefined;
@@ -2948,22 +3018,32 @@ const buildBalancedScorecardWorkspace = async (params: {
         : computed.actualLabel;
     const historicalTrend = buildManualKpiTrend(record.id, kpiActualHistory, buckets);
     const resolvedTrend = historicalTrend.length > 0 ? historicalTrend : computed.trend;
+    const engineResult = latestEngineResultByKpiId.get(record.id);
+    const engineActualValue =
+      engineResult?.actualValue !== null && engineResult?.actualValue !== undefined
+        ? Number(engineResult.actualValue)
+        : null;
+    const engineTrend = engineResult ? normalizeEngineTrend(engineResult.trend) : [];
     const weightedScore = Math.round(
-      catalogKpi
-        ? achievementToScore(
-            resolvedActualValue,
-            catalogKpi.targetValue,
-            catalogKpi.direction
-          )
-        : manualComputation
-          ? manualComputation.weightedScore
-          : 0
+      engineResult
+        ? engineResult.score
+        : catalogKpi
+          ? achievementToScore(
+              resolvedActualValue,
+              catalogKpi.targetValue,
+              catalogKpi.direction
+            )
+          : manualComputation
+            ? manualComputation.weightedScore
+            : 0
     );
-    const status = catalogKpi
-      ? scoreToStatus(weightedScore)
-      : manualComputation
-        ? manualComputation.status
-        : scoreToStatus(weightedScore);
+    const status = engineResult
+      ? engineResult.status
+      : catalogKpi
+        ? scoreToStatus(weightedScore)
+        : manualComputation
+          ? manualComputation.status
+          : scoreToStatus(weightedScore);
     if (!perspectiveId) {
       // Goal's parent perspective is archived or missing — skip this KPI to avoid
       // it appearing under the wrong perspective.
@@ -2980,15 +3060,21 @@ const buildBalancedScorecardWorkspace = async (params: {
       unit: record.unit,
       weight: record.weight,
       firmTarget: record.firmTarget,
-      actual: resolvedActualLabel,
+      actual:
+        engineResult && engineActualValue !== null
+          ? formatManualActual(record.measurementType ?? null, engineActualValue, record.unit)
+          : resolvedActualLabel,
       weightedScore,
       owner: record.ownerName || catalogKpi?.owner || "Unassigned",
       status,
       statusLogic: record.statusLogic || catalogKpi?.statusLogic || record.targetDirection || "",
       updateFrequency: record.updateFrequency || catalogKpi?.updateFrequency || record.frequency,
       initiativeProgress: weightedScore,
-      trend: resolvedTrend,
-      ownerUpdate: computed.ownerUpdate,
+      trend: engineTrend.length > 0 ? engineTrend : resolvedTrend,
+      ownerUpdate:
+        engineResult
+          ? `Engine calculated ${formatDateLabel(engineResult.calculatedAt)}.`
+          : computed.ownerUpdate,
     } satisfies WorkspaceKpi;
   });
 
@@ -3132,10 +3218,8 @@ const buildBalancedScorecardWorkspace = async (params: {
     initiatives.find((initiative) => initiative.perspectiveId === "people")?.title ||
     "";
 
-  const peopleKpiId =
-    params.role === "employee" ? provisionalPeopleKpiId : provisionalPeopleKpiId;
-  const peopleInitiativeTitle =
-    provisionalPeopleInitiativeTitle;
+  const peopleKpiId = provisionalPeopleKpiId;
+  const peopleInitiativeTitle = provisionalPeopleInitiativeTitle;
   const activityMap = buildEmployeeActivityMap(evaluationAssignments, learningAssignments);
   const employeeProfileIds = Array.from(
     new Set(

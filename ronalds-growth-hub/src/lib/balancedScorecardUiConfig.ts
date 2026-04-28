@@ -204,7 +204,7 @@ export const roleHomeConfigs: Record<RoleKey, RoleHomeConfig> = {
         note: "Perspectives, goals, owners, descriptions, and cycle structure.",
       },
       {
-        label: "Define KPI contracts",
+        label: "Define KPI engines",
         value: "Allowed",
         note: "Targets, weights, frequency, status logic, and KPI ownership.",
       },
@@ -217,7 +217,7 @@ export const roleHomeConfigs: Record<RoleKey, RoleHomeConfig> = {
     allowedActions: [
       "Create perspectives",
       "Create strategic goals",
-      "Define KPI contracts",
+      "Define KPI engines",
       "Launch firm initiatives",
       "Close review period",
     ],
@@ -695,32 +695,32 @@ export const kpiContractSteps: WorkflowStep[] = [
   },
   {
     step: "02",
-    title: "Measurement contract",
-    body: "Set formula, unit, frequency, target, and what counts as a valid source signal.",
+    title: "Tracking plan",
+    body: "Define the source inputs, frequency, updater, and evidence rule.",
     icon: LineChart,
   },
   {
     step: "03",
-    title: "Status logic",
-    body: "Define on-track, at-risk, and off-track thresholds so the board stays decision-ready.",
+    title: "Formula and scoring",
+    body: "Set the formula type, target, thresholds, and score behavior.",
     icon: Activity,
   },
   {
     step: "04",
-    title: "Execution handoff",
-    body: "Attach the KPI to the firm initiative layer so the cascade begins from a governed measurement contract.",
+    title: "Review action",
+    body: "Use amber and red results to trigger owner follow-up.",
     icon: Workflow,
   },
 ];
 
 export const moduleTabs = [
-  { value: "dashboard", label: "Role Home" },
-  { value: "setup", label: "BSC Setup" },
-  { value: "kpis", label: "KPI Library" },
-  { value: "peopleAdmin", label: "People Controls" },
-  { value: "cascade", label: "Initiative Cascade" },
-  { value: "tracking", label: "Performance Tracking" },
-  { value: "employee", label: "Employee View" },
+  { value: "dashboard", label: "Home" },
+  { value: "setup", label: "Strategy" },
+  { value: "kpis", label: "KPIs" },
+  { value: "peopleAdmin", label: "People" },
+  { value: "cascade", label: "Cascade" },
+  { value: "tracking", label: "Tracking" },
+  { value: "employee", label: "Employees" },
   { value: "reports", label: "Reports" },
 ] as const;
 
@@ -737,35 +737,13 @@ export const roleTabVisibility: Record<RoleKey, ModuleTabValue[]> = {
 };
 
 export function getRoleTabLabel(role: RoleKey, value: ModuleTabValue) {
-  if (role === "hr") {
-    if (value === "setup") return "Strategy Setup";
-    if (value === "kpis") return "KPI Governance";
-    if (value === "peopleAdmin") return "People Controls";
-    if (value === "reports") return "Review Packs";
-    if (value === "employee") return "Workforce View";
-  }
-  if (value === "cascade") {
-    if (role === "gmp") return "Approval Flow";
-    if (role === "partner") return "Portfolio Cascade";
-    if (role === "manager") return "Delivery Cascade";
-    if (role === "marketing") return "Growth Alignment";
-  }
-  if (value === "tracking") {
-    if (role === "finance") return "Financial Tracking";
-    if (role === "marketing") return "Growth Tracking";
-    if (role === "manager") return "Team Tracking";
-    if (role === "gmp") return "Executive Tracking";
-  }
   if (value === "employee") {
     if (role === "employee") return "My Contribution";
-    if (role === "manager") return "Team Actions";
-    if (role === "hr") return "Workforce View";
+    if (role === "manager") return "Team";
+    if (role === "hr") return "Workforce";
   }
-  if (value === "reports") {
-    if (role === "gmp") return "Executive Review";
-    if (role === "partner") return "Portfolio Review";
-    if (role === "finance") return "Financial Review";
-    if (role === "marketing") return "Growth Review";
+  if (value === "cascade") {
+    if (role === "manager") return "Delivery";
   }
   return moduleTabs.find((tab) => tab.value === value)?.label ?? value;
 }

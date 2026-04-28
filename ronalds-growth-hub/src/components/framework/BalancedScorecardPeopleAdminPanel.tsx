@@ -144,7 +144,7 @@ export function BalancedScorecardPeopleAdminPanel({
         <CardHeader className="space-y-4">
           <SectionTitle icon={Settings2} title="People controls" />
           <CardDescription>
-            Individual KPI targets and score bands live outside the generic KPI contract flow. This
+            Individual KPI targets and score bands live outside the KPI engine flow. This
             panel keeps employee-level accountability tied to the selected scorecard version.
           </CardDescription>
         </CardHeader>

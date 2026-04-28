@@ -51,14 +51,9 @@ import {
   deleteBalancedScorecardPerspective,
   createBalancedScorecardGoal,
   createBalancedScorecardInitiative,
-  createBalancedScorecardKpi,
-  KpiMeasurementType,
-  KpiTargetDirection,
-  KpiTrackingMode,
   createBalancedScorecardPerspective,
   ensureBalancedScorecardSeed,
   listBalancedScorecardKpiAssignments,
-  listBalancedScorecardMetricTemplates,
   listPerformanceBands,
   listBalancedScorecardStructure,
   upsertBalancedScorecardKpiAssignment,
@@ -68,6 +63,18 @@ import {
   updateBalancedScorecardKpiActual,
   updateBalancedScorecardPerspective,
 } from "../services/balancedScorecardStructure.service";
+import {
+  calculateKpiResult,
+  createKpiWithEngine,
+  getKpiEngineDetail,
+  submitKpiDataPoints,
+  type KpiFormulaType,
+  type KpiInputType,
+  type KpiMeasurementType,
+  type KpiScoringType,
+  type KpiSourceType,
+  type KpiTrackingType,
+} from "../services/kpiEngine.service";
 import { AuthRequest } from "../middleware/auth";
 import { errorResponse, successResponse } from "../utils/response";
 import { buildDiskUpload, deleteStoredUpload, storeUploadedFile } from "../config/uploads";
@@ -128,12 +135,6 @@ const isMeasurementReviewDecision = (
   value: string
 ): value is "start_review" | "request_changes" | "approve" =>
   ["start_review", "request_changes", "approve"].includes(value);
-
-const isKpiMeasurementType = (value: string): value is KpiMeasurementType =>
-  ["percentage", "currency", "number", "count", "days", "boolean", "milestone"].includes(value);
-
-const isKpiTargetDirection = (value: string): value is KpiTargetDirection =>
-  ["higher_better", "lower_better", "exact_match", "milestone_complete"].includes(value);
 
 const resolveDefinitionForProfile = async (
   departmentId: number | null | undefined,
@@ -942,17 +943,6 @@ router.get("/scorecard-structure", async (_req, res) => {
   }
 });
 
-router.get("/kpi-templates", async (_req, res) => {
-  try {
-    return res.json(
-      successResponse(listBalancedScorecardMetricTemplates(), "Balanced scorecard KPI templates loaded")
-    );
-  } catch (error: any) {
-    console.error("Error loading balanced scorecard KPI templates:", error);
-    return res.status(500).json(errorResponse("Failed to load balanced scorecard KPI templates", 500));
-  }
-});
-
 router.post("/scorecard-structure/bootstrap", async (req: AuthRequest, res) => {
   try {
     if (!canManageBalancedScorecard(req)) {
@@ -1164,109 +1154,192 @@ router.get("/goals/:id/weight-summary", async (req: AuthRequest, res) => {
 router.post("/kpis", async (req: AuthRequest, res) => {
   try {
     if (!canManageBalancedScorecard(req)) {
-      return res.status(403).json(errorResponse("Only HR can create KPI contracts", 403));
+      return res.status(403).json(errorResponse("Only HR can create KPIs", 403));
     }
     const {
       goalId,
-      trackingMode,
-      metricKey,
       measurementType,
-      targetDirection,
-      targetValue,
-      currentActualValue,
-      lastMeasurementNote,
       name,
       description,
-      formula,
       frequency,
       unit,
       weight,
-      firmTarget,
       ownerName,
       ownerProfileId,
-      statusLogic,
-      updateFrequency,
+      tracking,
+      formula,
+      scoring,
     } = req.body || {};
     const resolvedGoalId = parseIntSafe(goalId);
     if (!resolvedGoalId) {
       return res.status(400).json(errorResponse("Goal is required", 400));
     }
-    const resolvedTrackingMode: KpiTrackingMode =
-      String(trackingMode || "").trim().toLowerCase() === "manual" ? "manual" : "template";
-    if (resolvedTrackingMode === "template" && (!metricKey || !String(metricKey).trim())) {
-      return res.status(400).json(errorResponse("Metric template is required for template-based KPIs", 400));
-    }
-    if (resolvedTrackingMode === "manual") {
-      const resolvedMeasurementType = String(measurementType || "").trim().toLowerCase();
-      const resolvedTargetDirection = String(targetDirection || "").trim().toLowerCase();
-      if (!resolvedMeasurementType) {
-        return res.status(400).json(errorResponse("Measurement type is required for custom KPIs", 400));
-      }
-      if (!isKpiMeasurementType(resolvedMeasurementType)) {
-        return res.status(400).json(errorResponse("Unsupported measurement type", 400));
-      }
-      if (!resolvedTargetDirection) {
-        return res.status(400).json(errorResponse("Target direction is required for custom KPIs", 400));
-      }
-      if (!isKpiTargetDirection(resolvedTargetDirection)) {
-        return res.status(400).json(errorResponse("Unsupported target direction", 400));
-      }
-      if (parseNumberSafe(targetValue) === undefined) {
-        return res.status(400).json(errorResponse("Target value is required for custom KPIs", 400));
-      }
-    }
     if (!name || String(name).trim().length < 3) {
       return res.status(400).json(errorResponse("KPI name is required", 400));
     }
-    if (!frequency || !unit || !firmTarget) {
-      return res.status(400).json(errorResponse("Frequency, unit, and firm target are required", 400));
+    if (!frequency || !unit) {
+      return res.status(400).json(errorResponse("Frequency and unit are required", 400));
     }
     const parsedWeight = Number(weight ?? 0);
     if (!Number.isFinite(parsedWeight) || parsedWeight <= 0 || parsedWeight > 100) {
       return res.status(400).json(errorResponse("KPI weight must be between 1 and 100", 400));
     }
-    // Warn if total weights for this goal already reach 100 — caller should redistribute
-    const existingKpis = await prisma.balancedScorecardKpi.findMany({
-      where: { goalId: resolvedGoalId, isActive: true },
-      select: { weight: true },
-    });
-    const currentTotal = existingKpis.reduce((sum, k) => sum + (k.weight || 0), 0);
-    const newTotal = currentTotal + parsedWeight;
-    if (newTotal > 100) {
-      return res
-        .status(409)
-        .json(errorResponse(`KPI weights for this goal would total ${newTotal}%. Keep the goal at or below 100%.`, 409));
-    }
-    const created = await createBalancedScorecardKpi({
+    const trackingPayload = tracking && typeof tracking === "object" ? tracking : {};
+    const formulaPayload = formula && typeof formula === "object" ? formula : {};
+    const scoringPayload = scoring && typeof scoring === "object" ? scoring : {};
+    const trackingInputs = Array.isArray((trackingPayload as any).inputs)
+      ? (trackingPayload as any).inputs
+      : [];
+
+    const created = await createKpiWithEngine({
       goalId: resolvedGoalId,
-      metricKey: metricKey ? String(metricKey) : null,
-      trackingMode: resolvedTrackingMode,
-      measurementType: measurementType ? (String(measurementType) as KpiMeasurementType) : null,
-      targetDirection: targetDirection ? (String(targetDirection) as KpiTargetDirection) : null,
-      targetValue: parseNumberSafe(targetValue) ?? null,
-      currentActualValue: parseNumberSafe(currentActualValue) ?? null,
-      lastMeasurementNote: lastMeasurementNote ? String(lastMeasurementNote) : null,
       name: String(name),
       description: description ? String(description) : null,
-      formula: formula ? String(formula) : null,
       frequency: String(frequency),
       unit: String(unit),
-      weight: Number(weight ?? 0),
-      firmTarget: String(firmTarget),
+      weight: parsedWeight,
+      measurementType: String(measurementType || "number") as KpiMeasurementType,
       ownerName: ownerName ? String(ownerName) : null,
       ownerProfileId:
         ownerProfileId === undefined ? undefined : parseIntSafe(ownerProfileId) ?? null,
-      statusLogic: statusLogic ? String(statusLogic) : null,
-      updateFrequency: updateFrequency ? String(updateFrequency) : null,
+      tracking: {
+        trackingType: String((trackingPayload as any).trackingType || "manual_entry") as KpiTrackingType,
+        frequency: String((trackingPayload as any).frequency || frequency),
+        updateOwnerProfileId:
+          (trackingPayload as any).updateOwnerProfileId === undefined
+            ? null
+            : parseIntSafe((trackingPayload as any).updateOwnerProfileId) ?? null,
+        dueDay:
+          (trackingPayload as any).dueDay === undefined
+            ? null
+            : parseIntSafe((trackingPayload as any).dueDay) ?? null,
+        graceDays: parseNumberSafe((trackingPayload as any).graceDays) ?? 0,
+        requiresEvidence:
+          (trackingPayload as any).requiresEvidence === true ||
+          String((trackingPayload as any).requiresEvidence || "").toLowerCase() === "true",
+        dataQualityRule: (trackingPayload as any).dataQualityRule
+          ? String((trackingPayload as any).dataQualityRule)
+          : null,
+        inputs: trackingInputs.map((input: any) => ({
+          inputKey: String(input?.inputKey || input?.label || ""),
+          label: String(input?.label || input?.inputKey || ""),
+          inputType: String(input?.inputType || "number") as KpiInputType,
+          sourceType: String(input?.sourceType || "manual") as KpiSourceType,
+          sourceConfig:
+            input?.sourceConfig && typeof input.sourceConfig === "object"
+              ? input.sourceConfig
+              : {},
+          isRequired: input?.isRequired !== false,
+        })),
+      },
+      formula: {
+        formulaType: String((formulaPayload as any).formulaType || "direct") as KpiFormulaType,
+        config:
+          (formulaPayload as any).config && typeof (formulaPayload as any).config === "object"
+            ? (formulaPayload as any).config
+            : {},
+      },
+      scoring: {
+        scoringType: String((scoringPayload as any).scoringType || "higher_better") as KpiScoringType,
+        targetValue: parseNumberSafe((scoringPayload as any).targetValue) ?? null,
+        greenThreshold: parseNumberSafe((scoringPayload as any).greenThreshold) ?? null,
+        amberThreshold: parseNumberSafe((scoringPayload as any).amberThreshold) ?? null,
+        redThreshold: parseNumberSafe((scoringPayload as any).redThreshold) ?? null,
+        minValue: parseNumberSafe((scoringPayload as any).minValue) ?? null,
+        maxValue: parseNumberSafe((scoringPayload as any).maxValue) ?? null,
+        capScore: parseNumberSafe((scoringPayload as any).capScore) ?? 100,
+        config:
+          (scoringPayload as any).config && typeof (scoringPayload as any).config === "object"
+            ? (scoringPayload as any).config
+            : {},
+      },
       createdByProfileId: parseIntSafe(req.user?.profileId) ?? null,
     });
-    return res.json(successResponse({ ...created, goalWeightTotal: newTotal }, "KPI contract created"));
+    return res.json(successResponse(created, "KPI created with tracking engine"));
   } catch (error: any) {
     console.error("Error creating KPI:", error);
     const statusCode = Number(error?.statusCode || 500);
     return res
       .status(statusCode)
-      .json(errorResponse(statusCode >= 500 ? "Failed to create KPI contract" : error.message, statusCode));
+      .json(errorResponse(statusCode >= 500 ? "Failed to create KPI" : error.message, statusCode));
+  }
+});
+
+router.get("/kpis/:id/engine", async (req: AuthRequest, res) => {
+  try {
+    const kpiId = parseIntSafe(req.params.id);
+    if (!kpiId) {
+      return res.status(400).json(errorResponse("KPI is required", 400));
+    }
+    const detail = await getKpiEngineDetail(kpiId);
+    return res.json(successResponse(detail, "KPI engine loaded"));
+  } catch (error: any) {
+    console.error("Error loading KPI engine:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to load KPI engine" : error.message, statusCode));
+  }
+});
+
+router.post("/kpis/:id/data-points", async (req: AuthRequest, res) => {
+  try {
+    if (!canUpdateKpiActuals(req)) {
+      return res.status(403).json(errorResponse("You do not have access to update KPI tracking data", 403));
+    }
+
+    const kpiId = parseIntSafe(req.params.id);
+    if (!kpiId) {
+      return res.status(400).json(errorResponse("KPI is required", 400));
+    }
+
+    const { measurementPeriodId, values } = req.body || {};
+    const detail = await submitKpiDataPoints({
+      kpiId,
+      measurementPeriodId: parseIntSafe(measurementPeriodId) ?? null,
+      values: Array.isArray(values)
+        ? values.map((value: any) => ({
+            inputKey: String(value?.inputKey || ""),
+            rawValue: value?.rawValue,
+            evidenceUrl: value?.evidenceUrl ? String(value.evidenceUrl) : null,
+            note: value?.note ? String(value.note) : null,
+            sourceType: value?.sourceType ? (String(value.sourceType) as KpiSourceType) : null,
+          }))
+        : [],
+      submittedByProfileId: parseIntSafe(req.user?.profileId) ?? null,
+    });
+    return res.json(successResponse(detail, "KPI data captured and scored"));
+  } catch (error: any) {
+    console.error("Error submitting KPI data points:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to update KPI tracking data" : error.message, statusCode));
+  }
+});
+
+router.post("/kpis/:id/calculate", async (req: AuthRequest, res) => {
+  try {
+    if (!canUpdateKpiActuals(req)) {
+      return res.status(403).json(errorResponse("You do not have access to calculate KPI results", 403));
+    }
+
+    const kpiId = parseIntSafe(req.params.id);
+    if (!kpiId) {
+      return res.status(400).json(errorResponse("KPI is required", 400));
+    }
+
+    const detail = await calculateKpiResult({
+      kpiId,
+      measurementPeriodId: parseIntSafe(req.body?.measurementPeriodId) ?? null,
+    });
+    return res.json(successResponse(detail, "KPI result calculated"));
+  } catch (error: any) {
+    console.error("Error calculating KPI result:", error);
+    const statusCode = Number(error?.statusCode || 500);
+    return res
+      .status(statusCode)
+      .json(errorResponse(statusCode >= 500 ? "Failed to calculate KPI result" : error.message, statusCode));
   }
 });
 

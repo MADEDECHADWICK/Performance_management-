@@ -299,6 +299,121 @@ export interface BalancedScorecardKpiRecord {
   sortOrder: number;
 }
 
+export type KpiTrackingType =
+  | "manual_entry"
+  | "system_data_source"
+  | "calculated_inputs"
+  | "milestone_evidence"
+  | "survey_rating"
+  | "composite_child_kpis";
+
+export type KpiFormulaType =
+  | "direct"
+  | "ratio"
+  | "sum"
+  | "average"
+  | "variance"
+  | "growth_rate"
+  | "milestone"
+  | "survey_average"
+  | "composite";
+
+export type KpiScoringType =
+  | "higher_better"
+  | "lower_better"
+  | "target_range"
+  | "exact_match"
+  | "milestone_complete"
+  | "threshold_bands";
+
+export type KpiInputType = "number" | "currency" | "percentage" | "boolean" | "rating" | "text";
+export type KpiSourceType = "manual" | "system" | "calculated" | "evidence" | "survey" | "child_kpi";
+
+export interface KpiEngineTrackingInput {
+  id: number;
+  inputKey: string;
+  label: string;
+  inputType: KpiInputType;
+  sourceType: KpiSourceType;
+  sourceConfig: Record<string, unknown>;
+  isRequired: boolean;
+  sortOrder: number;
+}
+
+export interface KpiEngineDetail extends BalancedScorecardKpiRecord {
+  engineFormula: {
+    id: number;
+    kpiId: number;
+    formulaType: KpiFormulaType;
+    config: Record<string, unknown>;
+  } | null;
+  scoringRule: {
+    id: number;
+    kpiId: number;
+    scoringType: KpiScoringType;
+    targetValue: number | null;
+    greenThreshold: number | null;
+    amberThreshold: number | null;
+    redThreshold: number | null;
+    minValue: number | null;
+    maxValue: number | null;
+    capScore: number;
+    config: Record<string, unknown>;
+  } | null;
+  trackingPlan: {
+    id: number;
+    kpiId: number;
+    trackingType: KpiTrackingType;
+    frequency: string;
+    updateOwnerProfileId: number | null;
+    dueDay: number | null;
+    graceDays: number;
+    requiresEvidence: boolean;
+    dataQualityRule: string | null;
+    inputs: KpiEngineTrackingInput[];
+  } | null;
+  results: Array<{
+    id: number;
+    kpiId: number;
+    measurementPeriodId: number;
+    actualValue: number | null;
+    score: number;
+    status: WorkspaceStatusTone;
+    trend: number[];
+    calculatedAt: string;
+    lockedAt: string | null;
+    measurementPeriod?: {
+      id: number;
+      label: string;
+      periodStart: string;
+      periodEnd: string;
+      status: string;
+    };
+  }>;
+  dataPoints: Array<{
+    id: number;
+    kpiId: number;
+    measurementPeriodId: number;
+    inputKey: string;
+    rawValue: string;
+    normalizedValue: number | null;
+    evidenceUrl: string | null;
+    note: string | null;
+    sourceType: KpiSourceType;
+    submittedAt: string;
+    dataQualityStatus: string;
+  }>;
+  actions: Array<{
+    id: number;
+    kpiId: number;
+    resultId: number | null;
+    title: string;
+    ownerProfileId: number | null;
+    status: string;
+    dueDate: string | null;
+  }>;
+}
+
 export interface BalancedScorecardInitiativeRecord {
   id: number;
   key: string;
@@ -350,23 +465,6 @@ export interface BalancedScorecardStructure {
   goals: BalancedScorecardGoalRecord[];
   kpis: BalancedScorecardKpiRecord[];
   initiatives: BalancedScorecardInitiativeRecord[];
-}
-
-export interface BalancedScorecardMetricTemplate {
-  metricKey: string;
-  name: string;
-  perspectiveId: 'financial' | 'customer' | 'internal' | 'people';
-  defaultMeasurementType: string;
-  defaultTargetDirection: string;
-  defaultTargetValue: number;
-  defaultFormula: string;
-  defaultFrequency: string;
-  defaultUnit: string;
-  defaultWeight: number;
-  defaultTarget: string;
-  defaultOwnerName: string;
-  defaultStatusLogic: string;
-  defaultUpdateFrequency: string;
 }
 
 export interface BalancedScorecardGovernanceVersion {
@@ -838,9 +936,6 @@ export const performanceFrameworkAPI = {
       `/performance-framework/scorecard-structure${buildQuery(params || {})}`
     ),
 
-  getKpiTemplates: () =>
-    api.get<BalancedScorecardMetricTemplate[]>('/performance-framework/kpi-templates'),
-
   bootstrapScorecardStructure: () =>
     api.post<BalancedScorecardStructure>('/performance-framework/scorecard-structure/bootstrap'),
 
@@ -885,25 +980,69 @@ export const performanceFrameworkAPI = {
 
   createKpi: (payload: {
     goalId: number;
-    trackingMode?: "template" | "manual";
-    metricKey?: string;
-    measurementType?: string;
-    targetDirection?: string;
-    targetValue?: number;
-    currentActualValue?: number;
-    lastMeasurementNote?: string;
     name: string;
     description?: string;
-    formula?: string;
+    measurementType: string;
     frequency: string;
     unit: string;
     weight: number;
-    firmTarget: string;
     ownerName?: string;
     ownerProfileId?: number | null;
-    statusLogic?: string;
-    updateFrequency?: string;
-  }) => api.post<BalancedScorecardKpiRecord>('/performance-framework/kpis', payload),
+    tracking: {
+      trackingType: KpiTrackingType;
+      frequency: string;
+      updateOwnerProfileId?: number | null;
+      dueDay?: number | null;
+      graceDays?: number;
+      requiresEvidence?: boolean;
+      dataQualityRule?: string | null;
+      inputs: Array<{
+        inputKey: string;
+        label: string;
+        inputType: KpiInputType;
+        sourceType: KpiSourceType;
+        sourceConfig?: Record<string, unknown>;
+        isRequired?: boolean;
+      }>;
+    };
+    formula: {
+      formulaType: KpiFormulaType;
+      config: Record<string, unknown>;
+    };
+    scoring: {
+      scoringType: KpiScoringType;
+      targetValue?: number | null;
+      greenThreshold?: number | null;
+      amberThreshold?: number | null;
+      redThreshold?: number | null;
+      minValue?: number | null;
+      maxValue?: number | null;
+      capScore?: number;
+      config?: Record<string, unknown>;
+    };
+  }) => api.post<KpiEngineDetail>('/performance-framework/kpis', payload),
+
+  getKpiEngine: (kpiId: number) =>
+    api.get<KpiEngineDetail>(`/performance-framework/kpis/${kpiId}/engine`),
+
+  submitKpiDataPoints: (
+    kpiId: number,
+    payload: {
+      measurementPeriodId?: number | null;
+      values: Array<{
+        inputKey: string;
+        rawValue: string | number | boolean;
+        evidenceUrl?: string | null;
+        note?: string | null;
+        sourceType?: KpiSourceType | null;
+      }>;
+    }
+  ) => api.post<KpiEngineDetail>(`/performance-framework/kpis/${kpiId}/data-points`, payload),
+
+  calculateKpiResult: (
+    kpiId: number,
+    payload?: { measurementPeriodId?: number | null }
+  ) => api.post<KpiEngineDetail>(`/performance-framework/kpis/${kpiId}/calculate`, payload || {}),
 
   updateKpiActual: (
     kpiId: number,

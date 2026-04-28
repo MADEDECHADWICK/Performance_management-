@@ -998,6 +998,9 @@ model Profile {
   balancedScorecardKpisOwned BalancedScorecardKpi[] @relation("BalancedScorecardKpiOwner")
   balancedScorecardInitiativesOwned BalancedScorecardInitiative[] @relation("BalancedScorecardInitiativeOwner")
   balancedScorecardKpiAssignments BalancedScorecardKpiAssignment[] @relation("BalancedScorecardKpiAssignmentProfile")
+  balancedScorecardKpiTrackingPlansOwned BalancedScorecardKpiTrackingPlan[] @relation("BalancedScorecardKpiTrackingUpdateOwner")
+  balancedScorecardKpiDataPointsSubmitted BalancedScorecardKpiDataPoint[] @relation("BalancedScorecardKpiDataPointSubmittedBy")
+  balancedScorecardKpiActionsOwned BalancedScorecardKpiAction[] @relation("BalancedScorecardKpiActionOwner")
   @@index([isPartner])
   @@map("profiles")
 }
@@ -3682,6 +3685,8 @@ model BalancedScorecardMeasurementPeriod {
   scorecardVersion BalancedScorecardVersion           @relation(fields: [scorecardVersionId], references: [id], onDelete: Cascade)
   snapshots        BalancedScorecardKpiSnapshot[]
   reviews          BalancedScorecardMeasurementReview[]
+  kpiDataPoints    BalancedScorecardKpiDataPoint[]
+  kpiResults       BalancedScorecardKpiResult[]
 
   @@unique([scorecardVersionId, periodStart, periodEnd])
   @@index([scorecardVersionId, status])
@@ -3796,6 +3801,12 @@ model BalancedScorecardKpi {
   actualHistory  BalancedScorecardKpiActualHistory[]
   snapshots      BalancedScorecardKpiSnapshot[]
   assignments    BalancedScorecardKpiAssignment[]
+  engineFormula   BalancedScorecardKpiFormula?
+  scoringRule     BalancedScorecardKpiScoringRule?
+  trackingPlan    BalancedScorecardKpiTrackingPlan?
+  dataPoints      BalancedScorecardKpiDataPoint[]
+  results         BalancedScorecardKpiResult[]
+  actions         BalancedScorecardKpiAction[]
 
   @@index([scorecardVersionId, sortOrder])
   @@index([goalId, sortOrder])
@@ -3838,6 +3849,151 @@ model BalancedScorecardKpiActualHistory {
 
   @@index([kpiId, recordedAt])
   @@map("balanced_scorecard_kpi_actual_history")
+}
+
+model BalancedScorecardKpiFormula {
+  id          Int      @id @default(autoincrement())
+  kpiId       Int      @unique @map("kpi_id")
+  formulaType String   @map("formula_type")
+  config      Json     @default(dbgenerated("'{}'::jsonb"))
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  kpi BalancedScorecardKpi @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+
+  @@index([formulaType])
+  @@map("balanced_scorecard_kpi_formulas")
+}
+
+model BalancedScorecardKpiScoringRule {
+  id             Int      @id @default(autoincrement())
+  kpiId          Int      @unique @map("kpi_id")
+  scoringType    String   @map("scoring_type")
+  targetValue    Decimal? @map("target_value") @db.Decimal(14, 2)
+  greenThreshold Decimal? @map("green_threshold") @db.Decimal(14, 2)
+  amberThreshold Decimal? @map("amber_threshold") @db.Decimal(14, 2)
+  redThreshold   Decimal? @map("red_threshold") @db.Decimal(14, 2)
+  minValue       Decimal? @map("min_value") @db.Decimal(14, 2)
+  maxValue       Decimal? @map("max_value") @db.Decimal(14, 2)
+  capScore       Int      @default(100) @map("cap_score")
+  config         Json     @default(dbgenerated("'{}'::jsonb"))
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  kpi BalancedScorecardKpi @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+
+  @@index([scoringType])
+  @@map("balanced_scorecard_kpi_scoring_rules")
+}
+
+model BalancedScorecardKpiTrackingPlan {
+  id                   Int      @id @default(autoincrement())
+  kpiId                Int      @unique @map("kpi_id")
+  trackingType         String   @map("tracking_type")
+  frequency            String
+  updateOwnerProfileId Int?     @map("update_owner_profile_id")
+  dueDay               Int?     @map("due_day")
+  graceDays            Int      @default(0) @map("grace_days")
+  requiresEvidence     Boolean  @default(false) @map("requires_evidence")
+  dataQualityRule      String?  @map("data_quality_rule") @db.Text
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  kpi         BalancedScorecardKpi             @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  updateOwner Profile?                         @relation("BalancedScorecardKpiTrackingUpdateOwner", fields: [updateOwnerProfileId], references: [id], onDelete: SetNull)
+  inputs      BalancedScorecardKpiTrackingInput[]
+
+  @@index([trackingType])
+  @@index([updateOwnerProfileId])
+  @@map("balanced_scorecard_kpi_tracking_plans")
+}
+
+model BalancedScorecardKpiTrackingInput {
+  id             Int      @id @default(autoincrement())
+  trackingPlanId Int      @map("tracking_plan_id")
+  inputKey       String   @map("input_key")
+  label          String
+  inputType      String   @map("input_type")
+  sourceType     String   @map("source_type")
+  sourceConfig   Json     @default(dbgenerated("'{}'::jsonb")) @map("source_config")
+  isRequired     Boolean  @default(true) @map("is_required")
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  trackingPlan BalancedScorecardKpiTrackingPlan @relation(fields: [trackingPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([trackingPlanId, inputKey])
+  @@index([sourceType])
+  @@map("balanced_scorecard_kpi_tracking_inputs")
+}
+
+model BalancedScorecardKpiDataPoint {
+  id                  Int                          @id @default(autoincrement())
+  kpiId               Int                          @map("kpi_id")
+  measurementPeriodId Int                          @map("measurement_period_id")
+  inputKey            String                       @map("input_key")
+  rawValue            String                       @map("raw_value") @db.Text
+  normalizedValue     Decimal?                     @map("normalized_value") @db.Decimal(14, 2)
+  evidenceUrl         String?                      @map("evidence_url") @db.Text
+  note                String?                      @db.Text
+  sourceType          String                       @map("source_type")
+  submittedByProfileId Int?                        @map("submitted_by_profile_id")
+  submittedAt         DateTime                     @default(now()) @map("submitted_at")
+  dataQualityStatus   BalancedScorecardDataQualityStatus @default(healthy) @map("data_quality_status")
+
+  kpi               BalancedScorecardKpi               @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  measurementPeriod BalancedScorecardMeasurementPeriod  @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
+  submittedBy       Profile?                           @relation("BalancedScorecardKpiDataPointSubmittedBy", fields: [submittedByProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([measurementPeriodId, kpiId, inputKey])
+  @@index([kpiId, submittedAt])
+  @@index([measurementPeriodId])
+  @@index([sourceType])
+  @@index([dataQualityStatus])
+  @@map("balanced_scorecard_kpi_data_points")
+}
+
+model BalancedScorecardKpiResult {
+  id                  Int             @id @default(autoincrement())
+  kpiId               Int             @map("kpi_id")
+  measurementPeriodId Int             @map("measurement_period_id")
+  actualValue         Decimal?        @map("actual_value") @db.Decimal(14, 2)
+  score               Int
+  status              DashboardStatus
+  trend               Json            @default(dbgenerated("'[]'::jsonb"))
+  calculatedAt        DateTime        @default(now()) @map("calculated_at")
+  lockedAt            DateTime?       @map("locked_at")
+
+  kpi               BalancedScorecardKpi              @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  measurementPeriod BalancedScorecardMeasurementPeriod @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
+  actions           BalancedScorecardKpiAction[]
+
+  @@unique([measurementPeriodId, kpiId])
+  @@index([kpiId, calculatedAt])
+  @@index([measurementPeriodId, status])
+  @@map("balanced_scorecard_kpi_results")
+}
+
+model BalancedScorecardKpiAction {
+  id                  Int      @id @default(autoincrement())
+  kpiId               Int      @map("kpi_id")
+  resultId            Int?     @map("result_id")
+  title               String
+  ownerProfileId      Int?     @map("owner_profile_id")
+  status              String   @default("open")
+  dueDate             DateTime? @map("due_date")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  kpi          BalancedScorecardKpi        @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  result       BalancedScorecardKpiResult? @relation(fields: [resultId], references: [id], onDelete: SetNull)
+  ownerProfile Profile?                    @relation("BalancedScorecardKpiActionOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
+
+  @@index([kpiId, status])
+  @@index([resultId])
+  @@index([ownerProfileId])
+  @@map("balanced_scorecard_kpi_actions")
 }
 
 model BalancedScorecardKpiSnapshot {
