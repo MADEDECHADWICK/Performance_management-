@@ -1,7 +1,6 @@
 import { ApiError, api, getToken } from "./client";
+import { API_BASE_URL } from "@/lib/api/apiBaseUrl";
 import type { Department, Profile } from "./types";
-
-const API_BASE_URL = `${import.meta.env.VITE_API_URL || "http://localhost:4000"}/api`;
 
 export type EvaluationCycleType = "annual" | "mid_year" | "quarterly" | "probation";
 export type EvaluationCycleStatus = "draft" | "active" | "closed";

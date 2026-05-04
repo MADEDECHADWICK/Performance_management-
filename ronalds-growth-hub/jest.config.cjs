@@ -25,6 +25,7 @@ module.exports = {
     ],
   },
   moduleNameMapper: {
+    "^@/lib/api/apiBaseUrl$": "<rootDir>/src/lib/api/__mocks__/apiBaseUrl.ts",
     "^@/(.*)$": "<rootDir>/src/$1",
   },
   moduleFileExtensions: ["ts", "js", "json"],

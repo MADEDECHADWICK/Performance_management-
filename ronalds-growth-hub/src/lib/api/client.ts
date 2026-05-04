@@ -3,8 +3,9 @@
  * Handles authentication, error handling, and base fetch operations
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-const API_URL = `${BASE_URL}/api`;
+import { API_BASE_URL } from "@/lib/api/apiBaseUrl";
+
+const API_URL = API_BASE_URL;
 const TOKEN_KEY = 'rg_token';
 const USER_KEY = 'rg_user';
 
