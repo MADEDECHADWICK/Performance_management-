@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { TrendingUp, DollarSign, AlertCircle, Briefcase } from 'lucide-react';
+import { TrendingUp, DollarSign, AlertCircle, Briefcase, Clock, Users } from 'lucide-react';
 
 interface PortfolioMetrics {
   totalJobs: number;
@@ -34,6 +34,9 @@ interface PortfolioMetrics {
   totalPlannedCost?: number;
   totalPlannedHours?: number;
   totalActualHours?: number;
+  totalBillableHours?: number;
+  totalNonBillableHours?: number;
+  utilizationRate?: number;
   totalCostVariance?: number;
   totalHoursVariance?: number;
   jobsOverPlannedCost?: number;
@@ -89,6 +92,14 @@ interface JobSummary {
   };
 }
 
+interface TeamMemberUtilization {
+  profileId: number;
+  billableHours: number;
+  nonBillableHours: number;
+  totalHours: number;
+  utilizationRate: number;
+}
+
 interface DashboardSummary {
   portfolio: PortfolioMetrics;
   clientFeedback?: {
@@ -96,6 +107,13 @@ interface DashboardSummary {
     completedSurveys: number;
     responseRate: number;
     avgOverallSatisfaction: number;
+  };
+  teamUtilization?: {
+    totalBillableHours: number;
+    totalNonBillableHours: number;
+    totalHours: number;
+    utilizationRate: number;
+    byMember: TeamMemberUtilization[];
   };
   topJobs: JobSummary[];
   pendingTimeEntriesCount: number;
@@ -645,6 +663,48 @@ const PartnerDashboard = () => {
             </CardContent>
           </Card>
         </div>
+
+        {summary?.teamUtilization && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                <CardTitle>Team Utilization</CardTitle>
+              </div>
+              <CardDescription>Billable vs non-billable hours across your portfolio team.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-4 mb-4">
+                <div>
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Total hours</p>
+                  <p className="text-2xl font-bold">{summary.teamUtilization.totalHours.toFixed(0)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Billable hours</p>
+                  <p className="text-2xl font-bold text-emerald-600">{summary.teamUtilization.totalBillableHours.toFixed(0)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Non-billable hours</p>
+                  <p className="text-2xl font-bold text-amber-600">{summary.teamUtilization.totalNonBillableHours.toFixed(0)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Utilization rate</p>
+                  <p className={`text-2xl font-bold ${summary.teamUtilization.utilizationRate >= 70 ? 'text-emerald-600' : summary.teamUtilization.utilizationRate >= 50 ? 'text-amber-600' : 'text-rose-600'}`}>
+                    {summary.teamUtilization.utilizationRate.toFixed(1)}%
+                  </p>
+                </div>
+              </div>
+              {summary.teamUtilization.totalHours > 0 && (
+                <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-all"
+                    style={{ width: `${Math.min(100, summary.teamUtilization.utilizationRate)}%` }}
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {summary?.clientFeedback && (
           <Card>

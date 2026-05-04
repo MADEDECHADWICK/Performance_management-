@@ -111,6 +111,8 @@ export const mapRelationshipToEvaluatorType = (
       return "peer";
     case "subordinate":
       return "direct_report";
+    case "client":
+      return "client";
     case "manager":
     default:
       return "manager";

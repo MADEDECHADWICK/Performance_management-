@@ -18,6 +18,7 @@ export type EvaluationLaunchOptionsState = {
   enablePeerEvaluation: boolean;
   enableUpwardEvaluation: boolean;
   enableDownwardEvaluation: boolean;
+  enableClientEvaluation: boolean;
   peerAssignmentMode: PeerAssignmentMode;
   peersPerPerson: string;
   processAnonymously: boolean;
@@ -114,6 +115,7 @@ export const defaultLaunchOptionsState: EvaluationLaunchOptionsState = {
   enablePeerEvaluation: false,
   enableUpwardEvaluation: false,
   enableDownwardEvaluation: true,
+  enableClientEvaluation: false,
   peerAssignmentMode: "department",
   peersPerPerson: "2",
   processAnonymously: false,

@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import JobPerformanceFactsService from './jobPerformanceFacts.service';
 
 interface AuthContext {
   userId: number;
@@ -248,41 +249,24 @@ export class PartnerService {
       };
     }
 
-    // Get all jobs for partner
-    const jobs = await prisma.job.findMany({
-      where: { partnerProfileId: partnerId },
-      include: {
-        timeEntries: {
-          where: { status: 'approved' },
-        },
-        jobCosting: { include: { budgetCap: true } },
-      },
-    });
-
-    let totalApprovedHours = 0;
-    let totalBudget = 0;
-    let jobsCompleted = 0;
-
-    for (const job of jobs) {
-      if (job.status === 'completed') jobsCompleted++;
-      const budgetHours = Number(
-        job.jobCosting?.budgetCap?.totalAllocatedHours ??
-          job.jobCosting?.totalEstimatedHours ??
-          job.budgetHours ??
-          0
-      );
-      totalBudget += budgetHours;
-      totalApprovedHours += job.timeEntries.reduce((sum, te) => sum + Number(te.hours), 0);
-    }
+    const facts = await JobPerformanceFactsService.listFacts({}, { type: 'partner', profileId: partnerId });
+    const totalBudget = facts.reduce((sum, fact) => sum + fact.budgetHours, 0);
+    const totalApprovedHours = facts.reduce((sum, fact) => sum + fact.approvedHours, 0);
+    const jobsCompleted = facts.filter((fact) => fact.status === 'completed').length;
 
     return {
       partnerId,
-      totalJobs: jobs.length,
+      totalJobs: facts.length,
       jobsCompleted,
-      jobsInProgress: jobs.filter(j => j.status === 'in_progress').length,
+      jobsInProgress: facts.filter((fact) => fact.status === 'in_progress').length,
       totalBudget,
       totalApprovedHours,
-      averageBudgetPerJob: jobs.length > 0 ? totalBudget / jobs.length : 0,
+      averageBudgetPerJob: facts.length > 0 ? totalBudget / facts.length : 0,
+      billableValue: facts.reduce((sum, fact) => sum + fact.billableValue, 0),
+      billedRevenue: facts.reduce((sum, fact) => sum + fact.billedRevenue, 0),
+      collectedRevenue: facts.reduce((sum, fact) => sum + fact.collectedRevenue, 0),
+      actualCost: facts.reduce((sum, fact) => sum + fact.actualCost, 0),
+      cashProfit: facts.reduce((sum, fact) => sum + fact.cashProfit, 0),
     };
   }
 
@@ -296,36 +280,14 @@ export class PartnerService {
         client: { select: { clientName: true } },
         staffing: { select: { employeeProfileId: true } },
         jobCosting: { include: { budgetCap: true } },
-        timeEntries: {
-          where: { status: 'approved' },
-          select: {
-            hours: true,
-            billable: true,
-            profitLoss: true,
-            billableAmount: true,
-            costAmount: true,
-          },
-        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     const jobIds = jobs.map((job) => job.id);
-    const [allocations, payments, surveys, approvalGroups, overBudgetGroups, latestApprovalRows] =
+    const [facts, surveys, approvalGroups, overBudgetGroups, latestApprovalRows, memberHoursRaw] =
       await Promise.all([
-        prisma.revenueAllocation.findMany({
-          where: { jobId: { in: jobIds } },
-          select: {
-            jobId: true,
-            allocatedAmount: true,
-            employeeProfit: true,
-            employeeLoss: true,
-          },
-        }),
-        prisma.clientPayment.findMany({
-          where: { jobId: { in: jobIds } },
-          select: { jobId: true, paymentAmount: true },
-        }),
+        JobPerformanceFactsService.listFacts({ jobIds }, { type: 'partner', profileId: partnerId }),
         prisma.clientSatisfactionSurvey.findMany({
           where: { jobId: { in: jobIds } },
           select: { overallSatisfaction: true, completedAt: true },
@@ -354,22 +316,16 @@ export class PartnerService {
           orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
           take: 300,
         }),
+        jobIds.length > 0
+          ? prisma.$queryRaw<Array<{ employee_profile_id: number; billable: boolean; hours: number }>>`
+              SELECT employee_profile_id, billable, COALESCE(SUM(hours), 0)::float AS hours
+              FROM time_entries
+              WHERE job_id = ANY(${jobIds}::int[]) AND status = 'approved'
+              GROUP BY employee_profile_id, billable
+            `
+          : Promise.resolve([]),
       ]);
-
-    const allocationByJob = new Map<number, { revenue: number; profit: number }>();
-    allocations.forEach((allocation) => {
-      const current = allocationByJob.get(allocation.jobId) || { revenue: 0, profit: 0 };
-      current.revenue += Number(allocation.allocatedAmount || 0);
-      current.profit += Number(allocation.employeeProfit || 0) - Number(allocation.employeeLoss || 0);
-      allocationByJob.set(allocation.jobId, current);
-    });
-
-    const paymentsByJob = new Map<number, number>();
-    payments.forEach((payment) => {
-      if (!payment.jobId) return;
-      const current = paymentsByJob.get(payment.jobId) || 0;
-      paymentsByJob.set(payment.jobId, current + Number(payment.paymentAmount));
-    });
+    const factsByJob = new Map(facts.map((fact) => [fact.jobId, fact]));
 
     const pendingTimeEntriesCount = await prisma.timeEntry.count({
       where: { jobId: { in: jobIds }, status: 'submitted' },
@@ -461,40 +417,30 @@ export class PartnerService {
     let totalPlannedCost = 0;
     let totalPlannedHours = 0;
     let totalActualHours = 0;
+    let totalBillableHours = 0;
+    let totalNonBillableHours = 0;
 
     const topJobs = jobs.map((job) => {
       job.staffing.forEach((assignment) => uniqueTeamMembers.add(assignment.employeeProfileId));
+      const fact = factsByJob.get(job.id);
 
       const estimatedHours = Number(
-        job.jobCosting?.budgetCap?.totalAllocatedHours ??
+        fact?.budgetHours ??
+          job.jobCosting?.budgetCap?.totalAllocatedHours ??
           job.jobCosting?.totalEstimatedHours ??
           job.budgetHours ??
           0
       );
-      const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours), 0);
-      const billableHours = job.timeEntries
-        .filter((entry) => entry.billable)
-        .reduce((sum, entry) => sum + Number(entry.hours), 0);
-      const allocationTotals = allocationByJob.get(job.id);
-      const paymentTotal = paymentsByJob.get(job.id) || 0;
+      const actualHours = fact?.totalHours ?? 0;
+      const billableHours = fact?.billableHours ?? 0;
       const feeAmount = Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
-      const amountCollected = paymentTotal;
-      const timeEntries = job.timeEntries as Array<{
-        costAmount?: unknown;
-        billableAmount?: unknown;
-        profitLoss?: unknown;
-      }>;
-      const costAmount = timeEntries.reduce((sum, entry) => {
-        const hasCost = 'costAmount' in entry;
-        const entryCost = hasCost
-          ? Number(entry.costAmount || 0)
-          : Number(entry.billableAmount || 0) - Number(entry.profitLoss || 0);
-        return sum + entryCost;
-      }, 0);
-      const profit = amountCollected - costAmount;
+      const amountCollected = fact?.collectedRevenue ?? 0;
+      const costAmount = fact?.actualCost ?? 0;
+      const profit = fact?.cashProfit ?? 0;
       const plannedCost = Number(job.jobCosting?.totalEstimatedCost || 0);
       const plannedHours = Number(
-        job.jobCosting?.totalEstimatedHours ??
+        fact?.budgetHours ??
+          job.jobCosting?.totalEstimatedHours ??
           job.jobCosting?.budgetCap?.totalAllocatedHours ??
           job.budgetHours ??
           0
@@ -517,7 +463,7 @@ export class PartnerService {
       const isOverFeeCap = feeCap > 0 ? costAmount > feeCap : false;
 
       const efficiency = estimatedHours > 0 && actualHours > 0 ? (estimatedHours / actualHours) * 100 : 0;
-      const margin = amountCollected > 0 ? (profit / amountCollected) * 100 : 0;
+      const margin = fact?.marginPercent ?? (amountCollected > 0 ? (profit / amountCollected) * 100 : 0);
 
       if (efficiency > 0) {
         efficiencySum += efficiency;
@@ -535,6 +481,8 @@ export class PartnerService {
       totalPlannedCost += plannedCost;
       totalPlannedHours += plannedHours;
       totalActualHours += actualHours;
+      totalBillableHours += billableHours;
+      totalNonBillableHours += fact?.nonBillableHours ?? 0;
       totalPendingApprovalRequests += pendingApprovalTotal;
       if (isOverPlannedCost) jobsOverPlannedCost += 1;
       if (isOverPlannedHours) jobsOverPlannedHours += 1;
@@ -553,6 +501,10 @@ export class PartnerService {
         actualHours,
         billableHours,
         amountCollected,
+        billableValue: fact?.billableValue ?? 0,
+        billedRevenue: fact?.billedRevenue ?? 0,
+        collectedRevenue: fact?.collectedRevenue ?? 0,
+        nonBillableHours: fact?.nonBillableHours ?? 0,
         costAmount,
         profit,
         efficiencyRatio: efficiency,
@@ -600,6 +552,26 @@ export class PartnerService {
         : 0;
     const responseRate = totalSurveys > 0 ? (completedSurveys / totalSurveys) * 100 : 0;
 
+    type MemberHourRow = { billableHours: number; nonBillableHours: number; totalHours: number; utilizationRate: number };
+    const memberHoursMap = new Map<number, MemberHourRow>();
+    memberHoursRaw.forEach((row) => {
+      const memberId = Number(row.employee_profile_id);
+      const existing = memberHoursMap.get(memberId) ?? { billableHours: 0, nonBillableHours: 0, totalHours: 0, utilizationRate: 0 };
+      if (row.billable) existing.billableHours += Number(row.hours);
+      else existing.nonBillableHours += Number(row.hours);
+      existing.totalHours = existing.billableHours + existing.nonBillableHours;
+      existing.utilizationRate = existing.totalHours > 0 ? (existing.billableHours / existing.totalHours) * 100 : 0;
+      memberHoursMap.set(memberId, existing);
+    });
+
+    const teamUtilization = {
+      totalBillableHours,
+      totalNonBillableHours,
+      totalHours: totalActualHours,
+      utilizationRate: totalActualHours > 0 ? (totalBillableHours / totalActualHours) * 100 : 0,
+      byMember: Array.from(memberHoursMap.entries()).map(([profileId, hours]) => ({ profileId, ...hours })),
+    };
+
     return {
       portfolio: {
         totalJobs: jobs.length,
@@ -615,6 +587,9 @@ export class PartnerService {
         totalPlannedCost,
         totalPlannedHours,
         totalActualHours,
+        totalBillableHours,
+        totalNonBillableHours,
+        utilizationRate: totalActualHours > 0 ? (totalBillableHours / totalActualHours) * 100 : 0,
         totalCostVariance: totalCost - totalPlannedCost,
         totalHoursVariance: totalActualHours - totalPlannedHours,
         jobsOverPlannedCost,
@@ -629,6 +604,7 @@ export class PartnerService {
         responseRate,
         avgOverallSatisfaction,
       },
+      teamUtilization,
       topJobs,
       pendingTimeEntriesCount,
     };

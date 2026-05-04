@@ -1,4 +1,7 @@
 import prisma from '../prisma';
+import JobPerformanceFactsService, {
+  JobPerformanceFact,
+} from './jobPerformanceFacts.service';
 
 /**
  * Role-aware analytics service
@@ -48,7 +51,13 @@ export interface PartnerFinancialMetrics {
   partnerId: number;
   totalJobs: number;
   totalRevenue: number;
+  billableValue: number;
+  billedRevenue: number;
+  collectedRevenue: number;
   totalProfit: number;
+  workInProgressProfit: number;
+  billedProfit: number;
+  cashProfit: number;
   averageProfitMargin: number;
   jobBreakdown: {
     jobId: number;
@@ -56,25 +65,78 @@ export interface PartnerFinancialMetrics {
     revenue: number;
     profit: number;
     profitMargin: number;
+    billableValue: number;
+    billedRevenue: number;
+    collectedRevenue: number;
+    actualCost: number;
+    billableHours: number;
+    nonBillableHours: number;
   }[];
 }
 
 export interface CompanyFinancialMetrics {
   totalRevenue: number;
+  billableValue: number;
+  billedRevenue: number;
+  collectedRevenue: number;
+  actualCost: number;
   totalProfit: number;
+  workInProgressProfit: number;
+  billedProfit: number;
+  cashProfit: number;
   averageProfitMargin: number;
   totalEmployees: number;
   revenueByDepartment: {
     department: string;
     revenue: number;
     profit: number;
+    billableValue: number;
+    billedRevenue: number;
+    collectedRevenue: number;
+    actualCost: number;
   }[];
   revenueByPartner: {
     partnerName: string;
     revenue: number;
     profit: number;
+    billableValue: number;
+    billedRevenue: number;
+    collectedRevenue: number;
+    actualCost: number;
   }[];
 }
+
+const sumFacts = (facts: JobPerformanceFact[]) =>
+  facts.reduce(
+    (acc, fact) => {
+      acc.totalHours += fact.totalHours;
+      acc.billableHours += fact.billableHours;
+      acc.nonBillableHours += fact.nonBillableHours;
+      acc.billableValue += fact.billableValue;
+      acc.billedRevenue += fact.billedRevenue;
+      acc.collectedRevenue += fact.collectedRevenue;
+      acc.actualCost += fact.actualCost;
+      acc.workInProgressProfit += fact.workInProgressProfit;
+      acc.billedProfit += fact.billedProfit;
+      acc.cashProfit += fact.cashProfit;
+      return acc;
+    },
+    {
+      totalHours: 0,
+      billableHours: 0,
+      nonBillableHours: 0,
+      billableValue: 0,
+      billedRevenue: 0,
+      collectedRevenue: 0,
+      actualCost: 0,
+      workInProgressProfit: 0,
+      billedProfit: 0,
+      cashProfit: 0,
+    }
+  );
+
+const marginPercent = (profit: number, revenue: number) =>
+  revenue > 0 ? (profit / revenue) * 100 : 0;
 
 export class RoleAwareAnalyticsService {
   /**
@@ -463,127 +525,55 @@ export class RoleAwareAnalyticsService {
           allocatedRevenueTotal: 0,
           profitTotal: 0,
           lossTotal: 0,
+          financialsVisible: false,
           jobBreakdown: [],
         };
       }
-      // Get employee's approved time entries for hours + costs
-      const timeEntries = await prisma.timeEntry.findMany({
-        where: {
-          employeeProfileId: profileId,
-          status: 'approved',
-        },
-        include: { job: true },
-      });
 
-      let totalHours = 0;
-      let billableHours = 0;
-      const jobMap = new Map<number, { 
-        jobTitle: string; 
-        status: string;
-        lastWorkedAt: Date | null;
-        totalHours: number; 
-        billableHours: number; 
-        nonBillableHours: number;
-        revenue: number; 
-        cost: number; 
-        profitLoss: number;
-        allocatedRevenue: number;
-        profit: number;
-        loss: number;
-      }>();
+      const facts = await JobPerformanceFactsService.listFacts(
+        { employeeProfileId: profileId },
+        { type: 'employee', profileId }
+      );
+      const totals = sumFacts(facts);
+      const jobBreakdown = facts.map((fact) => {
+        const employeeFact = fact.employees.find((employee) => employee.employeeProfileId === profileId);
+        const totalHours = employeeFact?.totalHours ?? 0;
+        const billableHours = employeeFact?.billableHours ?? 0;
+        const nonBillableHours = employeeFact?.nonBillableHours ?? 0;
+        const contributionScore = totalHours > 0 ? Number(((billableHours / totalHours) * 100).toFixed(2)) : 0;
 
-      timeEntries.forEach(entry => {
-        totalHours += Number(entry.hours || 0);
-        billableHours += entry.billable ? Number(entry.hours || 0) : 0;
-        if (!entry.jobId) return;
-        const current = jobMap.get(entry.jobId) || {
-          jobTitle: entry.job?.jobName || 'Job',
-          status: entry.job?.status || 'in_progress',
+        return {
+          jobId: fact.jobId,
+          jobTitle: fact.jobName || 'Job',
+          status: fact.status,
           lastWorkedAt: null,
-          totalHours: 0,
-          billableHours: 0,
-          nonBillableHours: 0,
+          totalHours,
+          billableHours,
+          nonBillableHours,
+          utilizationPercent: contributionScore,
+          contributionScore,
+          budgetHours: fact.budgetHours,
+          budgetUsedPercent: fact.budgetUsedPercent,
+          remainingBudgetHours: Math.max(0, fact.budgetHours - fact.totalHours),
           revenue: 0,
           cost: 0,
           profitLoss: 0,
           allocatedRevenue: 0,
           profit: 0,
           loss: 0,
+          financialsVisible: false,
         };
-        current.totalHours += Number(entry.hours || 0);
-        if (entry.billable) {
-          current.billableHours += Number(entry.hours || 0);
-        } else {
-          current.nonBillableHours += Number(entry.hours || 0);
-        }
-        current.revenue += Number(entry.billableAmount || 0);
-        current.cost += Number(entry.costAmount || 0);
-        current.profitLoss += Number(entry.profitLoss || 0);
-        const workedAt = entry.dateWorked ?? entry.createdAt ?? null;
-        if (!current.lastWorkedAt || (workedAt && workedAt > current.lastWorkedAt)) {
-          current.lastWorkedAt = workedAt;
-        }
-        jobMap.set(entry.jobId, current);
       });
-
-      const allocations = await prisma.revenueAllocation.findMany({
-        where: { employeeProfileId: profileId },
-        include: { job: true },
-      });
-
-      let allocatedRevenueTotal = 0;
-      let profitTotal = 0;
-      let lossTotal = 0;
-
-      allocations.forEach((allocation) => {
-        allocatedRevenueTotal += Number(allocation.allocatedAmount || 0);
-        profitTotal += Number(allocation.employeeProfit || 0);
-        lossTotal += Number(allocation.employeeLoss || 0);
-
-        if (!allocation.jobId) return;
-        const current = jobMap.get(allocation.jobId) || {
-          jobTitle: allocation.job?.jobName || 'Job',
-          status: allocation.job?.status || 'in_progress',
-          lastWorkedAt: null,
-          totalHours: 0,
-          billableHours: 0,
-          nonBillableHours: 0,
-          revenue: 0,
-          cost: 0,
-          profitLoss: 0,
-          allocatedRevenue: 0,
-          profit: 0,
-          loss: 0,
-        };
-        current.allocatedRevenue += Number(allocation.allocatedAmount || 0);
-        current.profit += Number(allocation.employeeProfit || 0);
-        current.loss += Number(allocation.employeeLoss || 0);
-        jobMap.set(allocation.jobId, current);
-      });
-
-      const jobBreakdown = Array.from(jobMap.entries()).map(([jobId, data]) => ({
-        jobId,
-        jobTitle: data.jobTitle,
-        status: data.status,
-        lastWorkedAt: data.lastWorkedAt,
-        totalHours: data.totalHours,
-        billableHours: data.billableHours,
-        nonBillableHours: data.nonBillableHours,
-        revenue: data.revenue,
-        cost: data.cost,
-        profitLoss: data.profitLoss,
-        allocatedRevenue: data.allocatedRevenue,
-        profit: data.profit,
-        loss: data.loss,
-      }));
 
       return {
-        totalHours,
-        billableHours,
-        nonBillableHours: totalHours - billableHours,
-        allocatedRevenueTotal,
-        profitTotal,
-        lossTotal,
+        totalHours: totals.totalHours,
+        billableHours: totals.billableHours,
+        nonBillableHours: totals.nonBillableHours,
+        utilizationPercent: totals.totalHours > 0 ? (totals.billableHours / totals.totalHours) * 100 : 0,
+        allocatedRevenueTotal: 0,
+        profitTotal: 0,
+        lossTotal: 0,
+        financialsVisible: false,
         jobBreakdown,
       };
     } catch (error) {
@@ -595,6 +585,7 @@ export class RoleAwareAnalyticsService {
         allocatedRevenueTotal: 0,
         profitTotal: 0,
         lossTotal: 0,
+        financialsVisible: false,
         jobBreakdown: [],
       };
     }
@@ -611,57 +602,65 @@ export class RoleAwareAnalyticsService {
           partnerId: 0,
           totalJobs: 0,
           totalRevenue: 0,
+          billableValue: 0,
+          billedRevenue: 0,
+          collectedRevenue: 0,
           totalProfit: 0,
+          workInProgressProfit: 0,
+          billedProfit: 0,
+          cashProfit: 0,
           averageProfitMargin: 0,
           jobBreakdown: [],
         };
       }
-      // Get all jobs owned by partner
-      const jobs = await prisma.job.findMany({
-        where: {
-          partnerProfileId: partnerId,
-        },
-        include: { timeEntries: true },
-      });
 
-      if (jobs.length === 0) {
+      const facts = await JobPerformanceFactsService.listFacts({}, { type: 'partner', profileId: partnerId });
+      if (facts.length === 0) {
         return {
           partnerId,
           totalJobs: 0,
           totalRevenue: 0,
+          billableValue: 0,
+          billedRevenue: 0,
+          collectedRevenue: 0,
           totalProfit: 0,
+          workInProgressProfit: 0,
+          billedProfit: 0,
+          cashProfit: 0,
           averageProfitMargin: 0,
           jobBreakdown: [],
         };
       }
 
-      let totalRevenue = 0;
-      let totalProfit = 0;
-      const jobBreakdown = jobs.map(job => {
-        const approvedEntries = job.timeEntries.filter((entry) => entry.status === 'approved');
-        const revenue = approvedEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
-        const cost = approvedEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
-        const profit = revenue - cost;
-        const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
-        totalRevenue += revenue;
-        totalProfit += profit;
+      const totals = sumFacts(facts);
+      const jobBreakdown = facts.map((fact) => {
         return {
-          jobId: job.id,
-          jobTitle: job.jobName || 'Unknown',
-          revenue,
-          profit,
-          profitMargin,
+          jobId: fact.jobId,
+          jobTitle: fact.jobName || 'Unknown',
+          revenue: fact.collectedRevenue,
+          profit: fact.cashProfit,
+          profitMargin: fact.marginPercent,
+          billableValue: fact.billableValue,
+          billedRevenue: fact.billedRevenue,
+          collectedRevenue: fact.collectedRevenue,
+          actualCost: fact.actualCost,
+          billableHours: fact.billableHours,
+          nonBillableHours: fact.nonBillableHours,
         };
       });
 
-      const averageProfitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-
       return {
         partnerId,
-        totalJobs: jobs.length,
-        totalRevenue,
-        totalProfit,
-        averageProfitMargin,
+        totalJobs: facts.length,
+        totalRevenue: totals.collectedRevenue,
+        billableValue: totals.billableValue,
+        billedRevenue: totals.billedRevenue,
+        collectedRevenue: totals.collectedRevenue,
+        totalProfit: totals.cashProfit,
+        workInProgressProfit: totals.workInProgressProfit,
+        billedProfit: totals.billedProfit,
+        cashProfit: totals.cashProfit,
+        averageProfitMargin: marginPercent(totals.cashProfit, totals.collectedRevenue),
         jobBreakdown,
       };
     } catch (error) {
@@ -670,7 +669,13 @@ export class RoleAwareAnalyticsService {
         partnerId: partnerId || 0,
         totalJobs: 0,
         totalRevenue: 0,
+        billableValue: 0,
+        billedRevenue: 0,
+        collectedRevenue: 0,
         totalProfit: 0,
+        workInProgressProfit: 0,
+        billedProfit: 0,
+        cashProfit: 0,
         averageProfitMargin: 0,
         jobBreakdown: [],
       };
@@ -680,36 +685,58 @@ export class RoleAwareAnalyticsService {
   static async getManagerFinancialMetrics(managerProfileId?: number): Promise<any> {
     try {
       if (!managerProfileId) {
-        return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
-      }
-      const teamMembers = await prisma.profile.findMany({
-        where: { managerId: managerProfileId, status: 'active' },
-        select: { id: true },
-      });
-      const teamMemberIds = teamMembers.map((member) => member.id);
-      if (teamMemberIds.length === 0) {
-        return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
+        return {
+          totalHours: 0,
+          billableHours: 0,
+          nonBillableHours: 0,
+          revenue: 0,
+          billableValue: 0,
+          billedRevenue: 0,
+          collectedRevenue: 0,
+          cost: 0,
+          profit: 0,
+          workInProgressProfit: 0,
+          billedProfit: 0,
+          cashProfit: 0,
+          marginPercent: 0,
+        };
       }
 
-      const entries = await prisma.timeEntry.findMany({
-        where: { employeeProfileId: { in: teamMemberIds }, status: 'approved' },
-      });
-      const totals = entries.reduce(
-        (acc, entry) => {
-          acc.totalHours += Number(entry.hours || 0);
-          acc.billableHours += entry.billable ? Number(entry.hours || 0) : 0;
-          acc.revenue += Number(entry.billableAmount || 0);
-          acc.cost += Number(entry.costAmount || 0);
-          acc.profit += Number(entry.profitLoss || 0);
-          return acc;
-        },
-        { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 }
-      );
+      const facts = await JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId: managerProfileId });
+      const totals = sumFacts(facts);
 
-      return totals;
+      return {
+        totalHours: totals.totalHours,
+        billableHours: totals.billableHours,
+        nonBillableHours: totals.nonBillableHours,
+        revenue: totals.collectedRevenue,
+        billableValue: totals.billableValue,
+        billedRevenue: totals.billedRevenue,
+        collectedRevenue: totals.collectedRevenue,
+        cost: totals.actualCost,
+        profit: totals.cashProfit,
+        workInProgressProfit: totals.workInProgressProfit,
+        billedProfit: totals.billedProfit,
+        cashProfit: totals.cashProfit,
+        marginPercent: marginPercent(totals.cashProfit, totals.collectedRevenue),
+      };
     } catch (error) {
       console.error('Error fetching manager financial metrics:', error);
-      return { totalHours: 0, billableHours: 0, revenue: 0, cost: 0, profit: 0 };
+      return {
+        totalHours: 0,
+        billableHours: 0,
+        nonBillableHours: 0,
+        revenue: 0,
+        billableValue: 0,
+        billedRevenue: 0,
+        collectedRevenue: 0,
+        cost: 0,
+        profit: 0,
+        workInProgressProfit: 0,
+        billedProfit: 0,
+        cashProfit: 0,
+        marginPercent: 0,
+      };
     }
   }
 
@@ -719,77 +746,130 @@ export class RoleAwareAnalyticsService {
    */
   static async getCompanyFinancialMetrics(): Promise<CompanyFinancialMetrics> {
     try {
-      const timeEntries = await prisma.timeEntry.findMany({
-        where: { status: 'approved' },
-        include: { job: { include: { department: true, partner: true } } },
-      });
+      const [facts, totalEmployees, departments, partners] = await Promise.all([
+        JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
+        prisma.profile.count({ where: { status: 'active' } }),
+        prisma.department.findMany({ select: { id: true, name: true } }),
+        prisma.profile.findMany({
+          where: { isPartner: true },
+          select: { id: true, firstName: true, lastName: true },
+        }),
+      ]);
 
-      if (timeEntries.length === 0) {
-        return {
-          totalRevenue: 0,
-          totalProfit: 0,
-          averageProfitMargin: 0,
-          totalEmployees: 0,
-          revenueByDepartment: [],
-          revenueByPartner: [],
-        };
-      }
+      const totals = sumFacts(facts);
+      const departmentNames = new Map(departments.map((department) => [department.id, department.name]));
+      const partnerNames = new Map(
+        partners.map((partner) => [
+          partner.id,
+          `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Unassigned',
+        ])
+      );
+      const revenueByDepartment = new Map<
+        string,
+        {
+          revenue: number;
+          profit: number;
+          billableValue: number;
+          billedRevenue: number;
+          collectedRevenue: number;
+          actualCost: number;
+        }
+      >();
+      const revenueByPartner = new Map<
+        string,
+        {
+          revenue: number;
+          profit: number;
+          billableValue: number;
+          billedRevenue: number;
+          collectedRevenue: number;
+          actualCost: number;
+        }
+      >();
 
-      const totalEmployees = await prisma.profile.count({
-        where: {
-          status: 'active',
-        },
-      });
-
-      let totalRevenue = 0;
-      let totalProfit = 0;
-      const revenueByDepartment = new Map<string, { revenue: number; profit: number }>();
-      const revenueByPartner = new Map<string, { revenue: number; profit: number }>();
-
-      timeEntries.forEach((entry) => {
-        const revenue = Number(entry.billableAmount || 0);
-        const profit = Number(entry.profitLoss || 0);
-        totalRevenue += revenue;
-        totalProfit += profit;
-
-        const departmentName = entry.job?.department?.name || 'Unassigned';
-        const dept = revenueByDepartment.get(departmentName) || { revenue: 0, profit: 0 };
-        dept.revenue += revenue;
-        dept.profit += profit;
-        revenueByDepartment.set(departmentName, dept);
-
-        const partnerName = entry.job?.partner
-          ? `${entry.job.partner.firstName} ${entry.job.partner.lastName}`
+      facts.forEach((fact) => {
+        const departmentName = fact.departmentId
+          ? departmentNames.get(fact.departmentId) || 'Unassigned'
           : 'Unassigned';
-        const partner = revenueByPartner.get(partnerName) || { revenue: 0, profit: 0 };
-        partner.revenue += revenue;
-        partner.profit += profit;
+        const department = revenueByDepartment.get(departmentName) || {
+          revenue: 0,
+          profit: 0,
+          billableValue: 0,
+          billedRevenue: 0,
+          collectedRevenue: 0,
+          actualCost: 0,
+        };
+        department.revenue += fact.collectedRevenue;
+        department.profit += fact.cashProfit;
+        department.billableValue += fact.billableValue;
+        department.billedRevenue += fact.billedRevenue;
+        department.collectedRevenue += fact.collectedRevenue;
+        department.actualCost += fact.actualCost;
+        revenueByDepartment.set(departmentName, department);
+
+        const partnerName = fact.partnerProfileId
+          ? partnerNames.get(fact.partnerProfileId) || 'Unassigned'
+          : 'Unassigned';
+        const partner = revenueByPartner.get(partnerName) || {
+          revenue: 0,
+          profit: 0,
+          billableValue: 0,
+          billedRevenue: 0,
+          collectedRevenue: 0,
+          actualCost: 0,
+        };
+        partner.revenue += fact.collectedRevenue;
+        partner.profit += fact.cashProfit;
+        partner.billableValue += fact.billableValue;
+        partner.billedRevenue += fact.billedRevenue;
+        partner.collectedRevenue += fact.collectedRevenue;
+        partner.actualCost += fact.actualCost;
         revenueByPartner.set(partnerName, partner);
       });
 
-      const averageProfitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-
       return {
-        totalRevenue,
-        totalProfit,
-        averageProfitMargin,
+        totalRevenue: totals.collectedRevenue,
+        billableValue: totals.billableValue,
+        billedRevenue: totals.billedRevenue,
+        collectedRevenue: totals.collectedRevenue,
+        actualCost: totals.actualCost,
+        totalProfit: totals.cashProfit,
+        workInProgressProfit: totals.workInProgressProfit,
+        billedProfit: totals.billedProfit,
+        cashProfit: totals.cashProfit,
+        averageProfitMargin: marginPercent(totals.cashProfit, totals.collectedRevenue),
         totalEmployees,
         revenueByDepartment: Array.from(revenueByDepartment.entries()).map(([department, data]) => ({
           department,
           revenue: data.revenue,
           profit: data.profit,
+          billableValue: data.billableValue,
+          billedRevenue: data.billedRevenue,
+          collectedRevenue: data.collectedRevenue,
+          actualCost: data.actualCost,
         })),
         revenueByPartner: Array.from(revenueByPartner.entries()).map(([partnerName, data]) => ({
           partnerName,
           revenue: data.revenue,
           profit: data.profit,
+          billableValue: data.billableValue,
+          billedRevenue: data.billedRevenue,
+          collectedRevenue: data.collectedRevenue,
+          actualCost: data.actualCost,
         })),
       };
     } catch (error) {
       console.error('Error fetching company financial metrics:', error);
       return {
         totalRevenue: 0,
+        billableValue: 0,
+        billedRevenue: 0,
+        collectedRevenue: 0,
+        actualCost: 0,
         totalProfit: 0,
+        workInProgressProfit: 0,
+        billedProfit: 0,
+        cashProfit: 0,
         averageProfitMargin: 0,
         totalEmployees: 0,
         revenueByDepartment: [],

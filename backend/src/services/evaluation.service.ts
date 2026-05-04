@@ -15,6 +15,7 @@ import {
   normalizeEvaluationWorkflowConfig,
   resolveEnabledEvaluatorTypes,
 } from "./evaluationWorkflow.service";
+import { bridgeEvaluationScoreToBsc } from "./evaluationBscBridge.service";
 import {
   DEFAULT_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_QUESTIONS,
@@ -56,6 +57,7 @@ type CycleInput = {
   enablePeerEvaluation?: boolean;
   enableUpwardEvaluation?: boolean;
   enableDownwardEvaluation?: boolean;
+  enableClientEvaluation?: boolean;
   processAnonymously?: boolean;
   hideFromDashboard?: boolean;
   excludeFromScore?: boolean;
@@ -366,6 +368,7 @@ export class EvaluationService {
       | "enablePeerEvaluation"
       | "enableUpwardEvaluation"
       | "enableDownwardEvaluation"
+      | "enableClientEvaluation"
       | "processAnonymously"
       | "hideFromDashboard"
       | "excludeFromScore"
@@ -464,6 +467,7 @@ export class EvaluationService {
       enablePeerEvaluation: options?.enablePeerEvaluation ?? true,
       enableUpwardEvaluation: options?.enableUpwardEvaluation ?? true,
       enableDownwardEvaluation: options?.enableDownwardEvaluation ?? true,
+      enableClientEvaluation: Boolean(options?.enableClientEvaluation),
       processAnonymously: Boolean(options?.processAnonymously),
       hideFromDashboard: Boolean(options?.hideFromDashboard),
       excludeFromScore: Boolean(options?.excludeFromScore),
@@ -608,6 +612,7 @@ export class EvaluationService {
         enablePeerEvaluation: input.enablePeerEvaluation,
         enableUpwardEvaluation: input.enableUpwardEvaluation,
         enableDownwardEvaluation: input.enableDownwardEvaluation,
+        enableClientEvaluation: input.enableClientEvaluation,
         processAnonymously: input.processAnonymously,
         hideFromDashboard: input.hideFromDashboard,
         excludeFromScore: input.excludeFromScore,
@@ -928,6 +933,13 @@ export class EvaluationService {
         data: payload,
         skipDuplicates: true,
       });
+
+      if (cycle.status === EvaluationCycleStatus.draft) {
+        await tx.evaluationCycle.update({
+          where: { id: cycleId },
+          data: { status: EvaluationCycleStatus.active },
+        });
+      }
 
       return tx.evaluationAssignment.findMany({
         where: {
@@ -1645,6 +1657,10 @@ export class EvaluationService {
         scoreBreakdown: scoreBreakdown as Prisma.InputJsonValue,
       },
     });
+
+    bridgeEvaluationScoreToBsc(evaluateeId, cycleId, evaluationScore100).catch((err) =>
+      console.error("[EvalBscBridge] Failed to bridge evaluation score:", err)
+    );
 
     return {
       cycleId,

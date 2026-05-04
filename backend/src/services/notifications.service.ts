@@ -15,6 +15,8 @@ import {
   NotificationPreferenceService,
   NotificationPreferenceInput,
 } from "./notificationPreferences.service";
+import { sendEmail } from "./emailService";
+import { logger, toLogContext } from "../lib/logger";
 
 interface AuthContext {
   userId: number;
@@ -176,6 +178,89 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const allowedHttpMethods = new Set(["GET", "POST", "PATCH", "DELETE"]);
 
 export class NotificationService {
+  private static shouldSendEmailForContract(contract: NotificationContractMetadata) {
+    if (String(process.env.EVALUATION_EMAIL_NOTIFICATIONS_ENABLED || "true") === "false") {
+      return false;
+    }
+
+    const eventType = String(contract.eventType || "").toLowerCase();
+    const templateLabel = String(contract.templateLabel || "").toLowerCase();
+    const targetEntityType = String(contract.targetEntityType || "").toLowerCase();
+    return (
+      eventType.startsWith("evaluation.") ||
+      templateLabel.startsWith("evaluation.") ||
+      targetEntityType.startsWith("evaluation")
+    );
+  }
+
+  private static escapeHtml(value: unknown) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  private static absoluteFrontendUrl(path?: string | null) {
+    const baseUrl = String(
+      process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:8080"
+    ).replace(/\/+$/, "");
+    const route = String(path || "/notifications").trim() || "/notifications";
+    if (/^https?:\/\//i.test(route)) return route;
+    return `${baseUrl}${route.startsWith("/") ? route : `/${route}`}`;
+  }
+
+  private static async sendEvaluationEmailNotification(
+    recipient: {
+      id: number;
+      firstName?: string | null;
+      lastName?: string | null;
+      user?: { email?: string | null } | null;
+    },
+    notification: {
+      id?: number;
+      title?: string | null;
+      message?: string | null;
+      canonicalRoute?: string | null;
+      link?: string | null;
+    },
+    contract: NotificationContractMetadata
+  ) {
+    if (!this.shouldSendEmailForContract(contract)) return;
+
+    const to = String(recipient.user?.email || "").trim();
+    if (!to) return;
+
+    const title = String(notification.title || "Evaluation notification").trim();
+    const message = String(notification.message || "").trim();
+    const actionUrl = this.absoluteFrontendUrl(
+      notification.canonicalRoute || notification.link || contract.canonicalRoute
+    );
+    const recipientName = [recipient.firstName, recipient.lastName].filter(Boolean).join(" ").trim();
+    const greeting = recipientName ? `Hello ${recipientName},` : "Hello,";
+    const text = `${greeting}\n\n${title}\n\n${message}\n\nOpen: ${actionUrl}`;
+    const html = `
+      <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111827">
+        <p>${this.escapeHtml(greeting)}</p>
+        <h2 style="font-size:18px;margin:0 0 12px">${this.escapeHtml(title)}</h2>
+        <p>${this.escapeHtml(message)}</p>
+        <p><a href="${this.escapeHtml(actionUrl)}">Open evaluation</a></p>
+      </div>
+    `;
+
+    try {
+      await sendEmail(to, title, text, html);
+    } catch (error) {
+      logger.warn("evaluation_email_notification_failed", {
+        ...toLogContext(error),
+        recipientProfileId: recipient.id,
+        notificationId: notification.id || null,
+        eventType: contract.eventType,
+      });
+    }
+  }
+
   private static inferPriorityFromType(type: NotificationType): NotificationPriority {
     switch (type) {
       case "escalation":
@@ -670,7 +755,16 @@ export class NotificationService {
 
     const recipient = await prisma.profile.findUnique({
       where: { id: recipientProfileId },
-      select: { id: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        user: {
+          select: {
+            email: true,
+          },
+        },
+      },
     });
 
     if (!recipient) {
@@ -724,7 +818,7 @@ export class NotificationService {
         },
       });
 
-      return {
+      const suppressedNotification = {
         id: 0,
         profileId: recipientProfileId,
         type,
@@ -743,6 +837,13 @@ export class NotificationService {
         actions: contract.actions,
         requiredPermission: contract.requiredPermission,
       };
+      void this.sendEvaluationEmailNotification(
+        recipient,
+        suppressedNotification,
+        contract
+      );
+
+      return suppressedNotification;
     }
 
     const notification = await prisma.$transaction(async (tx) => {
@@ -837,6 +938,7 @@ export class NotificationService {
     });
 
     const decorated = this.decorateNotification(notification, contract);
+    void this.sendEvaluationEmailNotification(recipient, decorated, contract);
     NotificationOutboxService.requestImmediateProcessing();
 
     return decorated;

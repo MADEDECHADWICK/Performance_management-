@@ -1,58 +1,49 @@
-import prisma from "../prisma";
 import jobService from "./jobs.service";
+import JobPerformanceFactsService from "./jobPerformanceFacts.service";
 
-jest.mock("../prisma", () => {
-  const prismaMock = {
-    timeEntry: {
-      aggregate: jest.fn(),
-    },
-    requisitionRequest: {
-      aggregate: jest.fn(),
-    },
-  };
+jest.mock("../prisma", () => ({
+  __esModule: true,
+  default: {},
+  prisma: {},
+}));
 
-  return {
-    __esModule: true,
-    default: prismaMock,
-    prisma: prismaMock,
-  };
-});
+jest.mock("./jobPerformanceFacts.service", () => ({
+  __esModule: true,
+  default: {
+    getJobFact: jest.fn(),
+    listFacts: jest.fn(),
+  },
+}));
 
-type PrismaMock = {
-  timeEntry: {
-    aggregate: jest.Mock;
-  };
-  requisitionRequest: {
-    aggregate: jest.Mock;
-  };
-};
-
-const mockedPrisma = prisma as unknown as PrismaMock;
+const mockedGetJobFact = JobPerformanceFactsService.getJobFact as jest.Mock;
 
 describe("JobService.getJobProfitability", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.restoreAllMocks();
   });
 
   it("includes approved requisition spend in total job cost", async () => {
-    jest.spyOn(jobService as any, "getJobById").mockResolvedValue({
-      id: 501,
+    mockedGetJobFact.mockResolvedValue({
       jobName: "Audit FY2025",
       billingType: "hourly",
       status: "in_progress",
-    });
-
-    mockedPrisma.timeEntry.aggregate.mockResolvedValue({
-      _sum: {
-        billableAmount: 120000,
-        costAmount: 45000,
-      },
-    });
-    mockedPrisma.requisitionRequest.aggregate.mockResolvedValue({
-      _sum: {
-        amount: 8000,
-      },
+      billableValue: 120000,
+      billedRevenue: 120000,
+      collectedRevenue: 120000,
+      laborCost: 45000,
+      approvedRequisitionCost: 8000,
+      recoverableRequisitionCost: 0,
+      actualCost: 53000,
+      workInProgressProfit: 67000,
+      billedProfit: 67000,
+      cashProfit: 67000,
+      marginPercent: 55.8,
+      billableHours: 400,
+      nonBillableHours: 20,
+      budgetUsedPercent: 80,
+      totalHours: 420,
+      partnerProfileId: null,
+      departmentId: null,
     });
 
     const result = await jobService.getJobProfitability(501);

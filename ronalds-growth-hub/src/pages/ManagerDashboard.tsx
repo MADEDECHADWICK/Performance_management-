@@ -64,6 +64,10 @@ interface TeamFinancials {
   activeTeamMembers: number;
   totalTeamHours: number;
   billableHours: number;
+  nonBillableHours?: number;
+  billableValue?: number;
+  billedRevenue?: number;
+  collectedRevenue?: number;
   totalRevenue: number;
   totalCost: number;
 }
@@ -91,6 +95,13 @@ interface Job {
   budgetHours: number;
   actualHours: number;
   revenue: number;
+  billableValue?: number;
+  billedRevenue?: number;
+  collectedRevenue?: number;
+  billableHours?: number;
+  nonBillableHours?: number;
+  profit?: number;
+  marginPercent?: number;
   cost: number;
   budgetUtilization: number;
   costingStatus: string;
@@ -1348,7 +1359,7 @@ const ManagerDashboard = () => {
             {teamData && (
               <>
                 {/* Team Financial Summary */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                   <Card>
                     <CardHeader className="pb-2">
                       <CardTitle className="text-sm">Active Members</CardTitle>
@@ -1359,18 +1370,41 @@ const ManagerDashboard = () => {
                   </Card>
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Total Hours</CardTitle>
+                      <CardTitle className="text-sm">Billable Hours</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{Number(teamData.financials.totalTeamHours).toFixed(1)}</div>
+                      <div className="text-2xl font-bold text-emerald-600">{Number(teamData.financials.billableHours).toFixed(0)}h</div>
+                      <p className="text-xs text-muted-foreground">
+                        {teamData.financials.totalTeamHours > 0
+                          ? `${((teamData.financials.billableHours / teamData.financials.totalTeamHours) * 100).toFixed(0)}% utilization`
+                          : 'No hours'}
+                      </p>
                     </CardContent>
                   </Card>
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-sm">Team Revenue</CardTitle>
+                      <CardTitle className="text-sm">Non-billable Hours</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.totalRevenue)}</div>
+                      <div className="text-2xl font-bold text-amber-600">{Number(teamData.financials.nonBillableHours ?? 0).toFixed(0)}h</div>
+                      <p className="text-xs text-muted-foreground">of {Number(teamData.financials.totalTeamHours).toFixed(0)}h total</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">Billed Revenue</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.billedRevenue ?? teamData.financials.totalRevenue)}</div>
+                      <p className="text-xs text-muted-foreground">Collected {formatCurrency(teamData.financials.collectedRevenue ?? teamData.financials.totalRevenue)}</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm">Team Cost</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.totalCost)}</div>
                     </CardContent>
                   </Card>
                   <Card>
@@ -1378,7 +1412,9 @@ const ManagerDashboard = () => {
                       <CardTitle className="text-sm">Team Profit</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold">{formatCurrency(teamData.financials.totalRevenue - teamData.financials.totalCost)}</div>
+                      <div className={`text-2xl font-bold ${(teamData.financials.totalRevenue - teamData.financials.totalCost) >= 0 ? '' : 'text-rose-600'}`}>
+                        {formatCurrency(teamData.financials.totalRevenue - teamData.financials.totalCost)}
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
@@ -1610,7 +1646,7 @@ const ManagerDashboard = () => {
                         <TableHead>Remaining (Job)</TableHead>
                         <TableHead>Cost Control</TableHead>
                         <TableHead>Approval Chain</TableHead>
-                        <TableHead>Revenue</TableHead>
+                        <TableHead>Revenue / Profit</TableHead>
                         <TableHead>Progress</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -1701,7 +1737,20 @@ const ManagerDashboard = () => {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>{formatCurrency(job.revenue)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1 text-xs">
+                              <span className="font-medium">{formatCurrency(job.collectedRevenue ?? job.revenue)}</span>
+                              {(() => {
+                                const profit = job.profit ?? ((job.collectedRevenue ?? job.revenue) - job.cost);
+                                const margin = job.marginPercent ?? ((job.collectedRevenue ?? job.revenue) > 0 ? (profit / (job.collectedRevenue ?? job.revenue)) * 100 : 0);
+                                return (
+                                  <span className={`font-semibold ${profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                    {formatCurrency(profit)} ({margin.toFixed(1)}%)
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center space-x-2">
                               <Progress value={job.budgetUtilization} className="w-16" />

@@ -8,6 +8,11 @@ import {
   normalizeEvaluationQuestions,
   summarizeEvaluationQuestions,
 } from '../services/evaluationWorkflow.service';
+import {
+  parseResultAreaImportPayload,
+  resultAreaLibraryToCsv,
+  searchEvaluationResultAreaLibrary,
+} from '../services/evaluationResultAreaLibrary.service';
 import { createAudit } from '../utils/audit';
 
 const router = Router();
@@ -55,6 +60,80 @@ router.get('/', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
+router.get('/result-area-library', authMiddleware, loadProfile, async (req: AuthRequest, res) => {
+  try {
+    const library = searchEvaluationResultAreaLibrary({
+      search: req.query.search as string | undefined,
+      category: req.query.category as string | undefined,
+      domain: req.query.domain as string | undefined,
+      roleFamily: req.query.roleFamily as string | undefined,
+      limit: Number(req.query.limit || 50),
+      offset: Number(req.query.offset || 0),
+    });
+    return res.json(library);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/result-area-library/export.csv', authMiddleware, loadProfile, async (_req: AuthRequest, res) => {
+  try {
+    const csv = resultAreaLibraryToCsv();
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="evaluation-result-area-library.csv"');
+    return res.send(csv);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.post(
+  '/import',
+  authMiddleware,
+  loadProfile,
+  requireModuleAccess('evaluations', 'admin'),
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.user?.userId ? Number(req.user.userId) : undefined;
+      const name = String(req.body?.name || '').trim();
+      const questions = parseResultAreaImportPayload(req.body);
+
+      if (!name) {
+        return res.status(400).json({ error: 'Template name is required' });
+      }
+      if (questions.length === 0) {
+        return res.status(400).json({ error: 'At least one result area is required' });
+      }
+
+      const template = await prisma.evaluationTemplate.create({
+        data: {
+          name,
+          description: req.body?.description,
+          templateType: req.body?.templateType || 'imported_result_area_library',
+          bscCategory: req.body?.bscCategory,
+          questions: normalizeEvaluationQuestions(questions, {
+            fallbackTitle: name,
+            evaluatorTypes: ['self', 'manager', 'peer', 'direct_report', 'client'],
+          }),
+          createdBy: userId,
+          isActive: true,
+        },
+      });
+
+      await createAudit({
+        action: 'import_evaluation_template',
+        entity_type: 'evaluation_template',
+        user_id: userId,
+        ip_address: req.ip,
+      });
+
+      return res.status(201).json(normalizeTemplateResponse(template));
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 // GET /evaluation-templates/:id
 router.get('/:id', authMiddleware, loadProfile, async (req: AuthRequest, res) => {

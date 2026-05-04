@@ -1,5 +1,8 @@
 const path = require("path");
 
+// Load .env before Jest initializes any modules (Prisma throws if DATABASE_URL is missing at import time).
+require("dotenv").config({ path: path.resolve(__dirname, ".env") });
+
 module.exports = {
   rootDir: __dirname,
   preset: "ts-jest",

@@ -3,91 +3,36 @@ import { authMiddleware, AuthRequest } from '../middleware/auth';
 import prisma from '../prisma';
 import { notifyJobLossAlert } from '../services/notificationRecipients';
 import { logger, toLogContext } from '../lib/logger';
+import JobPerformanceFactsService from '../services/jobPerformanceFacts.service';
 
 const router = Router();
 
 /**
  * Job Profitability Routes
  * 
- * Implements Xero-style financial aggregation:
- * - Aggregates data from TimeEntry records
- * - Uses position-based rates to calculate costs and revenue
- * - Supports role-based visibility (employees, partners, HR/Super Admin)
- * 
- * Calculations:
- * - total_revenue = SUM(timeEntry.billable_amount) for billable time, or fixed_fee_amount
- * - total_cost = SUM(timeEntry.cost) for all logged time
- * - profit = total_revenue - total_cost
  * - profit_margin = (profit / total_revenue) × 100 if total_revenue > 0
  */
 
-// Helper function to calculate job profitability from time entries
-async function calculateJobProfitability(jobId: number) {
-  const job = await prisma.job.findUnique({
-    where: { id: jobId },
-    include: { jobCosting: true },
-  });
-
-  if (!job) {
-    throw new Error(`Job ${jobId} not found`);
-  }
-
-  // Get all time entries for this job
-  const [timeEntries, approvedRequisitions] = await Promise.all([
-    prisma.timeEntry.findMany({
-      where: {
-        jobId,
-        status: 'approved', // Only count approved time entries
-      },
-    }),
-    prisma.requisitionRequest.findMany({
-      where: {
-        jobId,
-        status: 'approved',
-      },
-      select: {
-        amount: true,
-      },
-    }),
-  ]);
-
-  // Calculate totals from time entries
-  let total_revenue = 0;
-  let total_cost = 0;
-
-  if (job.billingType === 'fixed_fee') {
-    // For fixed fee jobs, prefer jobCosting fee (source of truth) when available
-    total_revenue = Number(job.jobCosting?.jobFee || job.fixedFeeAmount || 0);
-  } else {
-    // For hourly and retainer, aggregate billable amounts from time entries
-    total_revenue = timeEntries.reduce((sum, entry) => {
-      return sum + Number(entry.billableAmount || 0);
-    }, 0);
-  }
-
-  // Cost is always the sum of actual costs
-  const labor_cost = timeEntries.reduce((sum, entry) => {
-    return sum + Number(entry.costAmount || 0);
-  }, 0);
-  const approved_requisition_cost = approvedRequisitions.reduce((sum, item) => {
-    return sum + Number(item.amount || 0);
-  }, 0);
-  total_cost = labor_cost + approved_requisition_cost;
-
-  const profit = total_revenue - total_cost;
-  const profit_margin = total_revenue > 0 ? (profit / total_revenue) * 100 : 0;
-
-  return {
-    job_id: jobId,
-    total_revenue,
-    labor_cost,
-    approved_requisition_cost,
-    total_cost,
-    profit,
-    profit_margin,
-    time_entries_count: timeEntries.length,
-  };
-}
+const toProfitabilityResponse = (fact: Awaited<ReturnType<typeof JobPerformanceFactsService.getJobFact>>) => ({
+  job_id: fact.jobId,
+  billable_value: fact.billableValue,
+  billed_revenue: fact.billedRevenue,
+  collected_revenue: fact.collectedRevenue,
+  total_revenue: fact.collectedRevenue,
+  labor_cost: fact.laborCost,
+  approved_requisition_cost: fact.approvedRequisitionCost,
+  recoverable_requisition_cost: fact.recoverableRequisitionCost,
+  total_cost: fact.actualCost,
+  work_in_progress_profit: fact.workInProgressProfit,
+  billed_profit: fact.billedProfit,
+  cash_profit: fact.cashProfit,
+  profit: fact.cashProfit,
+  profit_margin: fact.marginPercent,
+  billable_hours: fact.billableHours,
+  non_billable_hours: fact.nonBillableHours,
+  budget_used_percent: fact.budgetUsedPercent,
+  time_entries_count: fact.timeEntryCount,
+});
 
 // GET /job_profitability - Get financial metrics for all jobs
 // Role-based visibility:
@@ -109,45 +54,20 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     const isAdmin = userRoles.includes('super_admin') || userRoles.includes('hr');
     const isPartner = userRoles.includes('partner');
 
-    let jobs;
+    let facts;
 
     if (isAdmin) {
-      // HR/Super Admin see all jobs
-      jobs = await prisma.job.findMany({
-        include: { partner: true, client: true },
-      });
+      facts = await JobPerformanceFactsService.listFacts({}, { type: 'firm' });
     } else if (isPartner) {
-      // Partners see only their own jobs
-      jobs = await prisma.job.findMany({
-        where: { partnerProfileId: profileId ?? undefined },
-        include: { partner: true, client: true },
-      });
+      facts = await JobPerformanceFactsService.listFacts(
+        {},
+        { type: 'partner', profileId: profileId ?? 0 }
+      );
     } else {
-      // Regular employees cannot view job profitability
       return res.status(403).json({ error: 'Access denied. Only partners, HR, and Super Admin can view job profitability.' });
     }
 
-    // Calculate profitability for each job
-    const profitability = await Promise.all(
-      jobs.map(async (job) => {
-        try {
-          return await calculateJobProfitability(job.id);
-        } catch (error) {
-          logger.error('job_profitability_calculation_failed', {
-            jobId: job.id,
-            ...toLogContext(error),
-          });
-          return {
-            job_id: job.id,
-            total_revenue: 0,
-            total_cost: 0,
-            profit: 0,
-            profit_margin: 0,
-            error: 'Failed to calculate',
-          };
-        }
-      })
-    );
+    const profitability = facts.map(toProfitabilityResponse);
 
     res.json(profitability);
   } catch (error: any) {
@@ -183,8 +103,8 @@ router.get('/:jobId', authMiddleware, async (req: AuthRequest, res) => {
       }
     }
 
-    // Calculate profitability
-    const profitability = await calculateJobProfitability(parseInt(jobId));
+    const fact = await JobPerformanceFactsService.getJobFact(parseInt(jobId));
+    const profitability = toProfitabilityResponse(fact);
     res.json({
       ...profitability,
       job,
@@ -211,7 +131,8 @@ router.post('/:jobId/recalculate', authMiddleware, async (req: AuthRequest, res)
     }
 
     const jobIdNumber = parseInt(jobId);
-    const profitability = await calculateJobProfitability(jobIdNumber);
+    const fact = await JobPerformanceFactsService.getJobFact(jobIdNumber);
+    const profitability = toProfitabilityResponse(fact);
 
     const job = await prisma.job.findUnique({
       where: { id: jobIdNumber },

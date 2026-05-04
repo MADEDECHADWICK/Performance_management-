@@ -18,6 +18,7 @@ import { createAudit } from '../utils/audit';
 import { JobInvoiceStatus, JobStatus, Prisma, TaskStatus } from '@prisma/client';
 import { createClientSurveyForJobCompletion } from './surveyRouting.service';
 import { storeGeneratedUploadBuffer } from '../config/uploads';
+import JobPerformanceFactsService from './jobPerformanceFacts.service';
 
 export interface JobMilestoneInput {
   title: string;
@@ -1822,26 +1823,6 @@ class JobService {
               remainingBudget: true,
             },
           },
-          timeEntries: {
-            select: {
-              status: true,
-              hours: true,
-              billable: true,
-              billableAmount: true,
-              costAmount: true,
-            },
-          },
-          payments: {
-            select: {
-              paymentAmount: true,
-            },
-          },
-          requisitionRequests: {
-            select: {
-              status: true,
-              amount: true,
-            },
-          },
           invoices: {
             select: {
               status: true,
@@ -1851,45 +1832,22 @@ class JobService {
             },
           },
         },
-      }),
-      prisma.job.count({ where: whereClause }),
-    ]);
+        }),
+        prisma.job.count({ where: whereClause }),
+      ]);
+    const facts = await JobPerformanceFactsService.listFacts({ jobIds: jobs.map((job) => job.id) });
+    const factsByJob = new Map(facts.map((fact) => [fact.jobId, fact]));
 
     return {
       jobs: jobs.map((job) => {
-        const activeTimeEntries = job.timeEntries.filter((entry) =>
-          ['pending', 'submitted', 'approved'].includes(String(entry.status))
-        );
-        const approvedTimeEntries = job.timeEntries.filter(
-          (entry) => String(entry.status) === 'approved'
-        );
-        const totalBillableHours = roundCurrency(
-          activeTimeEntries
-            .filter((entry) => entry.billable)
-            .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-        );
-        const approvedBilledAmount = roundCurrency(
-          approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
-        );
-        const laborCostToDate = roundCurrency(
-          activeTimeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0)
-        );
-        const approvedRequisitionCost = roundCurrency(
-          job.requisitionRequests
-            .filter((item) => String(item.status) === 'approved')
-            .reduce((sum, item) => sum + Number(item.amount || 0), 0)
-        );
-        const costToDate = roundCurrency(laborCostToDate + approvedRequisitionCost);
-        const expectedFeeAmount = this.resolveJobFeeForTracking(job as any);
-        const collectedAmount = roundCurrency(
-          job.payments.reduce((sum, payment) => sum + Number(payment.paymentAmount || 0), 0)
-        );
-        const outstandingAmount = roundCurrency(Math.max(0, expectedFeeAmount - collectedAmount));
-        const profitToDate = roundCurrency(approvedBilledAmount - costToDate);
-        const marginPercent =
-          approvedBilledAmount > 0
-            ? Number(((profitToDate / approvedBilledAmount) * 100).toFixed(2))
-            : 0;
+        const fact = factsByJob.get(job.id);
+        const totalBillableHours = fact?.billableHours ?? 0;
+        const approvedBilledAmount = fact?.billableValue ?? 0;
+        const costToDate = fact?.actualCost ?? 0;
+        const collectedAmount = fact?.collectedRevenue ?? 0;
+        const outstandingAmount = fact?.outstandingRevenue ?? 0;
+        const profitToDate = fact?.workInProgressProfit ?? 0;
+        const marginPercent = fact?.workInProgressMarginPercent ?? 0;
         const openInvoices = job.invoices.filter(
           (invoice) => invoice.status !== 'paid' && invoice.status !== 'void'
         );
@@ -3748,57 +3706,32 @@ class JobService {
   }
 
   /**
-   * Calculate job profitability
-   * 
-   * Returns:
-   * - Total revenue (billableAmount)
-   * - Total cost (employee cost)
-   * - Profit/loss
-   * - Margin %
+   * Get standardized job profitability facts.
    */
   async getJobProfitability(jobId: number) {
-    const job = await this.getJobById(jobId, ['staffing', 'timeEntries']);
-
-    const [timeEntryResult, requisitionResult] = await Promise.all([
-      prisma.timeEntry.aggregate({
-        where: { jobId },
-        _sum: {
-          billableAmount: true,
-          costAmount: true,
-        },
-      }),
-      prisma.requisitionRequest.aggregate({
-        where: {
-          jobId,
-          status: 'approved',
-        },
-        _sum: {
-          amount: true,
-        },
-      }),
-    ]);
-
-    const totalRevenue = timeEntryResult._sum.billableAmount || 0;
-    const laborCost = Number(timeEntryResult._sum.costAmount || 0);
-    const approvedRequisitionCost = Number(requisitionResult._sum.amount || 0);
-    const totalCost = laborCost + approvedRequisitionCost;
-    const totalProfitLoss = Number(totalRevenue) - totalCost;
-
-    const revenueNumber = Number(totalRevenue);
-    const profitNumber = Number(totalProfitLoss);
-    const marginPercent = revenueNumber > 0 ? (profitNumber / revenueNumber) * 100 : 0;
+    const fact = await JobPerformanceFactsService.getJobFact(jobId);
 
     return {
       jobId,
-      jobName: job.jobName,
-      totalRevenue: Number(totalRevenue),
-      laborCost,
-      approvedRequisitionCost,
-      totalCost: Number(totalCost),
-      totalProfitLoss: Number(totalProfitLoss),
-      marginPercent: Number(marginPercent.toFixed(2)),
-      billingType: job.billingType,
-      status: job.status,
+      jobName: fact.jobName,
+      billableValue: fact.billableValue,
+      billedRevenue: fact.billedRevenue,
+      collectedRevenue: fact.collectedRevenue,
+      totalRevenue: fact.collectedRevenue,
+      laborCost: fact.laborCost,
+      approvedRequisitionCost: fact.approvedRequisitionCost,
+      recoverableRequisitionCost: fact.recoverableRequisitionCost,
+      totalCost: fact.actualCost,
+      workInProgressProfit: fact.workInProgressProfit,
+      billedProfit: fact.billedProfit,
+      cashProfit: fact.cashProfit,
+      totalProfitLoss: fact.cashProfit,
+      marginPercent: fact.marginPercent,
+      billableHours: fact.billableHours,
+      nonBillableHours: fact.nonBillableHours,
+      budgetUsedPercent: fact.budgetUsedPercent,
+      billingType: fact.billingType,
+      status: fact.status,
     };
   }
 
@@ -3979,7 +3912,6 @@ class JobService {
             dateWorked: true,
             billableAmount: true,
             costAmount: true,
-            profitLoss: true,
           },
         },
         payments: {
@@ -4069,6 +4001,7 @@ class JobService {
     }
 
     const jobInvoices = await this.listJobInvoices(jobId);
+    const jobFact = await JobPerformanceFactsService.getJobFact(jobId);
 
     const activeTimeEntries = job.timeEntries.filter((entry) =>
       ['pending', 'submitted', 'approved'].includes(String(entry.status))
@@ -4088,20 +4021,12 @@ class JobService {
       (task) => !['completed', 'cancelled'].includes(String(task.status))
     ).length;
 
-    const expectedFeeAmount = this.resolveJobFeeForTracking(job as any);
-    const collectedAmount = roundCurrency(
-      job.payments.reduce((sum, payment) => sum + Number(payment.paymentAmount || 0), 0)
-    );
-    const outstandingAmount = roundCurrency(Math.max(0, expectedFeeAmount - collectedAmount));
-    const billedAmount = roundCurrency(
-      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
-    );
-    const approvedBilledAmount = roundCurrency(
-      approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0)
-    );
-    const laborCostToDate = roundCurrency(
-      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0)
-    );
+    const expectedFeeAmount = jobFact.billedRevenue > 0 ? jobFact.billedRevenue : jobFact.billableValue;
+    const collectedAmount = jobFact.collectedRevenue;
+    const outstandingAmount = jobFact.outstandingRevenue;
+    const billedAmount = jobFact.billableValue;
+    const approvedBilledAmount = jobFact.billableValue;
+    const laborCostToDate = jobFact.laborCost;
     const requisitionRequests = job.requisitionRequests || [];
     const approvedRequisitions = requisitionRequests.filter(
       (item) => String(item.status) === 'approved'
@@ -4114,37 +4039,19 @@ class JobService {
 	        'pending_finance_approval',
 	      ].includes(String(item.status))
 	    );
-    const approvedRequisitionCost = roundCurrency(
-      approvedRequisitions.reduce((sum, item) => sum + Number(item.amount || 0), 0)
-    );
+    const approvedRequisitionCost = jobFact.approvedRequisitionCost;
     const committedRequisitionCost = roundCurrency(
       pendingRequisitions.reduce((sum, item) => sum + Number(item.amount || 0), 0)
     );
-    const recoverableRequisitionCost = roundCurrency(
-      approvedRequisitions
-        .filter((item) => item.isClientRecoverable)
-        .reduce((sum, item) => sum + Number(item.amount || 0), 0)
-    );
-    const costToDate = roundCurrency(laborCostToDate + approvedRequisitionCost);
+    const recoverableRequisitionCost = jobFact.recoverableRequisitionCost;
+    const costToDate = jobFact.actualCost;
     const totalCommittedCost = roundCurrency(costToDate + committedRequisitionCost);
-    const profitToDate = roundCurrency(billedAmount - costToDate);
+    const profitToDate = jobFact.workInProgressProfit;
 
-    const totalHoursWorked = roundCurrency(
-      activeTimeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-    );
-    const approvedHoursWorked = roundCurrency(
-      approvedTimeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-    );
-    const totalBillableHours = roundCurrency(
-      activeTimeEntries
-        .filter((entry) => entry.billable)
-        .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-    );
-    const totalNonBillableHours = roundCurrency(
-      activeTimeEntries
-        .filter((entry) => !entry.billable)
-        .reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
-    );
+    const totalHoursWorked = jobFact.totalHours;
+    const approvedHoursWorked = jobFact.approvedHours;
+    const totalBillableHours = jobFact.billableHours;
+    const totalNonBillableHours = jobFact.nonBillableHours;
 
     const allocatedHours = roundCurrency(
       (job.jobCosting?.allocations || []).reduce(

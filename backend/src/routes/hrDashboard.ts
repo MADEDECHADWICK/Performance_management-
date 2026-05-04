@@ -3,6 +3,8 @@ import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
+import JobPerformanceFactsService from '../services/jobPerformanceFacts.service';
+import { logger, toLogContext } from '../lib/logger';
 
 const router = Router();
 
@@ -40,17 +42,6 @@ const getHrContext = async (req: AuthRequest) => {
   return { user };
 };
 
-const resolveJobFee = (job: {
-  billingType: string;
-  fixedFeeAmount: any;
-  jobCosting?: { jobFee: any } | null;
-}) => {
-  const costingFee = Number(job.jobCosting?.jobFee || 0);
-  if (costingFee > 0) return costingFee;
-  if (job.billingType === 'fixed_fee') return Number(job.fixedFeeAmount || 0);
-  return 0;
-};
-
 const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
 
 // GET /hr-dashboard/company-metrics
@@ -71,9 +62,9 @@ router.get('/company-metrics', authMiddleware, async (req: AuthRequest, res) => 
       activeEvaluations,
       pendingEvaluations,
       avgPerformanceAgg,
-      monthPayments,
       monthProjections,
-      totalPayments,
+      monthFacts,
+      allFacts,
     ] = await Promise.all([
       prisma.profile.count({ where: { status: 'active' } }),
       prisma.evaluationCycle.count({ where: { status: 'active' } }),
@@ -82,66 +73,30 @@ router.get('/company-metrics', authMiddleware, async (req: AuthRequest, res) => 
         _avg: { totalScore: true },
         where: { calculatedAt: { gte: ninetyDaysAgo } },
       }),
-      prisma.clientPayment.aggregate({
-        _sum: { paymentAmount: true },
-        where: { paymentDate: { gte: monthStart, lt: nextMonthStart } },
-      }),
       prisma.revenueProjection.aggregate({
         _sum: { projectedAmount: true, actualCollected: true },
         where: { monthYear: { gte: monthStart, lt: nextMonthStart } },
       }),
-      prisma.clientPayment.aggregate({ _sum: { paymentAmount: true } }),
+      JobPerformanceFactsService.listFacts(
+        { dateFrom: monthStart, dateTo: nextMonthStart },
+        { type: 'firm' }
+      ),
+      JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
     ]);
 
-    const jobs = await prisma.job.findMany({
-      include: {
-        jobCosting: true,
-        payments: true,
-      },
-    });
-
-    let totalFees = 0;
-    let totalCollected = 0;
-    let totalOutstanding = 0;
-
-    jobs.forEach((job) => {
-      const fee = resolveJobFee(job);
-      const collected = job.payments.reduce(
-        (sum, payment) => sum + Number(payment.paymentAmount || 0),
-        0
-      );
-      const balance = Math.max(0, fee - collected);
-      totalFees += fee;
-      totalCollected += collected;
-      totalOutstanding += balance;
-    });
-
-    const collectionRate = totalFees > 0 ? (totalCollected / totalFees) * 100 : 0;
+    const totalBillableValue = allFacts.reduce((sum, fact) => sum + fact.billableValue, 0);
+    const totalBilledRevenue = allFacts.reduce((sum, fact) => sum + fact.billedRevenue, 0);
+    const totalCollected = allFacts.reduce((sum, fact) => sum + fact.collectedRevenue, 0);
+    const totalOutstanding = allFacts.reduce((sum, fact) => sum + fact.outstandingRevenue, 0);
+    const collectionBase = totalBilledRevenue > 0 ? totalBilledRevenue : totalBillableValue;
+    const collectionRate = collectionBase > 0 ? (totalCollected / collectionBase) * 100 : 0;
     const projectedMonth = Number(monthProjections._sum.projectedAmount || 0);
-    const collectedMonth = Number(monthPayments._sum.paymentAmount || 0);
+    const collectedMonth = monthFacts.reduce((sum, fact) => sum + fact.collectedRevenue, 0);
     const varianceMonth = collectedMonth - projectedMonth;
 
-    const allocations = await prisma.revenueAllocation.aggregate({
-      _sum: { allocatedAmount: true, employeeProfit: true, employeeLoss: true },
-      where: { allocationMonth: { gte: monthStart, lt: nextMonthStart } },
-    });
-
-    const firmProfit =
-      Number(allocations._sum.employeeProfit || 0) -
-      Number(allocations._sum.employeeLoss || 0);
-
-    const totalHoursAgg = await prisma.timeEntry.aggregate({
-      _sum: { hours: true },
-      where: { status: 'approved', dateWorked: { gte: monthStart, lt: nextMonthStart } },
-    });
-
-    const billableHoursAgg = await prisma.timeEntry.aggregate({
-      _sum: { hours: true },
-      where: { status: 'approved', billable: true, dateWorked: { gte: monthStart, lt: nextMonthStart } },
-    });
-
-    const totalHours = Number(totalHoursAgg._sum.hours || 0);
-    const billableHours = Number(billableHoursAgg._sum.hours || 0);
+    const firmProfit = monthFacts.reduce((sum, fact) => sum + fact.cashProfit, 0);
+    const totalHours = monthFacts.reduce((sum, fact) => sum + fact.totalHours, 0);
+    const billableHours = monthFacts.reduce((sum, fact) => sum + fact.billableHours, 0);
     const utilizationRate = totalHours > 0 ? (billableHours / totalHours) * 100 : 0;
 
     const overdueJobs = await prisma.job.count({
@@ -159,9 +114,12 @@ router.get('/company-metrics', authMiddleware, async (req: AuthRequest, res) => 
       projectedMonth,
       collectedMonth,
       varianceMonth,
-      totalCollected: Number(totalPayments._sum.paymentAmount || 0),
+      totalCollected,
       totalOutstanding,
-      totalFees,
+      totalFees: collectionBase,
+      billableValue: totalBillableValue,
+      billedRevenue: totalBilledRevenue,
+      collectedRevenue: totalCollected,
       collectionRate,
       firmProfit,
       utilizationRate,
@@ -169,7 +127,7 @@ router.get('/company-metrics', authMiddleware, async (req: AuthRequest, res) => 
       framework: getDashboardModuleCoverageSummary("hr"),
     });
   } catch (error: any) {
-    console.error('HR company metrics error:', error);
+    logger.error('hr_dashboard_company_metrics_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load HR company metrics' });
   }
 });
@@ -196,17 +154,14 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
             budgetCap: { select: { totalAllocatedHours: true } },
           },
         },
-        timeEntries: {
-          where: { status: 'approved' },
-          select: { hours: true, costAmount: true },
-        },
       },
       orderBy: [{ createdAt: 'desc' }],
     });
 
     const jobIds = jobs.map((job) => job.id);
 
-    const [standardRequests, overBudgetRequests] = await Promise.all([
+    const [facts, standardRequests, overBudgetRequests] = await Promise.all([
+      JobPerformanceFactsService.listFacts({ jobIds }, { type: 'firm' }),
       prisma.timeEntryApprovalRequest.findMany({
         where: { jobId: { in: jobIds } },
         include: {
@@ -227,6 +182,7 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
         take: 200,
       }),
     ]);
+    const factsByJob = new Map(facts.map((fact) => [fact.jobId, fact]));
 
     const controls = jobs.reduce(
       (acc, job) => {
@@ -237,8 +193,9 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
             job.budgetHours ??
             0
         );
-        const actualCost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
-        const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+        const fact = factsByJob.get(job.id);
+        const actualCost = fact?.actualCost ?? 0;
+        const actualHours = fact?.totalHours ?? 0;
         const feeCap = Number(
           job.jobCosting?.jobFee || (job.billingType === 'fixed_fee' ? job.fixedFeeAmount : 0) || 0
         );
@@ -296,6 +253,7 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
     });
 
     const recentJobs = jobs.slice(0, 20).map((job) => {
+      const fact = factsByJob.get(job.id);
       const plannedCost = Number(job.jobCosting?.totalEstimatedCost || 0);
       const plannedHours = Number(
         job.jobCosting?.totalEstimatedHours ??
@@ -303,8 +261,8 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
           job.budgetHours ??
           0
       );
-      const actualCost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
-      const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+      const actualCost = fact?.actualCost ?? 0;
+      const actualHours = fact?.totalHours ?? 0;
       const feeCap = Number(
         job.jobCosting?.jobFee || (job.billingType === 'fixed_fee' ? job.fixedFeeAmount : 0) || 0
       );
@@ -376,8 +334,175 @@ router.get('/approval-controls', authMiddleware, async (req: AuthRequest, res) =
       })),
     });
   } catch (error: any) {
-    console.error('HR approval controls error:', error);
+    logger.error('hr_dashboard_approval_controls_error', toLogContext(error));
     return res.status(500).json({ error: 'Failed to load HR approval controls' });
+  }
+});
+
+// GET /hr-dashboard/time-revenue
+// Firm-wide non-billable breakdown, revenue pipeline stages, department utilization, loss-alert jobs
+router.get('/time-revenue', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const context = await getHrContext(req);
+    if (context.error) {
+      return res.status(context.error.status).json({ error: context.error.message });
+    }
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+    const [nonBillableRaw, allFacts, departments, monthlyHoursRaw] = await Promise.all([
+      prisma.timeEntry.groupBy({
+        by: ['nonBillableCategory'],
+        _sum: { hours: true },
+        where: {
+          billable: false,
+          status: 'approved',
+          nonBillableCategory: { not: null },
+          dateWorked: { gte: yearStart },
+        },
+      }),
+      JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
+      prisma.department.findMany({ select: { id: true, name: true, departmentCode: true } }),
+      prisma.$queryRaw<Array<{ month: Date; billable: boolean; hours: number }>>`
+        SELECT date_trunc('month', date_worked) AS month,
+               billable,
+               COALESCE(SUM(hours), 0)::float AS hours
+        FROM time_entries
+        WHERE status = 'approved'
+          AND date_worked >= ${sixMonthsAgo}
+        GROUP BY 1, 2
+        ORDER BY 1
+      `,
+    ]);
+
+    const nonBillableByCategory: Record<string, number> = {
+      leave: 0, public_holiday: 0, internal: 0, training: 0, over_budget: 0, other: 0,
+    };
+    nonBillableRaw.forEach((row) => {
+      nonBillableByCategory[row.nonBillableCategory ?? 'other'] = Number(row._sum.hours || 0);
+    });
+
+    const firmPipeline = allFacts.reduce(
+      (acc, fact) => {
+        acc.totalHours += fact.totalHours;
+        acc.billableHours += fact.billableHours;
+        acc.nonBillableHours += fact.nonBillableHours;
+        acc.billableValue += fact.billableValue;
+        acc.billedRevenue += fact.billedRevenue;
+        acc.collectedRevenue += fact.collectedRevenue;
+        acc.outstanding += fact.outstandingRevenue;
+        acc.actualCost += fact.actualCost;
+        acc.laborCost += fact.laborCost;
+        acc.cashProfit += fact.cashProfit;
+        return acc;
+      },
+      {
+        totalHours: 0, billableHours: 0, nonBillableHours: 0,
+        billableValue: 0, billedRevenue: 0, collectedRevenue: 0,
+        outstanding: 0, actualCost: 0, laborCost: 0, cashProfit: 0,
+        utilizationRate: 0,
+      }
+    );
+    firmPipeline.utilizationRate =
+      firmPipeline.totalHours > 0 ? (firmPipeline.billableHours / firmPipeline.totalHours) * 100 : 0;
+
+    const deptFactMap = new Map<number, {
+      billableHours: number; nonBillableHours: number; totalHours: number;
+      billableValue: number; collectedRevenue: number; cashProfit: number; actualCost: number;
+    }>();
+    allFacts.forEach((fact) => {
+      if (!fact.departmentId) return;
+      const existing = deptFactMap.get(fact.departmentId) ?? {
+        billableHours: 0, nonBillableHours: 0, totalHours: 0,
+        billableValue: 0, collectedRevenue: 0, cashProfit: 0, actualCost: 0,
+      };
+      existing.billableHours += fact.billableHours;
+      existing.nonBillableHours += fact.nonBillableHours;
+      existing.totalHours += fact.totalHours;
+      existing.billableValue += fact.billableValue;
+      existing.collectedRevenue += fact.collectedRevenue;
+      existing.cashProfit += fact.cashProfit;
+      existing.actualCost += fact.actualCost;
+      deptFactMap.set(fact.departmentId, existing);
+    });
+
+    type DeptUtilRow = {
+      departmentId: number; departmentName: string; departmentCode: string | null;
+      billableHours: number; nonBillableHours: number; totalHours: number;
+      utilizationRate: number; revenue: number; profit: number; cost: number; marginPercent: number;
+    };
+    const departmentUtilization: DeptUtilRow[] = departments
+      .map((dept): DeptUtilRow | null => {
+        const totals = deptFactMap.get(dept.id);
+        if (!totals) return null;
+        return {
+          departmentId: dept.id,
+          departmentName: dept.name,
+          departmentCode: dept.departmentCode,
+          billableHours: totals.billableHours,
+          nonBillableHours: totals.nonBillableHours,
+          totalHours: totals.totalHours,
+          utilizationRate: totals.totalHours > 0 ? (totals.billableHours / totals.totalHours) * 100 : 0,
+          revenue: totals.collectedRevenue,
+          profit: totals.cashProfit,
+          cost: totals.actualCost,
+          marginPercent: totals.collectedRevenue > 0 ? (totals.cashProfit / totals.collectedRevenue) * 100 : 0,
+        };
+      })
+      .filter((d): d is DeptUtilRow => d !== null)
+      .sort((a, b) => b.revenue - a.revenue);
+
+    // Loss-alert jobs (cashProfit < 0, active or recently completed)
+    const lossAlertFacts = allFacts
+      .filter((fact) => fact.cashProfit < 0)
+      .map((fact) => ({
+        jobId: fact.jobId,
+        trackingPath: buildTrackingPath(fact.jobId),
+        jobName: fact.jobName,
+        jobCode: fact.jobCode,
+        clientName: fact.clientName ?? null,
+        cashProfit: fact.cashProfit,
+        billableValue: fact.billableValue,
+        actualCost: fact.actualCost,
+        marginPercent: fact.marginPercent,
+      }))
+      .sort((a, b) => a.cashProfit - b.cashProfit)
+      .slice(0, 20);
+
+    const monthlyTotals = new Map<string, { billable: number; nonBillable: number }>();
+    monthlyHoursRaw.forEach((row) => {
+      const key = new Date(row.month).toISOString().slice(0, 7);
+      const current = monthlyTotals.get(key) ?? { billable: 0, nonBillable: 0 };
+      if (row.billable) current.billable += Number(row.hours);
+      else current.nonBillable += Number(row.hours);
+      monthlyTotals.set(key, current);
+    });
+
+    const monthlyTrend = Array.from(monthlyTotals.entries())
+      .map(([month, totals]) => ({
+        month,
+        billableHours: totals.billable,
+        nonBillableHours: totals.nonBillable,
+        utilizationRate: (totals.billable + totals.nonBillable) > 0
+          ? (totals.billable / (totals.billable + totals.nonBillable)) * 100
+          : 0,
+      }))
+      .sort((a, b) => (a.month < b.month ? -1 : 1));
+
+    return res.json({
+      nonBillableByCategory,
+      firmPipeline,
+      departmentUtilization,
+      lossAlertJobs: lossAlertFacts,
+      monthlyTrend,
+    });
+  } catch (error: any) {
+    logger.error('hr_dashboard_time_revenue_error', toLogContext(error));
+    return res.status(500).json({ error: 'Failed to load time & revenue data' });
   }
 });
 

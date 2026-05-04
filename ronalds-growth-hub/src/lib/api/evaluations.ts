@@ -1,9 +1,11 @@
-import { api } from "./client";
+import { ApiError, api, getToken } from "./client";
 import type { Department, Profile } from "./types";
+
+const API_BASE_URL = `${import.meta.env.VITE_API_URL || "http://localhost:4000"}/api`;
 
 export type EvaluationCycleType = "annual" | "mid_year" | "quarterly" | "probation";
 export type EvaluationCycleStatus = "draft" | "active" | "closed";
-export type EvaluationRelationship = "self" | "peer" | "manager" | "subordinate";
+export type EvaluationRelationship = "self" | "peer" | "manager" | "subordinate" | "client";
 export type EvaluationAssignmentStatus = "pending" | "in_progress" | "submitted";
 export type EvaluationQuestionCategory = "competency" | "behavior" | "culture";
 export type FeedbackType = "praise" | "coaching" | "concern";
@@ -66,10 +68,11 @@ export interface EvaluationCycleSummary {
     id: number;
     dueDate?: string | null;
     enableSelfEvaluation?: boolean;
-    enablePeerEvaluation?: boolean;
-    enableUpwardEvaluation?: boolean;
-    enableDownwardEvaluation?: boolean;
-    processAnonymously?: boolean;
+	    enablePeerEvaluation?: boolean;
+	    enableUpwardEvaluation?: boolean;
+	    enableDownwardEvaluation?: boolean;
+	    enableClientEvaluation?: boolean;
+	    processAnonymously?: boolean;
     hideFromDashboard?: boolean;
     excludeFromScore?: boolean;
     requireEvaluatorSignature?: boolean;
@@ -202,10 +205,11 @@ export interface CreateCyclePayload {
   templateId?: number;
   questions?: Array<Record<string, unknown>>;
   enableSelfEvaluation?: boolean;
-  enablePeerEvaluation?: boolean;
-  enableUpwardEvaluation?: boolean;
-  enableDownwardEvaluation?: boolean;
-  processAnonymously?: boolean;
+	  enablePeerEvaluation?: boolean;
+	  enableUpwardEvaluation?: boolean;
+	  enableDownwardEvaluation?: boolean;
+	  enableClientEvaluation?: boolean;
+	  processAnonymously?: boolean;
   hideFromDashboard?: boolean;
   excludeFromScore?: boolean;
   requireEvaluatorSignature?: boolean;
@@ -307,6 +311,30 @@ export interface TeamDirectoryPerson {
   positionTitle?: string | null;
 }
 
+export interface EvaluationResultAreaLibraryItem {
+  id: string;
+  name: string;
+  description: string;
+  category: EvaluationQuestionCategory;
+  domain: string;
+  roleFamily: string;
+  evaluatorTypes: EvaluationWorkflowType[];
+  weight: number;
+  order: number;
+}
+
+export interface EvaluationResultAreaLibraryResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: EvaluationResultAreaLibraryItem[];
+  facets?: {
+    domains?: string[];
+    roleFamilies?: string[];
+    categories?: EvaluationQuestionCategory[];
+  };
+}
+
 type RawTemplateQuestionSection = {
   title?: string;
   category?: string;
@@ -384,10 +412,65 @@ const normalizeTemplate = (template: any): EvaluationTemplate => ({
   questions: normalizeTemplateQuestions(template.questions),
 });
 
+const buildQuery = (params?: Record<string, unknown>) => {
+  if (!params) return "";
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString();
+  return suffix ? `?${suffix}` : "";
+};
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
 const evaluationsAPI = {
-  getTemplates: async (): Promise<EvaluationTemplate[]> => {
-    const templates = await api.get<any[]>("/evaluation-templates?isActive=true");
-    return templates.map(normalizeTemplate);
+	  getTemplates: async (): Promise<EvaluationTemplate[]> => {
+	    const templates = await api.get<any[]>("/evaluation-templates?isActive=true");
+	    return templates.map(normalizeTemplate);
+	  },
+
+  getResultAreaLibrary: async (params?: {
+    search?: string;
+    category?: EvaluationQuestionCategory;
+    domain?: string;
+    roleFamily?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<EvaluationResultAreaLibraryResponse> =>
+    api.get(`/evaluation-templates/result-area-library${buildQuery(params)}`),
+
+  importResultAreaTemplate: async (data: {
+    name: string;
+    description?: string;
+    templateType?: string;
+    bscCategory?: string;
+    questions: EvaluationTemplateQuestionInput[];
+  }): Promise<EvaluationTemplate> => {
+    const template = await api.post<any>("/evaluation-templates/import", data);
+    return normalizeTemplate(template);
+  },
+
+  downloadResultAreaLibraryCsv: async (): Promise<void> => {
+    const token = getToken();
+    const response = await fetch(`${API_BASE_URL}/evaluation-templates/result-area-library/export.csv`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      throw new ApiError(`HTTP ${response.status}`, response.status);
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, "evaluation-result-area-library.csv");
   },
 
   getMyCycles: async (): Promise<EvaluationCycleSummary[]> =>
@@ -399,11 +482,14 @@ const evaluationsAPI = {
   createCycle: async (data: CreateCyclePayload): Promise<EvaluationCycleSummary> =>
     api.post("/evaluations/cycles", data),
 
-  assignEvaluators: async (
+	  assignEvaluators: async (
     cycleId: number,
     data: AssignEvaluatorsPayload
-  ): Promise<{ cycleId: number; count: number; assignments: EvaluationAssignment[] }> =>
-    api.post(`/evaluations/cycles/${cycleId}/assign`, data),
+	  ): Promise<{ cycleId: number; count: number; assignments: EvaluationAssignment[] }> =>
+	    api.post(`/evaluations/cycles/${cycleId}/assign`, data),
+
+  closeCycle: async (cycleId: number): Promise<unknown> =>
+    api.patch(`/evaluation-cycles/${cycleId}`, { status: "closed" }),
 
   getMyAssignments: async (): Promise<EvaluationAssignment[]> =>
     api.get("/evaluations/assignments/mine"),

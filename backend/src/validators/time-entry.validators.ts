@@ -4,6 +4,10 @@
 
 import { body, param, query } from "express-validator";
 
+const nonBillableCategories = ["leave", "public_holiday", "internal", "training", "over_budget", "other"];
+const nonBillableCategoryMessage =
+  "nonBillableCategory must be one of: leave, public_holiday, internal, training, over_budget, other";
+
 /**
  * Common param validator
  */
@@ -81,10 +85,8 @@ export const createTimeEntryValidators = [
 
   body("nonBillableCategory")
     .optional({ nullable: true })
-    .isIn(["leave", "public_holiday", "internal", "training", "other"])
-    .withMessage(
-      "nonBillableCategory must be one of: leave, public_holiday, internal, training, other"
-    ),
+    .isIn(nonBillableCategories)
+    .withMessage(nonBillableCategoryMessage),
 
   body("description")
     .optional({ nullable: true })
@@ -125,7 +127,7 @@ export const createTimeEntryValidators = [
   body().custom((value) => {
     if (value.billable === false && !value.nonBillableCategory) {
       throw new Error(
-        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, other)"
+        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, over_budget, other)"
       );
     }
     return true;
@@ -166,10 +168,8 @@ export const updateTimeEntryValidators = [
 
   body("nonBillableCategory")
     .optional({ nullable: true })
-    .isIn(["leave", "public_holiday", "internal", "training", "other"])
-    .withMessage(
-      "nonBillableCategory must be one of: leave, public_holiday, internal, training, other"
-    ),
+    .isIn(nonBillableCategories)
+    .withMessage(nonBillableCategoryMessage),
 
   body("description")
     .optional({ nullable: true })
@@ -213,7 +213,7 @@ export const updateTimeEntryValidators = [
   body().custom((value) => {
     if (value.billable === false && !value.nonBillableCategory) {
       throw new Error(
-        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, other)"
+        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, over_budget, other)"
       );
     }
     return true;

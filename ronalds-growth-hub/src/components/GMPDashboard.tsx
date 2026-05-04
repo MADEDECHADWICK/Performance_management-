@@ -180,7 +180,14 @@ interface TopClient {
 }
 
 interface DashboardData {
-  firmMetrics: FirmMetrics;
+  firmMetrics: FirmMetrics & {
+    total_hours?: number;
+    billable_hours?: number;
+    non_billable_hours?: number;
+    totalHours?: number;
+    billableHours?: number;
+    nonBillableHours?: number;
+  };
   financials?: {
     totalRevenue?: number;
     totalProfit?: number;
@@ -188,6 +195,10 @@ interface DashboardData {
     collectedAmount?: number;
     totalCost?: number;
     collectionRate?: number;
+    outstanding?: number;
+    totalHours?: number;
+    billableHours?: number;
+    nonBillableHours?: number;
   };
   partnerRankings: PartnerRanking[];
   managerRankings: ManagerRanking[];
@@ -479,6 +490,22 @@ export default function GMPDashboard() {
       ? collected - Number(dashboardData?.financials?.totalCost || 0)
       : collected - projected);
   const collectionRate = dashboardData?.financials?.collectionRate ?? 0;
+  const totalHours =
+    dashboardData?.financials?.totalHours ??
+    firmMetrics?.totalHours ??
+    firmMetrics?.total_hours ??
+    0;
+  const billableHours =
+    dashboardData?.financials?.billableHours ??
+    firmMetrics?.billableHours ??
+    firmMetrics?.billable_hours ??
+    0;
+  const nonBillableHours =
+    dashboardData?.financials?.nonBillableHours ??
+    firmMetrics?.nonBillableHours ??
+    firmMetrics?.non_billable_hours ??
+    0;
+  const outstanding = dashboardData?.financials?.outstanding ?? 0;
   const atRiskCount =
     dashboardData?.riskSummary?.atRiskJobs ??
     dashboardData?.alertsSummary?.atRiskJobs ??
@@ -719,9 +746,24 @@ export default function GMPDashboard() {
               <div className="kpi-value text-primary">
                 {formatPercentage(firmMetrics?.utilizationRate ?? firmMetrics?.utilization_rate ?? 0)}
               </div>
-              <p className="text-xs text-muted-foreground">Billable vs total hours</p>
+              <p className="text-xs text-muted-foreground">
+                {totalHours > 0 ? `${billableHours.toFixed(0)}h billable / ${totalHours.toFixed(0)}h total` : 'Billable vs total hours'}
+              </p>
             </CardContent>
           </Card>
+          {nonBillableHours > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Non-billable hours</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="kpi-value text-amber-600">{nonBillableHours.toFixed(0)}h</div>
+                <p className="text-xs text-muted-foreground">
+                  {outstanding > 0 ? `Outstanding ${formatCompactCurrency(outstanding)}` : 'Internal, leave, training'}
+                </p>
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">At-Risk Jobs</CardTitle>

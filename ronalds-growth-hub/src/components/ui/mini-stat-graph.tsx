@@ -174,24 +174,24 @@ export default function MiniStatGraph({
   return (
     <div
       className={cn(
-        "mt-4 rounded-2xl border px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]",
+        "mt-4 min-w-0 overflow-hidden rounded-2xl border px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]",
         palette.panelClass,
         className
       )}
     >
       {!hideLabel && (
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+        <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
             trend signal
           </span>
           <span
             className={cn(
-              "inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]",
+              "inline-flex min-w-0 shrink items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-tight",
               palette.badgeClass
             )}
           >
-            <TrendIcon className="h-3 w-3" />
-            {trendLabel}
+            <TrendIcon className="h-3 w-3 shrink-0" />
+            <span className="truncate">{trendLabel}</span>
           </span>
         </div>
       )}
@@ -247,10 +247,10 @@ export default function MiniStatGraph({
       </div>
 
       {!hideLabel && (
-        <div className="mt-2 flex items-center justify-between text-[11px] font-medium">
-          <span className="text-slate-500">Baseline pulse</span>
-          <span className={toneClass}>
-            {Math.abs(deltaPercent) < 0.2 ? "Holding steady" : `${Math.abs(deltaPercent).toFixed(1)}% shift`}
+        <div className="mt-2 flex min-w-0 items-center justify-between gap-1 text-[11px] font-medium">
+          <span className="shrink-0 text-slate-500">Baseline</span>
+          <span className={cn(toneClass, "min-w-0 truncate text-right")}>
+            {Math.abs(deltaPercent) < 0.2 ? "Steady" : `${Math.abs(deltaPercent).toFixed(1)}% shift`}
           </span>
         </div>
       )}

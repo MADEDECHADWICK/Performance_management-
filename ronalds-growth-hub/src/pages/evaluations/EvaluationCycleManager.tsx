@@ -78,6 +78,7 @@ export default function EvaluationCycleManager() {
     manager: [],
     peer: [],
     subordinate: [],
+    client: [],
   });
   const [pendingManualEvaluator, setPendingManualEvaluator] = useState<
     Record<EvaluationRelationship, string>
@@ -86,6 +87,7 @@ export default function EvaluationCycleManager() {
     manager: "",
     peer: "",
     subordinate: "",
+    client: "",
   });
   const [specificSignatureIds, setSpecificSignatureIds] = useState<number[]>([]);
   const [pendingSignatureProfileId, setPendingSignatureProfileId] = useState("");
@@ -186,13 +188,14 @@ export default function EvaluationCycleManager() {
 
   const enabledRelationships = useMemo(
     () =>
-      relationshipCards
-        .filter((relationship) => {
-          if (relationship.value === "manager") return launchOptions.enableDownwardEvaluation;
-          if (relationship.value === "peer") return launchOptions.enablePeerEvaluation;
-          if (relationship.value === "subordinate") return launchOptions.enableUpwardEvaluation;
-          return launchOptions.enableSelfEvaluation;
-        })
+	      relationshipCards
+	        .filter((relationship) => {
+	          if (relationship.value === "manager") return launchOptions.enableDownwardEvaluation;
+	          if (relationship.value === "peer") return launchOptions.enablePeerEvaluation;
+	          if (relationship.value === "subordinate") return launchOptions.enableUpwardEvaluation;
+	          if (relationship.value === "client") return launchOptions.enableClientEvaluation;
+	          return launchOptions.enableSelfEvaluation;
+	        })
         .map((relationship) => relationship.value),
     [launchOptions]
   );
@@ -326,6 +329,17 @@ export default function EvaluationCycleManager() {
     },
   });
 
+  const closeCycleMutation = useMutation({
+    mutationFn: evaluationsAPI.closeCycle,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["evaluation-cycles"] });
+      toast({
+        title: "Cycle finalized",
+        description: "The cycle is closed and final score outputs are being refreshed.",
+      });
+    },
+  });
+
   if (!canManageCycles) {
     return (
       <DashboardLayout>
@@ -337,11 +351,11 @@ export default function EvaluationCycleManager() {
   }
 
   if (
-    cyclesQuery.isLoading ||
-    peopleQuery.isLoading ||
-    departmentsQuery.isLoading ||
-    templatesQuery.isLoading
-  ) {
+	    cyclesQuery.isLoading ||
+	    peopleQuery.isLoading ||
+	    departmentsQuery.isLoading ||
+	    templatesQuery.isLoading
+	  ) {
     return (
       <DashboardLayout>
         <PageLoader message="Loading launch workspace..." minHeightClassName="min-h-[50vh]" />
@@ -442,10 +456,11 @@ export default function EvaluationCycleManager() {
         ? (generatedSections as unknown as Array<Record<string, unknown>>)
         : undefined,
       enableSelfEvaluation: launchOptions.enableSelfEvaluation,
-      enablePeerEvaluation: launchOptions.enablePeerEvaluation,
-      enableUpwardEvaluation: launchOptions.enableUpwardEvaluation,
-      enableDownwardEvaluation: launchOptions.enableDownwardEvaluation,
-      processAnonymously: launchOptions.processAnonymously,
+	      enablePeerEvaluation: launchOptions.enablePeerEvaluation,
+	      enableUpwardEvaluation: launchOptions.enableUpwardEvaluation,
+	      enableDownwardEvaluation: launchOptions.enableDownwardEvaluation,
+	      enableClientEvaluation: launchOptions.enableClientEvaluation,
+	      processAnonymously: launchOptions.processAnonymously,
       hideFromDashboard: launchOptions.hideFromDashboard,
       excludeFromScore: launchOptions.excludeFromScore,
       requireEvaluatorSignature: launchOptions.requireEvaluatorSignature,
@@ -474,12 +489,13 @@ export default function EvaluationCycleManager() {
           remindersEnabled: launchOptions.remindersEnabled,
           reminderCadence: launchOptions.reminderCadence,
           launchSummary: `${targetEvaluatees.length} evaluatee(s), ${enabledRelationships.length} evaluator group(s), ${questionSummary.itemCount} result areas`,
-          evaluatorMix: {
-            self: launchOptions.enableSelfEvaluation,
-            manager: launchOptions.enableDownwardEvaluation,
-            peer: launchOptions.enablePeerEvaluation,
-            direct_report: launchOptions.enableUpwardEvaluation,
-          },
+	          evaluatorMix: {
+	            self: launchOptions.enableSelfEvaluation,
+	            manager: launchOptions.enableDownwardEvaluation,
+	            peer: launchOptions.enablePeerEvaluation,
+	            direct_report: launchOptions.enableUpwardEvaluation,
+	            client: launchOptions.enableClientEvaluation,
+	          },
           schedules: enabledWorkflowTypes.map((evaluatorType) => ({
             evaluatorType,
             dueAt: computedDueDate,
@@ -524,7 +540,7 @@ export default function EvaluationCycleManager() {
     });
   };
 
-  const handlePublish = () => {
+	  const handlePublish = () => {
     if (!selectedCycleId) {
       toast({ title: "Create or select a cycle first", variant: "destructive" });
       return;
@@ -543,23 +559,22 @@ export default function EvaluationCycleManager() {
       cycleId: Number(selectedCycleId),
       payload: { assignments: stagedAssignments },
     });
+	  };
+
+  const handleCloseCycle = (cycle: { id: number; title: string; status: string }) => {
+    if (cycle.status === "closed") return;
+    const confirmed = window.confirm(
+      `Finalize "${cycle.title}"? This closes the cycle and refreshes final score outputs.`
+    );
+    if (!confirmed) return;
+    closeCycleMutation.mutate(cycle.id);
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">AssessTEAM-style</Badge>
-            <Badge variant="secondary">Create</Badge>
-            <Badge variant="secondary">Launch</Badge>
-          </div>
           <h1 className="text-3xl font-semibold tracking-tight">Create and Launch Evaluation</h1>
-          <p className="max-w-4xl text-sm text-muted-foreground">
-            Build the evaluation like a real rollout workspace: choose who is evaluated, define the
-            evaluator mix, decide the result areas, configure rollout rules, then publish the full
-            launch plan.
-          </p>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -930,14 +945,16 @@ export default function EvaluationCycleManager() {
               <CardContent className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   {relationshipCards.map((relationship) => {
-                    const checked =
-                      relationship.value === "manager"
-                        ? launchOptions.enableDownwardEvaluation
-                        : relationship.value === "peer"
-                          ? launchOptions.enablePeerEvaluation
-                          : relationship.value === "subordinate"
-                            ? launchOptions.enableUpwardEvaluation
-                            : launchOptions.enableSelfEvaluation;
+	                    const checked =
+	                      relationship.value === "manager"
+	                        ? launchOptions.enableDownwardEvaluation
+	                        : relationship.value === "peer"
+	                          ? launchOptions.enablePeerEvaluation
+	                          : relationship.value === "subordinate"
+	                            ? launchOptions.enableUpwardEvaluation
+	                            : relationship.value === "client"
+	                              ? launchOptions.enableClientEvaluation
+	                              : launchOptions.enableSelfEvaluation;
 
                     return (
                       <div
@@ -968,16 +985,23 @@ export default function EvaluationCycleManager() {
                                 }));
                                 return;
                               }
-                              if (relationship.value === "subordinate") {
-                                setLaunchOptions((current) => ({
-                                  ...current,
-                                  enableUpwardEvaluation: value,
-                                }));
-                                return;
-                              }
-                              setLaunchOptions((current) => ({
-                                ...current,
-                                enableSelfEvaluation: value,
+	                              if (relationship.value === "subordinate") {
+	                                setLaunchOptions((current) => ({
+	                                  ...current,
+	                                  enableUpwardEvaluation: value,
+	                                }));
+	                                return;
+	                              }
+	                              if (relationship.value === "client") {
+	                                setLaunchOptions((current) => ({
+	                                  ...current,
+	                                  enableClientEvaluation: value,
+	                                }));
+	                                return;
+	                              }
+	                              setLaunchOptions((current) => ({
+	                                ...current,
+	                                enableSelfEvaluation: value,
                               }));
                             }}
                           />
@@ -1039,11 +1063,13 @@ export default function EvaluationCycleManager() {
                                     </button>
                                   </Badge>
                                 ))
-                              ) : (
-                                <div className="text-sm text-muted-foreground">
-                                  If left empty, the system will auto-select this evaluator group.
-                                </div>
-                              )}
+	                              ) : (
+	                                <div className="text-sm text-muted-foreground">
+	                                  {relationship.value === "client"
+	                                    ? "Add at least one client or customer stakeholder for this group."
+	                                    : "If left empty, the system will auto-select this evaluator group."}
+	                                </div>
+	                              )}
                             </div>
                           </div>
                         )}
@@ -1160,12 +1186,22 @@ export default function EvaluationCycleManager() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {cycle.totalAssignments > 0 && (
-                        <Button asChild size="sm" variant="outline">
-                          <Link to={`/evaluations/cycles/${cycle.id}/results`}>View Results</Link>
-                        </Button>
-                      )}
-                      <Badge variant="outline">{cycle.status}</Badge>
+	                      {cycle.totalAssignments > 0 && (
+	                        <Button asChild size="sm" variant="outline">
+	                          <Link to={`/evaluations/cycles/${cycle.id}/results`}>View Results</Link>
+	                        </Button>
+	                      )}
+	                      {cycle.status !== "closed" && (
+	                        <Button
+	                          size="sm"
+	                          variant="outline"
+	                          disabled={closeCycleMutation.isPending}
+	                          onClick={() => handleCloseCycle(cycle)}
+	                        >
+	                          Finalize
+	                        </Button>
+	                      )}
+	                      <Badge variant="outline">{cycle.status}</Badge>
                       <Badge>{cycle.completionPercent}%</Badge>
                     </div>
                   </div>

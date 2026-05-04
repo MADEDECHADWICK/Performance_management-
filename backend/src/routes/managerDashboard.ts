@@ -5,6 +5,8 @@ import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
+import JobPerformanceFactsService from '../services/jobPerformanceFacts.service';
+import { logger, toLogContext } from '../lib/logger';
 
 const router = Router();
 
@@ -71,40 +73,17 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
 
-    const totalHoursAgg = await prisma.timeEntry.aggregate({
-      _sum: { hours: true, billableAmount: true, costAmount: true },
-      where: {
-        status: 'approved',
-        employeeProfileId: { in: teamMemberIds },
-      },
-    });
-
-    const allocationAgg = await prisma.revenueAllocation.aggregate({
-      _sum: { allocatedAmount: true, employeeProfit: true, employeeLoss: true },
-      where: { employeeProfileId: { in: teamMemberIds } },
-    });
-
-    const billableHoursAgg = await prisma.timeEntry.aggregate({
-      _sum: { hours: true },
-      where: {
-        status: 'approved',
-        billable: true,
-        employeeProfileId: { in: teamMemberIds },
-      },
-    });
-
-    const timeEntriesThisMonth = await prisma.timeEntry.findMany({
-      where: {
-        status: 'approved',
-        dateWorked: { gte: monthStart },
-        employeeProfileId: { in: teamMemberIds },
-      },
-      select: {
-        employeeProfileId: true,
-        hours: true,
-        billable: true,
-      },
-    });
+    const [managerFacts, monthFacts] = await Promise.all([
+      JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId }),
+      JobPerformanceFactsService.listFacts({ dateFrom: monthStart }, { type: 'manager', profileId }),
+    ]);
+    const teamMemberSet = new Set(teamMemberIds);
+    const teamFacts = managerFacts.flatMap((fact) =>
+      fact.employees.filter((employee) => teamMemberSet.has(employee.employeeProfileId))
+    );
+    const monthlyTeamFacts = monthFacts.flatMap((fact) =>
+      fact.employees.filter((employee) => teamMemberSet.has(employee.employeeProfileId))
+    );
 
     const performanceScores = await prisma.performanceScore.findMany({
       where: { employeeProfileId: { in: teamMemberIds } },
@@ -126,11 +105,10 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     const monthlyHoursByEmployee = new Map<number, { total: number; billable: number }>();
-    timeEntriesThisMonth.forEach((entry) => {
+    monthlyTeamFacts.forEach((entry) => {
       const current = monthlyHoursByEmployee.get(entry.employeeProfileId) || { total: 0, billable: 0 };
-      const hours = Number(entry.hours || 0);
-      current.total += hours;
-      if (entry.billable) current.billable += hours;
+      current.total += entry.totalHours;
+      current.billable += entry.billableHours;
       monthlyHoursByEmployee.set(entry.employeeProfileId, current);
     });
 
@@ -175,15 +153,19 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
       })),
       financials: {
         activeTeamMembers: teamMembers.length,
-        totalTeamHours: Number(totalHoursAgg._sum.hours || 0),
-        billableHours: Number(billableHoursAgg._sum.hours || 0),
-        totalRevenue: Number(allocationAgg._sum.allocatedAmount || 0),
-        totalCost: Number(totalHoursAgg._sum.costAmount || 0),
+        totalTeamHours: teamFacts.reduce((sum, fact) => sum + fact.totalHours, 0),
+        billableHours: teamFacts.reduce((sum, fact) => sum + fact.billableHours, 0),
+        nonBillableHours: teamFacts.reduce((sum, fact) => sum + fact.nonBillableHours, 0),
+        totalRevenue: managerFacts.reduce((sum, fact) => sum + fact.collectedRevenue, 0),
+        billableValue: managerFacts.reduce((sum, fact) => sum + fact.billableValue, 0),
+        billedRevenue: managerFacts.reduce((sum, fact) => sum + fact.billedRevenue, 0),
+        collectedRevenue: managerFacts.reduce((sum, fact) => sum + fact.collectedRevenue, 0),
+        totalCost: teamFacts.reduce((sum, fact) => sum + fact.actualCost, 0),
       },
       performance,
     });
   } catch (error: any) {
-    console.error('Error fetching team data:', error);
+    logger.error('manager_dashboard_team_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });
@@ -214,20 +196,13 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
             budgetCap: { select: { totalAllocatedHours: true } },
           },
         },
-        timeEntries: {
-          where: { status: 'approved' },
-          select: { hours: true, billableAmount: true, costAmount: true },
-        },
       },
       orderBy: { jobName: 'asc' },
     });
 
     const jobIds = jobs.map((job) => job.id);
-    const [allocations, approvalGroups, overBudgetGroups, latestApprovalRows] = await Promise.all([
-      prisma.revenueAllocation.findMany({
-        where: { jobId: { in: jobIds } },
-        select: { jobId: true, allocatedAmount: true },
-      }),
+    const [facts, approvalGroups, overBudgetGroups, latestApprovalRows] = await Promise.all([
+      JobPerformanceFactsService.listFacts({ jobIds }, { type: 'manager', profileId }),
       prisma.timeEntryApprovalRequest.groupBy({
         by: ['jobId', 'status'],
         where: { jobId: { in: jobIds } },
@@ -254,11 +229,7 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
       }),
     ]);
 
-    const revenueByJob = new Map<number, number>();
-    allocations.forEach((allocation) => {
-      const current = revenueByJob.get(allocation.jobId) || 0;
-      revenueByJob.set(allocation.jobId, current + Number(allocation.allocatedAmount || 0));
-    });
+    const factsByJob = new Map(facts.map((fact) => [fact.jobId, fact]));
 
     type ApprovalChainCounter = {
       pending: number;
@@ -330,23 +301,18 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     const portfolio = jobs.map((job) => {
-      const actualHours = job.timeEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
-      const timeEntryRevenue = job.timeEntries.reduce(
-        (sum, entry) => sum + Number(entry.billableAmount || 0),
-        0
-      );
-      const revenue = revenueByJob.get(job.id) ?? timeEntryRevenue;
-      const cost = job.timeEntries.reduce(
-        (sum, entry) => sum + Number(entry.costAmount || 0),
-        0
-      );
+      const fact = factsByJob.get(job.id);
+      const actualHours = fact?.totalHours ?? 0;
+      const revenue = fact?.collectedRevenue ?? 0;
+      const cost = fact?.actualCost ?? 0;
       const budgetHours = Number(
-        job.jobCosting?.budgetCap?.totalAllocatedHours ??
+        fact?.budgetHours ??
+          job.jobCosting?.budgetCap?.totalAllocatedHours ??
           job.jobCosting?.totalEstimatedHours ??
           job.budgetHours ??
           0
       );
-      const budgetUtilization = budgetHours > 0 ? Math.round((actualHours / budgetHours) * 100) : 0;
+      const budgetUtilization = fact?.budgetUsedPercent ?? (budgetHours > 0 ? Math.round((actualHours / budgetHours) * 100) : 0);
       const approvalChain = approvalChainByJob.get(job.id) || ensureApprovalCounter(job.id);
       const plannedCost = Number(job.jobCosting?.totalEstimatedCost || 0);
       const plannedHours = Number(
@@ -374,6 +340,11 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
         budgetHours,
         actualHours,
         revenue,
+        billableValue: fact?.billableValue ?? 0,
+        billedRevenue: fact?.billedRevenue ?? 0,
+        collectedRevenue: fact?.collectedRevenue ?? 0,
+        billableHours: fact?.billableHours ?? 0,
+        nonBillableHours: fact?.nonBillableHours ?? 0,
         cost,
         budgetUtilization,
         costingStatus: job.jobCosting?.costingStatus ?? 'missing',
@@ -460,7 +431,7 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
   } catch (error: any) {
-    console.error('Error fetching job data:', error);
+    logger.error('manager_dashboard_jobs_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });
@@ -623,7 +594,7 @@ router.get('/approval-chain', authMiddleware, async (req: AuthRequest, res) => {
       })),
     });
   } catch (error: any) {
-    console.error('Error fetching manager approval chain:', error);
+    logger.error('manager_dashboard_approval_chain_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });
@@ -642,98 +613,54 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
     const sinceDate = new Date();
     sinceDate.setMonth(sinceDate.getMonth() - 12);
 
-    const timeEntries = await prisma.timeEntry.findMany({
-      where: {
-        status: 'approved',
-        dateWorked: { gte: sinceDate },
-        employee: { managerId: profileId },
-      },
-      select: {
-        dateWorked: true,
-        billableAmount: true,
-        costAmount: true,
-        hours: true,
-        billable: true,
-        employeeProfileId: true,
-      },
+    const monthStarts = Array.from({ length: 12 }, (_, index) => {
+      const month = new Date(sinceDate.getFullYear(), sinceDate.getMonth() + index, 1);
+      month.setHours(0, 0, 0, 0);
+      return month;
     });
 
-    const monthlyMap = new Map<string, { revenue: number; cost: number; totalHours: number; billableHours: number }>();
-    timeEntries.forEach((entry) => {
-      const monthKey = new Date(entry.dateWorked.getFullYear(), entry.dateWorked.getMonth(), 1)
-        .toISOString()
-        .slice(0, 10);
-      const current = monthlyMap.get(monthKey) || { revenue: 0, cost: 0, totalHours: 0, billableHours: 0 };
-      current.cost += Number(entry.costAmount || 0);
-      current.totalHours += Number(entry.hours || 0);
-      if (entry.billable) current.billableHours += Number(entry.hours || 0);
-      monthlyMap.set(monthKey, current);
-    });
+    const monthlyFacts = await Promise.all(
+      monthStarts.map((monthStart) => {
+        const monthEnd = new Date(monthStart);
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
+        return JobPerformanceFactsService.listFacts(
+          { dateFrom: monthStart, dateTo: monthEnd },
+          { type: 'manager', profileId }
+        );
+      })
+    );
 
-    const allocations = await prisma.revenueAllocation.findMany({
-      where: {
-        employee: { managerId: profileId },
-        allocationMonth: { gte: sinceDate },
-      },
-      select: {
-        allocationMonth: true,
-        allocatedAmount: true,
-        employeeProfit: true,
-        employeeLoss: true,
-      },
-    });
-
-    allocations.forEach((allocation) => {
-      const monthKey = new Date(allocation.allocationMonth.getFullYear(), allocation.allocationMonth.getMonth(), 1)
-        .toISOString()
-        .slice(0, 10);
-      const current = monthlyMap.get(monthKey) || { revenue: 0, cost: 0, totalHours: 0, billableHours: 0 };
-      current.revenue += Number(allocation.allocatedAmount || 0);
-      monthlyMap.set(monthKey, current);
-    });
-
-    const monthlyFinancials = Array.from(monthlyMap.entries())
-      .map(([month, values]) => ({ month, ...values }))
+    const monthlyFinancials = monthlyFacts
+      .map((facts, index) => {
+        const month = monthStarts[index].toISOString().slice(0, 10);
+        return {
+          month,
+          revenue: facts.reduce((sum, fact) => sum + fact.collectedRevenue, 0),
+          billableValue: facts.reduce((sum, fact) => sum + fact.billableValue, 0),
+          billedRevenue: facts.reduce((sum, fact) => sum + fact.billedRevenue, 0),
+          collectedRevenue: facts.reduce((sum, fact) => sum + fact.collectedRevenue, 0),
+          cost: facts.reduce((sum, fact) => sum + fact.actualCost, 0),
+          totalHours: facts.reduce((sum, fact) => sum + fact.totalHours, 0),
+          billableHours: facts.reduce((sum, fact) => sum + fact.billableHours, 0),
+          nonBillableHours: facts.reduce((sum, fact) => sum + fact.nonBillableHours, 0),
+        };
+      })
       .sort((a, b) => (a.month < b.month ? 1 : -1));
 
-    const jobs = await prisma.job.findMany({
-      where: { managerProfileId: profileId },
-      include: {
-        client: { select: { clientName: true } },
-        timeEntries: {
-          where: { status: 'approved' },
-          select: { billableAmount: true, costAmount: true },
-        },
-      },
-    });
-
-    const jobIds = jobs.map((job) => job.id);
-    const jobAllocations = await prisma.revenueAllocation.findMany({
-      where: { jobId: { in: jobIds } },
-      select: { jobId: true, allocatedAmount: true },
-    });
-
-    const revenueByJob = new Map<number, number>();
-    jobAllocations.forEach((allocation) => {
-      const current = revenueByJob.get(allocation.jobId) || 0;
-      revenueByJob.set(allocation.jobId, current + Number(allocation.allocatedAmount || 0));
-    });
-
-    const jobProfitability = jobs.map((job) => {
-      const timeEntryRevenue = job.timeEntries.reduce((sum, entry) => sum + Number(entry.billableAmount || 0), 0);
-      const revenue = revenueByJob.get(job.id) ?? timeEntryRevenue;
-      const cost = job.timeEntries.reduce((sum, entry) => sum + Number(entry.costAmount || 0), 0);
-      return {
-        jobId: job.id,
-        trackingPath: buildTrackingPath(job.id),
-        jobName: job.jobName,
-        jobCode: job.jobCode,
-        clientName: job.client?.clientName ?? 'Unassigned',
-        revenue,
-        cost,
-        profit: revenue - cost,
-      };
-    });
+    const currentFacts = await JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId });
+    const jobProfitability = currentFacts.map((fact) => ({
+      jobId: fact.jobId,
+      trackingPath: buildTrackingPath(fact.jobId),
+      jobName: fact.jobName,
+      jobCode: fact.jobCode,
+      clientName: fact.clientName ?? 'Unassigned',
+      revenue: fact.collectedRevenue,
+      billableValue: fact.billableValue,
+      billedRevenue: fact.billedRevenue,
+      collectedRevenue: fact.collectedRevenue,
+      cost: fact.actualCost,
+      profit: fact.cashProfit,
+    }));
 
     const teamMembers = await prisma.profile.findMany({
       where: { managerId: profileId, status: 'active' },
@@ -743,47 +670,24 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
-
-    const memberEntries = await prisma.timeEntry.findMany({
-      where: {
-        status: 'approved',
-        dateWorked: { gte: monthStart },
-        employeeProfileId: { in: teamMembers.map((m) => m.id) },
-      },
-      select: { employeeProfileId: true, billableAmount: true, hours: true, billable: true },
-    });
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
 
     const contributionsMap = new Map<number, { revenue: number; totalHours: number; billableHours: number }>();
-    memberEntries.forEach((entry) => {
+    const currentMonthFacts = await JobPerformanceFactsService.listFacts(
+      { dateFrom: monthStart, dateTo: monthEnd },
+      { type: 'manager', profileId }
+    );
+    currentMonthFacts.flatMap((fact) => fact.employees).forEach((entry) => {
       const current = contributionsMap.get(entry.employeeProfileId) || {
         revenue: 0,
         totalHours: 0,
         billableHours: 0,
       };
-      current.totalHours += Number(entry.hours || 0);
-      if (entry.billable) current.billableHours += Number(entry.hours || 0);
+      current.revenue += entry.billableValue;
+      current.totalHours += entry.totalHours;
+      current.billableHours += entry.billableHours;
       contributionsMap.set(entry.employeeProfileId, current);
-    });
-
-    const monthEnd = new Date(monthStart);
-    monthEnd.setMonth(monthEnd.getMonth() + 1);
-
-    const allocationContributions = await prisma.revenueAllocation.findMany({
-      where: {
-        employeeProfileId: { in: teamMembers.map((m) => m.id) },
-        allocationMonth: { gte: monthStart, lt: monthEnd },
-      },
-      select: { employeeProfileId: true, allocatedAmount: true },
-    });
-
-    allocationContributions.forEach((allocation) => {
-      const current = contributionsMap.get(allocation.employeeProfileId) || {
-        revenue: 0,
-        totalHours: 0,
-        billableHours: 0,
-      };
-      current.revenue += Number(allocation.allocatedAmount || 0);
-      contributionsMap.set(allocation.employeeProfileId, current);
     });
 
     const teamContributions = teamMembers.map((member) => {
@@ -803,7 +707,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
       teamContributions,
     });
   } catch (error: any) {
-    console.error('Error fetching financial data:', error);
+    logger.error('manager_dashboard_financials_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });
@@ -854,7 +758,7 @@ router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
       recentPerformance,
     });
   } catch (error: any) {
-    console.error('Error fetching evaluation data:', error);
+    logger.error('manager_dashboard_evaluations_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });
@@ -874,12 +778,6 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       where: { managerId: profileId, status: 'active' },
     });
 
-    const teamMembers = await prisma.profile.findMany({
-      where: { managerId: profileId, status: 'active' },
-      select: { id: true },
-    });
-    const teamMemberIds = teamMembers.map((member) => member.id);
-
     const activeJobs = await prisma.job.count({
       where: {
         managerProfileId: profileId,
@@ -893,27 +791,12 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
     const monthEnd = new Date(monthStart);
     monthEnd.setMonth(monthEnd.getMonth() + 1);
 
-    const totals = await prisma.timeEntry.aggregate({
-      _sum: { billableAmount: true, costAmount: true, hours: true },
-      where: {
-        status: 'approved',
-        dateWorked: { gte: monthStart },
-        employeeProfileId: { in: teamMemberIds },
-      },
-    });
-
-    const billableTotals = await prisma.timeEntry.aggregate({
-      _sum: { hours: true },
-      where: {
-        status: 'approved',
-        billable: true,
-        dateWorked: { gte: monthStart },
-        employeeProfileId: { in: teamMemberIds },
-      },
-    });
-
-    const totalHours = Number(totals._sum.hours || 0);
-    const billableHours = Number(billableTotals._sum.hours || 0);
+    const monthFacts = await JobPerformanceFactsService.listFacts(
+      { dateFrom: monthStart, dateTo: monthEnd },
+      { type: 'manager', profileId }
+    );
+    const totalHours = monthFacts.reduce((sum, fact) => sum + fact.totalHours, 0);
+    const billableHours = monthFacts.reduce((sum, fact) => sum + fact.billableHours, 0);
     const utilizationRate = totalHours > 0 ? Math.round((billableHours / totalHours) * 100) : 0;
 
     const pendingReviews = await prisma.evaluationAssignment.count({
@@ -923,17 +806,8 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
 
-    const allocationTotals = await prisma.revenueAllocation.aggregate({
-      _sum: { allocatedAmount: true, employeeProfit: true, employeeLoss: true },
-      where: {
-        employeeProfileId: { in: teamMemberIds },
-        allocationMonth: { gte: monthStart, lt: monthEnd },
-      },
-    });
-
-    const monthlyRevenue = Number(allocationTotals._sum.allocatedAmount || 0);
-    const monthlyProfit =
-      Number(allocationTotals._sum.employeeProfit || 0) - Number(allocationTotals._sum.employeeLoss || 0);
+    const monthlyRevenue = monthFacts.reduce((sum, fact) => sum + fact.collectedRevenue, 0);
+    const monthlyProfit = monthFacts.reduce((sum, fact) => sum + fact.cashProfit, 0);
 
     return res.json({
       teamSize,
@@ -945,7 +819,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       framework: getDashboardModuleCoverageSummary("manager"),
     });
   } catch (error: any) {
-    console.error('Error fetching overview data:', error);
+    logger.error('manager_dashboard_overview_error', toLogContext(error));
     return res.status(500).json({ error: error.message });
   }
 });

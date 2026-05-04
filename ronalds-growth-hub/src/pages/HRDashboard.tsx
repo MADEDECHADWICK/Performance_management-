@@ -29,6 +29,7 @@ import {
   Circle,
   RefreshCw,
   FileSpreadsheet,
+  Clock,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
@@ -89,6 +90,31 @@ interface NotificationCard {
   link?: string;
 }
 
+interface TimeRevenueData {
+  nonBillableByCategory: Array<{ nonBillableCategory: string; _sum: { hours: number } }>;
+  firmPipeline: {
+    billableValue: number;
+    billedRevenue: number;
+    collectedRevenue: number;
+    outstandingRevenue: number;
+    totalHours: number;
+    billableHours: number;
+    nonBillableHours: number;
+    utilizationRate: number;
+  };
+  departmentUtilization: Array<{
+    departmentId: number;
+    departmentName: string;
+    billableHours: number;
+    nonBillableHours: number;
+    totalHours: number;
+    utilizationRate: number;
+    revenue: number;
+  }>;
+  lossAlertJobs: Array<{ jobId: number; jobName: string; cashProfit: number; marginPercent: number }>;
+  monthlyTrend: Array<{ month: string; billable: number; nonBillable: number }>;
+}
+
 interface HrApprovalControls {
   controls: {
     totalJobs: number;
@@ -143,6 +169,7 @@ const HRDashboard = () => {
   const [subordinates, setSubordinates] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<NotificationCard[]>([]);
   const [approvalControls, setApprovalControls] = useState<HrApprovalControls | null>(null);
+  const [timeRevenue, setTimeRevenue] = useState<TimeRevenueData | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [missingChecklistCount, setMissingChecklistCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -180,7 +207,8 @@ const HRDashboard = () => {
         loadCompanyMetrics(),
         loadApprovalControls(),
         loadSubordinates(profileId),
-        loadMissingChecklists()
+        loadMissingChecklists(),
+        loadTimeRevenue(),
       ]);
 
       const mapped = mapProfile(user);
@@ -425,6 +453,17 @@ const HRDashboard = () => {
     } catch (error) {
       console.error("Error loading HR approval controls:", error);
       setApprovalControls(null);
+    }
+  };
+
+  const loadTimeRevenue = async () => {
+    try {
+      const response = await apiFetch('GET', '/hr-dashboard/time-revenue');
+      const payload = response?.data ?? response ?? null;
+      setTimeRevenue(payload);
+    } catch (error) {
+      console.error("Error loading time-revenue data:", error);
+      setTimeRevenue(null);
     }
   };
 
@@ -907,7 +946,7 @@ const HRDashboard = () => {
                 </Button>
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-4">
               <Card className="hover:shadow-lg transition-shadow">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Total Employees</CardTitle>
@@ -1025,6 +1064,125 @@ const HRDashboard = () => {
                 </CardContent>
               </Card>
             </div>
+
+            {timeRevenue && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  Time &amp; Revenue Pipeline
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Billable hours</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xl font-bold text-emerald-600">
+                        {(timeRevenue.firmPipeline.billableHours ?? 0).toFixed(0)}h
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Utilization {(timeRevenue.firmPipeline.utilizationRate ?? 0).toFixed(1)}%
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Non-billable hours</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xl font-bold text-amber-600">
+                        {(timeRevenue.firmPipeline.nonBillableHours ?? 0).toFixed(0)}h
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        of {(timeRevenue.firmPipeline.totalHours ?? 0).toFixed(0)}h total
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Billed revenue</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-xl font-bold">
+                        {formatCurrency(timeRevenue.firmPipeline.billedRevenue ?? 0)}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Collected {formatCurrency(timeRevenue.firmPipeline.collectedRevenue ?? 0)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Outstanding</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className={`text-xl font-bold ${(timeRevenue.firmPipeline.outstandingRevenue ?? 0) > 0 ? 'text-rose-600' : 'text-foreground'}`}>
+                        {formatCurrency(timeRevenue.firmPipeline.outstandingRevenue ?? 0)}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Billable value {formatCurrency(timeRevenue.firmPipeline.billableValue ?? 0)}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {timeRevenue.departmentUtilization.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <Building2 className="h-4 w-4" />
+                        Department Utilization
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {timeRevenue.departmentUtilization.map((dept) => (
+                          <div key={dept.departmentId} className="flex items-center gap-3">
+                            <span className="w-32 shrink-0 text-xs font-medium truncate">{dept.departmentName}</span>
+                            <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-emerald-500"
+                                style={{ width: `${Math.min(100, dept.utilizationRate)}%` }}
+                              />
+                            </div>
+                            <span className={`w-12 shrink-0 text-right text-xs font-semibold ${dept.utilizationRate >= 70 ? 'text-emerald-600' : dept.utilizationRate >= 50 ? 'text-amber-600' : 'text-rose-600'}`}>
+                              {dept.utilizationRate.toFixed(0)}%
+                            </span>
+                            <span className="w-16 shrink-0 text-right text-xs text-muted-foreground">
+                              {dept.billableHours.toFixed(0)}h
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {timeRevenue.lossAlertJobs.length > 0 && (
+                  <Card className="border-rose-200">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2 text-rose-700">
+                        <TrendingDown className="h-4 w-4" />
+                        Loss Alert Jobs
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {timeRevenue.lossAlertJobs.slice(0, 5).map((job) => (
+                          <div key={job.jobId} className="flex items-center justify-between gap-3 rounded-md border border-rose-100 p-2">
+                            <span className="text-sm font-medium truncate">{job.jobName}</span>
+                            <div className="flex shrink-0 gap-3 text-xs">
+                              <span className="text-rose-600 font-semibold">{formatCurrency(job.cashProfit)}</span>
+                              <Badge variant="destructive">{job.marginPercent.toFixed(1)}%</Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <Card>

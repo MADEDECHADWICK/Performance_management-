@@ -16,7 +16,6 @@ export { default as jobsAPI } from './jobs';
 export { default as timeEntriesAPI } from './timeEntries';
 export { default as employeesAPI } from './employees';
 export { default as evaluationsAPI } from './evaluations';
-export { default as dashboardsAPI } from './dashboards';
 export { default as documentsAPI } from './documents';
 export { default as departmentsAPI } from './departments';
 export { default as surveysAPI } from './surveys';
@@ -42,7 +41,6 @@ import jobsAPI from './jobs';
 import timeEntriesAPI from './timeEntries';
 import employeesAPI from './employees';
 import evaluationsAPI from './evaluations';
-import dashboardsAPI from './dashboards';
 import documentsAPI from './documents';
 import departmentsAPI from './departments';
 import surveysAPI from './surveys';
@@ -68,7 +66,6 @@ const API = {
   timeEntries: timeEntriesAPI,
   employees: employeesAPI,
   evaluations: evaluationsAPI,
-  dashboards: dashboardsAPI,
   documents: documentsAPI,
   departments: departmentsAPI,
   surveys: surveysAPI,

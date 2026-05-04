@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../prisma';
@@ -8,6 +8,8 @@ import { requireAnyModuleAccess, requireModuleAccess } from '../middleware/requi
 import { notifyProfile, notifyProfilesByRoles } from '../services/notificationRecipients';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
 import jobService from '../services/jobs.service';
+import JobPerformanceFactsService from '../services/jobPerformanceFacts.service';
+import { logger, toLogContext } from '../lib/logger';
 
 const router = Router();
 const financeDashboardRoles = new Set(['finance', 'hr', 'gmp', 'super_admin']);
@@ -15,7 +17,7 @@ const canReadFinance = requireModuleAccess('finance', 'read');
 const canWriteFinance = requireModuleAccess('finance', 'write');
 const canApproveFinance = requireModuleAccess('finance', 'approve');
 const canAdminFinance = requireModuleAccess('finance', 'admin');
-// IMPLEMENTED: Finance projection/collection permission split — these flows now accept either legacy finance module access or dedicated split-module permissions.
+// IMPLEMENTED: Finance projection/collection permission split â€” these flows now accept either legacy finance module access or dedicated split-module permissions.
 const canReadCollections = requireAnyModuleAccess([
   { moduleKey: 'finance', action: 'read' },
   { moduleKey: 'finance_collections', action: 'read' },
@@ -311,7 +313,7 @@ router.get('/overview', authMiddleware, canReadFinance, async (req: AuthRequest,
       framework: getDashboardModuleCoverageSummary("finance"),
     });
   } catch (error: any) {
-    console.error('Finance overview error:', error);
+    logger.error('finance_dashboard_overview_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load finance overview' });
   }
 });
@@ -352,7 +354,7 @@ router.get('/collections', authMiddleware, canReadCollections, async (req: AuthR
       }))
     );
   } catch (error: any) {
-    console.error('Finance collections error:', error);
+    logger.error('finance_dashboard_collections_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load collections' });
   }
 });
@@ -439,7 +441,7 @@ router.get(
         }))
       );
     } catch (error: any) {
-      console.error('Finance outstanding invoices error:', error);
+      logger.error('finance_dashboard_outstanding_invoices_error', toLogContext(error));
       res.status(500).json({ error: 'Failed to load outstanding invoices' });
     }
   }
@@ -795,7 +797,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
               employeeTotals.set(entry.employeeProfileId, current);
             });
 
-            // IMPLEMENTED: Collections revenue allocation formula — per-payment allocation now uses adjusted billable hours (billable +/- profit/loss hours).
+            // IMPLEMENTED: Collections revenue allocation formula â€” per-payment allocation now uses adjusted billable hours (billable +/- profit/loss hours).
             employeeTotals.forEach((value) => {
               value.effectiveRate =
                 value.allocatedHours > 0 ? value.allocatedCost / value.allocatedHours : 0;
@@ -1060,7 +1062,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
             });
           }
         } catch (notifyError) {
-          console.error('Finance collections post-commit notification error:', notifyError);
+          logger.error('finance_dashboard_collection_notify_error', toLogContext(notifyError));
         }
       }
 
@@ -1086,7 +1088,7 @@ router.post('/collections', authMiddleware, canWriteCollections, async (req: Aut
     const result = await operation;
     res.status(result.statusCode).json(result.payload);
   } catch (error: any) {
-    console.error('Finance collections create error:', error);
+    logger.error('finance_dashboard_collections_create_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to record payment' });
   } finally {
     if (activeIdempotencyKey && registeredInFlight) {
@@ -1129,7 +1131,7 @@ router.get('/projections', authMiddleware, canReadProjections, async (req: AuthR
       }))
     );
   } catch (error: any) {
-    console.error('Finance projections error:', error);
+    logger.error('finance_dashboard_projections_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load projections' });
   }
 });
@@ -1219,7 +1221,7 @@ router.post('/projections', authMiddleware, canWriteProjections, async (req: Aut
 
     res.status(201).json(projection);
   } catch (error: any) {
-    console.error('Finance projections create error:', error);
+    logger.error('finance_dashboard_projections_create_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to save projection' });
   }
 });
@@ -1267,7 +1269,7 @@ router.get('/client-balances', authMiddleware, canReadFinance, async (req: AuthR
 
     res.json(balances);
   } catch (error: any) {
-    console.error('Finance client balances error:', error);
+    logger.error('finance_dashboard_client_balances_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load client balances' });
   }
 });
@@ -1359,7 +1361,7 @@ router.get('/job-balances', authMiddleware, canReadFinance, async (req: AuthRequ
 
     res.json(balances);
   } catch (error: any) {
-    console.error('Finance job balances error:', error);
+    logger.error('finance_dashboard_job_balances_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load job balances' });
   }
 });
@@ -1396,7 +1398,7 @@ router.get('/receivable-owners', authMiddleware, canReadFinance, async (req: Aut
       }))
     );
   } catch (error: any) {
-    console.error('Finance receivable owners error:', error);
+    logger.error('finance_dashboard_receivable_owners_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load receivable owners' });
   }
 });
@@ -1517,7 +1519,7 @@ router.patch('/job-balances/:jobId/owner', authMiddleware, canAdminFinance, asyn
       receivableOwnerAssignedAt: updated.receivableOwnerAssignedAt,
     });
   } catch (error: any) {
-    console.error('Finance receivable owner update error:', error);
+    logger.error('finance_dashboard_receivable_owner_update_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to assign receivable owner' });
   }
 });
@@ -1578,7 +1580,7 @@ router.get('/job-balances/:jobId/follow-ups', authMiddleware, canReadFinance, as
       }))
     );
   } catch (error: any) {
-    console.error('Finance follow-up logs error:', error);
+    logger.error('finance_dashboard_followup_logs_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load receivable follow-up logs' });
   }
 });
@@ -1809,7 +1811,7 @@ router.post('/job-balances/:jobId/follow-ups', authMiddleware, canWriteFinance, 
       actionByName: `${followUp.actionBy.firstName} ${followUp.actionBy.lastName}`.trim(),
     });
   } catch (error: any) {
-    console.error('Finance follow-up create error:', error);
+    logger.error('finance_dashboard_followup_create_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to log receivable follow-up action' });
   }
 });
@@ -1993,7 +1995,7 @@ router.post('/job-balances/:jobId/escalate', authMiddleware, canApproveFinance, 
       clientName: existingJob.client?.clientName ?? null,
     });
   } catch (error: any) {
-    console.error('Finance escalation error:', error);
+    logger.error('finance_dashboard_escalation_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to escalate receivable' });
   }
 });
@@ -2187,7 +2189,7 @@ router.get('/receivables-aging', authMiddleware, canReadFinance, async (req: Aut
       jobs: records,
     });
   } catch (error: any) {
-    console.error('Finance receivables aging error:', error);
+    logger.error('finance_dashboard_receivables_aging_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load receivables aging buckets' });
   }
 });
@@ -2336,7 +2338,7 @@ router.patch('/job-balances/:jobId/collection-stage', authMiddleware, canApprove
 
     res.json(updated);
   } catch (error: any) {
-    console.error('Finance job collection stage update error:', error);
+    logger.error('finance_dashboard_collection_stage_update_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to update collection stage' });
   }
 });
@@ -2349,61 +2351,34 @@ router.get('/job-profitability', authMiddleware, canReadFinance, async (req: Aut
       return res.status(context.error.status).json({ error: context.error.message });
     }
 
-    const jobs = await prisma.job.findMany({
-      include: {
-        client: { select: { clientName: true } },
-        jobCosting: true,
-        timeEntries: {
-          where: { status: 'approved' },
-          select: { billableAmount: true, costAmount: true },
-        },
-        requisitionRequests: {
-          where: { status: 'approved' },
-          select: { amount: true, isClientRecoverable: true },
-        },
-        payments: { select: { paymentAmount: true } },
-      },
-      orderBy: { jobName: 'asc' },
-    });
-
-    const profitability = jobs.map((job) => {
-      const laborCost = job.timeEntries.reduce(
-        (sum, entry) => sum + Number(entry.costAmount || 0),
-        0
-      );
-      const approvedRequisitionCost = job.requisitionRequests.reduce(
-        (sum, item) => sum + Number(item.amount || 0),
-        0
-      );
-      const recoverableRequisitionCost = job.requisitionRequests
-        .filter((item) => item.isClientRecoverable)
-        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const cost = laborCost + approvedRequisitionCost;
-      const collected = job.payments.reduce(
-        (sum, payment) => sum + Number(payment.paymentAmount || 0),
-        0
-      );
-      const revenue = collected;
-
-      return {
-        jobId: job.id,
-        jobCode: job.jobCode,
-        jobName: job.jobName,
-        clientName: job.client?.clientName ?? 'Unassigned',
-        revenue,
-        laborCost,
-        approvedRequisitionCost,
-        recoverableRequisitionCost,
-        cost,
-        profit: revenue - cost,
-        margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : 0,
-        collected,
-      };
-    });
+    const facts = await JobPerformanceFactsService.listFacts({}, { type: 'firm' });
+    const profitability = facts.map((fact) => ({
+      jobId: fact.jobId,
+      jobCode: fact.jobCode,
+      jobName: fact.jobName,
+      clientName: fact.clientName ?? 'Unassigned',
+      revenue: fact.collectedRevenue,
+      billableValue: fact.billableValue,
+      billedRevenue: fact.billedRevenue,
+      collectedRevenue: fact.collectedRevenue,
+      laborCost: fact.laborCost,
+      approvedRequisitionCost: fact.approvedRequisitionCost,
+      recoverableRequisitionCost: fact.recoverableRequisitionCost,
+      cost: fact.actualCost,
+      profit: fact.cashProfit,
+      workInProgressProfit: fact.workInProgressProfit,
+      billedProfit: fact.billedProfit,
+      cashProfit: fact.cashProfit,
+      margin: fact.marginPercent,
+      collected: fact.collectedRevenue,
+      billableHours: fact.billableHours,
+      nonBillableHours: fact.nonBillableHours,
+      budgetUsedPercent: fact.budgetUsedPercent,
+    }));
 
     res.json(profitability);
   } catch (error: any) {
-    console.error('Finance job profitability error:', error);
+    logger.error('finance_dashboard_job_profitability_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load job profitability' });
   }
 });
@@ -2444,7 +2419,7 @@ router.get('/revenue-allocations', authMiddleware, canReadFinance, async (req: A
       }))
     );
   } catch (error: any) {
-    console.error('Finance revenue allocations error:', error);
+    logger.error('finance_dashboard_revenue_allocations_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to load revenue allocations' });
   }
 });

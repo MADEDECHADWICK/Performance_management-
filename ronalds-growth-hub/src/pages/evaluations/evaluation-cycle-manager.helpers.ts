@@ -41,6 +41,12 @@ export const relationshipCards: Array<{
     title: "Self evaluation",
     description: "The employee completes their own review",
   },
+  {
+    value: "client",
+    workflowType: "client",
+    title: "Client/customer evaluators",
+    description: "Client-facing feedback from selected contacts or stakeholders",
+  },
 ];
 
 export const createQuestionDraft = (
@@ -174,6 +180,12 @@ export const buildLaunchAssignments = ({
           .filter((candidate) => candidate.managerId === evaluatee.id)
           .forEach((candidate) => addAssignment(evaluatee.id, candidate.id, "subordinate"));
       }
+    }
+
+    if (enabledSet.has("client")) {
+      manualEvaluators.client.forEach((evaluatorId) =>
+        addAssignment(evaluatee.id, evaluatorId, "client")
+      );
     }
   });
 

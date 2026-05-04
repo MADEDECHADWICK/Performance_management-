@@ -1,8 +1,12 @@
 import { Router } from 'express';
-import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { AuthRequest } from '../middleware/auth';
 import { requireModuleAccess } from '../middleware/requireModuleAccess';
 import { hasModuleAccess } from '../services/moduleAccess.service';
 import prisma from '../prisma';
+import { logger, toLogContext } from '../lib/logger';
+import JobPerformanceFactsService, {
+  JobPerformanceFact,
+} from '../services/jobPerformanceFacts.service';
 
 const router = Router();
 
@@ -24,27 +28,49 @@ const parseProfileIdParam = (value: string) => {
   return parsed;
 };
 
-const toCamelKey = (key: string) =>
-  key.replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
-
-const withCamelAliases = (value: any): any => {
-  if (Array.isArray(value)) {
-    return value.map((item) => withCamelAliases(item));
-  }
-  if (value && typeof value === 'object' && !(value instanceof Date)) {
-    const output: Record<string, any> = {};
-    for (const [key, nested] of Object.entries(value)) {
-      const mapped = withCamelAliases(nested);
-      output[key] = mapped;
-
-      const camelKey = toCamelKey(key);
-      if (camelKey !== key && !(camelKey in output)) {
-        output[camelKey] = mapped;
-      }
+const sumFacts = (facts: JobPerformanceFact[]) =>
+  facts.reduce(
+    (acc, fact) => {
+      acc.totalHours += fact.totalHours;
+      acc.billableHours += fact.billableHours;
+      acc.nonBillableHours += fact.nonBillableHours;
+      acc.billableValue += fact.billableValue;
+      acc.billedRevenue += fact.billedRevenue;
+      acc.collectedRevenue += fact.collectedRevenue;
+      acc.actualCost += fact.actualCost;
+      acc.cashProfit += fact.cashProfit;
+      return acc;
+    },
+    {
+      totalHours: 0,
+      billableHours: 0,
+      nonBillableHours: 0,
+      billableValue: 0,
+      billedRevenue: 0,
+      collectedRevenue: 0,
+      actualCost: 0,
+      cashProfit: 0,
     }
-    return output;
-  }
-  return value;
+  );
+
+const buildSummary = (facts: JobPerformanceFact[]) => {
+  const totals = sumFacts(facts);
+  const revenueBase = totals.billedRevenue > 0 ? totals.billedRevenue : totals.billableValue;
+  return {
+    total_revenue: totals.collectedRevenue,
+    billable_value: totals.billableValue,
+    billed_revenue: totals.billedRevenue,
+    collected_revenue: totals.collectedRevenue,
+    total_collected: totals.collectedRevenue,
+    total_cost: totals.actualCost,
+    total_profit: totals.cashProfit,
+    total_hours: totals.totalHours,
+    billable_hours: totals.billableHours,
+    non_billable_hours: totals.nonBillableHours,
+    avg_margin:
+      totals.collectedRevenue > 0 ? (totals.cashProfit / totals.collectedRevenue) * 100 : 0,
+    collection_rate: revenueBase > 0 ? (totals.collectedRevenue / revenueBase) * 100 : 0,
+  };
 };
 
 /**
@@ -55,8 +81,8 @@ const withCamelAliases = (value: any): any => {
  * - `finance.approve` (or admin): organization-wide scope (cross-profile reads + aggregate endpoints).
  */
 
-// GET /financial-summary/employee/:id - Employee's financial contribution
-router.get('/employee/:id', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+// GET /financial-summary/employee/:id
+router.get('/employee/:id', canReadFinance, async (req: AuthRequest, res) => {
   try {
     const requestedProfileId = parseProfileIdParam(req.params.id);
     if (!requestedProfileId) {
@@ -72,24 +98,40 @@ router.get('/employee/:id', authMiddleware, canReadFinance, async (req: AuthRequ
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const contribution = await prisma.$queryRaw`
-      SELECT * FROM employee_financial_contribution
-      WHERE employee_id = ${requestedProfileId}
-    `;
+    const facts = await JobPerformanceFactsService.listFacts(
+      { employeeProfileId: requestedProfileId },
+      { type: 'employee', profileId: requestedProfileId }
+    );
 
-    if (!contribution || (contribution as any[]).length === 0) {
+    if (facts.length === 0) {
       return res.status(404).json({ error: 'Employee financial data not found' });
     }
 
-    res.json(withCamelAliases((contribution as any[])[0]));
+    const canSeeFinancials = hasElevatedFinanceScope(req);
+    const summary = buildSummary(facts);
+    res.json({
+      employee_id: requestedProfileId,
+      total_hours: summary.total_hours,
+      billable_hours: summary.billable_hours,
+      non_billable_hours: summary.non_billable_hours,
+      utilization_rate:
+        summary.total_hours > 0 ? (summary.billable_hours / summary.total_hours) * 100 : 0,
+      billable_value: canSeeFinancials ? summary.billable_value : 0,
+      billed_revenue: canSeeFinancials ? summary.billed_revenue : 0,
+      collected_revenue: canSeeFinancials ? summary.collected_revenue : 0,
+      total_cost: canSeeFinancials ? summary.total_cost : 0,
+      total_profit: canSeeFinancials ? summary.total_profit : 0,
+      financials_visible: canSeeFinancials,
+      job_count: facts.length,
+    });
   } catch (error: any) {
-    console.error('Error fetching employee financial contribution:', error);
+    logger.error('finance_summary_employee_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch employee financial data' });
   }
 });
 
-// GET /financial-summary/manager/:id - Manager's department financial data
-router.get('/manager/:id', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+// GET /financial-summary/manager/:id
+router.get('/manager/:id', canReadFinance, async (req: AuthRequest, res) => {
   try {
     const requestedProfileId = parseProfileIdParam(req.params.id);
     if (!requestedProfileId) {
@@ -105,24 +147,47 @@ router.get('/manager/:id', authMiddleware, canReadFinance, async (req: AuthReque
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const contribution = await prisma.$queryRaw`
-      SELECT * FROM manager_financial_contribution
-      WHERE manager_id = ${requestedProfileId}
-    `;
+    const facts = await JobPerformanceFactsService.listFacts(
+      {},
+      { type: 'manager', profileId: requestedProfileId }
+    );
 
-    if (!contribution || (contribution as any[]).length === 0) {
+    if (facts.length === 0) {
       return res.status(404).json({ error: 'Manager financial data not found' });
     }
 
-    res.json(withCamelAliases((contribution as any[])[0]));
+    const profile = await prisma.profile.findUnique({
+      where: { id: requestedProfileId },
+      select: { department: { select: { id: true, name: true } } },
+    });
+    const summary = buildSummary(facts);
+    res.json({
+      manager_id: requestedProfileId,
+      department_id: profile?.department?.id ?? null,
+      department_name: profile?.department?.name ?? null,
+      department_total_hours: summary.total_hours,
+      department_billable_hours: summary.billable_hours,
+      department_non_billable_hours: summary.non_billable_hours,
+      department_revenue: summary.collected_revenue,
+      billable_value: summary.billable_value,
+      billed_revenue: summary.billed_revenue,
+      collected_revenue: summary.collected_revenue,
+      department_cost: summary.total_cost,
+      department_profit: summary.total_profit,
+      department_jobs: facts.length,
+      department_utilization_rate:
+        summary.total_hours > 0 ? (summary.billable_hours / summary.total_hours) * 100 : 0,
+      collection_rate: summary.collection_rate,
+      avg_margin: summary.avg_margin,
+    });
   } catch (error: any) {
-    console.error('Error fetching manager financial contribution:', error);
+    logger.error('finance_summary_manager_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch manager financial data' });
   }
 });
 
-// GET /financial-summary/partner/:id - Partner's portfolio financial data
-router.get('/partner/:id', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+// GET /financial-summary/partner/:id
+router.get('/partner/:id', canReadFinance, async (req: AuthRequest, res) => {
   try {
     const requestedProfileId = parseProfileIdParam(req.params.id);
     if (!requestedProfileId) {
@@ -138,91 +203,158 @@ router.get('/partner/:id', authMiddleware, canReadFinance, async (req: AuthReque
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const contribution = await prisma.$queryRaw`
-      SELECT * FROM partner_financial_contribution
-      WHERE partner_id = ${requestedProfileId}
-    `;
+    const facts = await JobPerformanceFactsService.listFacts(
+      {},
+      { type: 'partner', profileId: requestedProfileId }
+    );
 
-    if (!contribution || (contribution as any[]).length === 0) {
+    if (facts.length === 0) {
       return res.status(404).json({ error: 'Partner financial data not found' });
     }
 
-    res.json(withCamelAliases((contribution as any[])[0]));
+    const summary = buildSummary(facts);
+    res.json({
+      partner_id: requestedProfileId,
+      total_portfolio_revenue: summary.collected_revenue,
+      billable_value: summary.billable_value,
+      billed_revenue: summary.billed_revenue,
+      collected_revenue: summary.collected_revenue,
+      total_portfolio_cost: summary.total_cost,
+      total_portfolio_profit: summary.total_profit,
+      total_portfolio_hours: summary.total_hours,
+      billable_hours: summary.billable_hours,
+      non_billable_hours: summary.non_billable_hours,
+      total_jobs: facts.length,
+      collection_rate: summary.collection_rate,
+      avg_margin: summary.avg_margin,
+    });
   } catch (error: any) {
-    console.error('Error fetching partner financial contribution:', error);
+    logger.error('finance_summary_partner_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch partner financial data' });
   }
 });
 
-// GET /financial-summary/company - Company-wide financial summary
-router.get('/company', authMiddleware, canApproveFinance, async (_req: AuthRequest, res) => {
+// GET /financial-summary/company
+router.get('/company', canApproveFinance, async (_req: AuthRequest, res) => {
   try {
-    const summary = await prisma.$queryRaw`
-      SELECT * FROM company_financial_summary
-    `;
+    const [facts, activePartners] = await Promise.all([
+      JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
+      prisma.profile.count({ where: { isPartner: true, status: 'active' } }),
+    ]);
+    const summary = buildSummary(facts);
 
-    res.json(
-      withCamelAliases((summary as any[])[0]) ||
-        withCamelAliases({
-          company_total_revenue: 0,
-          company_total_cost: 0,
-          company_total_profit: 0,
-          company_total_collected: 0,
-          company_avg_margin: 0,
-          active_partners: 0,
-          total_jobs: 0,
-          company_collection_rate: 0,
-        })
-    );
+    res.json({
+      company_total_revenue: summary.collected_revenue,
+      company_billable_value: summary.billable_value,
+      company_billed_revenue: summary.billed_revenue,
+      company_total_cost: summary.total_cost,
+      company_total_profit: summary.total_profit,
+      company_total_collected: summary.collected_revenue,
+      company_avg_margin: summary.avg_margin,
+      active_partners: activePartners,
+      total_jobs: facts.length,
+      company_collection_rate: summary.collection_rate,
+    });
   } catch (error: any) {
-    console.error('Error fetching company financial summary:', error);
+    logger.error('finance_summary_company_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch company financial summary' });
   }
 });
 
-// GET /financial-summary/partners - All partners' financial contributions
-router.get('/partners', authMiddleware, canApproveFinance, async (_req: AuthRequest, res) => {
+// GET /financial-summary/partners
+router.get('/partners', canApproveFinance, async (_req: AuthRequest, res) => {
   try {
-    const partners = await prisma.$queryRaw`
-      SELECT * FROM partner_financial_contribution
-      ORDER BY total_portfolio_revenue DESC
-    `;
+    const [facts, profiles] = await Promise.all([
+      JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
+      prisma.profile.findMany({
+        where: { isPartner: true },
+        select: { id: true, firstName: true, lastName: true },
+      }),
+    ]);
+    const factsByPartner = new Map<number, JobPerformanceFact[]>();
+    facts.forEach((fact) => {
+      if (!fact.partnerProfileId) return;
+      const current = factsByPartner.get(fact.partnerProfileId) || [];
+      current.push(fact);
+      factsByPartner.set(fact.partnerProfileId, current);
+    });
+    const partners = profiles
+      .map((profile) => {
+        const profileFacts = factsByPartner.get(profile.id) || [];
+        const summary = buildSummary(profileFacts);
+        return {
+          partner_id: profile.id,
+          partner_name: `${profile.firstName || ''} ${profile.lastName || ''}`.trim(),
+          total_portfolio_revenue: summary.collected_revenue,
+          billable_value: summary.billable_value,
+          billed_revenue: summary.billed_revenue,
+          collected_revenue: summary.collected_revenue,
+          total_portfolio_cost: summary.total_cost,
+          total_portfolio_profit: summary.total_profit,
+          total_jobs: profileFacts.length,
+          collection_rate: summary.collection_rate,
+          avg_margin: summary.avg_margin,
+        };
+      })
+      .sort((left, right) => right.total_portfolio_revenue - left.total_portfolio_revenue);
 
-    res.json(withCamelAliases(partners));
+    res.json(partners);
   } catch (error: any) {
-    console.error('Error fetching partners financial data:', error);
+    logger.error('finance_summary_partners_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch partners financial data' });
   }
 });
 
-// GET /financial-summary/departments - Department roll-up financial data
-router.get('/departments', authMiddleware, canApproveFinance, async (_req: AuthRequest, res) => {
+// GET /financial-summary/departments
+router.get('/departments', canApproveFinance, async (_req: AuthRequest, res) => {
   try {
-    const departments = await prisma.$queryRaw`
-      SELECT
-        department_id,
-        department_name,
-        SUM(team_size) as total_employees,
-        SUM(department_total_hours) as total_hours,
-        SUM(department_billable_hours) as billable_hours,
-        SUM(department_revenue) as revenue,
-        SUM(department_cost) as cost,
-        SUM(department_jobs) as jobs_count,
-        AVG(department_utilization_rate) as avg_utilization_rate
-      FROM manager_financial_contribution
-      GROUP BY department_id, department_name
-      ORDER BY revenue DESC
-    `;
+    const [facts, departments] = await Promise.all([
+      JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
+      prisma.department.findMany({
+        select: { id: true, name: true, _count: { select: { profiles: true } } },
+      }),
+    ]);
+    const factsByDepartment = new Map<number, JobPerformanceFact[]>();
+    facts.forEach((fact) => {
+      if (!fact.departmentId) return;
+      const current = factsByDepartment.get(fact.departmentId) || [];
+      current.push(fact);
+      factsByDepartment.set(fact.departmentId, current);
+    });
+    const rows = departments
+      .map((department) => {
+        const departmentFacts = factsByDepartment.get(department.id) || [];
+        const summary = buildSummary(departmentFacts);
+        return {
+          department_id: department.id,
+          department_name: department.name,
+          total_employees: department._count.profiles,
+          total_hours: summary.total_hours,
+          billable_hours: summary.billable_hours,
+          non_billable_hours: summary.non_billable_hours,
+          revenue: summary.collected_revenue,
+          billable_value: summary.billable_value,
+          billed_revenue: summary.billed_revenue,
+          collected_revenue: summary.collected_revenue,
+          cost: summary.total_cost,
+          profit: summary.total_profit,
+          jobs_count: departmentFacts.length,
+          avg_utilization_rate:
+            summary.total_hours > 0 ? (summary.billable_hours / summary.total_hours) * 100 : 0,
+          collection_rate: summary.collection_rate,
+        };
+      })
+      .sort((left, right) => right.revenue - left.revenue);
 
-    res.json(withCamelAliases(departments));
+    res.json(rows);
   } catch (error: any) {
-    console.error('Error fetching departments financial data:', error);
+    logger.error('finance_summary_departments_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch departments financial data' });
   }
 });
 
-// GET /financial-summary/my-data - Current user's financial view
-router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+// GET /financial-summary/my-data
+router.get('/my-data', canReadFinance, async (req: AuthRequest, res) => {
   try {
     const profileId = req.user?.profileId ? Number(req.user.profileId) : null;
     if (!profileId) {
@@ -247,48 +379,71 @@ router.get('/my-data', authMiddleware, canReadFinance, async (req: AuthRequest, 
     let financialData: any = {};
 
     if (isGmp) {
-      const [personalData, companyData] = await Promise.all([
-        prisma.$queryRaw`SELECT * FROM partner_financial_contribution WHERE partner_id = ${profileId}`,
-        prisma.$queryRaw`SELECT * FROM company_financial_summary`,
+      const [personalFacts, companyFacts] = await Promise.all([
+        JobPerformanceFactsService.listFacts({}, { type: 'partner', profileId }),
+        JobPerformanceFactsService.listFacts({}, { type: 'firm' }),
       ]);
 
       financialData = {
         userType: 'groupManagingPartner',
-        personalPortfolio: withCamelAliases((personalData as any[])[0]) || null,
-        companySummary: withCamelAliases((companyData as any[])[0]) || null,
+        personalPortfolio: {
+          partner_id: profileId,
+          ...buildSummary(personalFacts),
+          total_jobs: personalFacts.length,
+        },
+        companySummary: {
+          ...buildSummary(companyFacts),
+          total_jobs: companyFacts.length,
+        },
       };
     } else if (isPartner) {
-      const data = await prisma.$queryRaw`
-        SELECT * FROM partner_financial_contribution WHERE partner_id = ${profileId}
-      `;
+      const facts = await JobPerformanceFactsService.listFacts({}, { type: 'partner', profileId });
 
       financialData = {
         userType: 'partner',
-        portfolio: withCamelAliases((data as any[])[0]) || null,
+        portfolio: {
+          partner_id: profileId,
+          ...buildSummary(facts),
+          total_jobs: facts.length,
+        },
       };
     } else if (isManager) {
-      const data = await prisma.$queryRaw`
-        SELECT * FROM manager_financial_contribution WHERE manager_id = ${profileId}
-      `;
+      const facts = await JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId });
 
       financialData = {
         userType: 'manager',
-        department: withCamelAliases((data as any[])[0]) || null,
+        department: {
+          manager_id: profileId,
+          department_id: profile.departmentId,
+          ...buildSummary(facts),
+          total_jobs: facts.length,
+        },
       };
     } else {
-      const data = await prisma.$queryRaw`
-        SELECT * FROM employee_financial_contribution WHERE employee_id = ${profileId}
-      `;
+      const facts = await JobPerformanceFactsService.listFacts(
+        { employeeProfileId: profileId },
+        { type: 'employee', profileId }
+      );
+      const summary = buildSummary(facts);
 
       financialData = {
         userType: 'employee',
-        personal: withCamelAliases((data as any[])[0]) || null,
+        personal: {
+          employee_id: profileId,
+          total_hours: summary.total_hours,
+          billable_hours: summary.billable_hours,
+          non_billable_hours: summary.non_billable_hours,
+          utilization_rate:
+            summary.total_hours > 0 ? (summary.billable_hours / summary.total_hours) * 100 : 0,
+          financials_visible: false,
+          total_jobs: facts.length,
+        },
       };
     }
 
     res.json(financialData);
   } catch (error: any) {
-    console.error('Error fetching user financial data:', error);
+    logger.error('finance_summary_my_data_error', toLogContext(error));
     res.status(500).json({ error: 'Failed to fetch financial data' });
   }
 });

@@ -23,6 +23,7 @@ const cycleValidators = [
   body("enablePeerEvaluation").optional().isBoolean(),
   body("enableUpwardEvaluation").optional().isBoolean(),
   body("enableDownwardEvaluation").optional().isBoolean(),
+  body("enableClientEvaluation").optional().isBoolean(),
   body("processAnonymously").optional().isBoolean(),
   body("hideFromDashboard").optional().isBoolean(),
   body("excludeFromScore").optional().isBoolean(),
@@ -46,7 +47,7 @@ const assignValidators = [
   body("assignments.*.evaluatorId").isInt({ min: 1 }),
   body("assignments.*.relationship")
     .isString()
-    .isIn(["self", "peer", "manager", "subordinate"]),
+    .isIn(["self", "peer", "manager", "subordinate", "client"]),
   body("assignments.*.dueDate").optional({ nullable: true }).isISO8601(),
 ];
 

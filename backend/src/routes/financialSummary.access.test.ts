@@ -2,7 +2,9 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import request from "supertest";
 import prisma from "../prisma";
+import { authMiddleware } from "../middleware/auth";
 import financialSummaryRoutes from "./financialSummary";
+import JobPerformanceFactsService from "../services/jobPerformanceFacts.service";
 
 jest.mock("../prisma", () => {
   const prismaMock = {
@@ -17,8 +19,8 @@ jest.mock("../prisma", () => {
     },
     profile: {
       findUnique: jest.fn(),
+      count: jest.fn(),
     },
-    $queryRaw: jest.fn(),
   };
 
   return {
@@ -28,15 +30,35 @@ jest.mock("../prisma", () => {
   };
 });
 
+jest.mock("../services/jobPerformanceFacts.service", () => ({
+  __esModule: true,
+  default: {
+    listFacts: jest.fn(),
+  },
+}));
+
 type PrismaMock = {
   session: { findFirst: jest.Mock };
   user: { findUnique: jest.Mock };
   userAuthRole: { findMany: jest.Mock };
-  profile: { findUnique: jest.Mock };
-  $queryRaw: jest.Mock;
+  profile: { findUnique: jest.Mock; count: jest.Mock };
 };
 
 const mockedPrisma = prisma as unknown as PrismaMock;
+const mockedListFacts = JobPerformanceFactsService.listFacts as jest.Mock;
+
+const emptyFact = {
+  totalHours: 0,
+  billableHours: 0,
+  nonBillableHours: 0,
+  billableValue: 0,
+  billedRevenue: 0,
+  collectedRevenue: 0,
+  actualCost: 0,
+  cashProfit: 0,
+  partnerProfileId: null,
+  departmentId: null,
+};
 
 const createToken = (userId = 1, email = "finance@ronalds.local") =>
   jwt.sign(
@@ -84,7 +106,7 @@ const setRolePolicy = (permissionKeys: string[]) => {
 const createApp = () => {
   const app = express();
   app.use(express.json());
-  app.use("/api/financial-summary", financialSummaryRoutes);
+  app.use("/api/financial-summary", authMiddleware, financialSummaryRoutes);
   return app;
 };
 
@@ -112,18 +134,15 @@ describe("financial summary permission boundaries", () => {
         action: "approve",
       })
     );
-    expect(mockedPrisma.$queryRaw).not.toHaveBeenCalled();
+    expect(mockedListFacts).not.toHaveBeenCalled();
   });
 
   it("allows company summary when user has finance.approve", async () => {
     const app = createApp();
     const token = createToken();
     setRolePolicy(["module.finance.approve"]);
-    mockedPrisma.$queryRaw.mockResolvedValue([
-      {
-        company_total_revenue: 1000000,
-      },
-    ]);
+    mockedListFacts.mockResolvedValue([{ ...emptyFact, collectedRevenue: 1000000 }]);
+    mockedPrisma.profile.count.mockResolvedValue(5);
 
     const response = await request(app)
       .get("/api/financial-summary/company")
@@ -141,12 +160,7 @@ describe("financial summary permission boundaries", () => {
     const app = createApp();
     const token = createToken();
     setRolePolicy(["module.finance.read"]);
-    mockedPrisma.$queryRaw.mockResolvedValue([
-      {
-        employee_id: 11,
-        total_revenue: 150000,
-      },
-    ]);
+    mockedListFacts.mockResolvedValue([{ ...emptyFact, totalHours: 100, billableHours: 80 }]);
 
     const response = await request(app)
       .get("/api/financial-summary/employee/11")
@@ -175,19 +189,14 @@ describe("financial summary permission boundaries", () => {
         error: "Access denied",
       })
     );
-    expect(mockedPrisma.$queryRaw).not.toHaveBeenCalled();
+    expect(mockedListFacts).not.toHaveBeenCalled();
   });
 
   it("allows employee contribution for another profile with finance.approve", async () => {
     const app = createApp();
     const token = createToken();
     setRolePolicy(["module.finance.approve"]);
-    mockedPrisma.$queryRaw.mockResolvedValue([
-      {
-        employee_id: 77,
-        total_revenue: 200000,
-      },
-    ]);
+    mockedListFacts.mockResolvedValue([{ ...emptyFact, totalHours: 200, billableHours: 160 }]);
 
     const response = await request(app)
       .get("/api/financial-summary/employee/77")

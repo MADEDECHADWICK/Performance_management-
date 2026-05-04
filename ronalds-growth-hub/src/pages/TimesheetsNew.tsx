@@ -144,6 +144,15 @@ interface JobAllocationSummary {
   remainingEmployeeHours: number;
 }
 
+const nonBillableCategoryOptions = [
+  { value: 'internal', label: 'Internal' },
+  { value: 'training', label: 'Training' },
+  { value: 'leave', label: 'Leave' },
+  { value: 'public_holiday', label: 'Public holiday' },
+  { value: 'over_budget', label: 'Over budget' },
+  { value: 'other', label: 'Other' },
+];
+
 const STATUS_COLORS = {
   pending: 'bg-gray-100 text-gray-800',
   submitted: 'bg-blue-100 text-blue-800',
@@ -203,6 +212,7 @@ export default function TimesheetsNew() {
     hours: 0,
     description: '',
     billable: true,
+    nonBillableCategory: 'internal',
   });
 
   const [additionalTimeRequest, setAdditionalTimeRequest] = useState({
@@ -670,6 +680,7 @@ export default function TimesheetsNew() {
       endedAt: now.toISOString(),
       description,
       billable,
+      nonBillableCategory: billable ? undefined : 'over_budget',
     });
     
     setTimer({
@@ -704,6 +715,7 @@ export default function TimesheetsNew() {
       hours: 0,
       description: '',
       billable: true,
+      nonBillableCategory: 'internal',
     });
   };
 
@@ -751,6 +763,7 @@ export default function TimesheetsNew() {
       taskId: '',
       // Auto-set billable based on budget availability
       billable: budgetInfo.isBillableAvailable,
+      nonBillableCategory: budgetInfo.isBillableAvailable ? prev.nonBillableCategory : 'over_budget',
     }));
     window.setTimeout(() => {
       quickTimerNotesInputRef.current?.focus();
@@ -801,6 +814,9 @@ export default function TimesheetsNew() {
       description: entryForm.description,
       billable,
     };
+    if (!billable) {
+      payload.nonBillableCategory = entryForm.billable ? 'over_budget' : entryForm.nonBillableCategory;
+    }
 
     if (hasTimeRange) {
       payload.startedAt = startedAt;
@@ -946,67 +962,67 @@ export default function TimesheetsNew() {
           </CardContent>
         </Card>
 
-        {/* Weekly Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Hours
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{weeklySummary.totalHours.toFixed(1)}h</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Billable
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-green-600">
-                {weeklySummary.billableHours.toFixed(1)}h
+        {/* Weekly Summary Bar */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium">Week Summary</CardTitle>
+              {weeklySummary.totalHours > 0 && (
+                <span className={`text-sm font-semibold ${
+                  (weeklySummary.billableHours / weeklySummary.totalHours) * 100 >= 70
+                    ? 'text-emerald-600'
+                    : (weeklySummary.billableHours / weeklySummary.totalHours) * 100 >= 50
+                      ? 'text-amber-600'
+                      : 'text-rose-600'
+                }`}>
+                  {((weeklySummary.billableHours / weeklySummary.totalHours) * 100).toFixed(0)}% utilization
+                </span>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Total hours</p>
+                <p className="text-xl font-bold">{weeklySummary.totalHours.toFixed(1)}h</p>
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Non-Billable
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-orange-600">
-                {weeklySummary.nonBillableHours.toFixed(1)}h
+              <div>
+                <p className="text-xs text-muted-foreground">Billable</p>
+                <p className="text-xl font-bold text-emerald-600">{weeklySummary.billableHours.toFixed(1)}h</p>
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pending
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-600">
-                {weeklySummary.pendingCount}
+              <div>
+                <p className="text-xs text-muted-foreground">Non-billable</p>
+                <p className="text-xl font-bold text-amber-600">{weeklySummary.nonBillableHours.toFixed(1)}h</p>
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Approved
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-blue-600">
-                {weeklySummary.approvedCount}
+              <div>
+                <p className="text-xs text-muted-foreground">Pending</p>
+                <p className="text-xl font-bold text-slate-500">{weeklySummary.pendingCount}</p>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Approved</p>
+                <p className="text-xl font-bold text-blue-600">{weeklySummary.approvedCount}</p>
+              </div>
+            </div>
+            {weeklySummary.totalHours > 0 && (
+              <div className="space-y-1">
+                <div className="h-2 w-full rounded-full bg-muted overflow-hidden flex">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{ width: `${(weeklySummary.billableHours / weeklySummary.totalHours) * 100}%` }}
+                  />
+                  <div
+                    className="h-full bg-amber-400 transition-all"
+                    style={{ width: `${(weeklySummary.nonBillableHours / weeklySummary.totalHours) * 100}%` }}
+                  />
+                </div>
+                <div className="flex gap-4 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-emerald-500" />Billable</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />Non-billable</span>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Week Navigation */}
         <Card>
@@ -1675,10 +1691,38 @@ export default function TimesheetsNew() {
                 <Label>Billable</Label>
                 <Switch
                   checked={entryForm.billable}
-                  onCheckedChange={(checked) => setEntryForm(prev => ({ ...prev, billable: checked }))}
+                  onCheckedChange={(checked) =>
+                    setEntryForm(prev => ({
+                      ...prev,
+                      billable: checked,
+                      nonBillableCategory: checked ? prev.nonBillableCategory : 'internal',
+                    }))
+                  }
                   disabled={entryForm.jobId && !getJobBudgetInfo(Number(entryForm.jobId)).isBillableAvailable}
                 />
               </div>
+              {!entryForm.billable && (
+                <div>
+                  <Label>Non-billable category</Label>
+                  <Select
+                    value={entryForm.nonBillableCategory}
+                    onValueChange={(value) =>
+                      setEntryForm(prev => ({ ...prev, nonBillableCategory: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {nonBillableCategoryOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowEntryDialog(false)}>

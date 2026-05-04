@@ -7,7 +7,7 @@
  */
 
 import { prisma } from '../prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, NonBillableCategory } from '@prisma/client';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
 
@@ -362,34 +362,38 @@ export class TimeEntryService {
     'public_holiday',
     'internal',
     'training',
+    'over_budget',
     'other',
   ]);
 
-  private static readonly NON_BILLABLE_PREFIX = '[[RG_NON_BILLABLE_CATEGORY]]';
-
-  private static normalizeNonBillableCategory(value: unknown) {
+  private static normalizeNonBillableCategory(value: unknown): NonBillableCategory | null {
     if (value === undefined || value === null || value === '') return null;
     const normalized = String(value).trim().toLowerCase().replace(/\s+/g, '_');
     if (!TimeEntryService.NON_BILLABLE_CATEGORIES.has(normalized)) {
       throw {
         statusCode: 400,
         message:
-          'nonBillableCategory must be one of: leave, public_holiday, internal, training, other',
+          'nonBillableCategory must be one of: leave, public_holiday, internal, training, over_budget, other',
       };
     }
-    return normalized;
+    return normalized as NonBillableCategory;
   }
 
-  private static applyNonBillableCategoryToDescription(
-    description: unknown,
-    category: string | null
-  ) {
+  private static normalizeDescription(description: unknown) {
     const raw = String(description || '').trim();
-    if (!category) return raw || null;
-    if (raw.startsWith(TimeEntryService.NON_BILLABLE_PREFIX)) {
-      return raw;
-    }
-    return `${TimeEntryService.NON_BILLABLE_PREFIX}${category}${raw ? `\n${raw}` : ''}`;
+    return raw || null;
+  }
+
+  private static resolveStoredNonBillableCategory(
+    finalBillable: boolean,
+    requestedBillable: boolean,
+    requestedCategory: NonBillableCategory | null,
+    existingCategory?: NonBillableCategory | null
+  ): NonBillableCategory | null {
+    if (finalBillable) return null;
+    return requestedBillable
+      ? NonBillableCategory.over_budget
+      : requestedCategory || existingCategory || NonBillableCategory.other;
   }
 
   private static async resolveAdditionalHoursRisk(
@@ -789,13 +793,10 @@ export class TimeEntryService {
       throw {
         statusCode: 400,
         message:
-          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, other)',
+          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, over_budget, other)',
       };
     }
-    const normalizedDescription = TimeEntryService.applyNonBillableCategoryToDescription(
-      rawDescription,
-      requestedBillable ? null : requestedNonBillableCategory
-    );
+    const normalizedDescription = TimeEntryService.normalizeDescription(rawDescription);
     const rates = await TimeEntryService.resolveRates(Number(jobId), auth.profileId);
 
     const jobFee = Number(
@@ -984,6 +985,11 @@ export class TimeEntryService {
               endedAt: resolvedTimeInput.endedAt,
               taskId: taskId ? Number(taskId) : null,
               billable: finalBillable,
+              nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+                finalBillable,
+                requestedBillable,
+                requestedNonBillableCategory
+              ),
               billableAmount: amounts.billableAmount,
               costAmount: amounts.costAmount,
               profitLoss: amounts.profitLoss,
@@ -1031,6 +1037,7 @@ export class TimeEntryService {
               endedAt: resolvedTimeInput.endedAt,
               taskId: taskId ? Number(taskId) : null,
               billable: true,
+              nonBillableCategory: null,
               billableAmount: billableAmounts.billableAmount,
               costAmount: billableAmounts.costAmount,
               profitLoss: billableAmounts.profitLoss,
@@ -1046,13 +1053,12 @@ export class TimeEntryService {
               jobId: Number(jobId),
               employeeProfileId: auth.profileId,
               hours: nonBillableHours,
-              description: TimeEntryService.applyNonBillableCategoryToDescription(
-                normalizedDescription,
-                requestedNonBillableCategory || 'other'
-              ),
+              description: normalizedDescription,
               dateWorked: resolvedDateWorked,
               taskId: taskId ? Number(taskId) : null,
               billable: false,
+              nonBillableCategory:
+                requestedNonBillableCategory || NonBillableCategory.over_budget,
               billableAmount: nonBillableAmounts.billableAmount,
               costAmount: nonBillableAmounts.costAmount,
               profitLoss: nonBillableAmounts.profitLoss,
@@ -1078,15 +1084,17 @@ export class TimeEntryService {
           jobId: Number(jobId),
           employeeProfileId: auth.profileId,
           hours: entryHours,
-          description: TimeEntryService.applyNonBillableCategoryToDescription(
-            normalizedDescription,
-            finalBillable ? null : requestedNonBillableCategory || 'other'
-          ),
+          description: normalizedDescription,
           dateWorked: resolvedDateWorked,
           startedAt: resolvedTimeInput.startedAt,
           endedAt: resolvedTimeInput.endedAt,
           taskId: taskId ? Number(taskId) : null,
           billable: finalBillable,
+          nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+            finalBillable,
+            requestedBillable,
+            requestedNonBillableCategory
+          ),
           billableAmount: amounts.billableAmount,
           costAmount: amounts.costAmount,
           profitLoss: amounts.profitLoss,
@@ -1297,16 +1305,16 @@ export class TimeEntryService {
     const requestedNonBillableCategory = TimeEntryService.normalizeNonBillableCategory(
       input.nonBillableCategory
     );
-    if (billable === false && !requestedNonBillableCategory) {
+    const existingNonBillableCategory = timeEntry.nonBillableCategory ?? null;
+    if (billable === false && !requestedNonBillableCategory && !existingNonBillableCategory) {
       throw {
         statusCode: 400,
         message:
-          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, other)',
+          'nonBillableCategory is required for non-billable entries (leave, public_holiday, internal, training, over_budget, other)',
       };
     }
-    const normalizedDescription = TimeEntryService.applyNonBillableCategoryToDescription(
-      rawDescription ?? timeEntry.description,
-      requestedBillable ? null : requestedNonBillableCategory
+    const normalizedDescription = TimeEntryService.normalizeDescription(
+      rawDescription ?? timeEntry.description
     );
 
     return TimeEntryService.runSerializable(async (tx) => {
@@ -1487,13 +1495,16 @@ export class TimeEntryService {
             where: { id: timeEntryId },
             data: {
               hours: updatedHours,
-              description: TimeEntryService.applyNonBillableCategoryToDescription(
-                normalizedDescription,
-                finalBillable ? null : requestedNonBillableCategory || 'other'
-              ),
+              description: normalizedDescription,
               startedAt: resolvedTimeInput.startedAt,
               endedAt: resolvedTimeInput.endedAt,
               billable: finalBillable,
+              nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+                finalBillable,
+                requestedBillable,
+                requestedNonBillableCategory,
+                existingNonBillableCategory
+              ),
               billableAmount: amounts.billableAmount,
               costAmount: amounts.costAmount,
               profitLoss: amounts.profitLoss,
@@ -1538,6 +1549,7 @@ export class TimeEntryService {
               startedAt: resolvedTimeInput.startedAt,
               endedAt: resolvedTimeInput.endedAt,
               billable: true,
+              nonBillableCategory: null,
               billableAmount: billableAmounts.billableAmount,
               costAmount: billableAmounts.costAmount,
               profitLoss: billableAmounts.profitLoss,
@@ -1553,15 +1565,14 @@ export class TimeEntryService {
               jobId: timeEntry.jobId,
               employeeProfileId: timeEntry.employeeProfileId,
               hours: nonBillableHours,
-              description: TimeEntryService.applyNonBillableCategoryToDescription(
-                normalizedDescription,
-                requestedNonBillableCategory || 'other'
-              ),
+              description: normalizedDescription,
               dateWorked: timeEntry.dateWorked,
               taskId: timeEntry.taskId,
               startedAt: null,
               endedAt: null,
               billable: false,
+              nonBillableCategory:
+                requestedNonBillableCategory || NonBillableCategory.over_budget,
               billableAmount: nonBillableAmounts.billableAmount,
               costAmount: nonBillableAmounts.costAmount,
               profitLoss: nonBillableAmounts.profitLoss,
@@ -1586,13 +1597,16 @@ export class TimeEntryService {
         where: { id: timeEntryId },
         data: {
           hours: updatedHours,
-          description: TimeEntryService.applyNonBillableCategoryToDescription(
-            normalizedDescription,
-            finalBillable ? null : requestedNonBillableCategory || 'other'
-          ),
+          description: normalizedDescription,
           startedAt: resolvedTimeInput.startedAt,
           endedAt: resolvedTimeInput.endedAt,
           billable: finalBillable,
+          nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+            finalBillable,
+            requestedBillable,
+            requestedNonBillableCategory,
+            existingNonBillableCategory
+          ),
           billableAmount: amounts.billableAmount,
           costAmount: amounts.costAmount,
           profitLoss: amounts.profitLoss,
@@ -2291,6 +2305,12 @@ export class TimeEntryService {
               endedAt: stoppedAt,
               hours: totalHours,
               billable: finalBillable,
+              nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+                finalBillable,
+                requestedBillable,
+                null,
+                timeEntry.nonBillableCategory
+              ),
               billableAmount: amounts.billableAmount,
               costAmount: amounts.costAmount,
               profitLoss: amounts.profitLoss,
@@ -2335,6 +2355,7 @@ export class TimeEntryService {
               endedAt: stoppedAt,
               hours: billableHours,
               billable: true,
+              nonBillableCategory: null,
               billableAmount: billableAmounts.billableAmount,
               costAmount: billableAmounts.costAmount,
               profitLoss: billableAmounts.profitLoss,
@@ -2351,15 +2372,13 @@ export class TimeEntryService {
               jobId: timeEntry.jobId,
               employeeProfileId: timeEntry.employeeProfileId,
               hours: nonBillableHours,
-              description: TimeEntryService.applyNonBillableCategoryToDescription(
-                timeEntry.description,
-                'other'
-              ),
+              description: timeEntry.description,
               dateWorked: timeEntry.dateWorked,
               taskId: timeEntry.taskId,
               startedAt: null,
               endedAt: null,
               billable: false,
+              nonBillableCategory: NonBillableCategory.over_budget,
               billableAmount: nonBillableAmounts.billableAmount,
               costAmount: nonBillableAmounts.costAmount,
               profitLoss: nonBillableAmounts.profitLoss,
@@ -2386,11 +2405,14 @@ export class TimeEntryService {
           startedAt: timeEntry.startedAt,
           endedAt: stoppedAt,
           hours: totalHours,
-          description: TimeEntryService.applyNonBillableCategoryToDescription(
-            timeEntry.description,
-            finalBillable ? null : 'other'
-          ),
+          description: timeEntry.description,
           billable: finalBillable,
+          nonBillableCategory: TimeEntryService.resolveStoredNonBillableCategory(
+            finalBillable,
+            requestedBillable,
+            null,
+            timeEntry.nonBillableCategory
+          ),
           billableAmount: amounts.billableAmount,
           costAmount: amounts.costAmount,
           profitLoss: amounts.profitLoss,

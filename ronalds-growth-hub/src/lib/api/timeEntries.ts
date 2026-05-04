@@ -20,6 +20,7 @@ interface CreateTimeEntryPayload {
   endedAt?: string;
   description?: string;
   billable?: boolean;
+  nonBillableCategory?: string | null;
 }
 
 interface TimeEntryFilters {
@@ -120,6 +121,7 @@ export const timeEntriesAPI = {
       endedAt: data.endedAt,
       description: data.description,
       billable: data.billable,
+      nonBillableCategory: data.nonBillableCategory,
     };
     return api.post('/time-entries', payload);
   },

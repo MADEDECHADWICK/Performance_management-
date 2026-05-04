@@ -2,6 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import request from "supertest";
 import prisma from "../prisma";
+import { authMiddleware } from "../middleware/auth";
 import financeDashboardRoutes from "./financeDashboard";
 
 jest.mock("../prisma", () => {
@@ -99,7 +100,7 @@ const setRolePolicy = (permissionKeys: string[]) => {
 const createApp = () => {
   const app = express();
   app.use(express.json());
-  app.use("/api/finance-dashboard", financeDashboardRoutes);
+  app.use("/api/finance-dashboard", authMiddleware, financeDashboardRoutes);
   return app;
 };
 
