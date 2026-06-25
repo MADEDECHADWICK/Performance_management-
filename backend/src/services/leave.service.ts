@@ -2138,6 +2138,20 @@ export class LeaveService {
           include: REQUEST_INCLUDE,
         });
       } else {
+        const conflictingTimeEntries = await tx.timeEntry.count({
+          where: {
+            employeeProfileId: request.employeeProfileId,
+            dateWorked: { gte: request.startDate, lte: request.endDate },
+            status: { in: ["submitted", "approved"] as any },
+          },
+        });
+        if (conflictingTimeEntries > 0) {
+          throw {
+            statusCode: 409,
+            message: `Cannot approve leave: ${conflictingTimeEntries} time entr${conflictingTimeEntries === 1 ? "y" : "ies"} already exist for these dates. Reject or remove them before approving leave.`,
+          };
+        }
+
         const leaveYear = request.startDate.getUTCFullYear();
         await tx.leaveLedgerEntry.create({
           data: {

@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { AlertCircle, DollarSign, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { AlertCircle, DollarSign } from "lucide-react";
 
 type RoleView = "employee" | "manager" | "partner" | "hr" | "gmp";
 type CardTone = "neutral" | "positive" | "warning" | "negative";
@@ -69,9 +70,23 @@ const formatDate = (value: unknown): string => {
 
 const toneClasses: Record<CardTone, string> = {
   neutral: "border-border",
-  positive: "border-emerald-300/60 bg-emerald-50/30",
-  warning: "border-amber-300/60 bg-amber-50/30",
-  negative: "border-rose-300/60 bg-rose-50/30",
+  positive: "border-emerald-200/70 bg-emerald-50/20",
+  warning: "border-amber-200/70 bg-amber-50/20",
+  negative: "border-rose-200/70 bg-rose-50/20",
+};
+
+const toneTextClasses: Record<CardTone, string> = {
+  neutral: "text-foreground",
+  positive: "text-emerald-700",
+  warning: "text-amber-700",
+  negative: "text-rose-700",
+};
+
+const toneAccentClasses: Record<CardTone, string> = {
+  neutral: "bg-primary/40",
+  positive: "bg-emerald-500",
+  warning: "bg-amber-500",
+  negative: "bg-rose-500",
 };
 
 function buildEmployeeSummary(dashboardData: any, scoreData: any): FinancialSummaryPayload {
@@ -666,19 +681,60 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
 
 function SummaryCards({ cards }: { cards: SummaryCardItem[] }) {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {cards.map((card) => (
-        <Card key={card.label} className={toneClasses[card.tone || "neutral"]}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">{card.label}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold leading-tight break-words">{card.value}</div>
-            <p className="text-xs text-muted-foreground">{card.hint}</p>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+      {cards.map((card) => {
+        const tone = card.tone ?? "neutral";
+        return (
+          <Card key={card.label} className={cn("relative overflow-hidden", toneClasses[tone])}>
+            <div className={cn("absolute inset-y-0 left-0 w-1 rounded-l-xl", toneAccentClasses[tone])} />
+            <CardContent className="py-5 pl-6 pr-4">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                {card.label}
+              </p>
+              <p className={cn("mt-2 text-2xl font-bold leading-none break-words tabular-nums", toneTextClasses[tone])}>
+                {card.value}
+              </p>
+              {card.hint && (
+                <p className="mt-1.5 text-xs text-muted-foreground">{card.hint}</p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
+  );
+}
+
+const isStatusCol = (col: string) => ["status", "state"].includes(col.toLowerCase());
+
+function cellClass(cell: string): string {
+  const lc = cell.trim().toLowerCase();
+  if (/^kes\s*-/.test(lc)) return "font-mono text-right text-sm text-rose-600";
+  if (/^kes\s*0\b/.test(lc)) return "font-mono text-right text-sm text-muted-foreground";
+  if (/^kes\s/.test(lc)) return "font-mono text-right text-sm text-foreground";
+  if (/^\d+(\.\d+)?%$/.test(lc)) return "font-mono text-right text-sm";
+  if (/^\d+(\.\d+)?\s*hrs$/.test(lc)) return "font-mono text-right text-sm tabular-nums";
+  if (/^-\d/.test(lc)) return "font-mono text-right text-sm text-rose-600";
+  return "text-sm";
+}
+
+function StatusCell({ value }: { value: string }) {
+  const lc = value.toLowerCase();
+  const emerald = ["approved", "in progress", "live", "completed"].some((s) => lc.includes(s));
+  const amber = ["pending", "on hold", "awaiting", "over budget"].some((s) => lc.includes(s));
+  const rose = ["rejected", "overdue", "cancelled", "auto"].some((s) => lc.includes(s));
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[11px] capitalize",
+        emerald && "border-emerald-200 bg-emerald-50 text-emerald-700",
+        amber && "border-amber-200 bg-amber-50 text-amber-700",
+        rose && "border-rose-200 bg-rose-50 text-rose-700"
+      )}
+    >
+      {value}
+    </Badge>
   );
 }
 
@@ -686,16 +742,18 @@ function SummarySectionView({ section }: { section: SummarySection }) {
   if (section.type === "stats") {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle>{section.title}</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{section.title}</CardTitle>
           {section.description && <CardDescription>{section.description}</CardDescription>}
         </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <CardContent className="grid grid-cols-2 gap-3 md:grid-cols-3">
           {section.items.map((item) => (
-            <div key={item.label} className="rounded-md border border-border p-3">
-              <p className="text-xs text-muted-foreground">{item.label}</p>
-              <p className="text-xl font-semibold">{item.value}</p>
-              {item.hint && <p className="text-xs text-muted-foreground">{item.hint}</p>}
+            <div key={item.label} className="rounded-xl border border-border bg-muted/30 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                {item.label}
+              </p>
+              <p className="mt-1 text-lg font-bold text-foreground tabular-nums">{item.value}</p>
+              {item.hint && <p className="mt-0.5 text-xs text-muted-foreground">{item.hint}</p>}
             </div>
           ))}
         </CardContent>
@@ -705,32 +763,61 @@ function SummarySectionView({ section }: { section: SummarySection }) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{section.title}</CardTitle>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">{section.title}</CardTitle>
         {section.description && <CardDescription>{section.description}</CardDescription>}
       </CardHeader>
-      <CardContent>
-        <div className="overflow-x-auto">
+      <CardContent className="p-0">
+        <div className="overflow-auto max-h-[420px]">
           <Table>
-            <TableHeader>
-              <TableRow>
-                {section.columns.map((column) => (
-                  <TableHead key={column}>{column}</TableHead>
+            <TableHeader className="sticky top-0 z-10 bg-card">
+              <TableRow className="border-b">
+                {section.columns.map((col) => (
+                  <TableHead
+                    key={col}
+                    className={cn(
+                      "text-[11px] font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap py-3",
+                      isStatusCol(col) ? "text-left" : "text-right first:text-left"
+                    )}
+                  >
+                    {col}
+                  </TableHead>
                 ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {section.rows.length > 0 ? (
                 section.rows.map((row, idx) => (
-                  <TableRow key={`${section.title}-${idx}`}>
-                    {row.map((cell, cellIdx) => (
-                      <TableCell key={`${idx}-${cellIdx}`}>{cell}</TableCell>
-                    ))}
+                  <TableRow key={`${section.title}-${idx}`} className="hover:bg-muted/30">
+                    {row.map((cell, cellIdx) => {
+                      const col = section.columns[cellIdx] ?? "";
+                      if (isStatusCol(col)) {
+                        return (
+                          <TableCell key={`${idx}-${cellIdx}`} className="py-2.5">
+                            <StatusCell value={cell} />
+                          </TableCell>
+                        );
+                      }
+                      return (
+                        <TableCell
+                          key={`${idx}-${cellIdx}`}
+                          className={cn(
+                            "py-2.5 whitespace-nowrap",
+                            cellIdx === 0 ? "text-sm font-medium" : cellClass(cell)
+                          )}
+                        >
+                          {cell}
+                        </TableCell>
+                      );
+                    })}
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={section.columns.length} className="text-center text-muted-foreground">
+                  <TableCell
+                    colSpan={section.columns.length}
+                    className="py-8 text-center text-sm text-muted-foreground"
+                  >
                     No records found.
                   </TableCell>
                 </TableRow>
@@ -850,13 +937,10 @@ export default function FinancialSummary() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">{payload?.title || "Financial Summary"}</h2>
-            <p className="text-muted-foreground">{payload?.subtitle || "Role-based financial overview."}</p>
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-2xl font-bold text-foreground">{payload?.title || "Financial Summary"}</h2>
           {payload?.role && (
-            <Badge variant="outline" className="capitalize">
+            <Badge variant="outline" className="capitalize text-xs">
               {payload.role} view
             </Badge>
           )}

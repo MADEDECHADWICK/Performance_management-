@@ -63,6 +63,8 @@ export interface WorkspaceKpi {
   initiativeProgress: number;
   trend: number[];
   ownerUpdate: string;
+  dataQualityStatus: BalancedScorecardComputedDataQualityStatus;
+  dataQualityNote: string | null;
 }
 
 export interface WorkspaceInitiative {
@@ -178,6 +180,7 @@ export interface WorkspaceEvaluationSummary {
 export interface BalancedScorecardWorkspace {
   generatedAt: string;
   effectiveRole: WorkspaceRole;
+  dataQuality: WorkspaceDataQualitySummary;
   perspectiveCards: WorkspacePerspectiveCard[];
   goals: WorkspaceGoal[];
   kpis: WorkspaceKpi[];
@@ -194,6 +197,14 @@ export interface BalancedScorecardWorkspace {
 }
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;
+
+export interface WorkspaceDataQualitySummary {
+  status: BalancedScorecardComputedDataQualityStatus;
+  counts: Record<BalancedScorecardComputedDataQualityStatus, number>;
+  notes: string[];
+  usesFrameworkBaselineDefinitions: boolean;
+  cacheTtlMs: number;
+}
 
 const buildWorkspaceCacheKey = (params: {
   role: WorkspaceRole;
@@ -215,6 +226,66 @@ export type BalancedScorecardComputedDataQualityStatus =
   | "missing_data"
   | "stale_data"
   | "manual_override";
+
+const DATA_QUALITY_STATUSES: BalancedScorecardComputedDataQualityStatus[] = [
+  "healthy",
+  "warning",
+  "missing_data",
+  "stale_data",
+  "manual_override",
+];
+
+const summarizeWorkspaceDataQuality = (
+  kpis: WorkspaceKpi[]
+): WorkspaceDataQualitySummary => {
+  const counts = DATA_QUALITY_STATUSES.reduce(
+    (acc, status) => {
+      acc[status] = 0;
+      return acc;
+    },
+    {} as Record<BalancedScorecardComputedDataQualityStatus, number>
+  );
+
+  kpis.forEach((kpi) => {
+    counts[kpi.dataQualityStatus] += 1;
+  });
+
+  const notes = [
+    "BSC framework goals, KPI definitions, formulas, and ownership metadata are baseline catalogue definitions; actual values are computed from operational signals or manual KPI submissions.",
+  ];
+
+  if (counts.missing_data > 0) {
+    notes.push(`${counts.missing_data} KPI(s) have no supporting measurement data in the selected window.`);
+  }
+  if (counts.warning > 0) {
+    notes.push(`${counts.warning} KPI(s) use fallback or partial operational signals.`);
+  }
+  if (counts.stale_data > 0) {
+    notes.push(`${counts.stale_data} KPI(s) are based on stale source data.`);
+  }
+  if (counts.manual_override > 0) {
+    notes.push(`${counts.manual_override} KPI(s) use manual actuals or overrides.`);
+  }
+
+  const status: BalancedScorecardComputedDataQualityStatus =
+    counts.missing_data > 0
+      ? "missing_data"
+      : counts.warning > 0
+        ? "warning"
+        : counts.stale_data > 0
+          ? "stale_data"
+          : counts.manual_override > 0
+            ? "manual_override"
+            : "healthy";
+
+  return {
+    status,
+    counts,
+    notes,
+    usesFrameworkBaselineDefinitions: true,
+    cacheTtlMs: WORKSPACE_CACHE_TTL_MS,
+  };
+};
 
 export type BalancedScorecardComputedTraceSourceType =
   | "metric_catalog"
@@ -3004,12 +3075,16 @@ const buildBalancedScorecardWorkspace = async (params: {
             actualLabel: manualComputation.actualLabel,
             trend: manualComputation.trend,
             ownerUpdate: manualComputation.ownerUpdate,
+            dataQualityStatus: manualComputation.dataQualityStatus,
+            dataQualityNote: manualComputation.dataQualityNote ?? null,
           }
         : {
             actualValue: null as number | null,
             actualLabel: "Awaiting first update",
             trend: [] as number[],
             ownerUpdate: "",
+            dataQualityStatus: "missing_data" as BalancedScorecardComputedDataQualityStatus,
+            dataQualityNote: "No supporting measurement data was available for this KPI.",
           };
     const resolvedActualValue = manualActualValue ?? computed.actualValue;
     const resolvedActualLabel =
@@ -3075,6 +3150,8 @@ const buildBalancedScorecardWorkspace = async (params: {
         engineResult
           ? `Engine calculated ${formatDateLabel(engineResult.calculatedAt)}.`
           : computed.ownerUpdate,
+      dataQualityStatus: computed.dataQualityStatus,
+      dataQualityNote: computed.dataQualityNote ?? null,
     } satisfies WorkspaceKpi;
   });
 
@@ -3172,9 +3249,7 @@ const buildBalancedScorecardWorkspace = async (params: {
   });
   const provisionalGoals = structure.goals.map((goal) => {
     const goalKpis = kpis.filter((kpi) => kpi.goalId === goal.key);
-    const score = Math.round(
-      weightedAverage(goalKpis.map((kpi) => ({ score: kpi.weightedScore, weight: kpi.weight })))
-    );
+    const score = Math.round(average(goalKpis.map((kpi) => kpi.weightedScore)));
     return {
       id: goal.key,
       perspectiveId: perspectiveKeyById.get(goal.perspectiveId) || "financial",
@@ -3431,11 +3506,7 @@ const buildBalancedScorecardWorkspace = async (params: {
     const perspectiveInitiatives = initiatives.filter((initiative) =>
       perspectiveGoals.some((goal) => goal.id === initiative.goalId)
     );
-    const score = Math.round(
-      weightedAverage(
-        perspectiveKpis.map((kpi) => ({ score: kpi.weightedScore, weight: kpi.weight }))
-      )
-    );
+    const score = Math.round(average(perspectiveKpis.map((kpi) => kpi.weightedScore)));
     const cascadeProgress = Math.round(
       average(perspectiveInitiatives.map((initiative) => initiative.progress))
     );
@@ -3604,6 +3675,7 @@ const buildBalancedScorecardWorkspace = async (params: {
   return {
     generatedAt: new Date().toISOString(),
     effectiveRole: params.role,
+    dataQuality: summarizeWorkspaceDataQuality(scopedKpis),
     perspectiveCards,
     goals,
     kpis: scopedKpis,

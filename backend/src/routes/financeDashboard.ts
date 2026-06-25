@@ -2383,6 +2383,294 @@ router.get('/job-profitability', authMiddleware, canReadFinance, async (req: Aut
   }
 });
 
+// GET /finance-dashboard/invoices
+router.get('/invoices', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) return res.status(context.error.status).json({ error: context.error.message });
+
+    const clientIdRaw = String(req.query.clientId || '').trim();
+    const jobIdRaw = String(req.query.jobId || '').trim();
+    const statusRaw = String(req.query.status || '').trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+
+    const resolvedClientId = clientIdRaw ? Number(clientIdRaw) : null;
+    const resolvedJobId = jobIdRaw ? Number(jobIdRaw) : null;
+
+    const invoices = await prisma.jobInvoice.findMany({
+      where: {
+        ...(resolvedClientId ? { clientId: resolvedClientId } : {}),
+        ...(resolvedJobId ? { jobId: resolvedJobId } : {}),
+        ...(statusRaw ? { status: statusRaw as any } : {}),
+      },
+      include: {
+        client: { select: { id: true, clientName: true } },
+        job: { select: { id: true, jobCode: true, jobName: true } },
+        generatedBy: { select: { firstName: true, lastName: true } },
+        issuedBy: { select: { firstName: true, lastName: true } },
+        document: { select: { id: true, fileName: true, filePath: true } },
+        lines: { orderBy: { sortOrder: 'asc' } },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      take: limit,
+    });
+
+    res.json(invoices.map((inv) => ({
+      id: inv.id,
+      invoiceNumber: inv.invoiceNumber,
+      title: inv.title,
+      description: inv.description,
+      status: inv.status,
+      currency: inv.currency,
+      subtotalAmount: Number(inv.subtotalAmount),
+      taxAmount: Number(inv.taxAmount),
+      totalAmount: Number(inv.totalAmount),
+      amountPaid: Number(inv.amountPaid),
+      amountOutstanding: Number(inv.amountOutstanding),
+      expectedPercent: inv.expectedPercent !== null ? Number(inv.expectedPercent) : null,
+      milestoneTaskId: inv.milestoneTaskId,
+      dueDate: inv.dueDate,
+      generatedAt: inv.generatedAt,
+      issuedAt: inv.issuedAt,
+      paidAt: inv.paidAt,
+      notes: inv.notes,
+      clientId: inv.clientId,
+      clientName: inv.client.clientName,
+      jobId: inv.jobId,
+      jobCode: inv.job.jobCode,
+      jobName: inv.job.jobName,
+      generatedByName: inv.generatedBy ? `${inv.generatedBy.firstName} ${inv.generatedBy.lastName}`.trim() : null,
+      issuedByName: inv.issuedBy ? `${inv.issuedBy.firstName} ${inv.issuedBy.lastName}`.trim() : null,
+      document: inv.document ? { id: inv.document.id, fileName: inv.document.fileName, filePath: inv.document.filePath } : null,
+      lines: inv.lines.map((l) => ({ id: l.id, description: l.description, quantity: Number(l.quantity), unitPrice: Number(l.unitPrice), lineAmount: Number(l.lineAmount) })),
+    })));
+  } catch (error: any) {
+    logger.error('finance_dashboard_invoices_list_error', toLogContext(error));
+    res.status(500).json({ error: 'Failed to load invoices' });
+  }
+});
+
+// POST /finance-dashboard/invoices
+router.post('/invoices', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) return res.status(context.error.status).json({ error: context.error.message });
+
+    const { clientId, jobId, title, subtotalAmount, taxAmount, dueDate, notes, currency } = req.body;
+
+    if (!clientId || !jobId || !title || subtotalAmount === undefined) {
+      return res.status(400).json({ error: 'clientId, jobId, title, and subtotalAmount are required' });
+    }
+
+    const resolvedClientId = Number(clientId);
+    const resolvedJobId = Number(jobId);
+    const resolvedSubtotal = Number(subtotalAmount);
+    const resolvedTax = Number(taxAmount || 0);
+
+    if (!Number.isFinite(resolvedClientId) || resolvedClientId <= 0) return res.status(400).json({ error: 'Invalid clientId' });
+    if (!Number.isFinite(resolvedJobId) || resolvedJobId <= 0) return res.status(400).json({ error: 'Invalid jobId' });
+    if (!Number.isFinite(resolvedSubtotal) || resolvedSubtotal <= 0) return res.status(400).json({ error: 'subtotalAmount must be a positive number' });
+    if (!Number.isFinite(resolvedTax) || resolvedTax < 0) return res.status(400).json({ error: 'taxAmount must be non-negative' });
+
+    const parsedDueDate = dueDate ? parseIsoDate(dueDate) : null;
+    if (dueDate && !parsedDueDate) return res.status(400).json({ error: 'Invalid dueDate' });
+
+    const job = await prisma.job.findUnique({
+      where: { id: resolvedJobId },
+      select: { id: true, jobCode: true, clientId: true },
+    });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.clientId !== resolvedClientId) return res.status(400).json({ error: 'Job does not belong to the selected client' });
+
+    const totalAmount = resolvedSubtotal + resolvedTax;
+    const invoiceNumber = `INV-${(job.jobCode ?? `J${resolvedJobId}`).replace(/[^A-Z0-9]/gi, '')}-${Date.now().toString(36).toUpperCase()}`;
+    const normalizedCurrency = String(currency || 'KES').trim().toUpperCase() || 'KES';
+
+    const invoice = await prisma.$transaction(async (tx) => {
+      const template = await tx.jobInvoiceTemplate.findFirst({ where: { isDefault: true }, orderBy: { id: 'asc' } });
+
+      const created = await tx.jobInvoice.create({
+        data: {
+          jobId: resolvedJobId,
+          clientId: resolvedClientId,
+          jobInvoiceTemplateId: template?.id ?? null,
+          generatedByProfileId: context.profileId ?? null,
+          invoiceNumber,
+          title: String(title).trim(),
+          description: String(title).trim(),
+          status: 'draft',
+          currency: normalizedCurrency,
+          subtotalAmount: resolvedSubtotal,
+          taxAmount: resolvedTax,
+          totalAmount,
+          amountOutstanding: totalAmount,
+          dueDate: parsedDueDate,
+          generatedAt: new Date(),
+          notes: notes ? String(notes).trim() : null,
+        },
+      });
+
+      await Promise.all([
+        tx.jobInvoiceLine.create({
+          data: {
+            jobInvoiceId: created.id,
+            lineType: 'service_fee',
+            description: String(title).trim(),
+            quantity: new Prisma.Decimal(1),
+            unitPrice: new Prisma.Decimal(resolvedSubtotal),
+            lineAmount: new Prisma.Decimal(resolvedSubtotal),
+            sortOrder: 1,
+          },
+        }),
+        tx.jobInvoiceStatusHistory.create({
+          data: {
+            jobInvoiceId: created.id,
+            fromStatus: null,
+            toStatus: 'draft',
+            changedByProfileId: context.profileId ?? null,
+            notes: 'Draft invoice created manually from finance module.',
+          },
+        }),
+        tx.auditLog.create({
+          data: {
+            action: 'finance_invoice_created',
+            entityType: 'job_invoice',
+            entityId: created.id,
+            userId: context.userId,
+            ipAddress: req.ip || null,
+            metadata: { invoiceNumber, jobId: resolvedJobId, clientId: resolvedClientId, totalAmount, currency: normalizedCurrency },
+          },
+        }),
+      ]);
+
+      return created;
+    });
+
+    res.status(201).json({ id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: invoice.status, totalAmount });
+  } catch (error: any) {
+    logger.error('finance_dashboard_invoice_create_error', toLogContext(error));
+    res.status(500).json({ error: 'Failed to create invoice' });
+  }
+});
+
+// PATCH /finance-dashboard/invoices/:invoiceId/issue
+router.patch('/invoices/:invoiceId/issue', authMiddleware, canWriteFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) return res.status(context.error.status).json({ error: context.error.message });
+
+    const invoiceId = Number(req.params.invoiceId);
+    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: 'Invalid invoiceId' });
+
+    const invoice = await prisma.jobInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, status: true, jobId: true },
+    });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    if (invoice.status !== 'draft') return res.status(409).json({ error: `Cannot issue an invoice with status "${invoice.status}"` });
+
+    const issued = await jobService.issueJobInvoice(invoice.jobId, invoiceId, {
+      userId: context.userId,
+      profileId: context.profileId ?? 0,
+      roles: [],
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action: 'finance_invoice_issued',
+        entityType: 'job_invoice',
+        entityId: invoiceId,
+        userId: context.userId,
+        ipAddress: req.ip || null,
+        metadata: { invoiceId, jobId: invoice.jobId, status: issued.status },
+      },
+    });
+
+    res.json(issued);
+  } catch (error: any) {
+    logger.error('finance_dashboard_invoice_issue_error', toLogContext(error));
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ error: error.message || 'Failed to issue invoice' });
+  }
+});
+
+// PATCH /finance-dashboard/invoices/:invoiceId/void
+router.patch('/invoices/:invoiceId/void', authMiddleware, canApproveFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) return res.status(context.error.status).json({ error: context.error.message });
+
+    const invoiceId = Number(req.params.invoiceId);
+    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: 'Invalid invoiceId' });
+
+    const invoice = await prisma.jobInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, status: true, amountPaid: true, invoiceNumber: true },
+    });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    if (invoice.status === 'void') return res.status(409).json({ error: 'Invoice is already void' });
+    if (invoice.status === 'paid') return res.status(409).json({ error: 'Cannot void a fully paid invoice' });
+    if (Number(invoice.amountPaid) > 0) return res.status(409).json({ error: 'Cannot void an invoice with payments applied. Reverse the payments first.' });
+
+    const reason = String(req.body?.reason || '').trim() || 'Voided by finance';
+
+    await prisma.$transaction(async (tx) => {
+      await tx.jobInvoice.update({
+        where: { id: invoiceId },
+        data: { status: 'void', voidedAt: new Date() },
+      });
+      await tx.jobInvoiceStatusHistory.create({
+        data: {
+          jobInvoiceId: invoiceId,
+          fromStatus: invoice.status,
+          toStatus: 'void',
+          changedByProfileId: context.profileId ?? null,
+          notes: reason,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: 'finance_invoice_voided',
+          entityType: 'job_invoice',
+          entityId: invoiceId,
+          userId: context.userId,
+          ipAddress: req.ip || null,
+          metadata: { invoiceId, invoiceNumber: invoice.invoiceNumber, reason },
+        },
+      });
+    });
+
+    res.json({ id: invoiceId, status: 'void', voidedAt: new Date() });
+  } catch (error: any) {
+    logger.error('finance_dashboard_invoice_void_error', toLogContext(error));
+    res.status(500).json({ error: 'Failed to void invoice' });
+  }
+});
+
+// GET /finance-dashboard/invoices/:invoiceId/download
+router.get('/invoices/:invoiceId/download', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
+  try {
+    const context = await getFinanceContext(req);
+    if (context.error) return res.status(context.error.status).json({ error: context.error.message });
+
+    const invoiceId = Number(req.params.invoiceId);
+    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: 'Invalid invoiceId' });
+
+    const exists = await prisma.jobInvoice.findUnique({ where: { id: invoiceId }, select: { id: true } });
+    if (!exists) return res.status(404).json({ error: 'Invoice not found' });
+
+    const { buffer, invoiceNumber } = await jobService.renderInvoicePdfBuffer(invoiceId);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${invoiceNumber}.pdf"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.end(buffer);
+  } catch (error: any) {
+    logger.error('finance_dashboard_invoice_download_error', toLogContext(error));
+    res.status(500).json({ error: 'Failed to generate invoice PDF' });
+  }
+});
+
 // GET /finance-dashboard/revenue-allocations
 router.get('/revenue-allocations', authMiddleware, canReadFinance, async (req: AuthRequest, res) => {
   try {

@@ -55,6 +55,25 @@ export type KpiMeasurementType =
   | "boolean"
   | "milestone";
 
+export type KpiSourceModule =
+  | "trainings"
+  | "timesheets"
+  | "jobs"
+  | "finance"
+  | "evaluations"
+  | "marketing"
+  | "manual";
+
+export type KpiCascadeLevel = "individual" | "department" | "organization";
+
+export type KpiRollupMethod = "average" | "weighted_average";
+
+export type KpiCascadeConfig = {
+  levels: KpiCascadeLevel[];
+  individualToDepartment: KpiRollupMethod;
+  departmentToOrganization: KpiRollupMethod;
+};
+
 type DashboardStatus = "on_track" | "at_risk" | "off_track";
 
 type FormulaConfig = {
@@ -91,6 +110,13 @@ type ScoringInput = {
   maxValue?: number | null;
   capScore?: number | null;
   config?: Record<string, unknown>;
+};
+
+type KpiEngineSourceConfig = {
+  version: 1;
+  template: string | null;
+  sourceModule: KpiSourceModule;
+  cascade: KpiCascadeConfig;
 };
 
 const validTrackingTypes: KpiTrackingType[] = [
@@ -141,6 +167,27 @@ const validSourceTypes: KpiSourceType[] = [
   "child_kpi",
 ];
 
+const validSourceModules: KpiSourceModule[] = [
+  "trainings",
+  "timesheets",
+  "jobs",
+  "finance",
+  "evaluations",
+  "marketing",
+  "manual",
+];
+
+const validCascadeLevels: KpiCascadeLevel[] = ["individual", "department", "organization"];
+
+const defaultCascadeConfig: KpiCascadeConfig = {
+  levels: ["individual", "department", "organization"],
+  individualToDepartment: "average",
+  departmentToOrganization: "average",
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
 const slugify = (value: string) =>
   value
     .toLowerCase()
@@ -171,8 +218,8 @@ const requireValid = <T extends string>(value: string, allowed: T[], label: stri
 };
 
 const scoreToStatus = (score: number): DashboardStatus => {
-  if (score >= 85) return "on_track";
-  if (score >= 65) return "at_risk";
+  if (score >= 80) return "on_track";
+  if (score >= 60) return "at_risk";
   return "off_track";
 };
 
@@ -184,6 +231,84 @@ const statusLabel = (status: DashboardStatus) => {
 
 const normalizeInputKey = (value: string) =>
   slugify(value).replace(/-/g, "_") || `input_${randomUUID().slice(0, 6)}`;
+
+const normalizeSourceModule = (value: unknown): KpiSourceModule => {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (validSourceModules.includes(raw as KpiSourceModule)) return raw as KpiSourceModule;
+  return "manual";
+};
+
+const normalizeRollupMethod = (value: unknown, fallback: KpiRollupMethod): KpiRollupMethod =>
+  value === "weighted_average" || value === "average" ? value : fallback;
+
+const normalizeCascadeConfig = (value: unknown): KpiCascadeConfig => {
+  const raw = isRecord(value) ? value : {};
+  const requestedLevels = Array.isArray(raw.levels)
+    ? raw.levels.filter((level): level is KpiCascadeLevel =>
+        typeof level === "string" && validCascadeLevels.includes(level as KpiCascadeLevel)
+      )
+    : [];
+
+  return {
+    levels: requestedLevels.length > 0 ? requestedLevels : defaultCascadeConfig.levels,
+    individualToDepartment: normalizeRollupMethod(
+      raw.individualToDepartment,
+      defaultCascadeConfig.individualToDepartment
+    ),
+    departmentToOrganization: normalizeRollupMethod(
+      raw.departmentToOrganization,
+      defaultCascadeConfig.departmentToOrganization
+    ),
+  };
+};
+
+const firstTrackingSourceConfig = (inputs: Array<{ sourceConfig?: unknown }>) =>
+  inputs.map((input) => input.sourceConfig).find(isRecord) ?? {};
+
+const normalizeEngineSourceConfig = (input: {
+  scoringConfig?: unknown;
+  inputs: Array<{ sourceConfig?: unknown }>;
+}): KpiEngineSourceConfig => {
+  const scoringConfig = isRecord(input.scoringConfig) ? input.scoringConfig : {};
+  const inputSourceConfig = firstTrackingSourceConfig(input.inputs);
+  const engineConfig = isRecord(scoringConfig.engine) ? scoringConfig.engine : scoringConfig;
+  const sourceModule =
+    engineConfig.sourceModule ??
+    engineConfig.module ??
+    inputSourceConfig.sourceModule ??
+    inputSourceConfig.module;
+  const template = engineConfig.template ?? inputSourceConfig.template ?? null;
+  const cascade = engineConfig.cascade ?? inputSourceConfig.cascade;
+
+  return {
+    version: 1,
+    template: typeof template === "string" && template.trim() ? template.trim() : null,
+    sourceModule: normalizeSourceModule(sourceModule),
+    cascade: normalizeCascadeConfig(cascade),
+  };
+};
+
+const withEngineSourceConfig = (
+  config: unknown,
+  engineConfig: KpiEngineSourceConfig
+): Record<string, unknown> => ({
+  ...(isRecord(config) ? config : {}),
+  sourceModule: engineConfig.sourceModule,
+  template: engineConfig.template,
+  cascade: engineConfig.cascade,
+  engine: engineConfig,
+});
+
+const buildCascadeLogicLabel = (engineConfig: KpiEngineSourceConfig) => {
+  const levelLabel = engineConfig.cascade.levels.join(" -> ");
+  return `Cascade: ${levelLabel}; employee-to-department uses ${engineConfig.cascade.individualToDepartment.replace(
+    /_/g,
+    " "
+  )}, department-to-organization uses ${engineConfig.cascade.departmentToOrganization.replace(/_/g, " ")}.`;
+};
+
+const buildDefaultDataQualityRule = (engineConfig: KpiEngineSourceConfig) =>
+  `${engineConfig.sourceModule} source data with ${engineConfig.cascade.levels.join(" -> ")} cascade.`;
 
 const normalizeTrackingInputs = (inputs: TrackingInput[]) => {
   if (!Array.isArray(inputs) || inputs.length === 0) {
@@ -210,7 +335,7 @@ const normalizeTrackingInputs = (inputs: TrackingInput[]) => {
       label: input.label?.trim() || inputKey,
       inputType: requireValid(input.inputType, validInputTypes, "input type"),
       sourceType: requireValid(input.sourceType, validSourceTypes, "source type"),
-      sourceConfig: input.sourceConfig ?? {},
+      sourceConfig: isRecord(input.sourceConfig) ? input.sourceConfig : {},
       isRequired: input.isRequired ?? true,
       sortOrder: index + 1,
     };
@@ -375,26 +500,10 @@ const resolveOwnerReference = async (input: {
   };
 };
 
-const assertGoalKpiWeightBudget = async (params: {
-  goalId: number;
-  incomingWeight: number;
-}) => {
-  if (!Number.isFinite(params.incomingWeight) || params.incomingWeight < 0 || params.incomingWeight > 100) {
+const assertKpiWeightValue = (incomingWeight: number) => {
+  if (!Number.isFinite(incomingWeight) || incomingWeight < 0 || incomingWeight > 100) {
     const err = new Error("KPI weight must be between 0 and 100") as Error & { statusCode?: number };
     err.statusCode = 400;
-    throw err;
-  }
-
-  const aggregate = await prisma.balancedScorecardKpi.aggregate({
-    where: { goalId: params.goalId, isActive: true },
-    _sum: { weight: true },
-  });
-  const proposedTotal = Number(aggregate._sum.weight ?? 0) + Math.round(params.incomingWeight);
-  if (proposedTotal > 100) {
-    const err = new Error(
-      `KPI weights for this goal would total ${proposedTotal}%. Keep the goal at or below 100%.`
-    ) as Error & { statusCode?: number };
-    err.statusCode = 409;
     throw err;
   }
 };
@@ -475,21 +584,15 @@ const computeFormulaValue = async (params: {
     if (childKpis.length === 0) return null;
     const childScores = await Promise.all(
       childKpis.map(async (child) => {
-        const result =
-          (await prisma.balancedScorecardKpiResult.findUnique({
-            where: {
-              measurementPeriodId_kpiId: {
-                measurementPeriodId: params.measurementPeriodId,
-                kpiId: child.kpiId,
-              },
+        const result = await prisma.balancedScorecardKpiResult.findUnique({
+          where: {
+            measurementPeriodId_kpiId: {
+              measurementPeriodId: params.measurementPeriodId,
+              kpiId: child.kpiId,
             },
-            select: { score: true },
-          })) ||
-          (await prisma.balancedScorecardKpiResult.findFirst({
-            where: { kpiId: child.kpiId },
-            orderBy: { calculatedAt: "desc" },
-            select: { score: true },
-          }));
+          },
+          select: { score: true },
+        });
         return { score: result?.score ?? 0, weight: child.weight };
       })
     );
@@ -679,10 +782,22 @@ export async function createKpiWithEngine(input: {
   const formulaType = requireValid(input.formula.formulaType, validFormulaTypes, "formula type");
   const scoringType = requireValid(input.scoring.scoringType, validScoringTypes, "scoring type");
   const inputs = normalizeTrackingInputs(input.tracking.inputs);
+  const engineSourceConfig = normalizeEngineSourceConfig({
+    scoringConfig: input.scoring.config,
+    inputs,
+  });
+  const inputsWithEngineConfig = inputs.map((trackingInput) => ({
+    ...trackingInput,
+    sourceConfig: withEngineSourceConfig(trackingInput.sourceConfig, engineSourceConfig),
+  }));
   const formulaConfig = normalizeFormulaConfig(formulaType, input.formula.config ?? {}, inputs);
-  const scoringInput = { ...input.scoring, scoringType };
+  const scoringInput = {
+    ...input.scoring,
+    scoringType,
+    config: withEngineSourceConfig(input.scoring.config, engineSourceConfig),
+  };
 
-  await assertGoalKpiWeightBudget({ goalId: input.goalId, incomingWeight: input.weight });
+  assertKpiWeightValue(input.weight);
   const owner = await resolveOwnerReference({
     ownerName: input.ownerName,
     ownerProfileId: input.ownerProfileId,
@@ -693,7 +808,7 @@ export async function createKpiWithEngine(input: {
     })) + 1;
   const targetLabel = buildTargetLabel(input.measurementType, input.unit, scoringInput);
   const formulaLabel = buildFormulaLabel(formulaType, formulaConfig);
-  const statusLogic = buildStatusLogicLabel(scoringInput);
+  const statusLogic = `${buildStatusLogicLabel(scoringInput)} ${buildCascadeLogicLabel(engineSourceConfig)}`;
 
   const created = await prisma.$transaction(async (tx) => {
     const kpi = await tx.balancedScorecardKpi.create({
@@ -747,7 +862,7 @@ export async function createKpiWithEngine(input: {
         minValue: input.scoring.minValue ?? null,
         maxValue: input.scoring.maxValue ?? null,
         capScore: Math.max(1, Math.min(100, Math.round(input.scoring.capScore ?? 100))),
-        config: (input.scoring.config ?? {}) as any,
+        config: scoringInput.config as any,
       },
     });
 
@@ -763,12 +878,13 @@ export async function createKpiWithEngine(input: {
             : null,
         graceDays: Math.max(0, Math.round(input.tracking.graceDays ?? 0)),
         requiresEvidence: input.tracking.requiresEvidence ?? false,
-        dataQualityRule: input.tracking.dataQualityRule?.trim() || null,
+        dataQualityRule:
+          input.tracking.dataQualityRule?.trim() || buildDefaultDataQualityRule(engineSourceConfig),
       },
     });
 
     await tx.balancedScorecardKpiTrackingInput.createMany({
-      data: inputs.map((trackingInput) => ({
+      data: inputsWithEngineConfig.map((trackingInput) => ({
         trackingPlanId: plan.id,
         inputKey: trackingInput.inputKey,
         label: trackingInput.label,
@@ -890,6 +1006,10 @@ export async function calculateKpiResult(input: {
     })
   );
   const status = scoreToStatus(score);
+  const engineSourceConfig = normalizeEngineSourceConfig({
+    scoringConfig: kpi.scoringRule.config,
+    inputs: kpi.trackingPlan.inputs,
+  });
 
   const previousResults = await prisma.balancedScorecardKpiResult.findMany({
     where: { kpiId: input.kpiId, measurementPeriodId: { not: period.id } },
@@ -905,60 +1025,66 @@ export async function calculateKpiResult(input: {
     actualValue ?? 0,
   ];
 
-  const result = await prisma.balancedScorecardKpiResult.upsert({
-    where: {
-      measurementPeriodId_kpiId: {
-        measurementPeriodId: period.id,
-        kpiId: input.kpiId,
-      },
-    },
-    update: {
-      actualValue,
-      score,
-      status: status as any,
-      trend,
-      calculatedAt: new Date(),
-    },
-    create: {
-      kpiId: input.kpiId,
-      measurementPeriodId: period.id,
-      actualValue,
-      score,
-      status: status as any,
-      trend,
-    },
-  });
-
-  await prisma.balancedScorecardKpi.update({
-    where: { id: input.kpiId },
-    data: {
-      currentActualValue: actualValue,
-      lastMeasurementNote: `Engine calculated ${actualValue ?? "no value"} with ${score}% score (${statusLabel(status)}).`,
-    },
-  });
-
-  if (status === "on_track") {
-    await prisma.balancedScorecardKpiAction.updateMany({
-      where: { kpiId: input.kpiId, status: "open" },
-      data: { status: "closed" },
-    });
-  } else {
-    const existingAction = await prisma.balancedScorecardKpiAction.findFirst({
-      where: { kpiId: input.kpiId, resultId: result.id, status: "open" },
-      select: { id: true },
-    });
-    if (!existingAction) {
-      await prisma.balancedScorecardKpiAction.create({
-        data: {
+  const result = await prisma.$transaction(async (tx) => {
+    const upserted = await tx.balancedScorecardKpiResult.upsert({
+      where: {
+        measurementPeriodId_kpiId: {
+          measurementPeriodId: period.id,
           kpiId: input.kpiId,
-          resultId: result.id,
-          title: `Review ${kpi.name} (${statusLabel(status)})`,
-          ownerProfileId: kpi.ownerProfileId ?? null,
-          status: "open",
         },
+      },
+      update: {
+        actualValue,
+        score,
+        status: status as any,
+        trend,
+        calculatedAt: new Date(),
+      },
+      create: {
+        kpiId: input.kpiId,
+        measurementPeriodId: period.id,
+        actualValue,
+        score,
+        status: status as any,
+        trend,
+      },
+    });
+
+    await tx.balancedScorecardKpi.update({
+      where: { id: input.kpiId },
+      data: {
+        currentActualValue: actualValue,
+        lastMeasurementNote: `Engine calculated ${actualValue ?? "no value"} with ${score}% score (${statusLabel(
+          status
+        )}). ${buildCascadeLogicLabel(engineSourceConfig)}`,
+      },
+    });
+
+    if (status === "on_track") {
+      await tx.balancedScorecardKpiAction.updateMany({
+        where: { kpiId: input.kpiId, status: "open" },
+        data: { status: "closed" },
       });
+    } else {
+      const existingAction = await tx.balancedScorecardKpiAction.findFirst({
+        where: { kpiId: input.kpiId, resultId: upserted.id, status: "open" },
+        select: { id: true },
+      });
+      if (!existingAction) {
+        await tx.balancedScorecardKpiAction.create({
+          data: {
+            kpiId: input.kpiId,
+            resultId: upserted.id,
+            title: `Review ${kpi.name} (${statusLabel(status)})`,
+            ownerProfileId: kpi.ownerProfileId ?? null,
+            status: "open",
+          },
+        });
+      }
     }
-  }
+
+    return upserted;
+  });
 
   cacheService.invalidate("^bsc:workspace:");
   return getKpiEngineDetail(input.kpiId);

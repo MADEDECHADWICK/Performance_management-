@@ -3,6 +3,8 @@ import {
   MODULE_REQUIREMENTS_BY_ROUTE,
   ROUTE_MODULE_REQUIREMENTS,
 } from "./moduleRouteRequirements";
+import fs from "fs";
+import path from "path";
 
 describe("module route requirements registry", () => {
   it("has no duplicate route paths", () => {
@@ -55,5 +57,16 @@ describe("module route requirements registry", () => {
         (item) => item.path === "/evaluation-templates"
       )
     ).toBe(true);
+  });
+
+  it("covers authenticated top-level routes mounted in index.ts", () => {
+    const indexSource = fs.readFileSync(path.join(__dirname, "index.ts"), "utf8");
+    const mountedRoutes = Array.from(indexSource.matchAll(/router\.use\(\s*['"]([^'"]+)['"]/g))
+      .map((match) => match[1])
+      .filter((route) => !["/auth", "/certificates", "/surveys"].includes(route));
+
+    const missingRoutes = mountedRoutes.filter((route) => !MODULE_REQUIREMENTS_BY_ROUTE.has(route));
+
+    expect(missingRoutes).toEqual([]);
   });
 });

@@ -1066,6 +1066,10 @@ export class EvaluationService {
 
     const isEvaluator = assignment.evaluatorProfileId === auth.profileId;
     const isEvaluatee = assignment.evaluateeProfileId === auth.profileId;
+    const canViewResponses =
+      isEvaluator ||
+      isEvaluatee ||
+      EvaluationService.isPrivilegedEvaluationManager(auth);
     const effectiveCycleId = assignment.cycleId || assignment.definition.cycleId || null;
     const scoringConfig = asRecord(assignment.definition.scoringConfig);
     const workflowConfig = asRecord(scoringConfig.evaluationWorkflow);
@@ -1172,11 +1176,13 @@ export class EvaluationService {
             questions,
           }
         : null,
-      responses: assignment.responseRecords.map((response) => ({
-        questionId: response.questionId,
-        score: response.score,
-        comment: response.comment,
-      })),
+      responses: canViewResponses
+        ? assignment.responseRecords.map((response) => ({
+            questionId: response.questionId,
+            score: response.score,
+            comment: response.comment,
+          }))
+        : [],
       submissionSummary: {
         evaluatorComment: assignment.evaluatorComments,
         submittedAt: assignment.submittedAt,
@@ -1345,7 +1351,10 @@ export class EvaluationService {
 
     const scoreReport = assignment.definition.excludeFromScore
       ? null
-      : await this.aggregateScores(effectiveCycleId, assignment.evaluateeProfileId);
+      : await this.aggregateScores(effectiveCycleId, assignment.evaluateeProfileId).catch((err) => {
+          console.error("[EvaluationScore] Failed to aggregate scores after submission:", err);
+          return null;
+        });
 
     websocketService.emitToUser(String(assignment.evaluateeProfileId), "evaluation:submitted", {
       assignmentId,

@@ -284,7 +284,9 @@ const calculateAndStoreScore = async (
     (sum, proposal) => sum + Number(proposal.proposedFee || 0),
     0
   );
-  const wonClientIds = Array.from(new Set(wonProposals.map((proposal) => proposal.clientId)));
+  const wonClientIds = Array.from(
+    new Set(wonProposals.map((p) => p.clientId).filter((id): id is number => id !== null))
+  );
   const leadToCashCollected =
     wonClientIds.length > 0
       ? Number(

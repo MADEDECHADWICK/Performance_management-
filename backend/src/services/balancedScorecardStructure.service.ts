@@ -81,34 +81,11 @@ const mapConflict = (message: string) => {
   throw err;
 };
 
-const assertGoalKpiWeightBudget = async (params: {
-  goalId: number;
-  incomingWeight: number;
-  excludeKpiId?: number | null;
-}) => {
-  if (!Number.isFinite(params.incomingWeight) || params.incomingWeight < 0 || params.incomingWeight > 100) {
+const assertKpiWeightValue = (incomingWeight: number) => {
+  if (!Number.isFinite(incomingWeight) || incomingWeight < 0 || incomingWeight > 100) {
     const err = new Error("KPI weight must be between 0 and 100") as Error & { statusCode?: number };
     err.statusCode = 400;
     throw err;
-  }
-
-  const aggregate = await prisma.balancedScorecardKpi.aggregate({
-    where: {
-      goalId: params.goalId,
-      isActive: true,
-      ...(params.excludeKpiId ? { id: { not: params.excludeKpiId } } : {}),
-    },
-    _sum: {
-      weight: true,
-    },
-  });
-
-  const currentWeight = Number(aggregate._sum.weight ?? 0);
-  const proposedTotal = currentWeight + Math.round(params.incomingWeight);
-  if (proposedTotal > 100) {
-    mapConflict(
-      `KPI weights for this goal would total ${proposedTotal}%. Reduce the new KPI weight so the goal stays within 100%.`
-    );
   }
 };
 
@@ -1255,10 +1232,7 @@ export async function createBalancedScorecardKpi(input: {
   const metricKey = input.metricKey?.trim() || `custom-${slugify(trimmedName) || "metric"}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
   const trackingMode =
     input.trackingMode ?? (input.metricKey && input.metricKey.trim() ? "template" : "manual");
-  await assertGoalKpiWeightBudget({
-    goalId: input.goalId,
-    incomingWeight: input.weight,
-  });
+  assertKpiWeightValue(input.weight);
   const owner = await resolveOwnerReference({
     ownerName: input.ownerName,
     ownerProfileId: input.ownerProfileId,

@@ -3335,8 +3335,9 @@ model ClientSatisfactionSurvey {
 // =============================
 
 model Proposal {
-  id       Int @id @default(autoincrement())
-  clientId Int @map("client_id")
+  id       Int  @id @default(autoincrement())
+  clientId Int? @map("client_id")
+  clientName String? @map("client_name")
 
   proposalTitle String  @map("proposal_title")
   serviceType   String  @map("service_type")
@@ -3353,8 +3354,8 @@ model Proposal {
   createdByProfileId       Int? @map("created_by_profile_id")
   assignedPartnerProfileId Int? @map("assigned_partner_profile_id")
 
-  createdBy       Profile? @relation("ProposalCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull) // v2.1
-  assignedPartner Profile? @relation("ProposalAssignedPartner", fields: [assignedPartnerProfileId], references: [id], onDelete: SetNull) // v2.1
+  createdBy       Profile? @relation("ProposalCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  assignedPartner Profile? @relation("ProposalAssignedPartner", fields: [assignedPartnerProfileId], references: [id], onDelete: SetNull)
 
   wonAt      DateTime? @map("won_at")
   lostReason String?   @map("lost_reason")
@@ -3364,13 +3365,13 @@ model Proposal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([status])
   @@index([proposalDate])
-  @@index([createdByProfileId]) // v2.1
-  @@index([assignedPartnerProfileId]) // v2.1
+  @@index([createdByProfileId])
+  @@index([assignedPartnerProfileId])
   @@map("proposals")
 }
 
@@ -3933,29 +3934,33 @@ model BalancedScorecardKpi {
   updateFrequency  String?  @map("update_frequency")
   sortOrder        Int      @default(0) @map("sort_order")
   isActive         Boolean  @default(true) @map("is_active")
+  firmTemplateId   Int?     @map("firm_template_id")
   createdByProfileId Int?   @map("created_by_profile_id")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
-  scorecardVersion BalancedScorecardVersion? @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
-  goal           BalancedScorecardGoal                  @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  ownerProfile   Profile?                              @relation("BalancedScorecardKpiOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
-  initiatives    BalancedScorecardInitiative[]
-  actualHistory  BalancedScorecardKpiActualHistory[]
-  snapshots      BalancedScorecardKpiSnapshot[]
-  assignments    BalancedScorecardKpiAssignment[]
-  engineFormula   BalancedScorecardKpiFormula?
-  scoringRule     BalancedScorecardKpiScoringRule?
-  trackingPlan    BalancedScorecardKpiTrackingPlan?
-  dataPoints      BalancedScorecardKpiDataPoint[]
-  results         BalancedScorecardKpiResult[]
-  actions         BalancedScorecardKpiAction[]
+  scorecardVersion    BalancedScorecardVersion? @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
+  goal                BalancedScorecardGoal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  ownerProfile        Profile?                  @relation("BalancedScorecardKpiOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
+  firmTemplate        BalancedScorecardKpi?     @relation("FirmCascadeKpis", fields: [firmTemplateId], references: [id], onDelete: SetNull)
+  cascadedInstances   BalancedScorecardKpi[]    @relation("FirmCascadeKpis")
+  initiatives         BalancedScorecardInitiative[]
+  actualHistory       BalancedScorecardKpiActualHistory[]
+  snapshots           BalancedScorecardKpiSnapshot[]
+  assignments         BalancedScorecardKpiAssignment[]
+  engineFormula       BalancedScorecardKpiFormula?
+  scoringRule         BalancedScorecardKpiScoringRule?
+  trackingPlan        BalancedScorecardKpiTrackingPlan?
+  dataPoints          BalancedScorecardKpiDataPoint[]
+  results             BalancedScorecardKpiResult[]
+  actions             BalancedScorecardKpiAction[]
 
   @@index([scorecardVersionId, sortOrder])
   @@index([goalId, sortOrder])
   @@index([metricKey])
   @@index([isActive])
   @@index([ownerProfileId])
+  @@index([firmTemplateId])
   @@map("balanced_scorecard_kpis")
 }
 

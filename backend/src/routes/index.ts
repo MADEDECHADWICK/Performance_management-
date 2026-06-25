@@ -78,6 +78,7 @@ import recruitmentCandidatesRoutes from './recruitmentCandidates.routes';
 import moduleAccessRoutes from './moduleAccess';
 import knowledgeHubRoutes from './knowledgeHub';
 import reportingRoutes from './reporting';
+import kpiCascadeRoutes from './kpiCascade';
 
 const router = Router();
 
@@ -170,6 +171,7 @@ router.use('/engagement-letters', authMiddleware, requireModuleAccess('clients')
 router.use('/client-onboardings', authMiddleware, requireModuleAccess('clients'), clientOnboardingsRoutes);
 router.use('/performance-scores', authMiddleware, requireModuleAccess('reports'), performanceScoresRoutes);
 router.use('/performance-framework', authMiddleware, requireModuleAccess('dashboard'), performanceFrameworkRoutes);
+router.use('/kpi-cascade', authMiddleware, requireModuleAccess('dashboard', 'read'), kpiCascadeRoutes);
 router.use('/project-evaluations', authMiddleware, requireModuleAccess('evaluations'), projectEvaluationsRoutes);
 router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), calibrationRoutes);
 router.use('/performance-bands', authMiddleware, requireModuleAccess('evaluations'), performanceBandsRoutes);

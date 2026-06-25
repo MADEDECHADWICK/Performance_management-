@@ -75,8 +75,15 @@ const ensureContributionRecord = async (params: {
   }
 
   const contribution = await resolveContribution(params);
-  const record = await prisma.balancedScorecardEmployeeContribution.create({
-    data: {
+  const record = await prisma.balancedScorecardEmployeeContribution.upsert({
+    where: {
+      profileId_contributionKey: {
+        profileId: params.profileId,
+        contributionKey: params.contributionKey,
+      },
+    },
+    update: {},
+    create: {
       profileId: params.profileId,
       contributionKey: params.contributionKey,
       sourceType: inferSourceType(params.contributionKey),
@@ -203,6 +210,7 @@ const rollupInitiativeParents = async (
   tx: Prisma.TransactionClient,
   initiativeIds: number[]
 ) => {
+  const visited = new Set<number>(initiativeIds);
   let parentIds = Array.from(new Set(initiativeIds));
   while (parentIds.length > 0) {
     const parents = await tx.balancedScorecardInitiative.findMany({
@@ -214,9 +222,11 @@ const rollupInitiativeParents = async (
         parents
           .map((initiative) => initiative.parentInitiativeId)
           .filter((id): id is number => typeof id === "number")
+          .filter((id) => !visited.has(id))
       )
     );
     if (nextParentIds.length === 0) return;
+    nextParentIds.forEach((id) => visited.add(id));
 
     for (const parentId of nextParentIds) {
       const children = await tx.balancedScorecardInitiative.findMany({

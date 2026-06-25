@@ -47,6 +47,8 @@ import {
   Crown,
   Bell,
   BookOpen,
+  Building2,
+  ScrollText,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -421,6 +423,7 @@ function AppSidebar({
     "finance.balances",
     "finance.profitability",
     "finance.allocations",
+    "finance.invoices",
   ]);
 
   const hasManagementSectionAccess = canShowAnyView([
@@ -491,6 +494,24 @@ function AppSidebar({
                 path="/bsc-management"
                 icon={Target}
                 label="BSC & KPIs"
+              />
+              <NavItem
+                path="/kpi-scorecard"
+                icon={TrendingUp}
+                label="KPI Scorecard"
+                viewKey="kpi.scorecard"
+              />
+              <NavItem
+                path="/firm-kpi-manager"
+                icon={Building2}
+                label="Firm KPI Templates"
+                viewKey="kpi.firm_templates"
+              />
+              <NavItem
+                path="/my-proposals"
+                icon={ScrollText}
+                label="My Proposals"
+                viewKey="proposals.my"
               />
               <NavItem
                 path="/reports"
@@ -651,6 +672,7 @@ function AppSidebar({
                     <NavItem path="/finance-balances" icon={BarChart3} label="Balances" viewKey="finance.balances" module="finance" />
                     <NavItem path="/finance-profitability" icon={TrendingUp} label="Profitability" viewKey="finance.profitability" module="finance" />
                     <NavItem path="/finance-allocations" icon={FileSpreadsheet} label="Allocations" viewKey="finance.allocations" module="finance" />
+                    <NavItem path="/finance-invoices" icon={FileText} label="Invoices" viewKey="finance.invoices" module="finance" />
                   </SidebarMenu>
                 </SidebarGroupContent>
               </CollapsibleContent>

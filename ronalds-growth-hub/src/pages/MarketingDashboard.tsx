@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
-import { clientsAPI, clientOnboardingsAPI, proposalsAPI, surveysAPI } from "@/lib/api";
+import { clientOnboardingsAPI, proposalsAPI, surveysAPI } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Proposal } from "@/lib/api/proposals";
 import type { ClientSatisfactionSurvey } from "@/lib/api/surveys";
@@ -36,12 +36,6 @@ const toNumber = (value: unknown) => {
 export default function MarketingDashboard() {
   const { profile, isLoading: authLoading } = useAuth();
   const currentProfileId = profile?.id ?? null;
-
-  const { data: clientsData, error: clientsError, isLoading: clientsLoading } = useQuery({
-    queryKey: ["marketing-clients", currentProfileId],
-    queryFn: () => clientsAPI.list({ page: 1, pageSize: 200 }),
-    enabled: !authLoading && !!currentProfileId,
-  });
 
   const {
     data: onboardingData,
@@ -73,7 +67,6 @@ export default function MarketingDashboard() {
     enabled: !authLoading && !!currentProfileId,
   });
 
-  const clients = useMemo(() => clientsData?.data ?? [], [clientsData]);
   const onboardings = useMemo(() => onboardingData?.data ?? [], [onboardingData]);
   const proposals = useMemo<MarketingProposal[]>(
     () => (proposalsData?.data ?? []) as MarketingProposal[],
@@ -119,11 +112,6 @@ export default function MarketingDashboard() {
     });
     return ids;
   }, [scopedOnboardings]);
-
-  const scopedClients = useMemo(
-    () => clients.filter((client: any) => scopedClientIds.has(Number(client.id || 0))),
-    [clients, scopedClientIds]
-  );
 
   const pendingHR = useMemo(
     () => scopedOnboardings.filter((o: any) => o.status === "pending_hr_review"),
@@ -319,20 +307,19 @@ export default function MarketingDashboard() {
 
   const loading =
     authLoading ||
-    clientsLoading ||
     onboardingLoading ||
     proposalsLoading ||
     surveysLoading;
-  const queryError = clientsError || onboardingError || proposalsError || surveysError;
+  const queryError = onboardingError || proposalsError || surveysError;
   const marketingJobMetrics = [
     {
       label: "Open opportunities",
       value: String(pipelineMetrics.totalOpportunities),
-      hint: `${scopedClients.length} clients in your active intake scope`,
+      hint: `${scopedClientIds.size} clients in your active intake scope`,
       icon: Building2,
       tone: "primary" as const,
       graphValue: pipelineMetrics.totalOpportunities,
-      graphBaseline: scopedClients.length,
+      graphBaseline: scopedClientIds.size,
     },
     {
       label: "Pipeline value",
@@ -394,7 +381,7 @@ export default function MarketingDashboard() {
               Marketing Overview
             </h1>
             <p className="text-muted-foreground">
-              Profile-scoped marketing activity for intake, onboarding, pipeline, and client feedback.
+              Intake, onboarding, pipeline, and client feedback.
             </p>
           </div>
           <div className="flex gap-2">
@@ -435,7 +422,7 @@ export default function MarketingDashboard() {
                 <FileText className="h-5 w-5" />
                 HR Intake Queue
               </CardTitle>
-              <CardDescription>Engagement letters submitted by marketing awaiting HR action.</CardDescription>
+              <CardDescription>Letters awaiting HR action</CardDescription>
             </CardHeader>
             <CardContent className="max-h-[420px] overflow-auto">
               <Table>
@@ -482,7 +469,7 @@ export default function MarketingDashboard() {
                 <Briefcase className="h-5 w-5" />
                 Upcoming Jobs
               </CardTitle>
-              <CardDescription>Approved onboarding ready for HR job creation.</CardDescription>
+              <CardDescription>Ready for HR job creation</CardDescription>
             </CardHeader>
             <CardContent className="max-h-[420px] overflow-auto">
               <Table>
@@ -640,7 +627,7 @@ export default function MarketingDashboard() {
               </div>
               {surveyList.length === 0 && (
                 <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                  No survey responses yet for your client/job portfolio.
+                  No survey responses yet.
                 </div>
               )}
               {surveyList.length > 0 && (

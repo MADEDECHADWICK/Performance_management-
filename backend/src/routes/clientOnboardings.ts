@@ -283,6 +283,14 @@ router.get(
     if (Number.isFinite(engagementLetterId)) where.engagementLetterId = engagementLetterId;
     if (Number.isFinite(departmentId)) where.departmentId = departmentId;
 
+    const roles = resolveRoleSet(req as AuthRequest);
+    const PRIVILEGED_OVER_MARKETING = ["super_admin", "hr", "gmp", "partner", "manager"];
+    const isMarketingOnly =
+      roles.has("marketing") && !PRIVILEGED_OVER_MARKETING.some((r) => roles.has(r));
+    if (isMarketingOnly && (req as AuthRequest).user?.profileId) {
+      where.uploadedByProfileId = (req as AuthRequest).user!.profileId;
+    }
+
     const [items, total] = await Promise.all([
       db.clientOnboarding.findMany({
         where,

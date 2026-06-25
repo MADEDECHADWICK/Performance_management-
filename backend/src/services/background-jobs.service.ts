@@ -9,13 +9,23 @@ import net from "net";
 import nodemailer from "nodemailer";
 import { logger, toLogContext } from "../lib/logger";
 import { ObservabilityService } from "./observability.service";
+import prisma from "../prisma";
+import { syncKpiSourceData } from "./kpiCascade.service";
 
 type QueueName =
   | "emails"
   | "reports"
   | "bulk-operations"
-  | "data-aggregation"
-  | "notifications";
+  | "data-aggregation";
+
+type RedisConnectionConfig = {
+  redis: NonNullable<Bull.QueueOptions["redis"]>;
+  host: string;
+  port: number;
+  urlConfigured: boolean;
+};
+
+const DEFAULT_REDIS_PORT = 6379;
 
 interface EmailJob {
   to: string;
@@ -56,11 +66,59 @@ class BackgroundJobsService {
     return true;
   }
 
-  private getRedisConfig() {
+  private getRedisConfig(): RedisConnectionConfig {
+    const redisUrl = String(process.env.REDIS_URL || "").trim();
+    if (redisUrl) {
+      let parsed: URL;
+      try {
+        parsed = new URL(redisUrl);
+      } catch {
+        throw new Error("REDIS_URL must be a valid redis:// or rediss:// URL");
+      }
+
+      if (parsed.protocol !== "redis:" && parsed.protocol !== "rediss:") {
+        throw new Error("REDIS_URL must use redis:// or rediss://");
+      }
+
+      const port = Number(parsed.port || DEFAULT_REDIS_PORT);
+      if (!parsed.hostname || !Number.isFinite(port) || port <= 0) {
+        throw new Error("REDIS_URL must include a valid Redis host and port");
+      }
+
+      return {
+        redis: redisUrl,
+        host: parsed.hostname,
+        port: Math.trunc(port),
+        urlConfigured: true,
+      };
+    }
+
+    const host = process.env.REDIS_HOST || "127.0.0.1";
+    const port = Number(process.env.REDIS_PORT || DEFAULT_REDIS_PORT);
+    if (!Number.isFinite(port) || port <= 0) {
+      throw new Error("REDIS_PORT must be a positive integer");
+    }
+
     return {
-      host: process.env.REDIS_HOST || "127.0.0.1",
-      port: Number(process.env.REDIS_PORT || 6379),
+      redis: {
+        host,
+        port: Math.trunc(port),
+      },
+      host,
+      port: Math.trunc(port),
+      urlConfigured: false,
     };
+  }
+
+  private getRedisLogContext() {
+    try {
+      const { host, port, urlConfigured } = this.getRedisConfig();
+      return { host, port, urlConfigured };
+    } catch (error) {
+      return {
+        configError: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async ensureRedisReachable() {
@@ -136,7 +194,6 @@ class BackgroundJobsService {
       this.createQueue("reports");
       this.createQueue("bulk-operations");
       this.createQueue("data-aggregation");
-      this.createQueue("notifications");
       await Promise.all(Array.from(this.queues.values()).map((queue) => queue.isReady()));
       this.startWorkers();
       this.initialized = true;
@@ -171,14 +228,14 @@ class BackgroundJobsService {
       logger.warn("background_jobs_initialization_skipped", {
         ...toLogContext(error),
         component: "background_jobs",
-        redis: this.getRedisConfig(),
+        redis: this.getRedisLogContext(),
       });
       ObservabilityService.registerWorker(this.workerName, {
         component: "background_jobs",
         enabled: false,
         metadata: {
           reason: "redis_unavailable",
-          redis: this.getRedisConfig(),
+          redis: this.getRedisLogContext(),
         },
       });
       ObservabilityService.markWorkerStopped(this.workerName, {
@@ -186,7 +243,7 @@ class BackgroundJobsService {
         enabled: false,
         metadata: {
           reason: "redis_unavailable",
-          redis: this.getRedisConfig(),
+          redis: this.getRedisLogContext(),
           startupDurationMs: Date.now() - startedAt,
         },
       });
@@ -197,11 +254,13 @@ class BackgroundJobsService {
   }
 
   private createQueue(name: QueueName) {
+    const redis = this.getRedisConfig().redis;
     const queue = new Bull(name, {
-      redis: this.getRedisConfig(),
+      redis,
       defaultJobOptions: {
         removeOnComplete: true,
         attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
       },
     });
 
@@ -266,6 +325,7 @@ class BackgroundJobsService {
       aggregationQueue.process(async (job: Bull.Job<any>) => {
         await this.processDataAggregation(job.data);
       });
+      this.scheduleKpiAutoSync();
     }
   }
 
@@ -336,9 +396,43 @@ class BackgroundJobsService {
   }
 
   private async processDataAggregation(data: any): Promise<void> {
-    logger.info("processing_aggregation_job", {
-      type: data?.type || "unknown",
-    });
+    const jobType = data?.type || "unknown";
+    logger.info("processing_aggregation_job", { type: jobType });
+
+    if (jobType === "kpi_sync") {
+      await this.runKpiAutoSync();
+    }
+  }
+
+  private async runKpiAutoSync(): Promise<void> {
+    try {
+      // Find all active (open or draft) periods
+      const periods = await prisma.balancedScorecardMeasurementPeriod.findMany({
+        where: { status: { in: ["draft", "active", "open", "review"] as any } },
+        select: { id: true, label: true },
+      });
+
+      for (const period of periods) {
+        try {
+          const result = await syncKpiSourceData(period.id);
+          logger.info("kpi_auto_sync_period", { periodId: period.id, label: period.label, ...result });
+        } catch (err) {
+          logger.warn("kpi_auto_sync_period_failed", { periodId: period.id, ...toLogContext(err) });
+        }
+      }
+    } catch (err) {
+      logger.error("kpi_auto_sync_failed", toLogContext(err));
+    }
+  }
+
+  private scheduleKpiAutoSync() {
+    const aggregationQueue = this.queues.get("data-aggregation");
+    if (!aggregationQueue) return;
+    // Repeating job: every 6 hours
+    aggregationQueue.add(
+      { type: "kpi_sync" },
+      { repeat: { cron: "0 */6 * * *" }, jobId: "kpi-auto-sync" }
+    ).catch(() => { /* ignore scheduling errors */ });
   }
 
   private renderEmailTemplate(template: string, data: Record<string, unknown>): string {
@@ -360,7 +454,6 @@ class BackgroundJobsService {
       "reports",
       "bulk-operations",
       "data-aggregation",
-      "notifications",
     ];
     const result: Record<string, Bull.JobCounts> = {};
     await Promise.all(
@@ -401,6 +494,7 @@ class BackgroundJobsService {
       emailTransportConfigured: Boolean(this.emailTransporter),
       lastInitializedAt: this.lastInitializedAt,
       lastInitializationError: this.lastInitializationError,
+      redis: this.getRedisLogContext(),
     };
   }
 }

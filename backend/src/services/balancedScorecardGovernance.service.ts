@@ -59,7 +59,7 @@ const ensureNoConflictingCycle = async (params: {
   );
 };
 
-const validateVersionGoalWeights = async (versionId: number) => {
+const validateVersionGoalKpiCoverage = async (versionId: number) => {
   const [goals, kpis] = await Promise.all([
     prisma.balancedScorecardGoal.findMany({
       where: { scorecardVersionId: versionId, isActive: true },
@@ -68,29 +68,22 @@ const validateVersionGoalWeights = async (versionId: number) => {
     }),
     prisma.balancedScorecardKpi.findMany({
       where: { scorecardVersionId: versionId, isActive: true },
-      select: { goalId: true, weight: true },
+      select: { goalId: true },
     }),
   ]);
 
-  const totalWeightByGoalId = new Map<number, number>();
+  const kpiCountByGoalId = new Map<number, number>();
   kpis.forEach((kpi) => {
-    totalWeightByGoalId.set(kpi.goalId, (totalWeightByGoalId.get(kpi.goalId) ?? 0) + (kpi.weight ?? 0));
+    kpiCountByGoalId.set(kpi.goalId, (kpiCountByGoalId.get(kpi.goalId) ?? 0) + 1);
   });
 
-  const violations = goals
-    .map((goal) => ({
-      title: goal.title,
-      totalWeight: totalWeightByGoalId.get(goal.id) ?? 0,
-    }))
-    .filter((goal) => goal.totalWeight !== 100);
+  const violations = goals.filter((goal) => (kpiCountByGoalId.get(goal.id) ?? 0) === 0);
 
   if (violations.length === 0) return;
 
-  const summary = violations
-    .map((goal) => `"${goal.title}" totals ${goal.totalWeight}%`)
-    .join(", ");
+  const summary = violations.map((goal) => `"${goal.title}"`).join(", ");
   throw mapConflict(
-    `Every goal must total exactly 100% KPI weight before publishing. ${summary}.`
+    `Every goal needs at least one KPI before publishing. Missing KPI coverage: ${summary}.`
   );
 };
 
@@ -479,7 +472,7 @@ export async function publishBalancedScorecardVersion(versionId: number) {
     throw mapNotFound("Scorecard version not found");
   }
 
-  await validateVersionGoalWeights(version.id);
+  await validateVersionGoalKpiCoverage(version.id);
 
   const publishedVersion = await prisma.$transaction(async (tx) => {
     await tx.balancedScorecardVersion.updateMany({

@@ -77,13 +77,6 @@ const Index = () => {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <Button size="lg" onClick={() => navigate("/auth")} className="px-6">
-                Launch Dashboard
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-              <Button size="lg" variant="outline" onClick={() => navigate("/auth")} className="px-6">
-                Explore Modules
-              </Button>
             </div>
           </div>
 

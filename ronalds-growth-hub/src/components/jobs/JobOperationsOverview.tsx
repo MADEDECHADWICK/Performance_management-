@@ -132,7 +132,7 @@ const deriveFallbackMetrics = (jobs: DecoratedJob[]): JobOperationsMetric[] => {
     {
       label: "Execution live",
       value: String(liveJobs.length),
-      hint: "Jobs already in motion",
+      hint: "In progress",
       icon: ShieldCheck,
       tone: "positive",
       graphValue: liveJobs.length,
@@ -141,7 +141,7 @@ const deriveFallbackMetrics = (jobs: DecoratedJob[]): JobOperationsMetric[] => {
     {
       label: "Overdue jobs",
       value: String(overdueJobs.length),
-      hint: "Need manager or partner intervention",
+      hint: "Action needed",
       icon: AlertTriangle,
       tone: "danger",
       graphValue: overdueJobs.length,
@@ -151,7 +151,7 @@ const deriveFallbackMetrics = (jobs: DecoratedJob[]): JobOperationsMetric[] => {
     {
       label: "Closed out",
       value: String(completedJobs.length),
-      hint: "Completed and ready for reporting",
+      hint: "Ready to report",
       icon: CheckCircle2,
       tone: "warning",
       graphValue: completedJobs.length,
@@ -195,7 +195,7 @@ export default function JobOperationsOverview({
     const loadJobs = async () => {
       try {
         setIsLoadingJobs(true);
-        const response = await jobsAPI.list({ page: 1, pageSize: 120 });
+        const response = await jobsAPI.list({ page: 1, pageSize: 100 });
         if (cancelled) return;
         const items = (response as any)?.data ?? (response as any)?.jobs ?? [];
         setFetchedJobs(Array.isArray(items) ? items : []);
@@ -430,7 +430,7 @@ export default function JobOperationsOverview({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <CardTitle className="text-xl">Job locator</CardTitle>
-                    <CardDescription>Quickly trace the work that needs attention.</CardDescription>
+                    <CardDescription>Find jobs that need attention.</CardDescription>
                   </div>
                   {showBoardLink ? (
                     <Button asChild variant="outline" size="sm">

@@ -65,6 +65,7 @@ const FinanceProjections = lazy(() => import("./pages/FinanceProjections"));
 const FinanceBalances = lazy(() => import("./pages/FinanceBalances"));
 const FinanceProfitability = lazy(() => import("./pages/FinanceProfitability"));
 const FinanceAllocations = lazy(() => import("./pages/FinanceAllocations"));
+const FinanceInvoices = lazy(() => import("./pages/FinanceInvoices"));
 const AuditLogs = lazy(() => import("./pages/AuditLogs"));
 const Notifications = lazy(() => import("./pages/Notifications"));
 const OpsCenter = lazy(() => import("./pages/OpsCenter"));
@@ -97,6 +98,9 @@ const Todos = lazy(() => import("./pages/Todos"));
 const RoleManagement = lazy(() => import("./pages/RoleManagement"));
 const PositionsRates = lazy(() => import("./pages/PositionsRates"));
 const RecruitmentCandidates = lazy(() => import("./pages/RecruitmentCandidates"));
+const KpiScorecard = lazy(() => import("./pages/KpiScorecard"));
+const FirmKpiManager = lazy(() => import("./pages/FirmKpiManager"));
+const MyProposals = lazy(() => import("./pages/MyProposals"));
 
 const queryClient = new QueryClient();
 
@@ -349,6 +353,30 @@ const App = () => (
                 }
               />
               <Route
+                path="/kpi-scorecard"
+                element={
+                  <AppRouteGuard>
+                    <KpiScorecard />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/firm-kpi-manager"
+                element={
+                  <AppRouteGuard>
+                    <FirmKpiManager />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/my-proposals"
+                element={
+                  <AppRouteGuard>
+                    <MyProposals />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
                 path="/role-management"
                 element={
                   <AppRouteGuard>
@@ -554,6 +582,14 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <FinanceAllocations />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/finance-invoices"
+                element={
+                  <AppRouteGuard>
+                    <FinanceInvoices />
                   </AppRouteGuard>
                 }
               />

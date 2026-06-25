@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { ClientOnboardingStatus, EngagementLetterStatus } from "@prisma/client";
+import { ClientOnboardingStatus, ClientStatus, EngagementLetterStatus, Prisma } from "@prisma/client";
 import prisma from "../prisma";
 import { AuthRequest } from "../middleware/auth";
 import { resolveRequestAccessRoles } from "../auth/accessRoles";
@@ -51,6 +51,67 @@ const isHrOrAdmin = (req: AuthRequest) => {
   return roles.has("hr") || roles.has("super_admin");
 };
 
+const canViewAllClients = (roles: Set<string>) =>
+  roles.has("super_admin") ||
+  roles.has("hr") ||
+  roles.has("gmp") ||
+  roles.has("marketing");
+
+const canManageClientRecords = (roles: Set<string>) => canViewAllClients(roles);
+
+const getRequesterProfileId = (req: AuthRequest) => {
+  const profileId = Number(req.profile?.id ?? req.user?.profileId);
+  return Number.isFinite(profileId) && profileId > 0 ? profileId : null;
+};
+
+const buildScopedClientWhere = (
+  req: AuthRequest,
+  filters: Prisma.ClientWhereInput = {}
+): Prisma.ClientWhereInput => {
+  const roles = resolveRoleSet(req);
+  if (canViewAllClients(roles)) {
+    return filters;
+  }
+
+  const profileId = getRequesterProfileId(req);
+  if (!profileId) {
+    return { AND: [filters, { id: -1 }] };
+  }
+
+  const scopedAccess: Prisma.ClientWhereInput = {
+    OR: [
+      { partnerProfileId: profileId },
+      { managerProfileId: profileId },
+      { department: { partnerProfileId: profileId } },
+      { department: { departmentHeadId: profileId } },
+      { jobs: { some: { partnerProfileId: profileId } } },
+      { jobs: { some: { managerProfileId: profileId } } },
+      { jobs: { some: { staffing: { some: { employeeProfileId: profileId } } } } },
+    ],
+  };
+
+  return Object.keys(filters).length > 0 ? { AND: [filters, scopedAccess] } : scopedAccess;
+};
+
+const requireClientRecordAccess = async (
+  req: AuthRequest,
+  clientId: number,
+  action: "read" | "write" = "read"
+) => {
+  const roles = resolveRoleSet(req);
+
+  if (action === "write" && !canManageClientRecords(roles)) {
+    return false;
+  }
+
+  const client = await prisma.client.findFirst({
+    where: buildScopedClientWhere(req, { id: clientId }),
+    select: { id: true },
+  });
+
+  return Boolean(client);
+};
+
 const engagementLetterIncludeWithFeedback = {
   document: { select: { id: true, fileName: true, filePath: true, mimeType: true } },
   statusTransitions: {
@@ -67,7 +128,18 @@ const engagementLetterIncludeWithFeedback = {
   },
 };
 
-const decorateEngagementLetter = (letter: any) => {
+type EngagementLetterWithFeedback = Prisma.EngagementLetterGetPayload<{
+  include: typeof engagementLetterIncludeWithFeedback;
+}>;
+
+type EngagementLetterRejectionNotice = {
+  id: number;
+  clientId: number | null;
+  clientName: string;
+  uploadedByProfileId: number | null;
+};
+
+const decorateEngagementLetter = (letter: EngagementLetterWithFeedback | null) => {
   if (!letter) return letter;
   const latestRejection = Array.isArray(letter.statusTransitions)
     ? letter.statusTransitions[0]
@@ -140,7 +212,7 @@ router.post(
       );
 
       res.json(successResponse(decorateEngagementLetter(updated), "Engagement letter approved"));
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error approving engagement letter:", error);
       res.status(500).json(errorResponse("Failed to approve engagement letter", 500));
     }
@@ -184,7 +256,7 @@ router.post(
         return;
       }
 
-      const { updated, onboardings } = await prisma.$transaction(async (tx: any) => {
+      const { updated, onboardings } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const updatedLetter = await tx.engagementLetter.update({
           where: { id: letterId },
           data: {
@@ -234,7 +306,7 @@ router.post(
       if (letter.uploadedByProfileId && letter.uploadedByProfileId !== req.user?.profileId) {
         recipients.add(letter.uploadedByProfileId);
       }
-      onboardings.forEach((item: any) => {
+      onboardings.forEach((item: EngagementLetterRejectionNotice) => {
         if (item.uploadedByProfileId && item.uploadedByProfileId !== req.user?.profileId) {
           recipients.add(item.uploadedByProfileId);
         }
@@ -265,7 +337,7 @@ router.post(
       );
 
       res.json(successResponse(decorateEngagementLetter(updated), "Engagement letter rejected"));
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error rejecting engagement letter:", error);
       res.status(500).json(errorResponse("Failed to reject engagement letter", 500));
     }
@@ -273,7 +345,7 @@ router.post(
 );
 
 // GET /clients - List clients (paginated)
-router.get("/", async (req, res) => {
+router.get("/", async (req: AuthRequest, res) => {
   try {
     const page = Number(req.query.page) || 1;
     const pageSize = Number(req.query.pageSize) || 10;
@@ -284,19 +356,22 @@ router.get("/", async (req, res) => {
     const managerProfileId = req.query.managerProfileId ? Number(req.query.managerProfileId) : undefined;
     const departmentId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
 
-    const where: any = {};
-    if (status) where.status = status;
-    if (Number.isFinite(partnerProfileId)) where.partnerProfileId = partnerProfileId;
-    if (Number.isFinite(managerProfileId)) where.managerProfileId = managerProfileId;
-    if (Number.isFinite(departmentId)) where.departmentId = departmentId;
+    const filters: Prisma.ClientWhereInput = {};
+    if (status && Object.values(ClientStatus).includes(status as ClientStatus)) {
+      filters.status = status as ClientStatus;
+    }
+    if (Number.isFinite(partnerProfileId)) filters.partnerProfileId = partnerProfileId;
+    if (Number.isFinite(managerProfileId)) filters.managerProfileId = managerProfileId;
+    if (Number.isFinite(departmentId)) filters.departmentId = departmentId;
     if (search) {
-      where.OR = [
+      filters.OR = [
         { clientName: { contains: search, mode: "insensitive" } },
         { contactPerson: { contains: search, mode: "insensitive" } },
         { contactEmail: { contains: search, mode: "insensitive" } },
       ];
     }
 
+    const where = buildScopedClientWhere(req, filters);
     const skip = (page - 1) * pageSize;
 
     const [clients, total] = await Promise.all([
@@ -322,7 +397,7 @@ router.get("/", async (req, res) => {
 });
 
 // GET /clients/:clientId - Get client by ID
-router.get("/:clientId", async (req, res) => {
+router.get("/:clientId", async (req: AuthRequest, res) => {
   try {
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
@@ -330,8 +405,8 @@ router.get("/:clientId", async (req, res) => {
       return;
     }
 
-    const client = await prisma.client.findUnique({
-      where: { id: clientId },
+    const client = await prisma.client.findFirst({
+      where: buildScopedClientWhere(req, { id: clientId }),
       include: {
         partner: { select: { id: true, firstName: true, lastName: true } },
         manager: { select: { id: true, firstName: true, lastName: true } },
@@ -555,11 +630,17 @@ router.post("/", async (req: AuthRequest, res) => {
 });
 
 // PATCH /clients/:clientId - Update client
-router.patch("/:clientId", async (req, res) => {
+router.patch("/:clientId", async (req: AuthRequest, res) => {
   try {
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
       res.status(400).json(errorResponse("Invalid client id", 400));
+      return;
+    }
+
+    const hasAccess = await requireClientRecordAccess(req, clientId, "write");
+    if (!hasAccess) {
+      res.status(403).json(errorResponse("You do not have permission to update this client", 403));
       return;
     }
 
@@ -594,11 +675,17 @@ router.patch("/:clientId", async (req, res) => {
 });
 
 // DELETE /clients/:clientId - Delete client
-router.delete("/:clientId", async (req, res) => {
+router.delete("/:clientId", async (req: AuthRequest, res) => {
   try {
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
       res.status(400).json(errorResponse("Invalid client id", 400));
+      return;
+    }
+
+    const hasAccess = await requireClientRecordAccess(req, clientId, "write");
+    if (!hasAccess) {
+      res.status(403).json(errorResponse("You do not have permission to delete this client", 403));
       return;
     }
 
@@ -611,11 +698,17 @@ router.delete("/:clientId", async (req, res) => {
 });
 
 // GET /clients/:clientId/jobs - List jobs for a client
-router.get("/:clientId/jobs", async (req, res) => {
+router.get("/:clientId/jobs", async (req: AuthRequest, res) => {
   try {
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
       res.status(400).json(errorResponse("Invalid client id", 400));
+      return;
+    }
+
+    const hasAccess = await requireClientRecordAccess(req, clientId, "read");
+    if (!hasAccess) {
+      res.status(403).json(errorResponse("You do not have permission to access this client", 403));
       return;
     }
 
@@ -637,11 +730,17 @@ router.get("/:clientId/jobs", async (req, res) => {
 });
 
 // GET /clients/:clientId/engagement-letters - List engagement letters
-router.get("/:clientId/engagement-letters", async (req, res) => {
+router.get("/:clientId/engagement-letters", async (req: AuthRequest, res) => {
   try {
     const clientId = parseId(req.params.clientId);
     if (!clientId) {
       res.status(400).json(errorResponse("Invalid client id", 400));
+      return;
+    }
+
+    const hasAccess = await requireClientRecordAccess(req, clientId, "read");
+    if (!hasAccess) {
+      res.status(403).json(errorResponse("You do not have permission to access this client", 403));
       return;
     }
 
@@ -651,7 +750,7 @@ router.get("/:clientId/engagement-letters", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    res.json(successResponse(letters.map((letter: any) => decorateEngagementLetter(letter)), "Engagement letters retrieved"));
+    res.json(successResponse(letters.map((letter) => decorateEngagementLetter(letter)), "Engagement letters retrieved"));
   } catch (error: any) {
     console.error("Error fetching engagement letters:", error);
     res.status(500).json(errorResponse("Failed to fetch engagement letters", 500));

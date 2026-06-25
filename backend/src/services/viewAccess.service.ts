@@ -59,6 +59,7 @@ export const ALL_VIEW_KEYS = [
   "finance.balances",
   "finance.profitability",
   "finance.allocations",
+  "finance.invoices",
   "reports.workspace",
   "reports.audit_logs",
   "reports.ops_center",
@@ -71,6 +72,9 @@ export const ALL_VIEW_KEYS = [
   "analytics.gmp",
   "partner.metrics",
   "partner.portfolio_summary",
+  "kpi.scorecard",
+  "kpi.firm_templates",
+  "proposals.my",
 ] as const;
 
 const COMMON_VIEW_KEYS = [
@@ -85,6 +89,7 @@ const COMMON_VIEW_KEYS = [
   "knowledge.hub",
   "notifications.center",
   "todos.my",
+  "proposals.my",
 ] as const;
 
 const MARKETING_VIEW_KEYS = [
@@ -107,6 +112,7 @@ const FINANCE_VIEW_KEYS = [
   "finance.balances",
   "finance.profitability",
   "finance.allocations",
+  "finance.invoices",
   "analytics.finance",
 ] as const;
 
@@ -125,6 +131,7 @@ const MANAGER_VIEW_KEYS = [
   "evaluations.management",
   "evaluations.project_view",
   "finance.summary",
+  "kpi.scorecard",
   "reports.workspace",
   "analytics.manager",
 ] as const;
@@ -141,6 +148,7 @@ const PARTNER_VIEW_KEYS = [
   "team.staff_development",
   "partner.metrics",
   "partner.portfolio_summary",
+  "kpi.scorecard",
   "reports.workspace",
   "evaluations.project_view",
   "finance.summary",
@@ -184,11 +192,14 @@ const GMP_VIEW_KEYS = [
   "finance.balances",
   "finance.profitability",
   "finance.allocations",
+  "finance.invoices",
   "reports.workspace",
   "reports.audit_logs",
   "analytics.gmp",
   "partner.metrics",
   "partner.portfolio_summary",
+  "kpi.scorecard",
+  "kpi.firm_templates",
 ] as const;
 
 const HR_VIEW_KEYS = [

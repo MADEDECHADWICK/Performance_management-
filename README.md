@@ -28,7 +28,7 @@ Frontend
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 18.19+
 - PostgreSQL 14+
 
 ### Backend
@@ -66,6 +66,8 @@ The app expects the API at `http://localhost:4000`. You can override with `VITE_
 - `REQUEST_PARAMETER_LIMIT` controls the maximum number of urlencoded parameters. Default: `1000`.
 - `TRUST_PROXY=true` should be set when the API runs behind a trusted reverse proxy.
 - `JWT_SECRET` is required and must be strong outside test mode.
+- `REDIS_URL` should point to the managed Redis-compatible store used for Bull background queues. `REDIS_HOST` and `REDIS_PORT` are still supported as a fallback when no URL is provided.
+- `DISABLE_BACKGROUND_JOBS_WORKER=true` disables the Bull worker when Redis is intentionally unavailable.
 - `LOG_LEVEL` controls structured backend logging. Supported values: `debug`, `info`, `warn`, `error`.
 - `REQUEST_LOGGING_ENABLED` toggles structured HTTP access logs. Default: `true`.
 - `OBSERVABILITY_ENABLED` toggles in-process ops metrics, worker health tracking, and alerts. Default: `true`.
@@ -89,6 +91,13 @@ The app expects the API at `http://localhost:4000`. You can override with `VITE_
 - `/api/ops/workers`, `/api/ops/errors`, and `/api/ops/alerts` expose focused operational views.
 - `/api/ops/metrics/prometheus` returns a Prometheus-style text export for scraping or external monitoring.
 - Active alerts are also emitted over Socket.IO as `ops:alert` to `hr` and `super_admin` role rooms.
+
+### Render Redis
+- Create a Render Key Value instance in the same region as the backend service.
+- Use the instance's internal connection URL for the backend `REDIS_URL`.
+- The same `REDIS_URL` also enables the Socket.IO Redis adapter for multi-instance websocket delivery.
+- Keep `DISABLE_BACKGROUND_JOBS_WORKER` unset or set to `false` when Redis should process background jobs.
+- For job queues, use a non-evicting maxmemory policy so queued work is not discarded under memory pressure.
 
 ## Scripts
 Backend (in `backend/`)

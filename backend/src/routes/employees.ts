@@ -88,6 +88,7 @@ router.get("/", authMiddleware, loadProfile, async (req, res) => {
 
     const where: any = filters.length ? { AND: filters } : {};
 
+    const showCostRate = isPrivileged(req);
     const [employees, total] = await Promise.all([
       prisma.profile.findMany({
         where,
@@ -96,7 +97,7 @@ router.get("/", authMiddleware, loadProfile, async (req, res) => {
         orderBy: { createdAt: "desc" },
         include: {
           user: { select: { id: true, email: true } },
-          role: { select: { id: true, name: true, billingRate: true, costRate: true } },
+          role: { select: { id: true, name: true, billingRate: true, ...(showCostRate ? { costRate: true } : {}) } },
           department: { select: { id: true, name: true, departmentCode: true } },
         },
       }),

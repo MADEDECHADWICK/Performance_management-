@@ -7,7 +7,12 @@
  */
 
 import { prisma } from '../prisma';
-import { Prisma, NonBillableCategory } from '@prisma/client';
+import {
+  Prisma,
+  NonBillableCategory,
+  LeaveRequestSegmentSyncStatus,
+  LeaveRequestStatus,
+} from '@prisma/client';
 import { NotificationService } from './notifications.service';
 import { createAudit } from '../utils/audit';
 
@@ -186,6 +191,93 @@ export class TimeEntryService {
     }
     const parsed = new Date(String(value));
     return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private static toUtcDateOnly(value: Date) {
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  }
+
+  private static addUtcDays(value: Date, days: number) {
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate() + days));
+  }
+
+  private static utcDateKey(value: Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  private static minuteOfUtcDay(value: Date) {
+    return value.getUTCHours() * 60 + value.getUTCMinutes();
+  }
+
+  private static async assertNotOnApprovedLeave(
+    employeeProfileId: number,
+    dateWorked: Date,
+    startedAt?: Date | null,
+    endedAt?: Date | null
+  ) {
+    const dayStart = TimeEntryService.toUtcDateOnly(dateWorked);
+    const nextDay = TimeEntryService.addUtcDays(dayStart, 1);
+    const dayKey = TimeEntryService.utcDateKey(dayStart);
+
+    const approvedLeaveRequests = await prisma.leaveRequest.findMany({
+      where: {
+        employeeProfileId,
+        status: LeaveRequestStatus.approved,
+        startDate: { lt: nextDay },
+        endDate: { gte: dayStart },
+      },
+      select: {
+        id: true,
+        segments: {
+          select: {
+            leaveDate: true,
+            startMinuteOfDay: true,
+            endMinuteOfDay: true,
+            hours: true,
+            syncStatus: true,
+          },
+        },
+      },
+    });
+
+    for (const request of approvedLeaveRequests) {
+      const activeSegments = request.segments.filter(
+        (segment) =>
+          segment.syncStatus !== LeaveRequestSegmentSyncStatus.voided &&
+          TimeEntryService.utcDateKey(segment.leaveDate) === dayKey &&
+          Number(segment.hours || 0) > 0
+      );
+
+      if (request.segments.length > 0 && activeSegments.length === 0) {
+        continue;
+      }
+
+      if (activeSegments.length === 0 || !startedAt || !endedAt) {
+        throw {
+          statusCode: 409,
+          message: 'Cannot log time while on approved leave',
+        };
+      }
+
+      const entryStartMinute = TimeEntryService.minuteOfUtcDay(startedAt);
+      const entryEndMinute = TimeEntryService.minuteOfUtcDay(endedAt);
+      const overlapsSegment = activeSegments.some((segment) => {
+        if (segment.startMinuteOfDay === null || segment.endMinuteOfDay === null) {
+          return true;
+        }
+        return (
+          entryStartMinute < segment.endMinuteOfDay &&
+          segment.startMinuteOfDay < entryEndMinute
+        );
+      });
+
+      if (overlapsSegment) {
+        throw {
+          statusCode: 409,
+          message: 'Cannot log time while on approved leave',
+        };
+      }
+    }
   }
 
   private static calculateLunchBreakOverlapHours(start: Date, end: Date): number {
@@ -702,6 +794,12 @@ export class TimeEntryService {
       throw { statusCode: 400, message: 'dateWorked is required' };
     }
 
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    if (resolvedDateWorked > todayEnd) {
+      throw { statusCode: 400, message: 'Time entries cannot be logged for future dates' };
+    }
+
     // ✅ VERIFY JOB EXISTS
     const job = await prisma.job.findUnique({
       where: { id: Number(jobId) },
@@ -735,6 +833,12 @@ export class TimeEntryService {
     }
 
     TimeEntryService.ensureJobReadyForTimeLogging(job, isAdmin);
+    await TimeEntryService.assertNotOnApprovedLeave(
+      auth.profileId,
+      resolvedDateWorked,
+      resolvedTimeInput.startedAt,
+      resolvedTimeInput.endedAt
+    );
 
     // CHECK ALLOCATION LIMITS
     const allocationSummary = await TimeEntryService.getAllocationSummary(
@@ -1254,6 +1358,12 @@ export class TimeEntryService {
       }
     );
     const updatedHours = resolvedTimeInput.hours;
+    await TimeEntryService.assertNotOnApprovedLeave(
+      timeEntry.employeeProfileId,
+      timeEntry.dateWorked,
+      resolvedTimeInput.startedAt,
+      resolvedTimeInput.endedAt
+    );
     let taskContext: { id: number; estimatedHours: number } | null = null;
 
     if (timeEntry.taskId) {
@@ -1796,6 +1906,26 @@ export class TimeEntryService {
         statusCode: 400,
         message: `Cannot approve time entry with status: ${timeEntry.status}`,
       };
+    }
+
+    // Re-validate budget cap in case it was lowered between submission and approval
+    const jobCosting = await prisma.jobCosting.findUnique({
+      where: { jobId: timeEntry.jobId },
+      select: { budgetCap: { select: { capEnforced: true, allowOverage: true, totalAllocatedHours: true } } },
+    });
+    if (jobCosting?.budgetCap?.capEnforced && !jobCosting.budgetCap.allowOverage) {
+      const totalAllocatedHours = Number(jobCosting.budgetCap.totalAllocatedHours);
+      const sum = await prisma.timeEntry.aggregate({
+        where: { jobId: timeEntry.jobId, status: { notIn: ['cancelled', 'rejected'] } },
+        _sum: { hours: true },
+      });
+      const totalLogged = Number(sum._sum.hours ?? 0);
+      if (totalLogged > totalAllocatedHours) {
+        throw {
+          statusCode: 409,
+          message: `Approval would exceed the job budget cap of ${totalAllocatedHours}h (${totalLogged}h logged). Reduce hours or request budget overage approval.`,
+        };
+      }
     }
 
     const amounts = await TimeEntryService.calculateAmounts(

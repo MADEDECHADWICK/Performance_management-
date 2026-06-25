@@ -67,7 +67,9 @@ const corsOriginDelegate: CorsOptions["origin"] = (origin, callback) => {
 };
 
 export const buildCorsOptions = (): CorsOptions => ({
-  origin: corsOriginDelegate,
+  // In development, reflect any origin (credentials still work because we echo the header, not "*")
+  // In production, enforce the strict allowlist
+  origin: isProduction() ? corsOriginDelegate : true,
   credentials: true,
   optionsSuccessStatus: 204,
 });
@@ -78,6 +80,10 @@ export const securityHeadersMiddleware = (_req: Request, res: Response, next: Ne
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+  );
 
   if (isProduction()) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");

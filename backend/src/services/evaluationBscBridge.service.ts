@@ -56,13 +56,29 @@ export async function bridgeAllScoresForCycle(cycleId: number): Promise<void> {
 
   if (scores.length === 0) return;
 
-  await Promise.all(
-    scores.map((score) =>
-      bridgeEvaluationScoreToBsc(
-        score.employeeProfileId,
-        cycleId,
-        Number(score.evaluationScore ?? 0)
-      )
-    )
+  const now = new Date();
+  await prisma.$transaction(
+    scores.map((score) => {
+      const contributionKey = `evaluation-${score.employeeProfileId}`;
+      const progress = Math.min(100, Math.max(0, Math.round(Number(score.evaluationScore ?? 0))));
+      return prisma.balancedScorecardEmployeeContribution.upsert({
+        where: {
+          profileId_contributionKey: {
+            profileId: score.employeeProfileId,
+            contributionKey,
+          },
+        },
+        update: { latestProgress: progress, lastUpdatedAt: now, sourceReferenceId: cycleId },
+        create: {
+          profileId: score.employeeProfileId,
+          contributionKey,
+          sourceType: "evaluation_cycle",
+          sourceReferenceId: cycleId,
+          title: "Evaluation cycle contribution",
+          latestProgress: progress,
+          lastUpdatedAt: now,
+        },
+      });
+    })
   );
 }

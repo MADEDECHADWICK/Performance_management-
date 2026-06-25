@@ -113,6 +113,7 @@ export interface ReportsSpecializedSurface {
 
 export interface BscTrackingSlice {
   workspaceRole: WorkspaceRole;
+  dataQuality: BalancedScorecardWorkspace["dataQuality"];
   perspectiveCards: BalancedScorecardWorkspace["perspectiveCards"];
   topKpis: BalancedScorecardWorkspace["kpis"];
   initiatives: BalancedScorecardWorkspace["cascadeInitiatives"];
@@ -762,6 +763,7 @@ export async function getReportingWorkspace(params: {
     },
     bscTracking: {
       workspaceRole: effectiveRole,
+      dataQuality: bscWorkspace.dataQuality,
       perspectiveCards: bscWorkspace.perspectiveCards,
       topKpis: [...bscWorkspace.kpis]
         .sort((a, b) => a.weightedScore - b.weightedScore)

@@ -462,6 +462,15 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     patterns: [/^\/finance-allocations(?:\/|$)/],
   },
   {
+    key: "finance.invoices",
+    label: "Finance Invoices",
+    category: "Finance",
+    module: "finance",
+    action: "read",
+    defaultPath: "/finance-invoices",
+    patterns: [/^\/finance-invoices(?:\/|$)/],
+  },
+  {
     key: "reports.workspace",
     label: "Reports Workspace",
     category: "Reporting",
@@ -568,6 +577,37 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     action: "read",
     defaultPath: "/partner-portfolio-summary",
     patterns: [/^\/partner-portfolio-summary(?:\/|$)/],
+  },
+  {
+    key: "kpi.scorecard",
+    label: "KPI Scorecard",
+    category: "Performance",
+    module: "dashboard",
+    action: "read",
+    defaultPath: "/kpi-scorecard",
+    patterns: [
+      /^\/kpi-scorecard(?:\/|$)/,
+      /^\/bsc-management(?:\/|$)/,
+      /^\/kpi-management(?:\/|$)/,
+    ],
+  },
+  {
+    key: "kpi.firm_templates",
+    label: "Firm KPI Templates",
+    category: "Performance",
+    module: "dashboard",
+    action: "admin",
+    defaultPath: "/firm-kpi-manager",
+    patterns: [/^\/firm-kpi-manager(?:\/|$)/],
+  },
+  {
+    key: "proposals.my",
+    label: "My Proposals",
+    category: "Business Development",
+    module: "dashboard",
+    action: "read",
+    defaultPath: "/my-proposals",
+    patterns: [/^\/my-proposals(?:\/|$)/],
   },
 ];
 

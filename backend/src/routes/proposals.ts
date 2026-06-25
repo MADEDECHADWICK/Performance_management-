@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { requireModuleAccess } from "../middleware/requireModuleAccess";
+import { resolveRequestAccessRoles } from "../auth/accessRoles";
 import { errorResponse, paginatedResponse, successResponse } from "../utils/response";
 import { ProposalStatus } from "@prisma/client";
 import { notifyHrGroup } from "../services/hrNotifications";
@@ -11,6 +12,27 @@ const router = Router();
 const parseNumber = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const normalizeRole = (value: string | null | undefined) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const resolveRoleSet = (req: AuthRequest) =>
+  new Set(
+    resolveRequestAccessRoles(req)
+      .map((role) => normalizeRole(role))
+      .filter(Boolean)
+  );
+
+const PRIVILEGED_OVER_MARKETING = ["super_admin", "hr", "gmp", "partner", "manager"] as const;
+
+const isMarketingOnly = (req: AuthRequest) => {
+  const roles = resolveRoleSet(req);
+  return roles.has("marketing") && !PRIVILEGED_OVER_MARKETING.some((r) => roles.has(r));
 };
 
 // GET /proposals/metrics - pipeline summary
@@ -94,7 +116,11 @@ router.get(
       0
     );
     const wonClientIdsInPeriod = Array.from(
-      new Set(wonProposalsInPeriod.map((proposal) => proposal.clientId))
+      new Set(
+        wonProposalsInPeriod
+          .map((proposal) => proposal.clientId)
+          .filter((id): id is number => id !== null)
+      )
     );
     const collectedFromWonClientsInPeriod =
       wonClientIdsInPeriod.length > 0
@@ -213,6 +239,52 @@ router.get(
   }
 });
 
+// GET /proposals/my - proposals created by the current user (all roles)
+router.get(
+  "/my",
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+  try {
+    const profileId = req.profile?.id ?? req.user?.profileId;
+    if (!profileId) return res.status(401).json(errorResponse("Profile not resolved", 401));
+
+    const page = parseNumber(req.query.page) || 1;
+    const pageSize = parseNumber(req.query.pageSize) || 20;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+
+    const where: any = { createdByProfileId: profileId };
+    if (status) where.status = status;
+    if (search) {
+      where.OR = [
+        { proposalTitle: { contains: search, mode: "insensitive" } },
+        { serviceType: { contains: search, mode: "insensitive" } },
+        { clientName: { contains: search, mode: "insensitive" } },
+        { client: { clientName: { contains: search, mode: "insensitive" } } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.proposal.findMany({
+        where,
+        orderBy: { proposalDate: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          client: { select: { id: true, clientName: true } },
+          assignedPartner: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.proposal.count({ where }),
+    ]);
+
+    res.json(paginatedResponse(items, total, page, pageSize, "My proposals retrieved"));
+  } catch (error) {
+    console.error("Error fetching my proposals:", error);
+    res.status(500).json(errorResponse("Failed to fetch proposals", 500));
+  }
+});
+
 // GET /proposals - list proposals
 router.get(
   "/",
@@ -235,6 +307,10 @@ router.get(
         { serviceType: { contains: search, mode: "insensitive" } },
         { client: { clientName: { contains: search, mode: "insensitive" } } },
       ];
+    }
+
+    if (isMarketingOnly(req) && req.user?.profileId) {
+      where.createdByProfileId = req.user.profileId;
     }
 
     const [items, total] = await Promise.all([
@@ -298,6 +374,7 @@ router.post(
   try {
     const {
       clientId,
+      clientName,
       proposalTitle,
       serviceType,
       proposedFee,
@@ -311,10 +388,15 @@ router.post(
       notes,
     } = req.body;
 
-    if (!clientId || !proposalTitle || !serviceType || !proposedFee || !proposalDate) {
+    if (!proposalTitle || !serviceType || !proposedFee || !proposalDate) {
       return res
         .status(400)
-        .json(errorResponse("clientId, proposalTitle, serviceType, proposedFee, and proposalDate are required", 400));
+        .json(errorResponse("proposalTitle, serviceType, proposedFee, and proposalDate are required", 400));
+    }
+    if (!clientId && !clientName?.trim()) {
+      return res
+        .status(400)
+        .json(errorResponse("Either clientId or clientName is required", 400));
     }
 
     const createdResult = await prisma.$transaction(async (tx) => {
@@ -322,7 +404,8 @@ router.post(
       let shouldNotifyHrOnWon = false;
       const proposal = await tx.proposal.create({
         data: {
-          clientId: Number(clientId),
+          clientId: clientId ? Number(clientId) : undefined,
+          clientName: !clientId && clientName?.trim() ? clientName.trim() : undefined,
           proposalTitle,
           serviceType,
           proposedFee: Number(proposedFee),
@@ -354,7 +437,7 @@ router.post(
         },
       });
 
-      if (status === "won") {
+      if (status === "won" && proposal.clientId) {
         shouldNotifyHrOnWon = true;
         const uploaderProfileId = req.user?.profileId;
         if (!uploaderProfileId) {
@@ -535,7 +618,7 @@ router.patch(
         },
       });
 
-      if (shouldCreateOnboarding) {
+      if (shouldCreateOnboarding && proposal.clientId) {
         const uploaderProfileId = req.user?.profileId || existingProposal.createdByProfileId;
         if (!uploaderProfileId) {
           throw new Error("Missing uploader profile id for onboarding creation");

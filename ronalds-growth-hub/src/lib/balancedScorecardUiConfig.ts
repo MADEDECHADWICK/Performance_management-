@@ -718,7 +718,6 @@ export const moduleTabs = [
   { value: "setup", label: "Strategy" },
   { value: "kpis", label: "KPIs" },
   { value: "peopleAdmin", label: "People" },
-  { value: "cascade", label: "Cascade" },
   { value: "tracking", label: "Tracking" },
   { value: "employee", label: "Employees" },
   { value: "reports", label: "Reports" },
@@ -727,12 +726,12 @@ export const moduleTabs = [
 export type ModuleTabValue = (typeof moduleTabs)[number]["value"];
 
 export const roleTabVisibility: Record<RoleKey, ModuleTabValue[]> = {
-  hr: ["dashboard", "setup", "kpis", "peopleAdmin", "cascade", "tracking", "employee", "reports"],
-  gmp: ["dashboard", "cascade", "tracking", "reports"],
-  partner: ["dashboard", "cascade", "tracking", "reports"],
-  manager: ["dashboard", "cascade", "tracking", "employee"],
+  hr: ["dashboard", "setup", "kpis", "peopleAdmin", "tracking", "employee", "reports"],
+  gmp: ["dashboard", "tracking", "reports"],
+  partner: ["dashboard", "tracking", "reports"],
+  manager: ["dashboard", "tracking", "employee"],
   finance: ["dashboard", "tracking", "reports"],
-  marketing: ["dashboard", "cascade", "tracking", "reports"],
+  marketing: ["dashboard", "tracking", "reports"],
   employee: ["dashboard", "employee"],
 };
 
@@ -741,9 +740,6 @@ export function getRoleTabLabel(role: RoleKey, value: ModuleTabValue) {
     if (role === "employee") return "My Contribution";
     if (role === "manager") return "Team";
     if (role === "hr") return "Workforce";
-  }
-  if (value === "cascade") {
-    if (role === "manager") return "Delivery";
   }
   return moduleTabs.find((tab) => tab.value === value)?.label ?? value;
 }

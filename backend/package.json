@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev:plain": "ts-node --transpile-only src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "start": "node dist/src/index.js",
@@ -12,9 +13,12 @@
     "prisma:migrate": "prisma migrate dev",
     "seed": "ts-node prisma/seed.ts",
     "seed:uat-team": "ts-node prisma/scripts/seed-uat-team.ts",
+    "seed:operational-uat": "ts-node --transpile-only prisma/scripts/seed-operational-uat.ts",
+    "validate:operational-uat": "ts-node --transpile-only prisma/scripts/validate-operational-uat.ts",
     "bsc:pilot": "ts-node --transpile-only prisma/scripts/bootstrap-bsc-pilot.ts",
     "bsc:reset": "ts-node --transpile-only prisma/scripts/reset-bsc.ts",
     "onboarding:bypass-seeded": "ts-node --transpile-only prisma/scripts/bypass-seeded-onboarding.ts",
+    "seed:production": "ts-node --transpile-only prisma/scripts/seed-production-data.ts",
     "recompute:time-entries": "ts-node prisma/scripts/recompute-time-entry-amounts.ts",
     "test": "jest --config jest.config.cjs",
     "test:security": "jest --config jest.config.cjs test-phase1-security.test.ts --verbose",
@@ -44,6 +48,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1025.0",
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^6.19.2",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@types/pdfkit": "^0.17.4",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
@@ -58,6 +63,7 @@
     "nodemailer": "^7.0.12",
     "pdfkit": "^0.17.2",
     "pg": "^8.17.1",
+    "redis": "^5.12.1",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

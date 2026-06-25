@@ -99,6 +99,7 @@ import {
   type WorkspaceCascadeLevel as CascadeLevel,
   type WorkspaceDepartmentRow,
   type WorkspaceEmployeeContribution as EmployeeContribution,
+  type WorkspaceEmployeeKpiAssignment,
   type WorkspaceEmployeeRow,
   type WorkspaceInitiative as InitiativeDefinition,
   type WorkspaceKpi as KpiDefinition,
@@ -132,6 +133,20 @@ import {
   type SetupSheetMode,
   type StatusTone,
 } from "@/lib/balancedScorecardUiConfig";
+import {
+  RadarChart,
+  Radar,
+  PolarGrid,
+  PolarAngleAxis,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+  ResponsiveContainer,
+  ReferenceLine,
+} from "recharts";
 import {
   averageScore,
   MetricCard,
@@ -354,6 +369,8 @@ export default function BalancedScorecardModule() {
   const featuredCascadeData: CascadeLevel[] = workspaceData?.featuredCascade ?? [];
   const employeeContributionData: EmployeeContribution[] =
     workspaceData?.employeeContributions ?? [];
+  const employeeKpiAssignmentData: WorkspaceEmployeeKpiAssignment[] =
+    workspaceData?.employeeKpiAssignments ?? [];
   const selectedContributionItem =
     employeeContributionData.find((item) => item.id === selectedContributionId) ?? null;
   const evaluationSummary: WorkspaceEvaluationSummary = workspaceData?.evaluationSummary ?? {
@@ -581,9 +598,11 @@ export default function BalancedScorecardModule() {
         icon: Target,
       },
       {
-        label: "Weighted coverage",
-        value: kpiData.length > 0 ? `${Math.round(kpiData.reduce((sum, kpi) => sum + kpi.weight, 0))}%` : "0%",
-        hint: "Total weighting currently assigned across the governed KPI mix.",
+        label: "On-track rate",
+        value: kpiData.length > 0
+          ? `${Math.round((kpiData.filter((kpi) => kpi.status === "on_track").length / kpiData.length) * 100)}%`
+          : "0%",
+        hint: "Share of governed KPIs currently on track.",
         icon: ShieldCheck,
       },
       {
@@ -643,27 +662,58 @@ export default function BalancedScorecardModule() {
       }),
     [employeeContributionData, goalData, kpiData, perspectiveData]
   );
+  const employeeKpiAssignmentDetails = useMemo(
+    () =>
+      employeeKpiAssignmentData.map((assignment) => {
+        const kpi = kpiData.find((candidate) => candidate.id === assignment.kpiId) ?? null;
+        const goal = kpi
+          ? goalData.find((candidate) => candidate.id === kpi.goalId) ?? null
+          : null;
+        const perspective = kpi
+          ? perspectiveData.find((candidate) => candidate.id === kpi.perspectiveId) ?? null
+          : null;
+        return {
+          assignment,
+          kpi,
+          goal,
+          perspective,
+        };
+      }),
+    [employeeKpiAssignmentData, goalData, kpiData, perspectiveData]
+  );
   const employeeLinkedKpiCount = new Set(
-    employeeContributionDetails
-      .map((entry) => entry.kpi?.id)
-      .filter((value): value is string => Boolean(value))
+    [
+      ...employeeContributionDetails.map((entry) => entry.kpi?.id),
+      ...employeeKpiAssignmentDetails.map((entry) => entry.assignment.kpiId),
+    ].filter((value): value is string => Boolean(value))
   ).size;
   const employeeGoalCount = new Set(
-    employeeContributionDetails
-      .map((entry) => entry.goal?.id)
-      .filter((value): value is string => Boolean(value))
+    [
+      ...employeeContributionDetails.map((entry) => entry.goal?.id),
+      ...employeeKpiAssignmentDetails.map((entry) => entry.goal?.id),
+    ].filter((value): value is string => Boolean(value))
   ).size;
   const employeePrimaryContribution = employeeContributionDetails[0] ?? null;
+  const linkedContributionDetails = employeeContributionDetails.filter((d) => d.kpi !== null);
+  const unlinkedContributionDetails = employeeContributionDetails.filter((d) => d.kpi === null);
+  const linkedPrimaryContribution = linkedContributionDetails[0] ?? null;
+  const employeeKpiScore = averageScore(employeeKpiAssignmentData.map((assignment) => assignment.score));
+  const employeeDisplayScore =
+    employeeKpiAssignmentData.length > 0 ? employeeKpiScore : averageContributionScore;
+  const employeeWorkItemCount = employeeContributionData.length + employeeKpiAssignmentData.length;
+  const employeePendingKpiUpdateCount = employeeKpiAssignmentData.filter(
+    (assignment) => assignment.status !== "on_track" || assignment.actualProgress <= 0
+  ).length;
   const employeePendingUpdateCount = employeeContributionData.filter(
     (item) => !item.acknowledged || item.status !== "on_track"
-  ).length;
+  ).length + employeePendingKpiUpdateCount;
   const employeeAcknowledgedCount = employeeContributionData.filter((item) => item.acknowledged).length;
   const employeeOverallStatus: StatusTone | null =
-    employeeContributionDetails.length === 0
+    employeeWorkItemCount === 0
       ? null
       : employeePendingUpdateCount === 0
         ? "on_track"
-        : averageContributionProgress >= 70
+        : (employeeKpiAssignmentData.length > 0 ? employeeKpiScore : averageContributionProgress) >= 70
           ? "at_risk"
           : "off_track";
   const atRiskGoalCount = goalData.filter((goal) => goal.status !== "on_track").length;
@@ -1280,41 +1330,41 @@ export default function BalancedScorecardModule() {
           metrics: [
             {
               label: "Assigned items",
-              value: String(employeeContributionData.length),
-              hint: "Current contribution items owned by the signed-in employee slice.",
+              value: String(employeeWorkItemCount),
+              hint: "Assigned KPIs and contribution items owned by the signed-in employee slice.",
               icon: ClipboardCheck,
             },
             {
               label: "Progress",
-              value: `${averageContributionProgress}%`,
-              hint: "Average progress across the live employee work items.",
+              value: `${employeeKpiAssignmentData.length > 0 ? employeeKpiScore : averageContributionProgress}%`,
+              hint: "Average score across assigned employee KPIs, falling back to contribution progress.",
               icon: Activity,
             },
             {
               label: "My score",
-              value: String(averageContributionScore),
-              hint: "Current weighted contribution score pulled from live actions.",
+              value: String(employeeDisplayScore),
+              hint: "Current score pulled from assigned KPI targets and live contribution actions.",
               icon: BarChart3,
             },
             {
-              label: "Pending ack",
-              value: String(employeeContributionData.filter((item) => !item.acknowledged).length),
-              hint: "Employee contribution items still waiting for acknowledgement.",
+              label: "Pending updates",
+              value: String(employeePendingUpdateCount),
+              hint: "Assigned KPIs or contribution items still needing employee action.",
               icon: CheckCircle2,
             },
           ],
           primaryBoardItems: [
             {
               label: "Assigned actions",
-              value: `${employeeContributionData.length} active`,
+              value: `${employeeWorkItemCount} active`,
               note: evaluationSummary.cycleId
                 ? `${evaluationSummary.cycleTitle} is the active cycle for these contribution items.`
                 : `${employeeContributionData.filter((item) => item.status !== "on_track").length} assigned items are currently amber or red.`,
               status:
-                employeeContributionData.length > 0
-                  ? scoreToStatus(averageContributionProgress)
+                employeeWorkItemCount > 0
+                  ? scoreToStatus(employeeDisplayScore)
                   : undefined,
-              progress: averageContributionProgress,
+              progress: employeeDisplayScore,
             },
             {
               label: "Acknowledgement",
@@ -1351,9 +1401,9 @@ export default function BalancedScorecardModule() {
             },
             {
               label: "Average progress",
-              value: `${averageContributionProgress}%`,
-              note: employeeContributionData.length > 0
-                ? `${averageContributionScore} is the current weighted contribution score across assigned work.`
+              value: `${employeeKpiAssignmentData.length > 0 ? employeeKpiScore : averageContributionProgress}%`,
+              note: employeeWorkItemCount > 0
+                ? `${employeeDisplayScore} is the current score across assigned KPI and contribution work.`
                 : "Progress will appear once contribution items are assigned.",
             },
             {
@@ -1409,14 +1459,6 @@ export default function BalancedScorecardModule() {
           ],
           cards: gmpCascadeCards,
           boardTitle: "Approval queue",
-          boardDescription: "The GMP surface should begin with decision-ready work, not the whole execution tree.",
-          asideTitle: "What GMP is checking",
-          asideDescription: "Executive review is about strategic integrity, not task administration.",
-          asideLines: [
-            "Is the parent initiative aligned to the strategic KPI and goal?",
-            "Will approving this create clear downstream work for partner and manager owners?",
-            "Do risk notes explain what needs executive intervention versus local execution?",
-          ],
         };
       case "partner":
         return {
@@ -1443,15 +1485,7 @@ export default function BalancedScorecardModule() {
             },
           ],
           cards: partnerCascadeCards,
-          boardTitle: "Portfolio initiative chain",
-          boardDescription: "Partner work narrows the firm initiative into account plans and manager delivery expectations.",
-          asideTitle: "What changes at partner level",
-          asideDescription: "The KPI stays aligned. The initiative becomes more specific around client portfolios and manager handoffs.",
-          asideLines: [
-            "The same KPI remains the shared measurement layer.",
-            "Partner initiatives become portfolio and account specific.",
-            "Managers should receive explicit deliverables, timelines, and commentary from the partner layer.",
-          ],
+          boardTitle: "Portfolio initiatives",
         };
       case "manager":
         return {
@@ -1478,15 +1512,7 @@ export default function BalancedScorecardModule() {
             },
           ],
           cards: managerCascadeCardsLive,
-          boardTitle: "Manager-owned execution layer",
-          boardDescription: "This is where the cascade becomes operational, visible, and coachable.",
-          asideTitle: "What the manager owns here",
-          asideDescription: "Managers should see work assignment and follow-through, not the full strategy authoring surface.",
-          asideLines: [
-            "Translate partner direction into team deliverables.",
-            "Turn deliverables into named employee actions with due dates.",
-            "Use coaching notes to explain movement before a KPI drifts too far off track.",
-          ],
+          boardTitle: "Team deliverables",
         };
       case "marketing":
         return {
@@ -1513,15 +1539,7 @@ export default function BalancedScorecardModule() {
             },
           ],
           cards: marketingCascadeCards,
-          boardTitle: "Growth initiative alignment",
-          boardDescription: "Marketing should see where it supports the cascade, not inherit the entire operations view.",
-          asideTitle: "What Marketing is reinforcing",
-          asideDescription: "Marketing contributes signals, customer insight, and campaign action to the same KPI outcome.",
-          asideLines: [
-            "Client feedback should visibly feed the customer KPI.",
-            "Campaign or proposal work should map to a parent initiative, not float independently.",
-            "Handoffs into partner and manager action need to be clear and documented.",
-          ],
+          boardTitle: "Growth initiatives",
         };
       default:
         return {
@@ -1558,15 +1576,7 @@ export default function BalancedScorecardModule() {
             status: initiative.status,
             progress: initiative.progress,
           })),
-          boardTitle: "Firm initiative register",
-          boardDescription: "HR defines the parent initiatives that the rest of the organization will inherit and refine.",
-          asideTitle: "What changes as work cascades",
-          asideDescription: "The KPI stays aligned. The initiative becomes more specific at lower levels.",
-          asideLines: [
-            "The same strategic KPI can stay intact across levels.",
-            "Target interpretation becomes more operational as the work nears the team.",
-            "Initiatives and tasks are what meaningfully change from HR to employee.",
-          ],
+          boardTitle: "Firm initiatives",
         };
     }
   })();
@@ -1594,53 +1604,17 @@ export default function BalancedScorecardModule() {
 
     switch (selectedRole) {
       case "gmp":
-        return {
-          ...shared,
-          title: "Executive tracking",
-          description: "GMP should see a compact KPI watchlist that combines strategic movement, execution health, and owner commentary.",
-          boardTitle: "Executive KPI watchlist",
-          boardDescription: "Small, decision-ready list of KPIs requiring executive review.",
-        };
+        return { ...shared, title: "Executive tracking", boardTitle: "KPI watchlist" };
       case "partner":
-        return {
-          ...shared,
-          title: "Portfolio KPI tracking",
-          description: "Partners need KPI tracking that stays close to client portfolios, account risk, and manager execution quality.",
-          boardTitle: "Portfolio KPI board",
-          boardDescription: "Partner-owned or partner-relevant KPIs with clear account and manager commentary.",
-        };
+        return { ...shared, title: "Portfolio tracking", boardTitle: "Portfolio KPIs" };
       case "manager":
-        return {
-          ...shared,
-          title: "Team tracking",
-          description: "Managers should see delivery KPIs, coaching-linked people signals, and execution commentary in one operational board.",
-          boardTitle: "Team contribution board",
-          boardDescription: "Target vs actual, progress, and commentary for the KPIs managers influence most directly.",
-        };
+        return { ...shared, title: "Team tracking", boardTitle: "Team KPIs" };
       case "finance":
-        return {
-          ...shared,
-          title: "Financial KPI tracking",
-          description: "Finance needs a financial-only lens with actuals, close commentary, and linked recovery initiatives.",
-          boardTitle: "Financial watchlist",
-          boardDescription: "Collections, realization, and recovery KPIs with finance-owned commentary.",
-        };
+        return { ...shared, title: "Financial KPI tracking", boardTitle: "Financial KPIs" };
       case "marketing":
-        return {
-          ...shared,
-          title: "Growth KPI tracking",
-          description: "Marketing should see the customer-growth KPIs, insight commentary, and initiative support signals in one lightweight board.",
-          boardTitle: "Customer-growth watchlist",
-          boardDescription: "Retention, conversion, and sponsor-review support tracked with clear commentary.",
-        };
+        return { ...shared, title: "Growth KPI tracking", boardTitle: "Growth KPIs" };
       default:
-        return {
-          ...shared,
-          title: "KPI tracking",
-          description: "Tracking shows target versus actual, weighted score, trend, linked initiative progress, and owner commentary in one clean operational view.",
-          boardTitle: "Tracking board",
-          boardDescription: "Target vs actual, trend, initiative progress, and comments all in one board.",
-        };
+        return { ...shared, title: "KPI tracking", boardTitle: "KPI board" };
     }
   })();
 
@@ -1676,13 +1650,6 @@ export default function BalancedScorecardModule() {
           },
         ],
         items: managerEmployeeItems,
-        sideTitle: "Manager design rules",
-        sideDescription: "Managers need a clean action board, not a full executive tree.",
-        sideLines: [
-          "Show employee acknowledgement and overdue updates prominently.",
-          "Keep coaching comments close to the action, not in a separate workflow.",
-          "Make upward contribution clear so managers understand why each action matters.",
-        ],
       };
     }
 
@@ -1748,7 +1715,7 @@ export default function BalancedScorecardModule() {
         },
         {
           label: "Strategic links",
-          value: `${employeeGoalCount} goals · ${employeeLinkedKpiCount} KPIs`,
+          value: `${employeeGoalCount} goals - ${employeeLinkedKpiCount} KPIs`,
           hint: "The goals and KPIs this employee currently supports.",
           icon: Target,
         },
@@ -1760,21 +1727,33 @@ export default function BalancedScorecardModule() {
         },
         {
           label: "My score",
-          value: String(averageContributionScore),
-          hint: "Current contribution score from assigned work items.",
+          value: String(employeeDisplayScore),
+          hint: "Current score from assigned KPIs and contribution work items.",
           icon: BarChart3,
         },
       ],
-      items: employeeContributionData.map((item) => ({
-        id: item.id,
-        employee: "Me",
-        title: item.title,
-        dueDate: item.dueDate,
-        progress: item.progress,
-        acknowledged: item.acknowledged,
-        status: item.status,
-        note: item.managerComment,
-      })),
+      items: [
+        ...employeeKpiAssignmentData.map((assignment) => ({
+          id: `kpi-assignment-${assignment.id}`,
+          employee: "Me",
+          title: assignment.kpiName,
+          dueDate: assignment.dueDate || "Current period",
+          progress: assignment.score,
+          acknowledged: assignment.status === "on_track",
+          status: assignment.status,
+          note: `Target ${assignment.individualTarget ?? "default"}; actual ${assignment.actualProgress}%.`,
+        })),
+        ...employeeContributionData.map((item) => ({
+          id: item.id,
+          employee: "Me",
+          title: item.title,
+          dueDate: item.dueDate,
+          progress: item.progress,
+          acknowledged: item.acknowledged,
+          status: item.status,
+          note: item.managerComment,
+        })),
+      ],
     };
   })();
 
@@ -2909,7 +2888,7 @@ export default function BalancedScorecardModule() {
         return;
       case "gmp":
       case "partner":
-        setActiveTab("cascade");
+        setActiveTab("tracking");
         return;
       case "manager":
         setActiveTab("employee");
@@ -3302,10 +3281,10 @@ export default function BalancedScorecardModule() {
                   <div className="grid gap-4 md:grid-cols-3">
                     {selectedRoleHome.primaryBoardItems.map((item) => (
                       <div key={item.label} className="rounded-[24px] border border-border/60 bg-muted/20 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0 space-y-1">
-                            <p className="text-sm font-medium text-foreground">{item.label}</p>
-                            <p className="text-2xl font-semibold tracking-tight text-foreground">{item.value}</p>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">{item.label}</p>
+                            <p className="text-sm font-semibold leading-snug text-foreground break-words">{item.value}</p>
                           </div>
                           {item.status ? <StatusBadge status={item.status} /> : null}
                         </div>
@@ -3322,26 +3301,6 @@ export default function BalancedScorecardModule() {
                     ))}
                   </div>
 
-                  <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">{selectedRoleHome.primaryBoardTitle}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {selectedRoleHome.primaryBoardItems.map((item) => (
-                        <div key={`${item.label}-detail`} className="rounded-2xl border border-border/60 bg-background p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0 space-y-1">
-                              <p className="font-medium text-foreground">{item.label}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="font-semibold text-foreground">{item.value}</p>
-                              {item.status ? <div className="mt-2"><StatusBadge status={item.status} /></div> : null}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </CardContent>
-                  </Card>
                 </CardContent>
               </Card>
 
@@ -3368,19 +3327,6 @@ export default function BalancedScorecardModule() {
                   </Card>
                 ) : null}
 
-                <Card className="rounded-[28px] border-border/70 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Enabled sections</CardTitle>
-                  </CardHeader>
-                  <CardContent className="flex flex-wrap gap-2">
-                    {visibleTabs.map((tab) => (
-                      <Badge key={tab.value} variant="outline" className="rounded-full bg-muted/20">
-                        {tab.label}
-                      </Badge>
-                    ))}
-                  </CardContent>
-                </Card>
-
               </div>
             </div>
 
@@ -3389,51 +3335,105 @@ export default function BalancedScorecardModule() {
                 <CardHeader>
                   <SectionTitle
                     icon={BarChart3}
-                    title="Perspective lens for this role"
+                    title="Scorecard perspectives"
                   />
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-5">
+                  {/* Radar health overview */}
+                  {scopedPerspectives.length >= 2 && (
+                    <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Health overview</p>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <RadarChart
+                          data={scopedPerspectives.map((p) => ({
+                            subject: p.name.split(" ")[0],
+                            score: p.score,
+                            fullMark: 100,
+                          }))}
+                        >
+                          <PolarGrid stroke="#e2e8f0" />
+                          <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b" }} />
+                          <Radar
+                            dataKey="score"
+                            fill="#6366f1"
+                            fillOpacity={0.2}
+                            stroke="#6366f1"
+                            strokeWidth={2}
+                            dot={{ r: 3, fill: "#6366f1" } as any}
+                          />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {/* Perspective cards with progress + goals */}
                   <div className={cn("grid gap-4", scopedPerspectives.length === 1 ? "md:grid-cols-1" : scopedPerspectives.length === 2 ? "xl:grid-cols-2" : "xl:grid-cols-3")}>
-                    {scopedPerspectives.map((perspective) => (
-                      <Card key={perspective.id} className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
-                        <CardHeader className="space-y-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <CardTitle className="text-base">{perspective.name}</CardTitle>
-                              {perspective.summary ? (
-                                <CardDescription>{perspective.summary}</CardDescription>
-                              ) : null}
+                    {scopedPerspectives.map((perspective) => {
+                      const perspectiveGoals = goalData.filter((goal) => goal.perspectiveId === perspective.id);
+                      const onTrackCount = perspectiveGoals.filter((g) => g.status === "on_track").length;
+                      return (
+                        <Card key={perspective.id} className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                          <CardHeader className="space-y-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <CardTitle className="text-base">{perspective.name}</CardTitle>
+                                {perspective.summary ? (
+                                  <CardDescription>{perspective.summary}</CardDescription>
+                                ) : null}
+                              </div>
+                              <StatusBadge status={perspective.status} />
                             </div>
-                            <StatusBadge status={perspective.status} />
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-muted-foreground">Perspective score</span>
-                              <span className="font-medium text-foreground">{perspective.score}%</span>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            {/* Score ring + progress */}
+                            <div className="flex items-center gap-4">
+                              <div className="relative flex-shrink-0" style={{ width: 56, height: 56 }}>
+                                {(() => {
+                                  const size = 56;
+                                  const r = (size - 8) / 2;
+                                  const circ = 2 * Math.PI * r;
+                                  const pct = Math.min(100, Math.max(0, perspective.score));
+                                  const offset = circ - (pct / 100) * circ;
+                                  const color = perspective.score >= 80 ? "#10b981" : perspective.score >= 60 ? "#f59e0b" : "#ef4444";
+                                  return (
+                                    <>
+                                      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+                                        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth="6" />
+                                        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth="6"
+                                          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                                          style={{ transition: "stroke-dashoffset 0.5s ease" }} />
+                                      </svg>
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className="text-[10px] font-bold" style={{ color }}>{perspective.score}%</span>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                              <div className="flex-1 space-y-1">
+                                <div className="flex justify-between text-xs text-muted-foreground">
+                                  <span>{perspectiveGoals.length} goals</span>
+                                  <span>{onTrackCount} on track</span>
+                                </div>
+                                <Progress value={perspective.score} className="h-2 rounded-full" />
+                              </div>
                             </div>
-                            <Progress value={perspective.score} className="h-2.5 rounded-full" />
-                          </div>
-                          <div className="space-y-2">
-                            {goalData
-                              .filter((goal) => goal.perspectiveId === perspective.id)
-                              .slice(0, 2)
-                              .map((goal) => (
-                                <div key={goal.id} className="rounded-2xl border border-border/60 bg-background p-3">
-                                  <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <p className="font-medium text-foreground">{goal.title}</p>
-                                      <p className="text-xs text-muted-foreground">{goal.owner}</p>
-                                    </div>
-                                    <StatusBadge status={goal.status} />
-                                  </div>
+                            {/* Goal pills */}
+                            <div className="space-y-1.5">
+                              {perspectiveGoals.slice(0, 3).map((goal) => (
+                                <div key={goal.id} className="flex items-center justify-between rounded-xl border border-border/60 bg-background px-3 py-2">
+                                  <p className="text-xs font-medium text-foreground truncate">{goal.title}</p>
+                                  <StatusBadge status={goal.status} />
                                 </div>
                               ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
+                              {perspectiveGoals.length > 3 && (
+                                <p className="text-xs text-muted-foreground text-center">+{perspectiveGoals.length - 3} more</p>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -3481,44 +3481,66 @@ export default function BalancedScorecardModule() {
                   </div>
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
-                      <CardTitle className="text-base">Goal registry</CardTitle>
+                      <CardTitle className="text-base">Strategy map</CardTitle>
                     </CardHeader>
-                    <CardContent>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Perspective</TableHead>
-                            <TableHead>Goal</TableHead>
-                            <TableHead>Owner</TableHead>
-                            <TableHead>Linked KPIs</TableHead>
-                            <TableHead>Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {goalRecords.map((goal) => {
-                            const perspective = perspectiveRecords.find(
-                              (candidate) => candidate.id === goal.perspectiveId
-                            );
-                            const linkedKpis = kpiRecords.filter((candidate) => candidate.goalId === goal.id);
-                            return (
-                              <TableRow key={goal.id}>
-                                <TableCell className="font-medium">{perspective?.name}</TableCell>
-                                <TableCell>
-                                  <div>
-                                    <p className="font-medium text-foreground">{goal.title}</p>
-                                    <p className="text-xs text-muted-foreground">{goal.description || "No description yet."}</p>
-                                  </div>
-                                </TableCell>
-                                <TableCell>{goal.ownerName || "Unassigned"}</TableCell>
-                                <TableCell>{linkedKpis.length}</TableCell>
-                                <TableCell>
-                                  <StatusBadge status={linkedKpis.length > 0 ? "on_track" : "at_risk"} />
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
+                    <CardContent className="space-y-3">
+                      {perspectiveRecords.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-6">No perspectives yet.</p>
+                      ) : (
+                        perspectiveRecords.map((perspective, idx) => {
+                          const perspGoals = goalRecords.filter((g) => g.perspectiveId === perspective.id);
+                          const paletteDot = ["bg-indigo-500", "bg-sky-500", "bg-amber-500", "bg-emerald-500"][idx % 4];
+                          const paletteBg = ["bg-indigo-50/60", "bg-sky-50/60", "bg-amber-50/60", "bg-emerald-50/60"][idx % 4];
+                          const paletteBorder = ["border-indigo-200", "border-sky-200", "border-amber-200", "border-emerald-200"][idx % 4];
+                          return (
+                            <div key={perspective.id} className={`rounded-2xl border p-4 ${paletteBg} ${paletteBorder}`}>
+                              <div className="flex items-center gap-2 mb-3">
+                                <div className={`h-2.5 w-2.5 rounded-full ${paletteDot}`} />
+                                <span className="font-semibold text-sm text-foreground">{perspective.name}</span>
+                                <Badge variant="outline" className="text-[10px] rounded-full ml-auto">
+                                  {perspGoals.length} goal{perspGoals.length !== 1 ? "s" : ""}
+                                </Badge>
+                              </div>
+                              {perspGoals.length === 0 ? (
+                                <p className="text-xs text-muted-foreground italic pl-4">No goals yet.</p>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {perspGoals.map((goal) => {
+                                    const kpiCount = kpiRecords.filter((k) => k.goalId === goal.id).length;
+                                    return (
+                                      <div
+                                        key={goal.id}
+                                        className="flex items-center gap-2 rounded-xl border border-border/50 bg-background/80 px-3 py-2 shadow-sm"
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="text-xs font-medium text-foreground leading-tight">{goal.title}</p>
+                                          {goal.ownerName ? (
+                                            <p className="text-[10px] text-muted-foreground">{goal.ownerName}</p>
+                                          ) : null}
+                                        </div>
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-[10px] rounded-full shrink-0 ${kpiCount > 0 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}
+                                        >
+                                          {kpiCount} KPI{kpiCount !== 1 ? "s" : ""}
+                                        </Badge>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-6 px-1.5 text-[10px] shrink-0"
+                                          onClick={() => openEditGoal(goal)}
+                                        >
+                                          Edit
+                                        </Button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -3548,9 +3570,7 @@ export default function BalancedScorecardModule() {
                             </>
                           ) : (
                             <>
-                              <p className="mt-2 text-sm text-muted-foreground">
-                                No scorecard cycle exists. Create one to get started.
-                              </p>
+                              <p className="mt-2 text-sm text-muted-foreground">No cycle yet.</p>
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -3613,9 +3633,7 @@ export default function BalancedScorecardModule() {
                                   : `Publish v${selectedGovernanceVersion.versionNumber}`}
                               </Button>
                             ) : selectedGovernanceVersion?.status === "published" ? (
-                              <p className="text-xs text-muted-foreground text-center">
-                                This version is live. Select a draft to publish.
-                              </p>
+                              <p className="text-xs text-muted-foreground text-center">Live version.</p>
                             ) : null}
                           </div>
                         ) : null}
@@ -3667,14 +3685,11 @@ export default function BalancedScorecardModule() {
                         return (
                         <div key={perspective.id} className="rounded-2xl border border-border/60 bg-background p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0 space-y-1">
+                            <div className="min-w-0 space-y-0.5">
                               <p className="font-medium text-foreground">{perspective.name}</p>
-                              <p className="text-sm text-muted-foreground">
+                              <p className="text-xs text-muted-foreground">
                                 {perspective.ownerName || "Unassigned"}
                               </p>
-                              {perspective.summary ? (
-                                <p className="text-sm text-muted-foreground">{perspective.summary}</p>
-                              ) : null}
                             </div>
                             <Badge variant="outline" className="rounded-full">
                               {perspectiveGoals.length} goals
@@ -3737,11 +3752,6 @@ export default function BalancedScorecardModule() {
                                 : "Archive"}
                             </Button>
                           </div>
-                          {perspectiveGoals.length > 0 ? (
-                            <p className="mt-2 text-xs text-muted-foreground">
-                              Archive becomes available after all active goals under this perspective are removed.
-                            </p>
-                          ) : null}
                         </div>
                         );
                       })}
@@ -3769,16 +3779,16 @@ export default function BalancedScorecardModule() {
                     </SheetTitle>
                     <SheetDescription>
                       {setupSheetMode === "flow"
-                        ? "A guided authoring flow for the BSC structure before the cascade begins."
+                        ? "Strategy authoring guide"
                         : setupSheetMode === "createPerspective"
-                          ? "Add a firm-level BSC perspective to the persisted scorecard structure."
+                          ? "Add a BSC perspective"
                           : setupSheetMode === "editPerspective"
-                            ? "Update the selected perspective in the persisted scorecard structure."
+                            ? "Edit perspective"
                           : setupSheetMode === "createGoal"
-                            ? "Create a strategic goal under one persisted BSC perspective."
+                            ? "Add a strategic goal"
                             : setupSheetMode === "editGoal"
-                              ? "Update the title, owner, or description of this strategic goal."
-                              : "Use these checks to keep the strategy layer clean before execution begins."}
+                              ? "Edit strategic goal"
+                              : "Strategy governance checks"}
                     </SheetDescription>
                   </SheetHeader>
                   <div className="mt-6 space-y-4">
@@ -4318,14 +4328,14 @@ export default function BalancedScorecardModule() {
                     </SheetTitle>
                     <SheetDescription>
                       {kpiSheetMode === "contract"
-                        ? "Review how KPI definition, tracking, formula, scoring, and action fit together."
+                        ? "KPI definition guide"
                         : kpiSheetMode === "createKpi"
-                          ? "Create a KPI with a tracking plan, formula, scoring rule, and period results."
+                          ? "Define a new KPI"
                           : kpiSheetMode === "createInitiative"
-                            ? "Create the execution layer that will carry the KPI downward through the cascade."
+                            ? "Add an initiative"
                             : kpiSheetMode === "editInitiative"
-                              ? "Update the title, owner, timeline, status, or progress of this initiative."
-                              : "Keep the KPI layer controlled before any initiative or employee contribution begins to move."}
+                              ? "Edit initiative"
+                              : "KPI governance rules"}
                     </SheetDescription>
                   </SheetHeader>
                   <div className="mt-6 space-y-4">
@@ -4711,109 +4721,6 @@ export default function BalancedScorecardModule() {
             />
           </TabsContent>
 
-          <TabsContent value="cascade" className="space-y-6">
-            <Card className="rounded-[28px] border-border/70 shadow-sm">
-              <CardHeader className="space-y-4">
-                <SectionTitle
-                  icon={Workflow}
-                  title={cascadeView.title}
-                />
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="grid gap-4 md:grid-cols-3">
-                  {cascadeView.metrics.map((metric) => (
-                    <MetricCard
-                      key={metric.label}
-                      label={metric.label}
-                      value={metric.value}
-                      icon={metric.icon}
-                    />
-                  ))}
-                </div>
-                <div>
-                  <Card className="rounded-[28px] border-border/60 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-xl">{cascadeView.boardTitle}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="rounded-[24px] border border-primary/20 bg-primary/5 p-5">
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">BSC Goal</p>
-                            <p className="text-lg font-semibold text-foreground">
-                              {featuredGoalRecord?.title || linkedGoal?.title || "0"}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {featuredGoalRecord?.description ||
-                                linkedGoal?.description ||
-                                ""}
-                            </p>
-                          </div>
-                          <div className="space-y-2">
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">KPI</p>
-                            <p className="text-lg font-semibold text-foreground">
-                              {featuredLiveKpi?.name || highlightedKpi?.name || "0"}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {featuredLiveKpi || highlightedKpi
-                                ? `Target ${featuredLiveKpi?.firmTarget || highlightedKpi?.firmTarget} · Actual ${featuredLiveKpi?.actual || highlightedKpi?.actual} · Shared measurement layer across every role.`
-                                : ""}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-4">
-                        {cascadeView.cards.map((card, index) => (
-                          <div key={card.id} className="relative pl-12">
-                            {index < cascadeView.cards.length - 1 ? (
-                              <div className="absolute left-[18px] top-14 h-[calc(100%+0.75rem)] w-px bg-border" />
-                            ) : null}
-                            <div className="absolute left-0 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-                              {index + 1}
-                            </div>
-                            <Card className="rounded-[24px] border-border/60 shadow-none">
-                              <CardContent className="space-y-4 p-5">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div className="space-y-1">
-                                    <div className="flex items-center gap-2">
-                                      <Badge variant="outline" className="rounded-full bg-muted/30">
-                                        {card.badge}
-                                      </Badge>
-                                      <p className="font-semibold text-foreground">{card.title}</p>
-                                    </div>
-                                    <p className="text-sm text-muted-foreground">
-                                      {card.owner} · Due {card.dueDate}
-                                    </p>
-                                  </div>
-                                  <StatusBadge status={card.status} />
-                                </div>
-                                <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
-                                  <div className="space-y-2">
-                                    <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Execution summary</p>
-                                    <p className="text-sm text-foreground">{card.summary}</p>
-                                    <p className="text-sm text-muted-foreground">{card.timeline}</p>
-                                  </div>
-                                  <div className="space-y-2 rounded-2xl border border-border/60 bg-muted/20 p-4">
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="text-muted-foreground">Progress</span>
-                                      <span className="font-medium text-foreground">{card.progress}%</span>
-                                    </div>
-                                    <Progress value={card.progress} className="h-2.5 rounded-full" />
-                                  </div>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
           <TabsContent value="tracking" className="space-y-6">
             <Card className="rounded-[28px] border-border/70 shadow-sm">
               <CardHeader className="space-y-4">
@@ -4931,6 +4838,111 @@ export default function BalancedScorecardModule() {
                     />
                   ))}
                 </div>
+
+                {/* Visual KPI health overview */}
+                {trackingView.kpis.length >= 2 && (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    {/* KPI score bar chart */}
+                    <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4 space-y-3">
+                      <p className="text-sm font-medium text-foreground">KPI score overview</p>
+                      <ResponsiveContainer width="100%" height={Math.max(140, trackingView.kpis.length * 38)}>
+                        <BarChart
+                          data={trackingView.kpis.map((kpi) => ({
+                            name: String("kpiName" in kpi ? kpi.kpiName : kpi.name).split(" ").slice(0, 3).join(" "),
+                            score: kpi.weightedScore,
+                            fill: kpi.status === "on_track" ? "#10b981" : kpi.status === "at_risk" ? "#f59e0b" : "#ef4444",
+                          }))}
+                          layout="vertical"
+                          margin={{ top: 4, right: 40, left: 8, bottom: 4 }}
+                        >
+                          <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                          <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                          <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                          <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" label={{ value: "Target", position: "top", fontSize: 10, fill: "#10b981" }} />
+                          <ReferenceLine x={60} stroke="#f59e0b" strokeDasharray="3 3" />
+                          <Bar dataKey="score" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                            {trackingView.kpis.map((kpi, i) => (
+                              <Cell key={i} fill={kpi.status === "on_track" ? "#10b981" : kpi.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    {/* Perspective radar / department breakdown */}
+                    {(selectedRole === "manager" || selectedRole === "partner") && departmentPerformanceData.length >= 2 ? (
+                      <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4 space-y-3">
+                        <p className="text-sm font-medium text-foreground">Department health snapshot</p>
+                        <ResponsiveContainer width="100%" height={Math.max(140, departmentPerformanceData.length * 38)}>
+                          <BarChart
+                            data={[...departmentPerformanceData].sort((a, b) => b.score - a.score).map((d) => ({
+                              name: d.name.split(" ").slice(0, 2).join(" "),
+                              score: d.score,
+                            }))}
+                            layout="vertical"
+                            margin={{ top: 4, right: 40, left: 8, bottom: 4 }}
+                          >
+                            <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                            <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                            <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                            <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                            <Bar dataKey="score" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                              {[...departmentPerformanceData].sort((a, b) => b.score - a.score).map((d, i) => (
+                                <Cell key={i} fill={d.status === "on_track" ? "#10b981" : d.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : scopedPerspectives.length >= 2 ? (
+                      <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4 space-y-3">
+                        <p className="text-sm font-medium text-foreground">Perspective health radar</p>
+                        <ResponsiveContainer width="100%" height={180}>
+                          <RadarChart data={scopedPerspectives.map((p) => ({ subject: p.name.split(" ")[0], score: p.score, fullMark: 100 }))}>
+                            <PolarGrid stroke="#e2e8f0" />
+                            <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b" }} />
+                            <Radar dataKey="score" fill="#6366f1" fillOpacity={0.2} stroke="#6366f1" strokeWidth={2} />
+                          </RadarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                {/* Manager: team employee contribution chart */}
+                {selectedRole === "manager" && managerEmployeeItems.length > 0 && (
+                  <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-foreground">Team contribution scores</p>
+                      <div className="flex gap-3 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500" />On track</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400" />At risk</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-400" />Off track</span>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={Math.max(120, managerEmployeeItems.length * 40)}>
+                      <BarChart
+                        data={[...managerEmployeeItems].sort((a, b) => b.progress - a.progress).map((item) => ({
+                          name: item.employee.split(" ")[0],
+                          progress: item.progress,
+                          fill: item.status === "on_track" ? "#10b981" : item.status === "at_risk" ? "#f59e0b" : "#ef4444",
+                        }))}
+                        layout="vertical"
+                        margin={{ top: 4, right: 40, left: 4, bottom: 4 }}
+                      >
+                        <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                        <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                        <Tooltip formatter={(v: number) => [`${v}%`, "Progress"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                        <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                        <Bar dataKey="progress" radius={[0, 4, 4, 0]} maxBarSize={24}>
+                          {[...managerEmployeeItems].sort((a, b) => b.progress - a.progress).map((item, i) => (
+                            <Cell key={i} fill={item.status === "on_track" ? "#10b981" : item.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
                 {canPreviewAllRoles && selectedMeasurementPeriod ? (
                   <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                     <CardHeader>
@@ -5184,20 +5196,196 @@ export default function BalancedScorecardModule() {
                     ))}
                   </div>
 
-                  <div className="space-y-4">
-                    {selectedRole === "employee"
-                      ? (
-                        <>
-                          {employeePrimaryContribution ? (
+	                  <div className="space-y-4">
+	                    {selectedRole === "employee"
+	                      ? (
+	                        <>
+                          {employeeKpiAssignmentDetails.length > 0 ? (
+                            <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                              <CardContent className="space-y-5 p-5">
+                                {/* Header */}
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-0 space-y-1">
+                                    <p className="text-lg font-semibold text-foreground">My KPI Performance</p>
+                                  </div>
+                                  <StatusBadge status={scoreToStatus(employeeKpiScore)} />
+                                </div>
+
+                                {/* Visual summary: gauge + stats */}
+                                <div className="flex flex-col sm:flex-row items-center gap-5 rounded-2xl border border-border/60 bg-background p-4">
+                                  {/* Radial gauge */}
+                                  {(() => {
+                                    const size = 100;
+                                    const r = (size - 12) / 2;
+                                    const circ = 2 * Math.PI * r;
+                                    const pct = Math.min(100, Math.max(0, employeeKpiScore));
+                                    const offset = circ - (pct / 100) * circ;
+                                    const color = employeeKpiScore >= 80 ? "#10b981" : employeeKpiScore >= 60 ? "#f59e0b" : "#ef4444";
+                                    return (
+                                      <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+                                        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+                                          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth="9" />
+                                          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth="9"
+                                            strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                                            style={{ transition: "stroke-dashoffset 0.6s ease" }} />
+                                        </svg>
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                          <span className="text-xl font-bold" style={{ color }}>{employeeKpiScore}%</span>
+                                          <span className="text-[9px] text-muted-foreground mt-0.5">MY SCORE</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                  {/* Stat tiles */}
+                                  <div className="flex-1 grid gap-3 sm:grid-cols-3 w-full">
+                                    <div className="rounded-xl border border-border/60 bg-muted/30 p-3 text-center">
+                                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">KPIs Assigned</p>
+                                      <p className="mt-1 text-2xl font-bold text-foreground">{employeeKpiAssignmentData.length}</p>
+                                    </div>
+                                    <div className="rounded-xl border border-border/60 bg-muted/30 p-3 text-center">
+                                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Avg Actual</p>
+                                      <p className="mt-1 text-2xl font-bold text-foreground">
+                                        {employeeKpiAssignmentData.length > 0
+                                          ? Math.round(employeeKpiAssignmentData.reduce((s, a) => s + a.actualProgress, 0) / employeeKpiAssignmentData.length)
+                                          : 0}%
+                                      </p>
+                                    </div>
+                                    <div className="rounded-xl border border-border/60 bg-muted/30 p-3 text-center">
+                                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Cascade</p>
+                                      <p className="mt-1 text-xs font-semibold text-foreground leading-tight">You → Dept → Firm</p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Individual KPI cards with target vs actual chart */}
+                                <div className="space-y-4">
+                                  {employeeKpiAssignmentDetails.map(({ assignment, kpi, goal, perspective }) => {
+                                    const target = Number(assignment.individualTarget ?? kpi?.firmTarget ?? 85);
+                                    const actual = assignment.actualProgress;
+                                    const score = assignment.score;
+                                    const barColor = score >= 80 ? "#10b981" : score >= 60 ? "#f59e0b" : "#ef4444";
+                                    const chartData = [
+                                      { label: "Actual", value: actual, fill: barColor },
+                                      { label: "Target", value: Number.isFinite(target) ? target : 85, fill: "#e2e8f0" },
+                                    ];
+                                    return (
+                                      <div key={assignment.id} className="rounded-2xl border border-border/60 bg-background p-4 space-y-4">
+                                        {/* KPI header */}
+                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                          <div className="min-w-0">
+                                            <p className="font-semibold text-foreground break-words">{assignment.kpiName}</p>
+                                            <p className="mt-0.5 text-sm text-muted-foreground">
+                                              {perspective?.name || "Perspective pending"} · {goal?.title || "Goal pending"}
+                                            </p>
+                                          </div>
+                                          <StatusBadge status={assignment.status} />
+                                        </div>
+
+                                        {/* Target vs Actual chart + score ring side-by-side */}
+                                        <div className="flex flex-col sm:flex-row gap-4 items-center">
+                                          {/* Mini gauge */}
+                                          {(() => {
+                                            const sz = 72;
+                                            const rad = (sz - 8) / 2;
+                                            const c = 2 * Math.PI * rad;
+                                            const off = c - (Math.min(100, score) / 100) * c;
+                                            return (
+                                              <div className="relative flex-shrink-0" style={{ width: sz, height: sz }}>
+                                                <svg width={sz} height={sz} style={{ transform: "rotate(-90deg)" }}>
+                                                  <circle cx={sz/2} cy={sz/2} r={rad} fill="none" stroke="#e2e8f0" strokeWidth="7" />
+                                                  <circle cx={sz/2} cy={sz/2} r={rad} fill="none" stroke={barColor} strokeWidth="7"
+                                                    strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round"
+                                                    style={{ transition: "stroke-dashoffset 0.5s ease" }} />
+                                                </svg>
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                                  <span className="text-sm font-bold" style={{ color: barColor }}>{score}%</span>
+                                                  <span className="text-[9px] text-muted-foreground">Score</span>
+                                                </div>
+                                              </div>
+                                            );
+                                          })()}
+
+                                          {/* Target vs Actual bar chart */}
+                                          <div className="flex-1 w-full">
+                                            <p className="text-xs text-muted-foreground mb-1">Target vs Actual</p>
+                                            <ResponsiveContainer width="100%" height={80}>
+                                              <BarChart data={chartData} margin={{ top: 0, right: 8, left: -20, bottom: 0 }}>
+                                                <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                                                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                                                <Tooltip formatter={(v: number) => [`${v}%`]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                                                <Bar dataKey="value" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                                                  {chartData.map((entry, i) => (
+                                                    <Cell key={i} fill={entry.fill} />
+                                                  ))}
+                                                </Bar>
+                                              </BarChart>
+                                            </ResponsiveContainer>
+                                          </div>
+
+                                          {/* Stats column */}
+                                          <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 text-sm shrink-0">
+                                            <div>
+                                              <p className="text-xs text-muted-foreground">Actual</p>
+                                              <p className="font-semibold text-foreground">{actual}%</p>
+                                            </div>
+                                            <div>
+                                              <p className="text-xs text-muted-foreground">Target</p>
+                                              <p className="font-semibold text-foreground">{Number.isFinite(target) ? `${target}%` : "Default"}</p>
+                                            </div>
+                                            <div>
+                                              <p className="text-xs text-muted-foreground">Due</p>
+                                              <p className="font-semibold text-foreground">{assignment.dueDate || "Period end"}</p>
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Status logic */}
+                                        {kpi?.statusLogic && (
+                                          <p className="text-xs text-muted-foreground border-t border-border/50 pt-3">
+                                            {kpi.statusLogic}
+                                          </p>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ) : (
+                            <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
+                              <CardContent className="space-y-4 p-5">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-lg font-semibold text-foreground">No employee KPI assignment yet</p>
+                                    <p className="mt-1 text-sm text-muted-foreground">No KPIs assigned yet.</p>
+                                  </div>
+                                  <Badge variant="outline" className="rounded-full">Awaiting KPI assignment</Badge>
+                                </div>
+                                <div className="grid gap-3 md:grid-cols-3">
+                                  <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Step 1</p>
+                                    <p className="mt-2 font-medium text-foreground">Create KPI</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Step 2</p>
+                                    <p className="mt-2 font-medium text-foreground">Assign KPI to employee</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-background p-4">
+                                    <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Step 3</p>
+                                    <p className="mt-2 font-medium text-foreground">Track individual to firm score</p>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          )}
+
+                          {linkedPrimaryContribution ? (
                             <Card className="rounded-[24px] border-border/60 bg-muted/20 shadow-none">
                               <CardContent className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.35fr)_320px]">
                                 <div className="space-y-4">
                                   <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div className="min-w-0 space-y-2">
                                       <p className="text-lg font-semibold text-foreground">Current contribution line of sight</p>
-                                      <p className="text-sm text-muted-foreground">
-                                        This shows the strategic goal, KPI, and initiative your current work is feeding.
-                                      </p>
                                     </div>
                                     {employeeOverallStatus ? <StatusBadge status={employeeOverallStatus} /> : null}
                                   </div>
@@ -5205,25 +5393,25 @@ export default function BalancedScorecardModule() {
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
                                       <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Perspective</p>
                                       <p className="mt-2 font-medium text-foreground">
-                                        {employeePrimaryContribution.perspective?.name || "Not linked yet"}
+                                        {linkedPrimaryContribution.perspective?.name || "Not linked yet"}
                                       </p>
                                     </div>
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
                                       <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Strategic goal</p>
                                       <p className="mt-2 font-medium text-foreground">
-                                        {employeePrimaryContribution.goal?.title || "No goal linked"}
+                                        {linkedPrimaryContribution.goal?.title || "No goal linked"}
                                       </p>
                                     </div>
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
                                       <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Linked KPI</p>
                                       <p className="mt-2 font-medium text-foreground">
-                                        {employeePrimaryContribution.kpi?.name || "No KPI linked"}
+                                        {linkedPrimaryContribution.kpi?.name || "No KPI linked"}
                                       </p>
                                     </div>
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
                                       <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Initiative</p>
                                       <p className="mt-2 font-medium text-foreground">
-                                        {employeePrimaryContribution.item.initiative || employeePrimaryContribution.item.title}
+                                        {linkedPrimaryContribution.item.initiative || linkedPrimaryContribution.item.title}
                                       </p>
                                     </div>
                                   </div>
@@ -5234,19 +5422,18 @@ export default function BalancedScorecardModule() {
                                         <div>
                                           <p className="text-xs text-muted-foreground">Target</p>
                                           <p className="mt-1 text-base font-semibold text-foreground">
-                                            {employeePrimaryContribution.kpi?.firmTarget || "Not set"}
+                                            {linkedPrimaryContribution.kpi?.firmTarget || "Not set"}
                                           </p>
                                         </div>
                                         <div>
                                           <p className="text-xs text-muted-foreground">Current actual</p>
                                           <p className="mt-1 text-base font-semibold text-foreground">
-                                            {employeePrimaryContribution.kpi?.actual || "Awaiting update"}
+                                            {linkedPrimaryContribution.kpi?.actual || "Awaiting update"}
                                           </p>
                                         </div>
                                       </div>
                                       <p className="mt-3 text-sm text-muted-foreground">
-                                        {employeePrimaryContribution.item.rollup ||
-                                          "This contribution is linked into the active scorecard cascade, but the roll-up note is still missing."}
+                                        {linkedPrimaryContribution.item.rollup || "No roll-up note yet."}
                                       </p>
                                     </div>
                                     <div className="rounded-2xl border border-border/60 bg-background p-4">
@@ -5264,7 +5451,7 @@ export default function BalancedScorecardModule() {
                                         </div>
                                         <div className="flex items-center justify-between gap-3">
                                           <span>Next due date</span>
-                                          <span className="font-medium text-foreground">{employeePrimaryContribution.item.dueDate}</span>
+                                          <span className="font-medium text-foreground">{linkedPrimaryContribution.item.dueDate}</span>
                                         </div>
                                       </div>
                                     </div>
@@ -5286,7 +5473,7 @@ export default function BalancedScorecardModule() {
                                             day: "2-digit",
                                             month: "short",
                                           })}`
-                                        : "This workspace is currently using the live KPI view."}
+                                        : "Live KPI view"}
                                     </p>
                                   </div>
                                   <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
@@ -5298,23 +5485,23 @@ export default function BalancedScorecardModule() {
                                   </div>
                                   <Button
                                     className="h-10 rounded-2xl w-full"
-                                    disabled={contributionSubmitting === `ack:${employeePrimaryContribution.item.id}`}
+                                    disabled={contributionSubmitting === `ack:${linkedPrimaryContribution.item.id}`}
                                     onClick={() =>
-                                      employeePrimaryContribution.item.acknowledged
-                                        ? openContributionProgressDialog(employeePrimaryContribution.item)
-                                        : handleAcknowledgeContribution(employeePrimaryContribution.item)
+                                      linkedPrimaryContribution.item.acknowledged
+                                        ? openContributionProgressDialog(linkedPrimaryContribution.item)
+                                        : handleAcknowledgeContribution(linkedPrimaryContribution.item)
                                     }
                                   >
-                                    {contributionSubmitting === `ack:${employeePrimaryContribution.item.id}`
+                                    {contributionSubmitting === `ack:${linkedPrimaryContribution.item.id}`
                                       ? "Recording..."
-                                      : employeePrimaryContribution.item.acknowledged
+                                      : linkedPrimaryContribution.item.acknowledged
                                         ? "Update my progress"
                                         : "Acknowledge my item"}
                                   </Button>
                                   <Button
                                     variant="outline"
                                     className="h-10 rounded-2xl w-full"
-                                    onClick={() => handleOpenContributionReviewContext(employeePrimaryContribution.item)}
+                                    onClick={() => handleOpenContributionReviewContext(linkedPrimaryContribution.item)}
                                   >
                                     Open evaluation context
                                   </Button>
@@ -5327,9 +5514,7 @@ export default function BalancedScorecardModule() {
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                   <div>
                                     <p className="text-lg font-semibold text-foreground">No current contribution items</p>
-                                    <p className="mt-1 text-sm text-muted-foreground">
-                                      No initiative, KPI, or acknowledgement item is currently assigned to this employee in the active window.
-                                    </p>
+                                    <p className="mt-1 text-sm text-muted-foreground">No items assigned in the current window.</p>
                                   </div>
                                   <Badge variant="outline" className="rounded-full">Awaiting allocation</Badge>
                                 </div>
@@ -5340,7 +5525,7 @@ export default function BalancedScorecardModule() {
                                   </div>
                                   <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
                                     <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Next expectation</p>
-                                    <p className="mt-2 font-medium text-foreground">Await assignment or manager cascade</p>
+                                    <p className="mt-2 font-medium text-foreground">Pending assignment</p>
                                   </div>
                                   <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
                                     <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">My score</p>
@@ -5350,6 +5535,34 @@ export default function BalancedScorecardModule() {
                               </CardContent>
                             </Card>
                           )}
+
+                          {unlinkedContributionDetails.length > 0 && (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5 flex-shrink-0 rounded-xl bg-amber-100 p-2 text-amber-600">
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                  </svg>
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-amber-800">
+                                    {unlinkedContributionDetails.length} contribution {unlinkedContributionDetails.length === 1 ? "item" : "items"} pending BSC setup
+                                  </p>
+                                  <p className="mt-0.5 text-xs text-amber-700">
+                                    The following items are not yet linked to a KPI in the scorecard. Ask your manager to complete the cascade mapping.
+                                  </p>
+                                  <ul className="mt-2 space-y-1">
+                                    {unlinkedContributionDetails.map((d) => (
+                                      <li key={d.item.id} className="text-xs text-amber-800 truncate">
+                                        · {d.item.title || d.item.initiative || "Unnamed item"}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
                           {employeeContributionData.map((item) => {
                           const kpi = item.kpiId
                             ? kpiData.find((candidate) => candidate.id === item.kpiId)
@@ -5478,53 +5691,155 @@ export default function BalancedScorecardModule() {
                         })}
                         </>
                       )
-                      : employeeView.items.map((item) => (
-                          <Card key={item.id} className="rounded-[24px] border-border/60 shadow-none">
-                            <CardContent className="p-5">
-                              <div className="space-y-3">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-lg font-semibold text-foreground break-words">{item.title}</p>
-                                    <p className="text-sm text-muted-foreground break-words">
-                                      {item.employee} · Due {item.dueDate}
-                                    </p>
-                                  </div>
-                                  <StatusBadge status={item.status as StatusTone} />
-                                </div>
-                                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3">
-                                  <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
-                                    <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Owner</p>
-                                    <p className="mt-2 font-medium text-foreground break-words">{item.employee}</p>
-                                  </div>
-                                  <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
-                                    <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Acknowledgement</p>
-                                    <p className="mt-2 font-medium text-foreground break-words">{item.acknowledged ? "Acknowledged" : "Pending"}</p>
-                                  </div>
-                                  <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
-                                    <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Progress</p>
-                                    <p className="mt-2 font-medium text-foreground break-words">{item.progress}%</p>
-                                  </div>
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="text-muted-foreground">Execution health</span>
-                                    <span className="font-medium text-foreground">{item.progress}%</span>
-                                  </div>
-                                  <Progress value={item.progress} className="h-2.5 rounded-full" />
-                                </div>
-                                <div className="rounded-2xl border border-border/60 bg-primary/5 p-4">
-                                  <div className="flex items-start gap-2">
-                                    <MessageSquare className="mt-0.5 h-4 w-4 text-primary" />
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">Review note</p>
-                                      <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
+                      : (
+                        <>
+                          {/* Team health visual overview (manager / HR) */}
+                          {employeeView.items.length > 0 && (
+                            <div className="space-y-4">
+                              {/* Overall gauge + distribution */}
+                              <div className="grid gap-4 xl:grid-cols-2">
+                                {/* Team health gauge + stat strip */}
+                                <div className="flex items-center gap-5 rounded-[24px] border border-border/60 bg-muted/20 p-5">
+                                  {(() => {
+                                    const teamScore = averageScore(employeeView.items.map((i) => i.progress));
+                                    const size = 96;
+                                    const r = (size - 12) / 2;
+                                    const circ = 2 * Math.PI * r;
+                                    const off = circ - (Math.min(100, teamScore) / 100) * circ;
+                                    const color = teamScore >= 80 ? "#10b981" : teamScore >= 60 ? "#f59e0b" : "#ef4444";
+                                    return (
+                                      <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+                                        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+                                          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e2e8f0" strokeWidth="9" />
+                                          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="9"
+                                            strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
+                                            style={{ transition: "stroke-dashoffset 0.6s ease" }} />
+                                        </svg>
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                                          <span className="text-xl font-bold" style={{ color }}>{teamScore}%</span>
+                                          <span className="text-[9px] text-muted-foreground mt-0.5">TEAM</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                  <div className="grid flex-1 gap-3 grid-cols-3">
+                                    <div className="text-center">
+                                      <p className="text-2xl font-bold text-emerald-600">{employeeView.items.filter((i) => i.status === "on_track").length}</p>
+                                      <p className="text-[10px] uppercase text-muted-foreground mt-0.5">On track</p>
+                                    </div>
+                                    <div className="text-center">
+                                      <p className="text-2xl font-bold text-amber-500">{employeeView.items.filter((i) => i.status === "at_risk").length}</p>
+                                      <p className="text-[10px] uppercase text-muted-foreground mt-0.5">At risk</p>
+                                    </div>
+                                    <div className="text-center">
+                                      <p className="text-2xl font-bold text-red-500">{employeeView.items.filter((i) => i.status === "off_track").length}</p>
+                                      <p className="text-[10px] uppercase text-muted-foreground mt-0.5">Off track</p>
                                     </div>
                                   </div>
                                 </div>
+
+                                {/* Employee ranking chart */}
+                                <div className="rounded-[24px] border border-border/60 bg-muted/20 p-4 space-y-2">
+                                  <p className="text-sm font-medium text-foreground">Team ranking by progress</p>
+                                  <ResponsiveContainer width="100%" height={Math.max(120, employeeView.items.length * 36)}>
+                                    <BarChart
+                                      data={[...employeeView.items].sort((a, b) => b.progress - a.progress).map((item) => ({
+                                        name: item.employee.split(" ")[0],
+                                        progress: item.progress,
+                                        fill: item.status === "on_track" ? "#10b981" : item.status === "at_risk" ? "#f59e0b" : "#ef4444",
+                                      }))}
+                                      layout="vertical"
+                                      margin={{ top: 4, right: 40, left: 4, bottom: 4 }}
+                                    >
+                                      <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                                      <YAxis type="category" dataKey="name" width={72} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                                      <Tooltip formatter={(v: number) => [`${v}%`, "Progress"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                                      <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                                      <Bar dataKey="progress" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                                        {[...employeeView.items].sort((a, b) => b.progress - a.progress).map((item, i) => (
+                                          <Cell key={i} fill={item.status === "on_track" ? "#10b981" : item.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                                        ))}
+                                      </Bar>
+                                    </BarChart>
+                                  </ResponsiveContainer>
+                                </div>
                               </div>
-                            </CardContent>
-                          </Card>
-                        ))}
+
+                              {/* Coaching attention list */}
+                              {employeeView.items.filter((i) => i.status !== "on_track").length > 0 && (
+                                <div className="rounded-[24px] border border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                                  <p className="text-sm font-semibold text-amber-800">
+                                    {employeeView.items.filter((i) => i.status !== "on_track").length} team {employeeView.items.filter((i) => i.status !== "on_track").length === 1 ? "member" : "members"} need attention
+                                  </p>
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    {employeeView.items.filter((i) => i.status !== "on_track").map((item) => (
+                                      <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-amber-100 bg-white p-3">
+                                        <div className={`h-2 w-2 flex-shrink-0 rounded-full ${item.status === "at_risk" ? "bg-amber-400" : "bg-red-400"}`} />
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-sm font-medium text-foreground truncate">{item.employee}</p>
+                                          <p className="text-xs text-muted-foreground">{item.progress}% · {item.status === "at_risk" ? "At risk" : "Off track"}</p>
+                                        </div>
+                                        <Badge variant="outline" className={`rounded-full flex-shrink-0 text-xs ${item.acknowledged ? "border-emerald-200 text-emerald-700" : "border-amber-200 text-amber-700"}`}>
+                                          {item.acknowledged ? "Ack" : "Pending"}
+                                        </Badge>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Individual action cards */}
+                          {employeeView.items.map((item) => (
+                            <Card key={item.id} className="rounded-[24px] border-border/60 shadow-none">
+                              <CardContent className="p-5">
+                                <div className="space-y-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-lg font-semibold text-foreground break-words">{item.title}</p>
+                                      <p className="text-sm text-muted-foreground break-words">
+                                        {item.employee} · Due {item.dueDate}
+                                      </p>
+                                    </div>
+                                    <StatusBadge status={item.status as StatusTone} />
+                                  </div>
+                                  <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3">
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Owner</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{item.employee}</p>
+                                    </div>
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Acknowledgement</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{item.acknowledged ? "Acknowledged" : "Pending"}</p>
+                                    </div>
+                                    <div className="min-w-0 rounded-2xl border border-border/60 bg-muted/20 p-3">
+                                      <p className="text-[11px] uppercase leading-tight tracking-[0.12em] text-muted-foreground break-words">Progress</p>
+                                      <p className="mt-2 font-medium text-foreground break-words">{item.progress}%</p>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between text-sm">
+                                      <span className="text-muted-foreground">Execution health</span>
+                                      <span className="font-medium text-foreground">{item.progress}%</span>
+                                    </div>
+                                    <Progress value={item.progress} className="h-2.5 rounded-full" />
+                                  </div>
+                                  <div className="rounded-2xl border border-border/60 bg-primary/5 p-4">
+                                    <div className="flex items-start gap-2">
+                                      <MessageSquare className="mt-0.5 h-4 w-4 text-primary" />
+                                      <div>
+                                        <p className="text-sm font-medium text-foreground">Review note</p>
+                                        <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))}
+                        </>
+                      )}
                   </div>
                 </div>
               </CardContent>
@@ -5650,116 +5965,202 @@ export default function BalancedScorecardModule() {
                   ))}
                 </div>
 
+                {/* Chart row 1: Perspective radar + Department bar + Initiative bar */}
                 <div className="grid gap-6 xl:grid-cols-3">
+                  {/* Perspective performance — radar */}
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">Performance by perspective</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      {reportsView.perspectiveRows.map((perspective) => (
-                        <div key={perspective.id} className="space-y-2">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-foreground">{perspective.name}</span>
-                            <span className="text-sm text-muted-foreground">{perspective.score}%</span>
+                    <CardContent>
+                      {reportsView.perspectiveRows.length >= 3 ? (
+                        <ResponsiveContainer width="100%" height={220}>
+                          <RadarChart data={reportsView.perspectiveRows.map((p) => ({ subject: p.name.split(" ")[0], score: p.score, fullMark: 100 }))}>
+                            <PolarGrid stroke="#e2e8f0" />
+                            <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b" }} />
+                            <Radar dataKey="score" fill="#6366f1" fillOpacity={0.18} stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: "#6366f1" } as any} />
+                            <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                          </RadarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={Math.max(120, reportsView.perspectiveRows.length * 44)}>
+                          <BarChart data={reportsView.perspectiveRows.map((p) => ({ name: p.name.split(" ")[0], score: p.score }))} layout="vertical" margin={{ top: 4, right: 32, left: 4, bottom: 4 }}>
+                            <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                            <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                            <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                            <Bar dataKey="score" fill="#6366f1" radius={[0, 4, 4, 0]} maxBarSize={24} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      )}
+                      <div className="mt-3 space-y-1">
+                        {reportsView.perspectiveRows.map((p) => (
+                          <div key={p.id} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground truncate max-w-[140px]">{p.name}</span>
+                            <span className={`font-semibold ${p.score >= 80 ? "text-emerald-600" : p.score >= 60 ? "text-amber-600" : "text-red-500"}`}>{p.score}%</span>
                           </div>
-                          <Progress value={perspective.score} className="h-2.5 rounded-full" />
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </CardContent>
                   </Card>
 
+                  {/* Department performance — horizontal bar */}
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
                       <CardTitle className="text-base">Performance by department</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      {reportsView.departmentRows.map((department) => (
-                        <div key={department.name} className="space-y-2">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-foreground">{department.name}</span>
-                            <StatusBadge status={department.status} />
-                          </div>
-                          <Progress value={department.score} className="h-2.5 rounded-full" />
-                        </div>
-                      ))}
+                    <CardContent>
+                      {reportsView.departmentRows.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={Math.max(140, reportsView.departmentRows.length * 40)}>
+                          <BarChart
+                            data={[...reportsView.departmentRows].sort((a, b) => b.score - a.score).map((d) => ({
+                              name: d.name.split(" ").slice(0, 2).join(" "),
+                              score: d.score,
+                              fill: d.status === "on_track" ? "#10b981" : d.status === "at_risk" ? "#f59e0b" : "#ef4444",
+                            }))}
+                            layout="vertical"
+                            margin={{ top: 4, right: 32, left: 4, bottom: 4 }}
+                          >
+                            <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                            <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                            <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                            <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                            <Bar dataKey="score" radius={[0, 4, 4, 0]} maxBarSize={24}>
+                              {[...reportsView.departmentRows].sort((a, b) => b.score - a.score).map((d, i) => (
+                                <Cell key={i} fill={d.status === "on_track" ? "#10b981" : d.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <p className="text-sm text-muted-foreground py-8 text-center">No department data available for this view.</p>
+                      )}
                     </CardContent>
                   </Card>
 
+                  {/* Initiative completion — bar chart */}
                   <Card className="rounded-[24px] border-border/60 shadow-none">
                     <CardHeader>
-                      <CardTitle className="text-base">Initiative completion summary</CardTitle>
+                      <CardTitle className="text-base">Initiative completion</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      {cascadeView.cards.slice(0, 4).map((initiative) => (
-                        <div key={initiative.id} className="space-y-2">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-foreground">{initiative.title}</span>
-                            <span className="text-sm text-muted-foreground">{initiative.progress}%</span>
-                          </div>
-                          <Progress value={initiative.progress} className="h-2.5 rounded-full" />
-                        </div>
-                      ))}
+                    <CardContent>
+                      {cascadeView.cards.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={Math.max(140, Math.min(cascadeView.cards.length, 6) * 40)}>
+                          <BarChart
+                            data={cascadeView.cards.slice(0, 6).map((ini) => ({
+                              name: ini.title.split(" ").slice(0, 3).join(" "),
+                              progress: ini.progress,
+                            }))}
+                            layout="vertical"
+                            margin={{ top: 4, right: 32, left: 4, bottom: 4 }}
+                          >
+                            <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                            <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                            <Tooltip formatter={(v: number) => [`${v}%`, "Progress"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                            <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                            <Bar dataKey="progress" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                              {cascadeView.cards.slice(0, 6).map((ini, i) => (
+                                <Cell key={i} fill={ini.status === "on_track" ? "#10b981" : ini.status === "at_risk" ? "#f59e0b" : "#ef4444"} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <p className="text-sm text-muted-foreground py-8 text-center">No initiative data in current scope.</p>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
 
-                <div className="grid gap-6 xl:grid-cols-2">
-                  <Card className="rounded-[24px] border-border/60 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Performance by manager</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Manager</TableHead>
-                            <TableHead>Team</TableHead>
-                            <TableHead>Score</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {reportsView.managerRows.length > 0 ? (
-                            reportsView.managerRows.map((manager) => (
-                              <TableRow key={manager.name}>
-                                <TableCell className="font-medium">{manager.name}</TableCell>
-                                <TableCell>{manager.team}</TableCell>
-                                <TableCell>{manager.score}</TableCell>
-                              </TableRow>
-                            ))
-                          ) : null}
-                        </TableBody>
-                      </Table>
-                    </CardContent>
-                  </Card>
+                {/* Chart row 2: Manager performance + Employee performance */}
+                {(reportsView.managerRows.length > 0 || reportsView.employeeRows.length > 0) && (
+                  <div className="grid gap-6 xl:grid-cols-2">
+                    {/* Manager performance — bar chart */}
+                    {reportsView.managerRows.length > 0 && (
+                      <Card className="rounded-[24px] border-border/60 shadow-none">
+                        <CardHeader>
+                          <CardTitle className="text-base">Manager performance</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <ResponsiveContainer width="100%" height={Math.max(100, reportsView.managerRows.length * 44)}>
+                            <BarChart
+                              data={[...reportsView.managerRows].sort((a, b) => b.score - a.score).map((m) => ({
+                                name: m.name.split(" ")[0],
+                                score: m.score,
+                                team: m.team,
+                              }))}
+                              layout="vertical"
+                              margin={{ top: 4, right: 40, left: 4, bottom: 4 }}
+                            >
+                              <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                              <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                              <Tooltip
+                                formatter={(v: number, _name: string, props: any) => [`${v}%  ·  ${props.payload.team}`, "Score"]}
+                                contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                              />
+                              <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                              <Bar dataKey="score" radius={[0, 4, 4, 0]} maxBarSize={24}>
+                                {[...reportsView.managerRows].sort((a, b) => b.score - a.score).map((m, i) => (
+                                  <Cell key={i} fill={m.score >= 80 ? "#10b981" : m.score >= 60 ? "#f59e0b" : "#ef4444"} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                          {/* Mini table for team context */}
+                          <div className="divide-y divide-border/40">
+                            {reportsView.managerRows.map((m) => (
+                              <div key={m.name} className="flex items-center justify-between py-2 text-sm">
+                                <span className="font-medium text-foreground">{m.name}</span>
+                                <span className="text-muted-foreground">{m.team}</span>
+                                <span className={`font-semibold ${m.score >= 80 ? "text-emerald-600" : m.score >= 60 ? "text-amber-600" : "text-red-500"}`}>{m.score}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
 
-                  <Card className="rounded-[24px] border-border/60 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Performance by employee</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Employee</TableHead>
-                            <TableHead>Contribution score</TableHead>
-                            <TableHead>Acknowledgement</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {reportsView.employeeRows.length > 0 ? (
-                            reportsView.employeeRows.map((employee) => (
-                              <TableRow key={employee.name}>
-                                <TableCell className="font-medium">{employee.name}</TableCell>
-                                <TableCell>{employee.score}</TableCell>
-                                <TableCell>{employee.ack}</TableCell>
-                              </TableRow>
-                            ))
-                          ) : null}
-                        </TableBody>
-                      </Table>
-                    </CardContent>
-                  </Card>
-                </div>
+                    {/* Employee performance — sorted bar */}
+                    {reportsView.employeeRows.length > 0 && (
+                      <Card className="rounded-[24px] border-border/60 shadow-none">
+                        <CardHeader>
+                          <CardTitle className="text-base">Employee contribution scores</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <ResponsiveContainer width="100%" height={Math.max(120, Math.min(reportsView.employeeRows.length, 8) * 36)}>
+                            <BarChart
+                              data={[...reportsView.employeeRows].sort((a, b) => b.score - a.score).slice(0, 8).map((e) => ({
+                                name: e.name.split(" ")[0],
+                                score: e.score,
+                              }))}
+                              layout="vertical"
+                              margin={{ top: 4, right: 40, left: 4, bottom: 4 }}
+                            >
+                              <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                              <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                              <Tooltip formatter={(v: number) => [`${v}%`, "Score"]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                              <ReferenceLine x={80} stroke="#10b981" strokeDasharray="3 3" />
+                              <Bar dataKey="score" radius={[0, 4, 4, 0]} maxBarSize={20}>
+                                {[...reportsView.employeeRows].sort((a, b) => b.score - a.score).slice(0, 8).map((e, i) => (
+                                  <Cell key={i} fill={e.score >= 80 ? "#10b981" : e.score >= 60 ? "#f59e0b" : "#ef4444"} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                          {/* Acknowledgement column */}
+                          <div className="divide-y divide-border/40">
+                            {[...reportsView.employeeRows].sort((a, b) => b.score - a.score).slice(0, 8).map((e) => (
+                              <div key={e.name} className="flex items-center justify-between py-2 text-sm">
+                                <span className="font-medium text-foreground">{e.name}</span>
+                                <span className="text-muted-foreground text-xs truncate max-w-[180px]">{e.ack}</span>
+                                <span className={`font-semibold ${e.score >= 80 ? "text-emerald-600" : e.score >= 60 ? "text-amber-600" : "text-red-500"}`}>{e.score}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

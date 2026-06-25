@@ -10,6 +10,7 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
+    color-scheme: light;
     --background: 210 40% 98%;
     --foreground: 217 37% 17%;
 
@@ -72,65 +73,7 @@ All colors MUST be HSL.
     --chart-5: 152 68% 37%;
   }
 
-  .dark {
-    --background: 220 36% 11%;
-    --foreground: 210 28% 95%;
-
-    --card: 220 33% 14%;
-    --card-foreground: 210 28% 95%;
-
-    --popover: 220 33% 14%;
-    --popover-foreground: 210 28% 95%;
-
-    --primary: 198 88% 50%;
-    --primary-foreground: 218 68% 13%;
-
-    --secondary: 24 96% 58%;
-    --secondary-foreground: 0 0% 100%;
-
-    --brand-orange: 24 96% 58%;
-    --brand-dark-blue: 217 74% 42%;
-
-    --muted: 220 25% 20%;
-    --muted-foreground: 214 13% 69%;
-
-    --accent: 38 95% 60%;
-    --accent-foreground: 220 36% 11%;
-
-    --destructive: 0 78% 58%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 217 24% 26%;
-    --input: 217 24% 26%;
-    --ring: 198 88% 50%;
-
-    --success: 152 68% 42%;
-    --warning: 37 92% 56%;
-    --info: 198 88% 50%;
-
-    --gradient-primary: linear-gradient(130deg, hsl(217 74% 42%) 0%, hsl(198 88% 50%) 52%, hsl(24 96% 58%) 100%);
-    --gradient-secondary: linear-gradient(125deg, hsl(198 88% 50%) 0%, hsl(152 68% 42%) 100%);
-    --gradient-accent: linear-gradient(130deg, hsl(38 95% 60%) 0%, hsl(24 96% 58%) 100%);
-
-    --shadow-sm: 0 6px 14px -12px hsl(0 0% 0% / 0.4);
-    --shadow-md: 0 14px 24px -18px hsl(0 0% 0% / 0.45);
-    --shadow-lg: 0 20px 44px -26px hsl(0 0% 0% / 0.5);
-    --shadow-xl: 0 30px 58px -32px hsl(0 0% 0% / 0.55);
-    --sidebar-background: 222 42% 10%;
-    --sidebar-foreground: 210 24% 94%;
-    --sidebar-primary: 24 96% 58%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 31% 20%;
-    --sidebar-accent-foreground: 210 24% 94%;
-    --sidebar-border: 218 30% 24%;
-    --sidebar-ring: 198 88% 50%;
-
-    --chart-1: 198 88% 50%;
-    --chart-2: 24 96% 58%;
-    --chart-3: 38 95% 60%;
-    --chart-4: 152 68% 42%;
-    --chart-5: 217 74% 42%;
-  }
+  /* Dark mode intentionally disabled — app is light-only */
 }
 
 @layer base {

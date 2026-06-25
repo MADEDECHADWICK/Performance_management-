@@ -308,13 +308,27 @@ router.get("/workspace", async (req: AuthRequest, res) => {
     const requestingProfileId = parseIntSafe(req.user?.profileId);
     // An optional override: HR can pass ?profileId=X to view another employee's contributions.
     const profileIdOverride = parseIntSafe(req.query.profileId);
+    const requesterRoles = (req.userRoles || []).map((role) => role.toLowerCase());
+    const canViewOtherProfiles =
+      requesterRoles.includes("hr") ||
+      requesterRoles.includes("super_admin") ||
+      requesterRoles.includes("gmp");
+
+    if (
+      profileIdOverride &&
+      profileIdOverride !== requestingProfileId &&
+      !canViewOtherProfiles
+    ) {
+      return res.status(403).json(errorResponse("You cannot view another profile's KPI workspace", 403));
+    }
+
     const profileId = profileIdOverride ?? requestingProfileId;
 
     const requestedRoleRaw = typeof req.query.role === "string" ? req.query.role.toLowerCase() : undefined;
     const requestedRole = requestedRoleRaw && isWorkspaceRole(requestedRoleRaw) ? requestedRoleRaw : undefined;
     const evaluationCycleId = parseIntSafe(req.query.evaluationCycleId);
 
-    let roles = (req.userRoles || []).map((role) => role.toLowerCase());
+    let roles = requesterRoles;
     let positionTitle: string | null = null;
 
     if (profileId) {
@@ -336,7 +350,7 @@ router.get("/workspace", async (req: AuthRequest, res) => {
       positionTitle,
     }) as WorkspaceRole;
 
-    const canPreviewAllRoles = roles.includes("hr") || roles.includes("super_admin");
+    const canPreviewAllRoles = canViewOtherProfiles;
     if (requestedRole && requestedRole !== resolvedRole && !canPreviewAllRoles) {
       return res.status(403).json(errorResponse("You cannot preview another KPI workspace role", 403));
     }

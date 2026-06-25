@@ -5,7 +5,8 @@ import { api } from './client';
 
 export interface Proposal {
   id: number;
-  clientId: number;
+  clientId: number | null;
+  clientName: string | null;
   proposalTitle: string;
   serviceType: string;
   proposedFee: number;
@@ -17,8 +18,9 @@ export interface Proposal {
   probability: number;
   notes?: string | null;
   lostReason?: string | null;
-  client?: { id: number; clientName: string; industry?: string | null };
+  client?: { id: number; clientName: string; industry?: string | null } | null;
   assignedPartner?: { id: number; firstName: string; lastName: string } | null;
+  createdByProfileId?: number | null;
 }
 
 export interface ProposalMetrics {
@@ -56,14 +58,18 @@ interface ProposalFilters {
 }
 
 export interface CreateProposalPayload {
-  clientId: number;
+  clientId?: number | null;
+  clientName?: string;
   proposalTitle: string;
   serviceType: string;
   proposedFee: number;
   proposalDate: string;
   expectedStart?: string;
+  expectedDurationDays?: number;
   probability: number;
   status: Proposal["status"];
+  notes?: string;
+  currency?: string;
 }
 
 export interface UpdateProposalPayload {
@@ -71,7 +77,24 @@ export interface UpdateProposalPayload {
   lostReason?: string;
 }
 
+export interface MyProposalFilters {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  search?: string;
+}
+
 export const proposalsAPI = {
+  listMine: async (filters?: MyProposalFilters): Promise<{ data: Proposal[]; total: number; page: number; pageSize: number }> => {
+    const params = new URLSearchParams();
+    if (filters?.page) params.append('page', String(filters.page));
+    if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.search) params.append('search', filters.search);
+    const query = params.toString();
+    return api.get(`/proposals/my${query ? `?${query}` : ''}`);
+  },
+
   list: async (filters?: ProposalFilters) => {
     const params = new URLSearchParams();
     if (filters?.page) params.append('page', String(filters.page));
