@@ -228,6 +228,9 @@ describe("LeaveService", () => {
       leaveApprovalStep: {
         update: jest.fn().mockResolvedValue({ id: 501 }),
       },
+      timeEntry: {
+        count: jest.fn().mockResolvedValue(0),
+      },
       leaveLedgerEntry: {
         create: jest.fn().mockResolvedValue({ id: 1 }),
       },
