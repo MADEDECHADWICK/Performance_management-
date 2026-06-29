@@ -417,7 +417,7 @@ test("creates an evaluation cycle and publishes the staged assignments", async (
   await page.getByTestId("evaluation-save-cycle-draft").click();
   await page.getByTestId("evaluation-publish-assignments").click();
 
-  await expect(page.getByText("Assignments published")).toBeVisible();
+  await expect(page.getByText("Assignments published", { exact: true })).toBeVisible();
   expect(state.createPayload).toMatchObject({
     title: "Q2 Audit Performance Review",
     cycleType: "annual",
@@ -598,7 +598,7 @@ test("submits an evaluation assignment with a score and evaluator signature", as
   await page.getByTestId("evaluation-evaluator-signature").click();
   await page.getByTestId("evaluation-submit").click();
 
-  await expect(page.getByText("Evaluation submitted")).toBeVisible();
+  await expect(page.getByText("Evaluation submitted", { exact: true })).toBeVisible();
   expect(submitPayload).toEqual({
     responses: [
       {
