@@ -18,6 +18,7 @@
     "seed:uat-team": "ts-node prisma/scripts/seed-uat-team.ts",
     "seed:operational-uat": "ts-node --transpile-only prisma/scripts/seed-operational-uat.ts",
     "validate:operational-uat": "ts-node --transpile-only prisma/scripts/validate-operational-uat.ts",
+    "bootstrap:render-users": "node prisma/scripts/bootstrap-render-users.cjs",
     "bsc:pilot": "ts-node --transpile-only prisma/scripts/bootstrap-bsc-pilot.ts",
     "bsc:reset": "ts-node --transpile-only prisma/scripts/reset-bsc.ts",
     "onboarding:bypass-seeded": "ts-node --transpile-only prisma/scripts/bypass-seeded-onboarding.ts",
