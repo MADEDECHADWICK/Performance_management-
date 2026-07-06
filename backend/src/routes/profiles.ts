@@ -40,6 +40,26 @@ const updateProfileValidators = [
     .optional()
     .isURL()
     .withMessage('profilePicture must be valid URL'),
+  body('positionTitle')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('positionTitle must not exceed 100 characters'),
+  body('hireDate')
+    .optional({ nullable: true })
+    .isISO8601()
+    .withMessage('hireDate must be a valid ISO date'),
+  body('departmentId')
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .toInt()
+    .withMessage('departmentId must be a positive integer'),
+  body('managerId')
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .toInt()
+    .withMessage('managerId must be a positive integer'),
   body('status')
     .optional()
     .isIn(['active', 'inactive', 'separated'])

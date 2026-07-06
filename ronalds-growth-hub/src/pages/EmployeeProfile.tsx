@@ -375,9 +375,10 @@ export default function EmployeeProfile() {
 
       console.log('Saving profile with data:', updateData);
 
-      const response = await apiFetch('PATCH', `/profiles/${profile.id}`, updateData);
+      const response = await apiFetch<EmployeeProfileRecord>('PATCH', `/profiles/${profile.id}`, updateData);
       
       console.log('Profile saved successfully:', response);
+      setProfile(response);
 
       toast({
         title: "Profile updated",
@@ -385,7 +386,7 @@ export default function EmployeeProfile() {
       });
       
       // Reload to get fresh data
-      loadProfile();
+      await loadProfile();
     } catch (error: unknown) {
       console.error('Save error:', error);
       toast({

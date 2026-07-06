@@ -26,6 +26,8 @@ interface UpdateProfileInput {
   lastName?: string;
   phoneNumber?: string;
   profilePicture?: string;
+  positionTitle?: string;
+  hireDate?: Date | string | null;
   departmentId?: number;
   managerId?: number | null;
   status?: 'active' | 'inactive' | 'separated';
@@ -248,10 +250,19 @@ export class ProfileService {
       canManageOrg &&
       ('departmentId' in input ||
         'managerId' in input ||
+        'positionTitle' in input ||
+        'hireDate' in input ||
         'status' in input ||
         'separationDate' in input)
     ) {
-      allowedFields.push('departmentId', 'managerId', 'status', 'separationDate');
+      allowedFields.push(
+        'departmentId',
+        'managerId',
+        'positionTitle',
+        'hireDate',
+        'status',
+        'separationDate'
+      );
     }
 
     const updateData: Record<string, any> = {};
@@ -261,6 +272,8 @@ export class ProfileService {
       if (value !== undefined) {
         if (field === 'status') {
           updateData.status = normalizedStatus;
+        } else if (field === 'hireDate' || field === 'separationDate') {
+          updateData[field] = value ? new Date(value) : null;
         } else {
           updateData[field] = value;
         }
