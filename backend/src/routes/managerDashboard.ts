@@ -1,11 +1,14 @@
 // This file defines the routes for the manager dashboard, providing endpoints for managers to view their team overview, job portfolio, approval chains, financial summaries, and performance evaluations. The routes are protected by authentication middleware and ensure that only users with appropriate managerial roles can access the data. The endpoints aggregate data from various sources to present a comprehensive dashboard experience for managers.
 
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { resolveRequestAccessRoles } from '../auth/accessRoles';
 import { getDashboardModuleCoverageSummary } from '../services/performanceFramework.service';
-import JobPerformanceFactsService from '../services/jobPerformanceFacts.service';
+import JobPerformanceFactsService, {
+  type JobPerformanceFactsScope,
+} from '../services/jobPerformanceFacts.service';
 import { logger, toLogContext } from '../lib/logger';
 
 const router = Router();
@@ -15,9 +18,55 @@ const allowedManagerRoles = new Set([
   'super_admin',
   'hr',
   'gmp',
+  'partner',
 ]);
 
 const buildTrackingPath = (jobId: number) => `/jobs/${jobId}/tracking`;
+const elevatedRoles = new Set(['super_admin', 'hr', 'gmp']);
+
+const shouldUsePartnerScope = (roles: string[]) =>
+  roles.includes('partner') && !roles.some((role) => elevatedRoles.has(role));
+
+type DashboardScope = {
+  workspace: 'manager' | 'partner';
+  factScope: JobPerformanceFactsScope;
+  teamWhere: Prisma.ProfileWhereInput;
+  jobWhere: Prisma.JobWhereInput;
+  frameworkModule: 'manager' | 'partner';
+};
+
+const getDashboardScope = async (
+  profileId: number,
+  roles: string[]
+): Promise<DashboardScope> => {
+  if (shouldUsePartnerScope(roles)) {
+    const departments = await prisma.department.findMany({
+      where: { partnerProfileId: profileId },
+      select: { id: true },
+    });
+    const departmentIds = departments.map((department) => department.id);
+
+    return {
+      workspace: 'partner' as const,
+      factScope: { type: 'partner', profileId } satisfies JobPerformanceFactsScope,
+      teamWhere: {
+        departmentId: { in: departmentIds },
+        status: 'active' as const,
+        NOT: { id: profileId },
+      },
+      jobWhere: { partnerProfileId: profileId },
+      frameworkModule: 'partner' as const,
+    };
+  }
+
+  return {
+    workspace: 'manager' as const,
+    factScope: { type: 'manager', profileId } satisfies JobPerformanceFactsScope,
+    teamWhere: { managerId: profileId, status: 'active' as const },
+    jobWhere: { managerProfileId: profileId },
+    frameworkModule: 'manager' as const,
+  };
+};
 
 const getManagerContext = async (req: AuthRequest) => {
   const userId = req.user?.userId;
@@ -57,9 +106,10 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const profileId = context.profile.id;
+    const scope = await getDashboardScope(profileId, context.roles || []);
 
     const teamMembers = await prisma.profile.findMany({
-      where: { managerId: profileId },
+      where: scope.teamWhere,
       include: {
         role: { select: { name: true } },
         department: { select: { name: true } },
@@ -74,8 +124,8 @@ router.get('/team', authMiddleware, async (req: AuthRequest, res) => {
     monthStart.setHours(0, 0, 0, 0);
 
     const [managerFacts, monthFacts] = await Promise.all([
-      JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId }),
-      JobPerformanceFactsService.listFacts({ dateFrom: monthStart }, { type: 'manager', profileId }),
+      JobPerformanceFactsService.listFacts({}, scope.factScope),
+      JobPerformanceFactsService.listFacts({ dateFrom: monthStart }, scope.factScope),
     ]);
     const teamMemberSet = new Set(teamMemberIds);
     const teamFacts = managerFacts.flatMap((fact) =>
@@ -180,9 +230,10 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const profileId = context.profile.id;
+    const scope = await getDashboardScope(profileId, context.roles || []);
 
     const jobs = await prisma.job.findMany({
-      where: { managerProfileId: profileId },
+      where: scope.jobWhere,
       include: {
         client: { select: { clientName: true } },
         department: { select: { name: true } },
@@ -202,7 +253,7 @@ router.get('/jobs', authMiddleware, async (req: AuthRequest, res) => {
 
     const jobIds = jobs.map((job) => job.id);
     const [facts, approvalGroups, overBudgetGroups, latestApprovalRows] = await Promise.all([
-      JobPerformanceFactsService.listFacts({ jobIds }, { type: 'manager', profileId }),
+      JobPerformanceFactsService.listFacts({ jobIds }, scope.factScope),
       prisma.timeEntryApprovalRequest.groupBy({
         by: ['jobId', 'status'],
         where: { jobId: { in: jobIds } },
@@ -609,6 +660,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const profileId = context.profile.id;
+    const scope = await getDashboardScope(profileId, context.roles || []);
 
     const sinceDate = new Date();
     sinceDate.setMonth(sinceDate.getMonth() - 12);
@@ -625,7 +677,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
         monthEnd.setMonth(monthEnd.getMonth() + 1);
         return JobPerformanceFactsService.listFacts(
           { dateFrom: monthStart, dateTo: monthEnd },
-          { type: 'manager', profileId }
+          scope.factScope
         );
       })
     );
@@ -647,7 +699,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
       })
       .sort((a, b) => (a.month < b.month ? 1 : -1));
 
-    const currentFacts = await JobPerformanceFactsService.listFacts({}, { type: 'manager', profileId });
+    const currentFacts = await JobPerformanceFactsService.listFacts({}, scope.factScope);
     const jobProfitability = currentFacts.map((fact) => ({
       jobId: fact.jobId,
       trackingPath: buildTrackingPath(fact.jobId),
@@ -663,7 +715,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
     }));
 
     const teamMembers = await prisma.profile.findMany({
-      where: { managerId: profileId, status: 'active' },
+      where: scope.teamWhere,
       include: { role: { select: { name: true } } },
     });
 
@@ -676,7 +728,7 @@ router.get('/financials', authMiddleware, async (req: AuthRequest, res) => {
     const contributionsMap = new Map<number, { revenue: number; totalHours: number; billableHours: number }>();
     const currentMonthFacts = await JobPerformanceFactsService.listFacts(
       { dateFrom: monthStart, dateTo: monthEnd },
-      { type: 'manager', profileId }
+      scope.factScope
     );
     currentMonthFacts.flatMap((fact) => fact.employees).forEach((entry) => {
       const current = contributionsMap.get(entry.employeeProfileId) || {
@@ -722,6 +774,12 @@ router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const profileId = context.profile.id;
+    const scope = await getDashboardScope(profileId, context.roles || []);
+    const teamMembers = await prisma.profile.findMany({
+      where: scope.teamWhere,
+      select: { id: true },
+    });
+    const teamMemberIds = teamMembers.map((member) => member.id);
 
     const pendingReviews = await prisma.evaluationAssignment.findMany({
       where: {
@@ -743,7 +801,7 @@ router.get('/evaluations', authMiddleware, async (req: AuthRequest, res) => {
 
     const recentPerformance = await prisma.performanceScore.findMany({
       where: {
-        employee: { managerId: profileId },
+        employeeProfileId: { in: teamMemberIds },
         calculatedAt: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
       },
       include: {
@@ -773,14 +831,15 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     const profileId = context.profile.id;
+    const scope = await getDashboardScope(profileId, context.roles || []);
 
     const teamSize = await prisma.profile.count({
-      where: { managerId: profileId, status: 'active' },
+      where: scope.teamWhere,
     });
 
     const activeJobs = await prisma.job.count({
       where: {
-        managerProfileId: profileId,
+        ...scope.jobWhere,
         status: { in: ['planned', 'in_progress', 'on_hold'] },
       },
     });
@@ -793,7 +852,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
 
     const monthFacts = await JobPerformanceFactsService.listFacts(
       { dateFrom: monthStart, dateTo: monthEnd },
-      { type: 'manager', profileId }
+      scope.factScope
     );
     const totalHours = monthFacts.reduce((sum, fact) => sum + fact.totalHours, 0);
     const billableHours = monthFacts.reduce((sum, fact) => sum + fact.billableHours, 0);
@@ -816,7 +875,7 @@ router.get('/overview', authMiddleware, async (req: AuthRequest, res) => {
       monthlyProfit,
       utilizationRate,
       pendingReviews,
-      framework: getDashboardModuleCoverageSummary("manager"),
+      framework: getDashboardModuleCoverageSummary(scope.frameworkModule),
     });
   } catch (error: any) {
     logger.error('manager_dashboard_overview_error', toLogContext(error));
