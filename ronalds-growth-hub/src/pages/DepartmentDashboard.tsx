@@ -185,7 +185,7 @@ const DepartmentDashboard = () => {
 
   const loadDepartments = async () => {
     try {
-      const data = await apiFetch<any[]>('GET', '/departments');
+      const data = await apiFetch<any[]>('GET', '/departments?page=1&pageSize=500');
       const rawList = normalizeArray(data);
       const list =
         isManager && managerDepartmentId
@@ -217,7 +217,7 @@ const DepartmentDashboard = () => {
   const loadAllDepartmentRankings = async () => {
     try {
       const [deptsResponse, financialRes, nonFinancialRes] = await Promise.all([
-        apiFetch<any[]>('GET', '/departments'),
+        apiFetch<any[]>('GET', '/departments?page=1&pageSize=500'),
         apiFetch<any[]>('GET', '/financial-summary/departments').catch(() => []),
         apiFetch<any>('GET', '/analytics/non-financial').catch(() => null),
       ]);
@@ -242,7 +242,15 @@ const DepartmentDashboard = () => {
         return {
           id: dept.id,
           name: deptName,
-          memberCount: toNumber(fin?.total_employees || non?.employeeCount),
+          memberCount: toNumber(
+            dept.employee_count ??
+              dept.employeeCount ??
+              dept._count?.profiles ??
+              dept.Count?.profiles ??
+              fin?.total_employees ??
+              fin?.totalEmployees ??
+              non?.employeeCount
+          ),
           avgFinancial: toNumber(fin?.revenue).toFixed(0),
           avgNonFinancial: toNumber(non?.avgScore).toFixed(1),
           overallScore: toNumber(non?.avgScore).toFixed(1),

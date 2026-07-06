@@ -343,11 +343,30 @@ export class DepartmentService {
         },
       ])
     );
+    const departmentIds = departments.map((dept) => dept.id);
+    const activeProfileCounts = departmentIds.length
+      ? await prisma.profile.groupBy({
+          by: ["departmentId"],
+          where: {
+            departmentId: { in: departmentIds },
+            status: "active" as const,
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const activeProfileCountMap = new Map(
+      activeProfileCounts
+        .filter((row) => typeof row.departmentId === "number")
+        .map((row) => [row.departmentId as number, row._count._all])
+    );
 
     const enriched = departments.map((dept) => {
       const partner = dept.partnerProfileId ? partnerMap.get(dept.partnerProfileId) : undefined;
+      const employeeCount = activeProfileCountMap.get(dept.id) ?? 0;
       return {
         ...dept,
+        employee_count: employeeCount,
+        employeeCount,
         partner: partner
           ? { id: partner.id, firstName: partner.firstName, lastName: partner.lastName }
           : undefined,
