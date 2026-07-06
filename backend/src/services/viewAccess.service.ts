@@ -101,6 +101,7 @@ const MARKETING_VIEW_KEYS = [
   "clients.engagement_letters",
   "clients.business_development",
   "clients.surveys",
+  "kpi.scorecard",
   "analytics.marketing",
 ] as const;
 
@@ -113,6 +114,7 @@ const FINANCE_VIEW_KEYS = [
   "finance.profitability",
   "finance.allocations",
   "finance.invoices",
+  "kpi.scorecard",
   "analytics.finance",
 ] as const;
 
@@ -231,6 +233,7 @@ const HR_VIEW_KEYS = [
 const EMPLOYEE_VIEW_KEYS = [
   "dashboard.employee",
   "jobs.workflow",
+  "kpi.scorecard",
   "finance.summary",
   "reports.workspace",
   "analytics.employee",

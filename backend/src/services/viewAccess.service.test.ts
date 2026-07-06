@@ -58,4 +58,10 @@ describe("viewAccess.service", () => {
       ])
     ).toBe("dashboard.finance");
   });
+
+  it("exposes the BSC/KPI scorecard to scoped contributor roles by default", () => {
+    expect(getDefaultRoleViewEntitlements("finance")).toContain("kpi.scorecard");
+    expect(getDefaultRoleViewEntitlements("marketing")).toContain("kpi.scorecard");
+    expect(getDefaultRoleViewEntitlements("employee")).toContain("kpi.scorecard");
+  });
 });

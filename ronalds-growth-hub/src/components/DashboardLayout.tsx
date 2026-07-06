@@ -494,6 +494,7 @@ function AppSidebar({
                 path="/bsc-management"
                 icon={Target}
                 label="BSC & KPIs"
+                viewKey="kpi.scorecard"
               />
               <NavItem
                 path="/kpi-scorecard"
