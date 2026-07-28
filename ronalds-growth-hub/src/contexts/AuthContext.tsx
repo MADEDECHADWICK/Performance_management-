@@ -239,6 +239,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const normalizedAction = toModuleAction(action);
       const allowedActions = moduleAccessMatrix[normalizedModuleKey] || [];
 
+      if (normalizedModuleKey === "proposals") {
+        const proposalRoles: CanonicalRole[] = [
+          "super_admin",
+          "hr",
+          "gmp",
+          "partner",
+          "manager",
+          "marketing",
+          "employee",
+        ];
+        if (proposalRoles.some((role) => canonicalRoles.includes(role))) {
+          return true;
+        }
+      }
+
       if (allowedActions.includes('admin')) return true;
       if (allowedActions.includes(normalizedAction)) return true;
 
@@ -252,13 +267,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return false;
     },
-    [moduleAccessMatrix]
+    [canonicalRoles, moduleAccessMatrix]
   );
 
   const hasViewAccess = useCallback(
     (viewKey: string): boolean => {
       const normalizedViewKey = String(viewKey || "").toLowerCase().trim();
       if (!normalizedViewKey) return false;
+
+      if (
+        normalizedViewKey === "proposals.my" &&
+        canonicalRoles.some((role) =>
+          ["super_admin", "hr", "gmp", "partner", "manager", "marketing", "employee"].includes(role)
+        )
+      ) {
+        return true;
+      }
+
+      if (
+        normalizedViewKey === "clients.business_development" &&
+        canonicalRoles.some((role) =>
+          ["super_admin", "hr", "gmp", "partner", "manager", "marketing"].includes(role)
+        )
+      ) {
+        return true;
+      }
+
       if (!viewAccessSet.has(normalizedViewKey)) return false;
 
       const viewDefinition = getViewPermissionDefinition(normalizedViewKey);
@@ -274,7 +308,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         hasModuleAccess(fallback.moduleKey, fallback.action || requiredAction)
       );
     },
-    [hasModuleAccess, viewAccessSet]
+    [canonicalRoles, hasModuleAccess, viewAccessSet]
   );
 
   const hasPermission = useCallback((permission: string): boolean => {

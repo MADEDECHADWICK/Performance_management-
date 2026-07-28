@@ -651,7 +651,8 @@ export interface JobWorkflowTrackingResponse {
 // Time Entry Models
 export interface TimeEntry {
   id: number;
-  jobId: number;
+  jobId: number | null;
+  proposalId?: number | null;
   employeeProfileId: number;
   taskId?: number;
   date: string;
@@ -673,7 +674,13 @@ export interface TimeEntry {
   createdAt: string;
   updatedAt: string;
   // Relations
-  job?: Job;
+  job?: Job | null;
+  proposal?: {
+    id: number;
+    proposalTitle: string;
+    clientName?: string | null;
+    client?: { id: number; clientName: string } | null;
+  } | null;
   employee?: Profile;
   task?: Task;
   approvedBy?: Profile;

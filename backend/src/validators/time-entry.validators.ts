@@ -43,7 +43,7 @@ export const getWeeklySummaryValidators = [
 /**
  * POST /time-entries
  * Body:
- * - jobId (required)
+ * - jobId or proposalId (required)
  * - taskId (optional)
  * - dateWorked (required ISO8601 date)
  * - Either:
@@ -57,7 +57,9 @@ export const getWeeklySummaryValidators = [
  * - employeeProfileId MUST NOT be in body; server uses req.user.profileId
  */
 export const createTimeEntryValidators = [
-  body("jobId").isInt({ min: 1 }).withMessage("Valid jobId (integer) required"),
+  body("jobId").optional({ nullable: true }).isInt({ min: 1 }).withMessage("Valid jobId required if provided"),
+
+  body("proposalId").optional({ nullable: true }).isInt({ min: 1 }).withMessage("Valid proposalId required if provided"),
 
   body("taskId").optional({ nullable: true }).isInt({ min: 1 }).withMessage("Valid taskId required if provided"),
 
@@ -96,6 +98,25 @@ export const createTimeEntryValidators = [
     .withMessage("Description must be 1-2000 characters if provided"),
 
   // Enforce: hours OR (startedAt & endedAt)
+  body().custom((value) => {
+    const hasJob = value.jobId !== undefined && value.jobId !== null && value.jobId !== "";
+    const hasProposal = value.proposalId !== undefined && value.proposalId !== null && value.proposalId !== "";
+
+    if (hasJob && hasProposal) {
+      throw new Error("Provide either jobId or proposalId, not both");
+    }
+
+    if (!hasJob && !hasProposal) {
+      throw new Error("Provide either jobId or proposalId");
+    }
+
+    if (hasProposal && value.taskId) {
+      throw new Error("taskId is only valid for job time entries");
+    }
+
+    return true;
+  }),
+
   body().custom((value) => {
     const hasHours = value.hours !== undefined && value.hours !== null && value.hours !== "";
     const hasStarted = value.startedAt !== undefined && value.startedAt !== null && value.startedAt !== "";

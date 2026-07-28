@@ -1,118 +1,127 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { proposalsAPI, clientsAPI, documentsAPI, surveysAPI } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { proposalsAPI } from "@/lib/api";
 import type {
   CreateProposalPayload,
   Proposal,
+  ProposalStatus,
   UpdateProposalPayload,
 } from "@/lib/api/proposals";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Plus, Target, TrendingUp, DollarSign, Zap, Paperclip } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Check, ExternalLink, Plus, Search, Send, X } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   sent: "Sent",
+  submitted_to_manager: "Manager review",
+  manager_changes_requested: "Changes requested",
+  manager_rejected: "Rejected",
+  manager_approved: "Manager approved",
+  assigned_to_bd: "With BD",
+  bd_in_progress: "BD editing",
+  bd_changes_requested: "BD changes",
+  ready_for_client_submission: "Ready",
+  submitted_to_client: "Submitted",
   won: "Won",
   lost: "Lost",
+  cancelled: "Cancelled",
 };
 
 const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "secondary",
-  sent: "outline",
+  submitted_to_manager: "outline",
+  manager_changes_requested: "outline",
+  manager_rejected: "destructive",
+  manager_approved: "default",
+  assigned_to_bd: "default",
+  bd_in_progress: "outline",
+  ready_for_client_submission: "default",
+  submitted_to_client: "secondary",
   won: "default",
   lost: "destructive",
+  cancelled: "destructive",
 };
 
-const SERVICE_TYPES = [
-  "Audit",
-  "Tax Advisory",
-  "Financial Consulting",
-  "Due Diligence",
-  "Risk Assessment",
-  "Advisory",
-];
-
-type ClientOption = {
-  id: number;
-  clientName: string;
-  industry?: string | null;
-};
-
-type SurveyStatusRecord = {
-  clientId?: number | null;
-  completedAt?: string | null;
-};
-
-type ProposalCreateResponse = Proposal | { data?: Proposal };
+const PROPOSAL_TYPES = ["proposal", "tender", "eoi", "quotation", "prequalification"];
 
 type ProposalFormState = {
   clientId: string;
+  clientName: string;
   proposalTitle: string;
-  serviceType: string;
+  proposalType: string;
+  requestedService: string;
   proposedFee: string;
-  proposalDate: string;
-  expectedStart: string;
-  probability: string;
-  status: Proposal["status"];
+  currency: string;
+  sourceName: string;
+  departmentId: string;
+  assignedPartnerProfileId: string;
+  managerProfileId: string;
+  deadlineDate: string;
+  employeeDraftLink: string;
+  notes: string;
 };
 
-const getErrorMessage = (error: unknown, fallback: string) => {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  if (
-    error &&
-    typeof error === "object" &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return String((error as { message?: string }).message);
-  }
-  return fallback;
+const emptyForm: ProposalFormState = {
+  clientId: "",
+  clientName: "",
+  proposalTitle: "",
+  proposalType: "proposal",
+  requestedService: "",
+  proposedFee: "",
+  currency: "KES",
+  sourceName: "",
+  departmentId: "",
+  assignedPartnerProfileId: "",
+  managerProfileId: "",
+  deadlineDate: "",
+  employeeDraftLink: "",
+  notes: "",
 };
 
-const getCreatedProposal = (payload: ProposalCreateResponse): Proposal | null => {
-  if ("id" in payload) {
-    return payload;
-  }
-  return payload.data ?? null;
-};
+const getName = (person?: { firstName?: string; lastName?: string } | null) =>
+  person ? `${person.firstName || ""} ${person.lastName || ""}`.trim() : "";
+
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error && error.message ? error.message : fallback;
+
+const unwrapProposal = (payload: Proposal | { data?: Proposal }) =>
+  "id" in payload ? payload : payload.data;
 
 export default function BusinessDevelopment() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isAdmin, isHR, isGMP, isManager, isPartner, isMarketing } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [lostReasonDrafts, setLostReasonDrafts] = useState<Record<number, string>>({});
-  const [lostReasonEditingId, setLostReasonEditingId] = useState<number | null>(null);
-  const [proposalAttachment, setProposalAttachment] = useState<File | null>(null);
-  const [attachingProposalId, setAttachingProposalId] = useState<number | null>(null);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<number[]>([]);
+  const [teamMemberSearch, setTeamMemberSearch] = useState("");
+  const [bdDrafts, setBdDrafts] = useState<Record<number, Partial<UpdateProposalPayload>>>({});
+  const [form, setForm] = useState<ProposalFormState>(emptyForm);
 
-  const [proposalForm, setProposalForm] = useState<ProposalFormState>({
-    clientId: "",
-    proposalTitle: "",
-    serviceType: "",
-    proposedFee: "",
-    proposalDate: "",
-    expectedStart: "",
-    probability: "50",
-    status: "sent",
-  });
+  const canManagerReview = isAdmin || isHR || isGMP || isManager || isPartner;
+  const canBdFinalize = isAdmin || isHR || isGMP || isMarketing;
 
   const { data: metrics } = useQuery({
     queryKey: ["proposal-metrics"],
     queryFn: () => proposalsAPI.metrics(),
+  });
+
+  const { data: context } = useQuery({
+    queryKey: ["proposal-context"],
+    queryFn: () => proposalsAPI.context(),
   });
 
   const { data: proposalsData, isLoading } = useQuery({
@@ -126,654 +135,467 @@ export default function BusinessDevelopment() {
       }),
   });
 
-  const { data: clientsData } = useQuery({
-    queryKey: ["clients", "pipeline"],
-    queryFn: () => clientsAPI.list({ page: 1, pageSize: 200 }),
-  });
+  const proposals = useMemo(() => proposalsData?.data || [], [proposalsData]);
+  const profiles = context?.profiles || [];
+  const departments = context?.departments || [];
+  const clients = context?.clients || [];
+  const selectedDepartmentId = form.departmentId ? Number(form.departmentId) : null;
+  const selectedDepartment = departments.find((department) => department.id === selectedDepartmentId);
 
-  const { data: pendingSurveyData } = useQuery({
-    queryKey: ["surveys", "pending"],
-    queryFn: () => surveysAPI.getPending(),
+  const profileHasRole = (profile: typeof profiles[number], roles: string[]) => {
+    const roleSet = new Set(
+      (profile.user?.roles || []).map((entry) => String(entry.role.name || "").toLowerCase())
+    );
+    return roles.some((role) => roleSet.has(role));
+  };
+  const isDepartmentProfile = (profile: typeof profiles[number]) =>
+    !selectedDepartmentId || profile.departmentId === selectedDepartmentId;
+  const managerOptions = profiles.filter((profile) => {
+    const isManager = profileHasRole(profile, ["manager"]) || profile.id === selectedDepartment?.departmentHeadId;
+    return isManager && isDepartmentProfile(profile);
   });
-
-  const { data: completedSurveyData } = useQuery({
-    queryKey: ["surveys", "completed"],
-    queryFn: () => surveysAPI.getCompleted(),
+  const partnerOptions = profiles.filter((profile) => {
+    const isPartner = !!profile.isPartner || profileHasRole(profile, ["partner"]);
+    const ownsSelectedDepartment = selectedDepartment?.partnerProfileId === profile.id;
+    return isPartner && (!selectedDepartmentId || profile.departmentId === selectedDepartmentId || ownsSelectedDepartment);
   });
-
-  const proposals = useMemo<Proposal[]>(
-    () => (Array.isArray(proposalsData?.data) ? proposalsData.data : []),
-    [proposalsData]
-  );
-  const clients = useMemo<ClientOption[]>(
-    () => (Array.isArray(clientsData?.data) ? clientsData.data : []),
-    [clientsData]
-  );
-  const pendingSurveys = useMemo<SurveyStatusRecord[]>(
-    () => (Array.isArray(pendingSurveyData?.surveys) ? pendingSurveyData.surveys : []),
-    [pendingSurveyData]
-  );
-  const completedSurveys = useMemo(
-    () => (Array.isArray(completedSurveyData?.surveys) ? completedSurveyData.surveys : []),
-    [completedSurveyData]
-  );
+  const visibleTeamMembers = useMemo(() => {
+    const query = teamMemberSearch.trim().toLowerCase();
+    return profiles.filter((profile) => {
+      if (!query) return true;
+      const haystack = `${getName(profile)} ${profile.positionTitle || ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [profiles, teamMemberSearch]);
+  const handleDepartmentChange = (departmentId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      departmentId,
+      assignedPartnerProfileId: "",
+      managerProfileId: "",
+    }));
+  };
+  const requiresManagerReviewRouting = !canBdFinalize;
+  const canSubmitProposal =
+    !!form.proposalTitle.trim() &&
+    !!form.requestedService.trim() &&
+    (!!form.clientId || !!form.clientName.trim()) &&
+    (!requiresManagerReviewRouting ||
+      (!!form.departmentId && !!form.assignedPartnerProfileId && !!form.managerProfileId));
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      if (!proposalAttachment) {
-        throw new Error("Proposal document is required before submission.");
-      }
-
       const payload: CreateProposalPayload = {
-        clientId: Number(proposalForm.clientId),
-        proposalTitle: proposalForm.proposalTitle,
-        serviceType: proposalForm.serviceType,
-        proposedFee: Number(proposalForm.proposedFee),
-        proposalDate: proposalForm.proposalDate,
-        expectedStart: proposalForm.expectedStart || undefined,
-        probability: Number(proposalForm.probability),
-        status: proposalForm.status,
+        clientId: form.clientId ? Number(form.clientId) : null,
+        clientName: form.clientId ? undefined : form.clientName,
+        proposalTitle: form.proposalTitle,
+        proposalType: form.proposalType,
+        requestedService: form.requestedService,
+        serviceType: form.requestedService,
+        proposedFee: Number(form.proposedFee || 0),
+        currency: form.currency,
+        sourceName: form.sourceName,
+        departmentId: form.departmentId ? Number(form.departmentId) : null,
+        assignedPartnerProfileId: form.assignedPartnerProfileId ? Number(form.assignedPartnerProfileId) : null,
+        managerProfileId: form.managerProfileId ? Number(form.managerProfileId) : null,
+        deadlineDate: form.deadlineDate || undefined,
+        employeeDraftLink: canBdFinalize ? form.employeeDraftLink || undefined : undefined,
+        notes: form.notes || undefined,
+        teamMemberProfileIds: selectedTeamIds,
+        submitToManager: true,
       };
-
       const created = await proposalsAPI.create(payload);
-
-      const proposal = getCreatedProposal(created);
-      if (proposalAttachment && proposal?.id) {
-        try {
-          await documentsAPI.uploadFile(proposalAttachment, {
-            documentType: "proposal",
-            entityType: "Proposal",
-            entityId: proposal.id,
-            accessLevel: "hr",
-            isRequired: true,
-            description: `Proposal attachment for ${proposal.proposalTitle}`,
-          });
-        } catch (uploadError: unknown) {
-          toast({
-            title: "Proposal saved, attachment failed",
-            description: getErrorMessage(uploadError, "Could not upload proposal attachment."),
-            variant: "destructive",
-          });
-        }
-      }
-      return created;
+      return unwrapProposal(created);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["proposals"] });
       queryClient.invalidateQueries({ queryKey: ["proposal-metrics"] });
-      toast({ title: "Proposal created", description: "Pipeline updated successfully." });
+      toast({ title: "Proposal request created", description: "It is now in manager review." });
       setDialogOpen(false);
-      setProposalForm({
-        clientId: "",
-        proposalTitle: "",
-        serviceType: "",
-        proposedFee: "",
-        proposalDate: "",
-        expectedStart: "",
-        probability: "50",
-        status: "sent",
-      });
-      setProposalAttachment(null);
+      setForm(emptyForm);
+      setSelectedTeamIds([]);
+      setTeamMemberSearch("");
     },
-    onError: (error: unknown) => {
+    onError: (error) =>
       toast({
-        title: "Error",
+        title: "Proposal not saved",
         description: getErrorMessage(error, "Failed to create proposal"),
         variant: "destructive",
-      });
-    },
+      }),
   });
 
-  const updateMutation = useMutation({
+  const managerMutation = useMutation({
+    mutationFn: ({ id, decision }: { id: number; decision: "approve" | "reject" | "changes_requested" }) =>
+      proposalsAPI.managerDecision(id, { decision }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
+      toast({ title: "Manager decision saved" });
+    },
+    onError: (error) =>
+      toast({
+        title: "Decision failed",
+        description: getErrorMessage(error, "Could not save manager decision"),
+        variant: "destructive",
+      }),
+  });
+
+  const teamMemberMutation = useMutation({
     mutationFn: ({
-      id,
+      proposalId,
+      teamMemberId,
       status,
-      lostReason,
     }: {
-      id: number;
-      status: Proposal["status"];
-      lostReason?: string;
-    }) =>
-      proposalsAPI.update(id, { status, lostReason } satisfies UpdateProposalPayload),
+      proposalId: number;
+      teamMemberId: number;
+      status: "approved" | "rejected";
+    }) => proposalsAPI.updateTeamMember(proposalId, teamMemberId, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
+      toast({ title: "Team member decision saved" });
+    },
+    onError: (error) =>
+      toast({
+        title: "Team member update failed",
+        description: getErrorMessage(error, "Could not update proposal team member"),
+        variant: "destructive",
+      }),
+  });
+
+  const bdMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: UpdateProposalPayload }) =>
+      proposalsAPI.updateBd(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["proposals"] });
       queryClient.invalidateQueries({ queryKey: ["proposal-metrics"] });
-      toast({ title: "Proposal updated", description: "Pipeline status refreshed." });
+      toast({ title: "BD details saved" });
     },
-    onError: (error: unknown) => {
+    onError: (error) =>
       toast({
-        title: "Error",
-        description: getErrorMessage(error, "Failed to update proposal"),
+        title: "BD update failed",
+        description: getErrorMessage(error, "Could not update proposal"),
         variant: "destructive",
-      });
-    },
+      }),
   });
 
-  const sendSurveyMutation = useMutation({
-    mutationFn: (clientId: number) => surveysAPI.create({ clientId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["surveys", "pending"] });
-      queryClient.invalidateQueries({ queryKey: ["surveys", "completed"] });
-      queryClient.invalidateQueries({ queryKey: ["survey-analytics"] });
-      toast({ title: "Survey routed", description: "Client survey has been queued." });
-    },
-    onError: (error: unknown) => {
-      toast({
-        title: "Survey failed",
-        description: getErrorMessage(error, "Could not send client survey."),
-        variant: "destructive",
-      });
-    },
-  });
-
-  const pipelineValue = metrics?.pipelineValue || 0;
-  const conversionRate = metrics?.conversionRate || 0;
-  const avgDealSize = metrics?.avgDealSize || 0;
-  const hotLeads = metrics?.hotLeads || 0;
-
-  const filteredProposals = useMemo(() => proposals, [proposals]);
-
-  const getSurveyRoutingStatus = (proposal: Proposal) => {
-    const clientId = proposal?.clientId || proposal?.client?.id;
-    if (!clientId) return "not_sent";
-    const hasCompleted = completedSurveys.some((survey) => survey.clientId === clientId);
-    if (hasCompleted) return "received";
-    const hasPending = pendingSurveys.some((survey) => survey.clientId === clientId);
-    if (hasPending) return "pending";
-    return "not_sent";
-  };
-
-  const handleAttachProposalFile = async (proposal: Proposal, file: File | null) => {
-    if (!file || !proposal?.id) return;
-    setAttachingProposalId(proposal.id);
-    try {
-      await documentsAPI.uploadFile(file, {
-        documentType: "proposal",
-        entityType: "Proposal",
-        entityId: proposal.id,
-        accessLevel: "hr",
-        isRequired: false,
-        description: `Proposal attachment for ${proposal.proposalTitle}`,
-      });
-      toast({ title: "Attachment uploaded", description: "Proposal file saved." });
-    } catch (error: unknown) {
-      toast({
-        title: "Attachment failed",
-        description: getErrorMessage(error, "Could not upload proposal attachment."),
-        variant: "destructive",
-      });
-    } finally {
-      setAttachingProposalId(null);
-    }
+  const setBdField = (proposalId: number, patch: Partial<UpdateProposalPayload>) => {
+    setBdDrafts((current) => ({
+      ...current,
+      [proposalId]: { ...current[proposalId], ...patch },
+    }));
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-3xl font-bold text-foreground">Business Development</h2>
-            <p className="text-muted-foreground">Track proposals and pipeline performance.</p>
+            <p className="text-muted-foreground">
+              Proposal requests, manager approval, BD finalization, and client submission tracking.
+            </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="mr-2 h-4 w-4" />
                 New Proposal
               </Button>
             </DialogTrigger>
-            <DialogContent className="w-[92vw] max-w-[480px] max-h-[82vh] overflow-y-auto">
+            <DialogContent className="w-[94vw] max-w-4xl max-h-[86vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Create Proposal</DialogTitle>
-                <DialogDescription>Log a new business development opportunity.</DialogDescription>
+                <DialogTitle>Create Proposal Request</DialogTitle>
+                <DialogDescription>Store Google Workspace links only. Documents are not uploaded here.</DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Client</Label>
-                    <Select
-                      value={proposalForm.clientId}
-                      onValueChange={(value) =>
-                        setProposalForm((prev) => ({ ...prev, clientId: value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select client" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {clients.map((client) => (
-                          <SelectItem key={client.id} value={String(client.id)}>
-                            {client.clientName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Proposal Title</Label>
-                    <Input
-                      value={proposalForm.proposalTitle}
-                      onChange={(event) =>
-                        setProposalForm((prev) => ({ ...prev, proposalTitle: event.target.value }))
-                      }
-                      placeholder="Annual Audit 2026"
-                    />
-                  </div>
+              <div className="grid gap-4 py-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Existing client</Label>
+                  <Select value={form.clientId} onValueChange={(clientId) => setForm((prev) => ({ ...prev, clientId }))}>
+                    <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={String(client.id)}>{client.clientName}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Service Type</Label>
-                    <Select
-                      value={proposalForm.serviceType}
-                      onValueChange={(value) =>
-                        setProposalForm((prev) => ({ ...prev, serviceType: value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select service" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SERVICE_TYPES.map((service) => (
-                          <SelectItem key={service} value={service}>
-                            {service}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Proposed Fee (KES)</Label>
-                    <Input
-                      type="number"
-                      value={proposalForm.proposedFee}
-                      onChange={(event) =>
-                        setProposalForm((prev) => ({ ...prev, proposedFee: event.target.value }))
-                      }
-                      placeholder="100000"
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label>Client name</Label>
+                  <Input value={form.clientName} onChange={(event) => setForm((prev) => ({ ...prev, clientName: event.target.value }))} disabled={!!form.clientId} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Proposal Date</Label>
-                    <Input
-                      type="date"
-                      value={proposalForm.proposalDate}
-                      onChange={(event) =>
-                        setProposalForm((prev) => ({ ...prev, proposalDate: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Expected Start</Label>
-                    <Input
-                      type="date"
-                      value={proposalForm.expectedStart}
-                      onChange={(event) =>
-                        setProposalForm((prev) => ({ ...prev, expectedStart: event.target.value }))
-                      }
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label>Proposal title</Label>
+                  <Input value={form.proposalTitle} onChange={(event) => setForm((prev) => ({ ...prev, proposalTitle: event.target.value }))} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Proposal type</Label>
+                  <Select value={form.proposalType} onValueChange={(proposalType) => setForm((prev) => ({ ...prev, proposalType }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PROPOSAL_TYPES.map((type) => <SelectItem key={type} value={type}>{type.toUpperCase()}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Requested service</Label>
+                  <Input value={form.requestedService} onChange={(event) => setForm((prev) => ({ ...prev, requestedService: event.target.value }))} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
-                    <Label>Probability (%)</Label>
-                    <Input
-                      type="number"
-                      value={proposalForm.probability}
-                      onChange={(event) =>
-                        setProposalForm((prev) => ({ ...prev, probability: event.target.value }))
-                      }
-                    />
+                    <Label>Currency</Label>
+                    <Input value={form.currency} onChange={(event) => setForm((prev) => ({ ...prev, currency: event.target.value }))} />
                   </div>
                   <div className="space-y-2">
-                    <Label>Status</Label>
-                    <Select
-                      value={proposalForm.status}
-                      onValueChange={(value) =>
-                        setProposalForm((prev) => ({
-                          ...prev,
-                          status: value as Proposal["status"],
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="draft">Draft</SelectItem>
-                        <SelectItem value="sent">Sent</SelectItem>
-                        <SelectItem value="won">Won</SelectItem>
-                        <SelectItem value="lost">Lost</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>Value</Label>
+                    <Input type="number" value={form.proposedFee} onChange={(event) => setForm((prev) => ({ ...prev, proposedFee: event.target.value }))} />
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Proposal Attachment *</Label>
-                  <Input
-                    type="file"
-                    accept=".pdf,.doc,.docx"
-                    required
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] || null;
-                      setProposalAttachment(file);
-                    }}
-                  />
-                  {proposalAttachment ? (
-                    <p className="text-xs text-muted-foreground">
-                      Selected: {proposalAttachment.name}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Upload the proposal document (required).
-                    </p>
+                  <Label>Source</Label>
+                  <Input value={form.sourceName} onChange={(event) => setForm((prev) => ({ ...prev, sourceName: event.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Deadline</Label>
+                  <Input type="date" value={form.deadlineDate} onChange={(event) => setForm((prev) => ({ ...prev, deadlineDate: event.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Department{requiresManagerReviewRouting ? " *" : ""}</Label>
+                  <Select value={form.departmentId} onValueChange={handleDepartmentChange}>
+                    <SelectTrigger><SelectValue placeholder="Select department" /></SelectTrigger>
+                    <SelectContent>
+                      {departments.map((department) => <SelectItem key={department.id} value={String(department.id)}>{department.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Partner in charge{requiresManagerReviewRouting ? " *" : ""}</Label>
+                  <Select value={form.assignedPartnerProfileId} onValueChange={(assignedPartnerProfileId) => setForm((prev) => ({ ...prev, assignedPartnerProfileId }))}>
+                    <SelectTrigger><SelectValue placeholder="Select partner" /></SelectTrigger>
+                    <SelectContent>
+                      {partnerOptions.map((profile) => <SelectItem key={profile.id} value={String(profile.id)}>{getName(profile)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {selectedDepartmentId && partnerOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No partner is assigned to this department yet.</p>
                   )}
                 </div>
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={() => createMutation.mutate()}
-                    disabled={createMutation.isPending || !proposalAttachment}
-                  >
-                    {createMutation.isPending ? "Saving..." : "Create Proposal"}
-                  </Button>
+                <div className="space-y-2">
+                  <Label>Manager in charge{requiresManagerReviewRouting ? " *" : ""}</Label>
+                  <Select value={form.managerProfileId} onValueChange={(managerProfileId) => setForm((prev) => ({ ...prev, managerProfileId }))}>
+                    <SelectTrigger><SelectValue placeholder="Select manager" /></SelectTrigger>
+                    <SelectContent>
+                      {managerOptions.map((profile) => <SelectItem key={profile.id} value={String(profile.id)}>{getName(profile)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {selectedDepartmentId && managerOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No manager is assigned to this department yet.</p>
+                  )}
                 </div>
+                {canBdFinalize && (
+                  <div className="space-y-2">
+                    <Label>Employee draft Google link</Label>
+                    <Input value={form.employeeDraftLink} onChange={(event) => setForm((prev) => ({ ...prev, employeeDraftLink: event.target.value }))} placeholder="https://docs.google.com/..." />
+                  </div>
+                )}
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Team members</Label>
+                  <Input
+                    value={teamMemberSearch}
+                    onChange={(event) => setTeamMemberSearch(event.target.value)}
+                    placeholder="Search employees by name or position"
+                    className="h-9"
+                  />
+                  <div className="grid max-h-44 gap-2 overflow-y-auto rounded-md border p-3 md:grid-cols-3">
+                    {visibleTeamMembers.map((profile) => {
+                      const checked = selectedTeamIds.includes(profile.id);
+                      return (
+                        <label key={profile.id} className="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) =>
+                              setSelectedTeamIds((current) =>
+                                value ? [...current, profile.id] : current.filter((id) => id !== profile.id)
+                              )
+                            }
+                          />
+                          <span>{getName(profile)}</span>
+                        </label>
+                      );
+                    })}
+                    {visibleTeamMembers.length === 0 && (
+                      <p className="text-sm text-muted-foreground md:col-span-3">No employees match your search.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Notes</Label>
+                  <Textarea value={form.notes} onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+                <Button onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !canSubmitProposal}>
+                  {createMutation.isPending ? "Saving..." : "Submit to Manager"}
+                </Button>
               </div>
             </DialogContent>
           </Dialog>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pipeline Value</CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">KES {(pipelineValue / 1000000).toFixed(2)}M</div>
-              <p className="text-xs text-muted-foreground">Open proposals</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Conversion Rate</CardTitle>
-              <Target className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{conversionRate.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground">Won vs lost</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Avg Deal Size</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">KES {(avgDealSize / 1000).toFixed(0)}K</div>
-              <p className="text-xs text-muted-foreground">Average proposal</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Hot Leads</CardTitle>
-              <Zap className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{hotLeads}</div>
-              <p className="text-xs text-muted-foreground">70%+ probability</p>
-            </CardContent>
-          </Card>
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card><CardHeader><CardTitle className="text-sm">Pipeline Value</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">KES {Number(metrics?.pipelineValue || 0).toLocaleString()}</div></CardContent></Card>
+          <Card><CardHeader><CardTitle className="text-sm">Weighted Pipeline</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">KES {Number(metrics?.weightedPipelineValue || 0).toLocaleString()}</div></CardContent></Card>
+          <Card><CardHeader><CardTitle className="text-sm">Conversion</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{Number(metrics?.conversionRate || 0).toFixed(1)}%</div></CardContent></Card>
+          <Card><CardHeader><CardTitle className="text-sm">Hot Leads</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{metrics?.hotLeads || 0}</div></CardContent></Card>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Pipeline</CardTitle>
-            <CardDescription>Proposals awaiting conversion to jobs.</CardDescription>
+            <CardTitle>Proposal Workflow</CardTitle>
+            <CardDescription>Manager approval controls whether proposal time can be logged.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col md:flex-row gap-4 mb-4">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search proposals or clients..."
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  className="pl-9"
-                />
+                <Input className="pl-9" placeholder="Search proposals or clients" value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} />
               </div>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-48">
-                  <SelectValue placeholder="Filter by status" />
-                </SelectTrigger>
+                <SelectTrigger className="md:w-64"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="sent">Sent</SelectItem>
-                  <SelectItem value="won">Won</SelectItem>
-                  <SelectItem value="lost">Lost</SelectItem>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  {Object.keys(STATUS_LABELS).map((status) => <SelectItem key={status} value={status}>{STATUS_LABELS[status]}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
-
             {isLoading ? (
               <div className="py-10 text-center text-muted-foreground">Loading proposals...</div>
-            ) : filteredProposals.length === 0 ? (
+            ) : proposals.length === 0 ? (
               <div className="py-10 text-center text-muted-foreground">No proposals found.</div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Client</TableHead>
                     <TableHead>Proposal</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead className="text-right">Probability</TableHead>
-                    <TableHead>Proposal Date</TableHead>
+                    <TableHead>Ownership</TableHead>
+                    <TableHead>Team</TableHead>
+                    <TableHead>Links</TableHead>
+                    <TableHead>BD Finalization</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredProposals.map((proposal) => (
-                    <TableRow key={proposal.id}>
-                      <TableCell>
-                        <div className="font-medium">{proposal.client?.clientName}</div>
-                        <div className="text-xs text-muted-foreground">{proposal.client?.industry || ""}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{proposal.proposalTitle}</div>
-                        <div className="text-xs text-muted-foreground">{proposal.serviceType}</div>
-                        <div className="mt-2 space-y-1">
-                          <label
-                            htmlFor={`proposal-attach-${proposal.id}`}
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline cursor-pointer"
-                          >
-                            <Paperclip className="h-3 w-3" />
-                            {attachingProposalId === proposal.id ? "Uploading..." : "Attach file"}
-                          </label>
-                          <input
-                            id={`proposal-attach-${proposal.id}`}
-                            type="file"
-                            accept=".pdf,.doc,.docx"
-                            className="hidden"
-                            onChange={(event) => {
-                              const file = event.target.files?.[0] || null;
-                              handleAttachProposalFile(proposal, file);
-                              event.currentTarget.value = "";
-                            }}
-                          />
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-2">
-                          <Badge variant={STATUS_VARIANTS[proposal.status] || "outline"}>
-                            {STATUS_LABELS[proposal.status] || proposal.status}
-                          </Badge>
-                        <Select
-                          value={proposal.status}
-                          onValueChange={(value) => {
-                            if (value === proposal.status) return;
-                            if (value === "lost") {
-                              updateMutation.mutate({
-                                id: proposal.id,
-                                status: value as Proposal["status"],
-                              });
-                              setLostReasonEditingId(proposal.id);
-                              setLostReasonDrafts((prev) => ({
-                                ...prev,
-                                [proposal.id]: proposal.lostReason || "",
-                              }));
-                            } else {
-                              updateMutation.mutate({
-                                id: proposal.id,
-                                status: value as Proposal["status"],
-                              });
-                            }
-                          }}
-                        >
-                            <SelectTrigger className="w-32">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="draft">Draft</SelectItem>
-                              <SelectItem value="sent">Sent</SelectItem>
-                              <SelectItem value="won">Won</SelectItem>
-                              <SelectItem value="lost">Lost</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          {proposal.status === "won" && (
-                            <Link
-                              to="/client-onboarding-queue"
-                              className="text-xs text-primary hover:underline text-left"
-                            >
-                              View onboarding queue
-                            </Link>
-                          )}
-                          {proposal.status === "won" && (
-                            <Link
-                              to={`/client-surveys?clientId=${proposal.clientId || proposal.client?.id || ""}`}
-                              className="inline-block pt-1 text-xs hover:underline"
-                            >
-                              {(() => {
-                                const surveyStatus = getSurveyRoutingStatus(proposal);
-                                if (surveyStatus === "received") {
-                                  return <Badge variant="secondary">Survey received</Badge>;
-                                }
-                                if (surveyStatus === "pending") {
-                                  return <Badge variant="outline">Survey pending</Badge>;
-                                }
-                                  return (
-                                    <Badge variant="outline" className="text-muted-foreground">
-                                      Survey not sent
-                                    </Badge>
-                                  );
-                                })()}
-                            </Link>
-                          )}
-                          {proposal.status === "won" &&
-                            getSurveyRoutingStatus(proposal) === "not_sent" && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 px-2 text-xs"
-                                disabled={sendSurveyMutation.isPending}
-                                onClick={() => {
-                                  const clientId = proposal.clientId || proposal.client?.id;
-                                  if (!clientId) return;
-                                  sendSurveyMutation.mutate(Number(clientId));
-                                }}
-                              >
-                                {sendSurveyMutation.isPending ? "Routing..." : "Send survey"}
-                              </Button>
-                            )}
-                          {proposal.status === "lost" && (
-                            <div className="space-y-2">
-                              {lostReasonEditingId === proposal.id ? (
-                                <>
-                                  <Input
-                                    value={lostReasonDrafts[proposal.id] || ""}
-                                    onChange={(event) =>
-                                      setLostReasonDrafts((prev) => ({
-                                        ...prev,
-                                        [proposal.id]: event.target.value,
-                                      }))
-                                    }
-                                    placeholder="Reason for loss"
-                                  />
-                                  <div className="flex gap-2">
-                                    <Button
-                                      size="sm"
-                                      onClick={() => {
-                                        updateMutation.mutate({
-                                          id: proposal.id,
-                                          status: "lost",
-                                          lostReason: lostReasonDrafts[proposal.id] || undefined,
-                                        });
-                                        setLostReasonEditingId(null);
-                                      }}
-                                    >
-                                      Save
-                                    </Button>
+                  {proposals.map((proposal) => {
+                    const bdDraft = bdDrafts[proposal.id] || {};
+                    return (
+                      <TableRow key={proposal.id} className="align-top">
+                        <TableCell className="min-w-64">
+                          <div className="font-medium">{proposal.proposalTitle}</div>
+                          <div className="text-xs text-muted-foreground">{proposal.client?.clientName || proposal.clientName} · {proposal.requestedService || proposal.serviceType}</div>
+                          <Badge className="mt-2" variant={STATUS_VARIANTS[proposal.status] || "outline"}>{STATUS_LABELS[proposal.status] || proposal.status}</Badge>
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            {proposal.currency} {Number(proposal.proposedFee || 0).toLocaleString()} · deadline {proposal.deadlineDate ? new Date(proposal.deadlineDate).toLocaleDateString() : "-"}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">Dept: {proposal.department?.name || "-"}</div>
+                          <div className="text-sm">Partner: {getName(proposal.assignedPartner) || "-"}</div>
+                          <div className="text-sm">Manager: {getName(proposal.manager) || "-"}</div>
+                          <div className="text-xs text-muted-foreground">Source: {proposal.sourceName || getName(proposal.sourceProfile) || "-"}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            {(proposal.teamMembers || []).map((member) => (
+                              <div key={member.id} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-xs">
+                                <span>{getName(member.profile)}</span>
+                                <div className="flex items-center gap-1">
+                                  <Badge variant={member.status === "approved" ? "default" : member.status === "rejected" ? "destructive" : "outline"}>{member.status.replace(/_/g, " ")}</Badge>
+                                  {canManagerReview && !["approved", "removed"].includes(member.status) && (
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      onClick={() => {
-                                        setLostReasonEditingId(null);
-                                        setLostReasonDrafts((prev) => ({
-                                          ...prev,
-                                          [proposal.id]: proposal.lostReason || "",
-                                        }));
-                                      }}
+                                      className="h-6 px-2 text-xs"
+                                      onClick={() => teamMemberMutation.mutate({ proposalId: proposal.id, teamMemberId: member.id, status: "approved" })}
+                                      disabled={teamMemberMutation.isPending}
                                     >
-                                      Cancel
+                                      Approve
                                     </Button>
-                                  </div>
-                                </>
-                              ) : proposal.lostReason ? (
-                                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                  <span>Reason: {proposal.lostReason}</span>
-                                  <button
-                                    type="button"
-                                    className="text-primary hover:underline"
-                                    onClick={() => {
-                                      setLostReasonEditingId(proposal.id);
-                                      setLostReasonDrafts((prev) => ({
-                                        ...prev,
-                                        [proposal.id]: proposal.lostReason || "",
-                                      }));
-                                    }}
-                                  >
-                                    Edit
-                                  </button>
+                                  )}
+                                  {canManagerReview && !["rejected", "removed"].includes(member.status) && (
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      className="h-6 px-2 text-xs"
+                                      onClick={() => teamMemberMutation.mutate({ proposalId: proposal.id, teamMemberId: member.id, status: "rejected" })}
+                                      disabled={teamMemberMutation.isPending}
+                                    >
+                                      Reject
+                                    </Button>
+                                  )}
                                 </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="text-xs text-primary hover:underline text-left"
-                                  onClick={() => {
-                                    setLostReasonEditingId(proposal.id);
-                                    setLostReasonDrafts((prev) => ({
-                                      ...prev,
-                                      [proposal.id]: "",
-                                    }));
-                                  }}
-                                >
-                                  Add loss reason
-                                </button>
-                              )}
+                              </div>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-2 text-sm">
+                            {proposal.employeeDraftLink ? (
+                              <a className="inline-flex items-center gap-1 text-primary hover:underline" href={proposal.employeeDraftLink} target="_blank" rel="noreferrer">
+                                Employee draft <ExternalLink className="h-3 w-3" />
+                              </a>
+                            ) : <div className="text-muted-foreground">No employee draft link</div>}
+                            {proposal.bdFinalProposalLink ? (
+                              <a className="inline-flex items-center gap-1 text-primary hover:underline" href={proposal.bdFinalProposalLink} target="_blank" rel="noreferrer">
+                                BD final <ExternalLink className="h-3 w-3" />
+                              </a>
+                            ) : <div className="text-muted-foreground">No BD final link</div>}
+                          </div>
+                        </TableCell>
+                        <TableCell className="min-w-72">
+                          {canBdFinalize ? (
+                            <div className="space-y-2">
+                              <Input placeholder="Final Google link" value={bdDraft.bdFinalProposalLink ?? proposal.bdFinalProposalLink ?? ""} onChange={(event) => setBdField(proposal.id, { bdFinalProposalLink: event.target.value })} />
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input type="date" value={bdDraft.finalSubmittedAt ?? proposal.finalSubmittedAt?.slice(0, 10) ?? ""} onChange={(event) => setBdField(proposal.id, { finalSubmittedAt: event.target.value })} />
+                                <Select value={(bdDraft.status as ProposalStatus) || proposal.status} onValueChange={(status) => setBdField(proposal.id, { status: status as ProposalStatus })}>
+                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="bd_in_progress">BD editing</SelectItem>
+                                    <SelectItem value="ready_for_client_submission">Ready</SelectItem>
+                                    <SelectItem value="submitted_to_client">Submitted</SelectItem>
+                                    <SelectItem value="won">Won</SelectItem>
+                                    <SelectItem value="lost">Lost</SelectItem>
+                                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input placeholder="Final submission status" value={bdDraft.finalSubmissionStatus ?? proposal.finalSubmissionStatus ?? ""} onChange={(event) => setBdField(proposal.id, { finalSubmissionStatus: event.target.value })} />
+                                <Input placeholder="Award status" value={bdDraft.awardStatus ?? proposal.awardStatus ?? ""} onChange={(event) => setBdField(proposal.id, { awardStatus: event.target.value })} />
+                              </div>
+                              <Textarea placeholder="Client feedback" value={bdDraft.clientFeedback ?? proposal.clientFeedback ?? ""} onChange={(event) => setBdField(proposal.id, { clientFeedback: event.target.value })} />
+                              <Textarea placeholder="Comments" value={bdDraft.notes ?? proposal.notes ?? ""} onChange={(event) => setBdField(proposal.id, { notes: event.target.value })} />
+                              <Button size="sm" onClick={() => bdMutation.mutate({ id: proposal.id, data: bdDraft })} disabled={bdMutation.isPending}>
+                                <Send className="mr-2 h-3 w-3" /> Save BD update
+                              </Button>
                             </div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground">BD finalization is restricted.</div>
                           )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">KES {Number(proposal.proposedFee).toLocaleString()}</TableCell>
-                      <TableCell className="text-right">{proposal.probability}%</TableCell>
-                      <TableCell>
-                        {proposal.proposalDate ? new Date(proposal.proposalDate).toLocaleDateString() : "-"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {canManagerReview && ["submitted_to_manager", "manager_changes_requested", "draft"].includes(proposal.status) ? (
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "changes_requested" })}>Changes</Button>
+                              <Button size="sm" variant="destructive" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "reject" })}><X className="h-3 w-3" /></Button>
+                              <Button size="sm" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "approve" })}><Check className="h-3 w-3" /></Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No action</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}

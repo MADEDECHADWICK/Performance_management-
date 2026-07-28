@@ -604,7 +604,7 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     key: "proposals.my",
     label: "My Proposals",
     category: "Business Development",
-    module: "dashboard",
+    module: "proposals",
     action: "read",
     defaultPath: "/my-proposals",
     patterns: [/^\/my-proposals(?:\/|$)/],

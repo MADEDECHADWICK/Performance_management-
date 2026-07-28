@@ -17,6 +17,7 @@ export class TimeEntryController {
       const pageSize = Number(req.query.pageSize) || 10;
       const status = (req.query.status as string) || undefined;
       const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const proposalId = req.query.proposalId ? Number(req.query.proposalId) : undefined;
       const billableOnly =
         typeof req.query.billableOnly === 'string'
           ? req.query.billableOnly.toLowerCase() === 'true'
@@ -32,6 +33,7 @@ export class TimeEntryController {
           pageSize,
           status,
           jobId,
+          proposalId,
           dateFrom,
           dateTo,
           billableOnly,
@@ -84,6 +86,7 @@ export class TimeEntryController {
       const pageSize = Number(req.query.pageSize) || 10;
       const status = (req.query.status as string) || undefined;
       const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const proposalId = req.query.proposalId ? Number(req.query.proposalId) : undefined;
       const billableOnly =
         typeof req.query.billableOnly === 'string'
           ? req.query.billableOnly.toLowerCase() === 'true'
@@ -97,6 +100,7 @@ export class TimeEntryController {
           pageSize,
           status,
           jobId,
+          proposalId,
           dateFrom,
           dateTo,
           billableOnly,

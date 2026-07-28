@@ -1,7 +1,49 @@
 /**
- * Proposals API - Marketing pipeline
+ * Proposals API - Business development workflow
  */
 import { api } from './client';
+
+export type ProposalStatus =
+  | 'draft'
+  | 'sent'
+  | 'submitted_to_manager'
+  | 'manager_changes_requested'
+  | 'manager_rejected'
+  | 'manager_approved'
+  | 'assigned_to_bd'
+  | 'bd_in_progress'
+  | 'bd_changes_requested'
+  | 'ready_for_client_submission'
+  | 'submitted_to_client'
+  | 'won'
+  | 'lost'
+  | 'cancelled';
+
+export type ProposalTeamMemberStatus =
+  | 'pending_manager_approval'
+  | 'approved'
+  | 'rejected'
+  | 'removed';
+
+export interface ProposalPerson {
+  id: number;
+  firstName: string;
+  lastName: string;
+  positionTitle?: string | null;
+  departmentId?: number | null;
+}
+
+export interface ProposalTeamMember {
+  id: number;
+  proposalId: number;
+  profileId: number;
+  status: ProposalTeamMemberStatus;
+  roleOnProposal?: string | null;
+  approvedAt?: string | null;
+  rejectionReason?: string | null;
+  profile?: ProposalPerson;
+  approvedBy?: ProposalPerson | null;
+}
 
 export interface Proposal {
   id: number;
@@ -9,18 +51,43 @@ export interface Proposal {
   clientName: string | null;
   proposalTitle: string;
   serviceType: string;
+  requestedService?: string | null;
+  proposalType?: string | null;
   proposedFee: number;
   currency: string;
   proposalDate: string;
   expectedStart?: string | null;
   expectedDurationDays?: number | null;
-  status: 'draft' | 'sent' | 'won' | 'lost';
+  deadlineDate?: string | null;
+  dateAssigned?: string | null;
+  employeeSubmissionDate?: string | null;
+  finalSubmittedAt?: string | null;
+  status: ProposalStatus;
   probability: number;
   notes?: string | null;
   lostReason?: string | null;
+  sourceName?: string | null;
+  reviewerName?: string | null;
+  employeeDraftLink?: string | null;
+  bdFinalProposalLink?: string | null;
+  finalSubmissionStatus?: string | null;
+  awardStatus?: string | null;
+  clientFeedback?: string | null;
+  managerDecisionNote?: string | null;
+  timeTakenHours?: number | null;
   client?: { id: number; clientName: string; industry?: string | null } | null;
-  assignedPartner?: { id: number; firstName: string; lastName: string } | null;
+  department?: { id: number; name: string; departmentCode?: string | null } | null;
+  assignedPartner?: ProposalPerson | null;
+  manager?: ProposalPerson | null;
+  createdBy?: ProposalPerson | null;
+  sourceProfile?: ProposalPerson | null;
+  reviewerProfile?: ProposalPerson | null;
+  bdOwner?: ProposalPerson | null;
   createdByProfileId?: number | null;
+  assignedPartnerProfileId?: number | null;
+  managerProfileId?: number | null;
+  departmentId?: number | null;
+  teamMembers?: ProposalTeamMember[];
 }
 
 export interface ProposalMetrics {
@@ -32,21 +99,22 @@ export interface ProposalMetrics {
   wonThisMonth: number;
   lostThisMonth: number;
   hotLeads: number;
-  pipelineTrend?: {
-    month: string;
-    won: number;
-    lost: number;
-    created: number;
+}
+
+export interface ProposalContext {
+  clients: { id: number; clientName: string; industry?: string | null }[];
+  departments: {
+    id: number;
+    name: string;
+    departmentCode?: string | null;
+    departmentHeadId?: number | null;
+    partnerProfileId?: number | null;
   }[];
-  leadToCash?: {
-    periodStart: string;
-    periodEnd: string;
-    wonClients: number;
-    wonProposalValue: number;
-    collectedFromWonClients: number;
-    conversionRate: number;
-    outstandingGap: number;
-  };
+  profiles: (ProposalPerson & {
+    managerId?: number | null;
+    isPartner?: boolean;
+    user?: { email?: string | null; roles?: { role: { name: string } }[] } | null;
+  })[];
 }
 
 interface ProposalFilters {
@@ -61,20 +129,43 @@ export interface CreateProposalPayload {
   clientId?: number | null;
   clientName?: string;
   proposalTitle: string;
-  serviceType: string;
-  proposedFee: number;
-  proposalDate: string;
+  serviceType?: string;
+  requestedService?: string;
+  proposalType?: string;
+  proposedFee?: number;
+  value?: number;
+  currency?: string;
+  proposalDate?: string;
   expectedStart?: string;
   expectedDurationDays?: number;
-  probability: number;
-  status: Proposal["status"];
+  deadlineDate?: string;
+  dateAssigned?: string;
+  employeeSubmissionDate?: string;
+  probability?: number;
+  status?: ProposalStatus;
+  submitToManager?: boolean;
   notes?: string;
-  currency?: string;
+  sourceName?: string;
+  reviewerName?: string;
+  employeeDraftLink?: string;
+  assignedPartnerProfileId?: number | null;
+  managerProfileId?: number | null;
+  departmentId?: number | null;
+  sourceProfileId?: number | null;
+  reviewerProfileId?: number | null;
+  bdOwnerProfileId?: number | null;
+  teamMemberProfileIds?: number[];
 }
 
-export interface UpdateProposalPayload {
-  status?: Proposal["status"];
+export interface UpdateProposalPayload extends Partial<CreateProposalPayload> {
+  finalSubmittedAt?: string;
+  bdFinalProposalLink?: string;
+  finalSubmissionStatus?: string;
+  awardStatus?: string;
+  clientFeedback?: string;
+  managerDecisionNote?: string;
   lostReason?: string;
+  timeTakenHours?: number;
 }
 
 export interface MyProposalFilters {
@@ -84,47 +175,61 @@ export interface MyProposalFilters {
   search?: string;
 }
 
+const buildQuery = (filters?: object) => {
+  const params = new URLSearchParams();
+  Object.entries((filters || {}) as Record<string, string | number | undefined>).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') params.append(key, String(value));
+  });
+  const query = params.toString();
+  return query ? `?${query}` : '';
+};
+
 export const proposalsAPI = {
-  listMine: async (filters?: MyProposalFilters): Promise<{ data: Proposal[]; total: number; page: number; pageSize: number }> => {
-    const params = new URLSearchParams();
-    if (filters?.page) params.append('page', String(filters.page));
-    if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
-    if (filters?.status) params.append('status', filters.status);
-    if (filters?.search) params.append('search', filters.search);
-    const query = params.toString();
-    return api.get(`/proposals/my${query ? `?${query}` : ''}`);
-  },
+  listMine: async (
+    filters?: MyProposalFilters
+  ): Promise<{ data: Proposal[]; total: number; page: number; pageSize: number }> =>
+    api.get(`/proposals/my${buildQuery(filters)}`),
 
-  list: async (filters?: ProposalFilters) => {
-    const params = new URLSearchParams();
-    if (filters?.page) params.append('page', String(filters.page));
-    if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
-    if (filters?.status) params.append('status', filters.status);
-    if (filters?.clientId) params.append('clientId', String(filters.clientId));
-    if (filters?.search) params.append('search', filters.search);
-    const query = params.toString();
-    return api.get(`/proposals${query ? `?${query}` : ''}`);
-  },
+  list: async (
+    filters?: ProposalFilters
+  ): Promise<{ data: Proposal[]; total: number; page: number; pageSize: number }> =>
+    api.get(`/proposals${buildQuery(filters)}`),
 
-  getById: async (id: number) => {
-    return api.get(`/proposals/${id}`);
-  },
+  context: async (): Promise<ProposalContext> => api.get('/proposals/context'),
 
-  create: async (data: CreateProposalPayload) => {
-    return api.post<Proposal | { data?: Proposal }>('/proposals', data);
-  },
+  timeLoggable: async () => api.get('/proposals/time-loggable'),
 
-  update: async (id: number, data: UpdateProposalPayload) => {
-    return api.patch<Proposal | { data?: Proposal }>(`/proposals/${id}`, data);
-  },
+  taskTemplates: async () => api.get('/proposals/task-templates'),
 
-  metrics: async (params?: { startDate?: string; endDate?: string }): Promise<ProposalMetrics> => {
-    const query = new URLSearchParams();
-    if (params?.startDate) query.append("startDate", params.startDate);
-    if (params?.endDate) query.append("endDate", params.endDate);
-    const suffix = query.toString() ? `?${query.toString()}` : "";
-    return api.get(`/proposals/metrics${suffix}`);
-  },
+  getById: async (id: number): Promise<Proposal> => api.get(`/proposals/${id}`),
+
+  create: async (data: CreateProposalPayload) =>
+    api.post<Proposal | { data?: Proposal }>('/proposals', data),
+
+  update: async (id: number, data: UpdateProposalPayload) =>
+    api.patch<Proposal | { data?: Proposal }>(`/proposals/${id}`, data),
+
+  managerDecision: async (
+    id: number,
+    data: {
+      decision: 'approve' | 'reject' | 'changes_requested';
+      note?: string;
+      approvedTeamMemberIds?: number[];
+      rejectedTeamMemberIds?: number[];
+    }
+  ) => api.post<Proposal | { data?: Proposal }>(`/proposals/${id}/manager-decision`, data),
+
+  updateTeamMember: async (
+    proposalId: number,
+    teamMemberId: number,
+    data: { status: ProposalTeamMemberStatus; rejectionReason?: string }
+  ) => api.patch(`/proposals/${proposalId}/team-members/${teamMemberId}`, data),
+
+  updateBd: async (id: number, data: UpdateProposalPayload) =>
+    api.patch<Proposal | { data?: Proposal }>(`/proposals/${id}/bd`, data),
+
+  metrics: async (params?: { startDate?: string; endDate?: string }): Promise<ProposalMetrics> =>
+    api.get(`/proposals/metrics${buildQuery(params)}`),
 };
 
 export default proposalsAPI;

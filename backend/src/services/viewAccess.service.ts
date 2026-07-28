@@ -125,6 +125,7 @@ const MANAGER_VIEW_KEYS = [
   "requisitions.approvals",
   "clients.list",
   "clients.portfolio",
+  "clients.business_development",
   "jobs.workflow",
   "jobs.workload_management",
   "jobs.team_overview",

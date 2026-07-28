@@ -1,4 +1,4 @@
-# Reward-Based Perfomance Matrix
+# Reward-Based Performance Matrix
 
 Full-stack system for audit and tax firms covering employee lifecycle, performance evaluation, and job delivery. Built with a TypeScript/Node backend and a React dashboard UI.
 
@@ -37,8 +37,7 @@ cd backend
 npm install
 ```
 
-Create `backend/.env`:
-
+Create `backend/.env` with database, JWT, CORS, upload, Redis, and SMTP settings required for your environment.
 
 Generate Prisma client and run migrations:
 ```bash
@@ -117,7 +116,6 @@ Frontend (in `ronalds-growth-hub/`)
 This project is under active development. Core backend modules and the dashboard are operational; some advanced workflows and reports are still evolving.
 
 ## Auth/RBAC
-- Canonical roles and centralized RBAC are documented in `AUTH_RBAC_REFACTOR.md`.
 - Backend sources:
   - `backend/src/auth/canonicalRoles.ts`
   - `backend/src/services/moduleAccess.service.ts`

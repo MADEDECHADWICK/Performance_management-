@@ -358,8 +358,25 @@ enum MetricType {
 enum ProposalStatus {
   draft
   sent
+  submitted_to_manager
+  manager_changes_requested
+  manager_rejected
+  manager_approved
+  assigned_to_bd
+  bd_in_progress
+  bd_changes_requested
+  ready_for_client_submission
+  submitted_to_client
   won
   lost
+  cancelled
+}
+
+enum ProposalTeamMemberStatus {
+  pending_manager_approval
+  approved
+  rejected
+  removed
 }
 
 enum WorkflowTriggerType {
@@ -672,8 +689,8 @@ model AuthRole {
   description String?
   isActive    Boolean @default(true)
 
-  users       UserAuthRole[]
-  permissions AuthRolePermission[]
+  users           UserAuthRole[]
+  permissions     AuthRolePermission[]
   viewPermissions AuthRoleViewPermission[]
 
   createdAt DateTime @default(now())
@@ -776,21 +793,22 @@ model Department {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profiles              Profile[]
-  jobs                  Job[]
-  clients               Client[]
-  clientOnboardings     ClientOnboarding[]
-  recruitmentCandidates RecruitmentCandidate[]
-  revenueProjections    RevenueProjection[]
-  evaluationDefinitions EvaluationDefinition[]
-  evaluationCycles      EvaluationCycle[]
-  dashboardMetrics      DashboardMetric[]
-  calibrationSessions   CalibrationSession[]
-  trainingRecords       TrainingRecord[]
-  skillAssessments      SkillAssessment[]
-  learningPrograms      LearningProgram[]
+  profiles               Profile[]
+  jobs                   Job[]
+  clients                Client[]
+  clientOnboardings      ClientOnboarding[]
+  recruitmentCandidates  RecruitmentCandidate[]
+  revenueProjections     RevenueProjection[]
+  evaluationDefinitions  EvaluationDefinition[]
+  evaluationCycles       EvaluationCycle[]
+  dashboardMetrics       DashboardMetric[]
+  calibrationSessions    CalibrationSession[]
+  trainingRecords        TrainingRecord[]
+  skillAssessments       SkillAssessment[]
+  learningPrograms       LearningProgram[]
   leavePolicyAssignments LeavePolicyAssignment[]
-  requisitionRequests   RequisitionRequest[]
+  requisitionRequests    RequisitionRequest[]
+  proposals              Proposal[]
 
   @@index([departmentHeadId])
   @@index([partnerProfileId])
@@ -811,11 +829,11 @@ model PositionRole {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profiles            Profile[]
-  jobStaffAssignments JobStaffAssignment[]
-  jobTimeAllocations  JobTimeAllocation[]
+  profiles               Profile[]
+  jobStaffAssignments    JobStaffAssignment[]
+  jobTimeAllocations     JobTimeAllocation[]
   leavePolicyAssignments LeavePolicyAssignment[]
-  performanceBands    PerformanceBand[]
+  performanceBands       PerformanceBand[]
 
   @@index([name])
   @@map("position_roles")
@@ -893,12 +911,12 @@ model Profile {
 
   partner Partner?
 
-  jobsAsPartner Job[] @relation("JobsPartner")
-  jobsAsManager Job[] @relation("JobsManager")
-  jobInvoicesGenerated JobInvoice[] @relation("JobInvoiceGeneratedBy")
-  jobInvoicesIssued    JobInvoice[] @relation("JobInvoiceIssuedBy")
-  jobInvoiceTemplatesCreated JobInvoiceTemplate[] @relation("JobInvoiceTemplateCreatedBy")
-  jobInvoiceStatusChanges    JobInvoiceStatusHistory[] @relation("JobInvoiceStatusChangedBy")
+  jobsAsPartner                 Job[]                          @relation("JobsPartner")
+  jobsAsManager                 Job[]                          @relation("JobsManager")
+  jobInvoicesGenerated          JobInvoice[]                   @relation("JobInvoiceGeneratedBy")
+  jobInvoicesIssued             JobInvoice[]                   @relation("JobInvoiceIssuedBy")
+  jobInvoiceTemplatesCreated    JobInvoiceTemplate[]           @relation("JobInvoiceTemplateCreatedBy")
+  jobInvoiceStatusChanges       JobInvoiceStatusHistory[]      @relation("JobInvoiceStatusChangedBy")
   jobInvoicePaymentApplications JobInvoicePaymentApplication[] @relation("JobInvoicePaymentAppliedBy")
 
   jobStaffAssignments        JobStaffAssignment[]
@@ -911,23 +929,23 @@ model Profile {
   timeEntryApprovalRequests TimeEntryApprovalRequest[]
   timeEntryApprovalsGiven   TimeEntryApprovalRequest[] @relation("TimeEntryApprovalApprover") // v2.1
 
-  leaveRequests                    LeaveRequest[]       @relation("LeaveRequestEmployee")
-  leaveRequestsCurrentApprover     LeaveRequest[]       @relation("LeaveRequestCurrentApprover")
-  leaveApprovalStepsAssigned       LeaveApprovalStep[]  @relation("LeaveApprovalStepApprover")
-  leaveApprovalStepsDelegatedFrom  LeaveApprovalStep[]  @relation("LeaveApprovalStepDelegatedFrom")
+  leaveRequests                         LeaveRequest[]                 @relation("LeaveRequestEmployee")
+  leaveRequestsCurrentApprover          LeaveRequest[]                 @relation("LeaveRequestCurrentApprover")
+  leaveApprovalStepsAssigned            LeaveApprovalStep[]            @relation("LeaveApprovalStepApprover")
+  leaveApprovalStepsDelegatedFrom       LeaveApprovalStep[]            @relation("LeaveApprovalStepDelegatedFrom")
   leavePolicyApprovalRouteStepsAssigned LeavePolicyApprovalRouteStep[] @relation("LeavePolicyApprovalRouteStepApprover")
-  leaveBalances                    LeaveBalance[]
-  leaveLedgerEntries               LeaveLedgerEntry[]   @relation("LeaveLedgerEntryEmployee")
-  leaveLedgerEntriesCreated        LeaveLedgerEntry[]   @relation("LeaveLedgerEntryCreatedBy")
-  leavePolicyAssignments           LeavePolicyAssignment[] @relation("LeavePolicyAssignmentProfile")
-  leaveDelegationsAsApprover       LeaveDelegation[]    @relation("LeaveDelegationApprover")
-  leaveDelegationsAsDelegate       LeaveDelegation[]    @relation("LeaveDelegationDelegate")
-  leaveDelegationsCreated          LeaveDelegation[]    @relation("LeaveDelegationCreatedBy")
-  requisitionsRequested            RequisitionRequest[] @relation("RequisitionRequester")
-  requisitionsCurrentApprover      RequisitionRequest[] @relation("RequisitionCurrentApprover")
-  requisitionApprovalStepsAssigned RequisitionApprovalStep[] @relation("RequisitionApprovalStepApprover")
-  requisitionsFundsReleased        RequisitionRequest[] @relation("RequisitionReleasedBy")
-  requisitionAccountabilitiesSubmitted RequisitionRequest[] @relation("RequisitionAccountabilitySubmittedBy")
+  leaveBalances                         LeaveBalance[]
+  leaveLedgerEntries                    LeaveLedgerEntry[]             @relation("LeaveLedgerEntryEmployee")
+  leaveLedgerEntriesCreated             LeaveLedgerEntry[]             @relation("LeaveLedgerEntryCreatedBy")
+  leavePolicyAssignments                LeavePolicyAssignment[]        @relation("LeavePolicyAssignmentProfile")
+  leaveDelegationsAsApprover            LeaveDelegation[]              @relation("LeaveDelegationApprover")
+  leaveDelegationsAsDelegate            LeaveDelegation[]              @relation("LeaveDelegationDelegate")
+  leaveDelegationsCreated               LeaveDelegation[]              @relation("LeaveDelegationCreatedBy")
+  requisitionsRequested                 RequisitionRequest[]           @relation("RequisitionRequester")
+  requisitionsCurrentApprover           RequisitionRequest[]           @relation("RequisitionCurrentApprover")
+  requisitionApprovalStepsAssigned      RequisitionApprovalStep[]      @relation("RequisitionApprovalStepApprover")
+  requisitionsFundsReleased             RequisitionRequest[]           @relation("RequisitionReleasedBy")
+  requisitionAccountabilitiesSubmitted  RequisitionRequest[]           @relation("RequisitionAccountabilitySubmittedBy")
 
   evaluationAssignmentsAsEvaluator EvaluationAssignment[] @relation("EvalEvaluator")
   evaluationAssignmentsAsEvaluatee EvaluationAssignment[] @relation("EvalEvaluatee")
@@ -937,54 +955,54 @@ model Profile {
   projectEvaluationsReceived       ProjectEvaluation[]    @relation("ProjectEvaluationEvaluatee")
 
   performanceScores           PerformanceScore[]
-  calibratedPerformanceScores PerformanceScore[]      @relation("PerformanceScoreCalibratedBy")
-  notifications Notification[]
+  calibratedPerformanceScores PerformanceScore[] @relation("PerformanceScoreCalibratedBy")
+  notifications               Notification[]
 
   notificationTemplatesCreated NotificationTemplate[] @relation("NotificationTemplateCreatedBy")
 
   tasksAssigned Task[] @relation("TaskAssignee")
 
-  feedbackGiven    Feedback[] @relation("FeedbackGiver")
-  feedbackReceived Feedback[] @relation("FeedbackRecipient")
-  checkInsAsManager CheckIn[] @relation("CheckInManager")
-  checkInsAsEmployee CheckIn[] @relation("CheckInEmployee")
+  feedbackGiven      Feedback[] @relation("FeedbackGiver")
+  feedbackReceived   Feedback[] @relation("FeedbackRecipient")
+  checkInsAsManager  CheckIn[]  @relation("CheckInManager")
+  checkInsAsEmployee CheckIn[]  @relation("CheckInEmployee")
 
-  recruitmentCandidatesCreated RecruitmentCandidate[]   @relation("CandidateCreatedBy")
-  onboardingCasesAsEmployee    EmployeeOnboardingCase[] @relation("OnboardingEmployee")
-  onboardingCasesAsHROwner     EmployeeOnboardingCase[] @relation("OnboardingHROwner")
+  recruitmentCandidatesCreated RecruitmentCandidate[]    @relation("CandidateCreatedBy")
+  onboardingCasesAsEmployee    EmployeeOnboardingCase[]  @relation("OnboardingEmployee")
+  onboardingCasesAsHROwner     EmployeeOnboardingCase[]  @relation("OnboardingHROwner")
   onboardingStagesOwned        EmployeeOnboardingStage[] @relation("OnboardingStageOwner")
 
   offboardingCasesAsEmployee EmployeeOffboardingCase[]  @relation("OffboardingEmployee")
   offboardingCasesAsHROwner  EmployeeOffboardingCase[]  @relation("OffboardingHROwner")
   offboardingItemsCompleted  OffboardingChecklistItem[] @relation("OffboardingItemCompletedBy")
 
-  inductionChecklistsAsEmployee InductionChecklist[] @relation("InductionChecklistEmployee")
-  inductionChecklistsAsAssigner InductionChecklist[] @relation("InductionChecklistAssigner")
-  onboardingPoliciesCreated      OnboardingPolicy[]   @relation("OnboardingPolicyCreatedBy")
-  onboardingPoliciesUpdated      OnboardingPolicy[]   @relation("OnboardingPolicyUpdatedBy")
-  clientOnboardingChecklistsAssigned ClientOnboardingChecklist[] @relation("ClientOnboardingChecklistAssigner")
+  inductionChecklistsAsEmployee           InductionChecklist[]            @relation("InductionChecklistEmployee")
+  inductionChecklistsAsAssigner           InductionChecklist[]            @relation("InductionChecklistAssigner")
+  onboardingPoliciesCreated               OnboardingPolicy[]              @relation("OnboardingPolicyCreatedBy")
+  onboardingPoliciesUpdated               OnboardingPolicy[]              @relation("OnboardingPolicyUpdatedBy")
+  clientOnboardingChecklistsAssigned      ClientOnboardingChecklist[]     @relation("ClientOnboardingChecklistAssigner")
   clientOnboardingChecklistItemsCompleted ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemCompletedBy")
-  trainingRecordsAsEmployee      TrainingRecord[]    @relation("TrainingRecordEmployee")
-  trainingRecordsCreated         TrainingRecord[]    @relation("TrainingRecordCreator")
-  skillAssessmentsAsEmployee     SkillAssessment[]   @relation("SkillAssessmentEmployee")
-  skillAssessmentsAsAssessor     SkillAssessment[]   @relation("SkillAssessmentAssessor")
-  knowledgeHubResourceProgressEntries KnowledgeHubResourceProgress[] @relation("KnowledgeHubResourceProgressProfile")
-  knowledgeHubQuizAttempts            KnowledgeHubQuizAttempt[]      @relation("KnowledgeHubQuizAttemptProfile")
-  learningProgramsCreated             LearningProgram[]              @relation("LearningProgramCreatedBy")
-  learningProgramVersionsCreated      LearningProgramVersion[]       @relation("LearningProgramVersionCreatedBy")
-  learningProgramVersionsAsTrainer    LearningProgramVersion[]       @relation("LearningProgramVersionTrainer")
-  globalCertificateTemplatesCreated   GlobalCertificateTemplate[]    @relation("GlobalCertificateTemplateCreatedBy")
-  globalCertificateTemplatesUpdated   GlobalCertificateTemplate[]    @relation("GlobalCertificateTemplateUpdatedBy")
-  learningSessionsAsTrainer           LearningSession[]              @relation("LearningSessionTrainer")
-  learningAssignmentsAsEmployee       LearningAssignment[]           @relation("LearningAssignmentEmployee")
-  learningAssignmentsCreated          LearningAssignment[]           @relation("LearningAssignmentAssignedBy")
-  learningAssignmentsManaged          LearningAssignment[]           @relation("LearningAssignmentManager")
-  learningAttendanceMarked            LearningAttendanceRecord[]     @relation("LearningAttendanceMarkedBy")
-  trainingFeedbackReceivedAsTrainer   TrainingFeedback[]             @relation("TrainingFeedbackTrainer")
-  impactAssessmentTasksOwned          ImpactAssessmentTask[]         @relation("ImpactAssessmentManager")
-  impactAssessmentResponsesSubmitted  ImpactAssessmentResponse[]     @relation("ImpactAssessmentSubmittedBy")
-  learningPointLedgerEntries          LearningPointLedger[]          @relation("LearningPointLedgerProfile")
-  learningPointAwardsGiven            LearningPointLedger[]          @relation("LearningPointAwardedBy")
+  trainingRecordsAsEmployee               TrainingRecord[]                @relation("TrainingRecordEmployee")
+  trainingRecordsCreated                  TrainingRecord[]                @relation("TrainingRecordCreator")
+  skillAssessmentsAsEmployee              SkillAssessment[]               @relation("SkillAssessmentEmployee")
+  skillAssessmentsAsAssessor              SkillAssessment[]               @relation("SkillAssessmentAssessor")
+  knowledgeHubResourceProgressEntries     KnowledgeHubResourceProgress[]  @relation("KnowledgeHubResourceProgressProfile")
+  knowledgeHubQuizAttempts                KnowledgeHubQuizAttempt[]       @relation("KnowledgeHubQuizAttemptProfile")
+  learningProgramsCreated                 LearningProgram[]               @relation("LearningProgramCreatedBy")
+  learningProgramVersionsCreated          LearningProgramVersion[]        @relation("LearningProgramVersionCreatedBy")
+  learningProgramVersionsAsTrainer        LearningProgramVersion[]        @relation("LearningProgramVersionTrainer")
+  globalCertificateTemplatesCreated       GlobalCertificateTemplate[]     @relation("GlobalCertificateTemplateCreatedBy")
+  globalCertificateTemplatesUpdated       GlobalCertificateTemplate[]     @relation("GlobalCertificateTemplateUpdatedBy")
+  learningSessionsAsTrainer               LearningSession[]               @relation("LearningSessionTrainer")
+  learningAssignmentsAsEmployee           LearningAssignment[]            @relation("LearningAssignmentEmployee")
+  learningAssignmentsCreated              LearningAssignment[]            @relation("LearningAssignmentAssignedBy")
+  learningAssignmentsManaged              LearningAssignment[]            @relation("LearningAssignmentManager")
+  learningAttendanceMarked                LearningAttendanceRecord[]      @relation("LearningAttendanceMarkedBy")
+  trainingFeedbackReceivedAsTrainer       TrainingFeedback[]              @relation("TrainingFeedbackTrainer")
+  impactAssessmentTasksOwned              ImpactAssessmentTask[]          @relation("ImpactAssessmentManager")
+  impactAssessmentResponsesSubmitted      ImpactAssessmentResponse[]      @relation("ImpactAssessmentSubmittedBy")
+  learningPointLedgerEntries              LearningPointLedger[]           @relation("LearningPointLedgerProfile")
+  learningPointAwardsGiven                LearningPointLedger[]           @relation("LearningPointAwardedBy")
 
   dashboardMetrics DashboardMetric[] @relation("DashboardMetricPartner")
 
@@ -992,8 +1010,14 @@ model Profile {
   workflowDefinitionsCreated WorkflowDefinition[] @relation("WorkflowCreatedBy")
   workflowStepEvents         WorkflowStepEvent[]  @relation("WorkflowStepActor") // v2.1
 
-  proposalsCreated   Proposal[] @relation("ProposalCreatedBy") // v2.1
-  proposalsAsPartner Proposal[] @relation("ProposalAssignedPartner") // v2.1
+  proposalsCreated        Proposal[]           @relation("ProposalCreatedBy") // v2.1
+  proposalsAsPartner      Proposal[]           @relation("ProposalAssignedPartner") // v2.1
+  proposalsAsManager      Proposal[]           @relation("ProposalManager")
+  proposalsAsSource       Proposal[]           @relation("ProposalSource")
+  proposalsAsReviewer     Proposal[]           @relation("ProposalReviewer")
+  proposalsAsBdOwner      Proposal[]           @relation("ProposalBdOwner")
+  proposalTeamAssignments ProposalTeamMember[] @relation("ProposalTeamMemberProfile")
+  proposalTeamApprovals   ProposalTeamMember[] @relation("ProposalTeamMemberApprover")
 
   revenueProjectionsCreated RevenueProjection[] @relation("RevenueProjectionCreatedBy") // v2.1
 
@@ -1001,23 +1025,24 @@ model Profile {
   receivableFollowUpsLogged   ReceivableFollowUpAction[] @relation("ReceivableFollowUpActor")
   receivableFollowUpsAssigned ReceivableFollowUpAction[] @relation("ReceivableFollowUpOwner")
 
-  engagementLettersUploaded EngagementLetter[]   @relation("EngagementLetterUploader")
-  engagementLettersApproved EngagementLetter[]   @relation("EngagementLetterApprover")
-  balancedScorecardContributionRecords BalancedScorecardEmployeeContribution[] @relation("BalancedScorecardContributionProfile")
-  balancedScorecardContributionsAcknowledged BalancedScorecardEmployeeContribution[] @relation("BalancedScorecardContributionAcknowledgedBy")
+  engagementLettersUploaded                   EngagementLetter[]                            @relation("EngagementLetterUploader")
+  engagementLettersApproved                   EngagementLetter[]                            @relation("EngagementLetterApprover")
+  balancedScorecardContributionRecords        BalancedScorecardEmployeeContribution[]       @relation("BalancedScorecardContributionProfile")
+  balancedScorecardContributionsAcknowledged  BalancedScorecardEmployeeContribution[]       @relation("BalancedScorecardContributionAcknowledgedBy")
   balancedScorecardContributionUpdatesCreated BalancedScorecardEmployeeContributionUpdate[] @relation("BalancedScorecardContributionUpdateCreatedBy")
-  employeeGoals               EmployeeGoal[]
-  calibrationSessionsFacilitated   CalibrationSession[]            @relation("CalibrationSessionFacilitator")
-  calibrationSessionParticipations CalibrationSessionParticipant[]
-  performanceReviewsGiven          PerformanceReview[]             @relation("PerformanceReviewReviewer")
-  performanceReviewsReceived       PerformanceReview[]             @relation("PerformanceReviewReviewee")
-  developmentPlans                 DevelopmentPlan[]
-  balancedScorecardKpisOwned BalancedScorecardKpi[] @relation("BalancedScorecardKpiOwner")
-  balancedScorecardInitiativesOwned BalancedScorecardInitiative[] @relation("BalancedScorecardInitiativeOwner")
-  balancedScorecardKpiAssignments BalancedScorecardKpiAssignment[] @relation("BalancedScorecardKpiAssignmentProfile")
-  balancedScorecardKpiTrackingPlansOwned BalancedScorecardKpiTrackingPlan[] @relation("BalancedScorecardKpiTrackingUpdateOwner")
-  balancedScorecardKpiDataPointsSubmitted BalancedScorecardKpiDataPoint[] @relation("BalancedScorecardKpiDataPointSubmittedBy")
-  balancedScorecardKpiActionsOwned BalancedScorecardKpiAction[] @relation("BalancedScorecardKpiActionOwner")
+  employeeGoals                               EmployeeGoal[]
+  calibrationSessionsFacilitated              CalibrationSession[]                          @relation("CalibrationSessionFacilitator")
+  calibrationSessionParticipations            CalibrationSessionParticipant[]
+  performanceReviewsGiven                     PerformanceReview[]                           @relation("PerformanceReviewReviewer")
+  performanceReviewsReceived                  PerformanceReview[]                           @relation("PerformanceReviewReviewee")
+  developmentPlans                            DevelopmentPlan[]
+  balancedScorecardKpisOwned                  BalancedScorecardKpi[]                        @relation("BalancedScorecardKpiOwner")
+  balancedScorecardInitiativesOwned           BalancedScorecardInitiative[]                 @relation("BalancedScorecardInitiativeOwner")
+  balancedScorecardKpiAssignments             BalancedScorecardKpiAssignment[]              @relation("BalancedScorecardKpiAssignmentProfile")
+  balancedScorecardKpiTrackingPlansOwned      BalancedScorecardKpiTrackingPlan[]            @relation("BalancedScorecardKpiTrackingUpdateOwner")
+  balancedScorecardKpiDataPointsSubmitted     BalancedScorecardKpiDataPoint[]               @relation("BalancedScorecardKpiDataPointSubmittedBy")
+  balancedScorecardKpiActionsOwned            BalancedScorecardKpiAction[]                  @relation("BalancedScorecardKpiActionOwner")
+
   @@index([isPartner])
   @@map("profiles")
 }
@@ -1034,14 +1059,14 @@ model LeaveType {
   description String?
   color       String?
 
-  isActive            Boolean       @default(true) @map("is_active")
-  isPaid              Boolean       @default(true) @map("is_paid")
-  balanceTracked      Boolean       @default(true) @map("balance_tracked")
-  requiresAttachment  Boolean       @default(false) @map("requires_attachment")
-  allowsHalfDay       Boolean       @default(true) @map("allows_half_day")
-  unitType            LeaveUnitType @default(day) @map("unit_type")
-  defaultNoticeDays   Int           @default(0) @map("default_notice_days")
-  defaultMaxUnits     Decimal?      @map("default_max_units") @db.Decimal(8, 2)
+  isActive           Boolean       @default(true) @map("is_active")
+  isPaid             Boolean       @default(true) @map("is_paid")
+  balanceTracked     Boolean       @default(true) @map("balance_tracked")
+  requiresAttachment Boolean       @default(false) @map("requires_attachment")
+  allowsHalfDay      Boolean       @default(true) @map("allows_half_day")
+  unitType           LeaveUnitType @default(day) @map("unit_type")
+  defaultNoticeDays  Int           @default(0) @map("default_notice_days")
+  defaultMaxUnits    Decimal?      @map("default_max_units") @db.Decimal(8, 2)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1058,37 +1083,37 @@ model LeaveType {
 model LeavePolicy {
   id Int @id @default(autoincrement())
 
-  leaveTypeId  Int     @map("leave_type_id")
-  name         String
-  description  String?
-  isActive     Boolean @default(true) @map("is_active")
+  leaveTypeId Int     @map("leave_type_id")
+  name        String
+  description String?
+  isActive    Boolean @default(true) @map("is_active")
 
   effectiveFrom DateTime? @map("effective_from")
   effectiveTo   DateTime? @map("effective_to")
 
-  annualEntitlement  Decimal @default(0) @map("annual_entitlement") @db.Decimal(8, 2)
-  carryoverCap       Decimal @default(0) @map("carryover_cap") @db.Decimal(8, 2)
-  accrualEnabled     Boolean @default(true) @map("accrual_enabled")
-  accrualFrequency   LeaveAccrualFrequency @default(monthly) @map("accrual_frequency")
-  accrualRate        Decimal @default(0) @map("accrual_rate") @db.Decimal(8, 2)
-  requiresManagerApproval Boolean @default(true) @map("requires_manager_approval")
-  requiresHrApproval      Boolean @default(false) @map("requires_hr_approval")
-  excludeWeekends         Boolean @default(true) @map("exclude_weekends")
-  excludePublicHolidays   Boolean @default(true) @map("exclude_public_holidays")
-  minNoticeDays           Int     @default(0) @map("min_notice_days")
-  hoursPerWorkday         Decimal @default(8) @map("hours_per_workday") @db.Decimal(6, 2)
-  autoProjectToTimesheet  Boolean @default(true) @map("auto_project_to_timesheet")
-  maxConsecutiveUnits     Decimal @default(0) @map("max_consecutive_units") @db.Decimal(8, 2)
-  maxUnitsPerRequest      Decimal @default(0) @map("max_units_per_request") @db.Decimal(8, 2)
-  allowNegativeBalance    Boolean @default(false) @map("allow_negative_balance")
+  annualEntitlement       Decimal               @default(0) @map("annual_entitlement") @db.Decimal(8, 2)
+  carryoverCap            Decimal               @default(0) @map("carryover_cap") @db.Decimal(8, 2)
+  accrualEnabled          Boolean               @default(true) @map("accrual_enabled")
+  accrualFrequency        LeaveAccrualFrequency @default(monthly) @map("accrual_frequency")
+  accrualRate             Decimal               @default(0) @map("accrual_rate") @db.Decimal(8, 2)
+  requiresManagerApproval Boolean               @default(true) @map("requires_manager_approval")
+  requiresHrApproval      Boolean               @default(false) @map("requires_hr_approval")
+  excludeWeekends         Boolean               @default(true) @map("exclude_weekends")
+  excludePublicHolidays   Boolean               @default(true) @map("exclude_public_holidays")
+  minNoticeDays           Int                   @default(0) @map("min_notice_days")
+  hoursPerWorkday         Decimal               @default(8) @map("hours_per_workday") @db.Decimal(6, 2)
+  autoProjectToTimesheet  Boolean               @default(true) @map("auto_project_to_timesheet")
+  maxConsecutiveUnits     Decimal               @default(0) @map("max_consecutive_units") @db.Decimal(8, 2)
+  maxUnitsPerRequest      Decimal               @default(0) @map("max_units_per_request") @db.Decimal(8, 2)
+  allowNegativeBalance    Boolean               @default(false) @map("allow_negative_balance")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  leaveType   LeaveType               @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
-  assignments LeavePolicyAssignment[]
-  requests    LeaveRequest[]
-  noticeRules LeavePolicyNoticeRule[]
+  leaveType      LeaveType                  @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  assignments    LeavePolicyAssignment[]
+  requests       LeaveRequest[]
+  noticeRules    LeavePolicyNoticeRule[]
   approvalRoutes LeavePolicyApprovalRoute[]
 
   @@index([leaveTypeId, isActive])
@@ -1098,13 +1123,13 @@ model LeavePolicy {
 model LeavePolicyNoticeRule {
   id Int @id @default(autoincrement())
 
-  policyId   Int  @map("policy_id")
-  sequenceNo Int  @map("sequence_no")
-  minHours   Decimal? @map("min_hours") @db.Decimal(8, 2)
-  maxHours   Decimal? @map("max_hours") @db.Decimal(8, 2)
-  noticeValue Int @map("notice_value")
-  noticeUnit LeaveNoticeUnit @default(calendar_days) @map("notice_unit")
-  isActive   Boolean @default(true) @map("is_active")
+  policyId    Int             @map("policy_id")
+  sequenceNo  Int             @map("sequence_no")
+  minHours    Decimal?        @map("min_hours") @db.Decimal(8, 2)
+  maxHours    Decimal?        @map("max_hours") @db.Decimal(8, 2)
+  noticeValue Int             @map("notice_value")
+  noticeUnit  LeaveNoticeUnit @default(calendar_days) @map("notice_unit")
+  isActive    Boolean         @default(true) @map("is_active")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1119,16 +1144,16 @@ model LeavePolicyNoticeRule {
 model LeavePolicyApprovalRoute {
   id Int @id @default(autoincrement())
 
-  policyId Int @map("policy_id")
+  policyId Int      @map("policy_id")
   name     String
   minHours Decimal? @map("min_hours") @db.Decimal(8, 2)
   maxHours Decimal? @map("max_hours") @db.Decimal(8, 2)
-  isActive Boolean @default(true) @map("is_active")
+  isActive Boolean  @default(true) @map("is_active")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  policy LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  policy LeavePolicy                    @relation(fields: [policyId], references: [id], onDelete: Cascade)
   steps  LeavePolicyApprovalRouteStep[]
 
   @@index([policyId, isActive])
@@ -1138,17 +1163,17 @@ model LeavePolicyApprovalRoute {
 model LeavePolicyApprovalRouteStep {
   id Int @id @default(autoincrement())
 
-  routeId            Int @map("route_id")
-  stepNumber         Int @map("step_number")
-  stageType          LeaveApprovalStageType @map("stage_type")
-  approverSource     LeaveApproverSource @default(employee_manager) @map("approver_source")
-  approverProfileId  Int? @map("approver_profile_id")
+  routeId           Int                    @map("route_id")
+  stepNumber        Int                    @map("step_number")
+  stageType         LeaveApprovalStageType @map("stage_type")
+  approverSource    LeaveApproverSource    @default(employee_manager) @map("approver_source")
+  approverProfileId Int?                   @map("approver_profile_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   route           LeavePolicyApprovalRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  approverProfile Profile? @relation("LeavePolicyApprovalRouteStepApprover", fields: [approverProfileId], references: [id], onDelete: SetNull)
+  approverProfile Profile?                 @relation("LeavePolicyApprovalRouteStepApprover", fields: [approverProfileId], references: [id], onDelete: SetNull)
 
   @@unique([routeId, stepNumber])
   @@index([routeId, stageType])
@@ -1159,12 +1184,12 @@ model LeavePolicyApprovalRouteStep {
 model LeavePolicyAssignment {
   id Int @id @default(autoincrement())
 
-  policyId      Int                       @map("policy_id")
-  scope         LeavePolicyAssignmentScope @default(global)
-  departmentId  Int?                      @map("department_id")
-  roleId        Int?                      @map("role_id")
-  profileId     Int?                      @map("profile_id")
-  priority      Int                       @default(100)
+  policyId     Int                        @map("policy_id")
+  scope        LeavePolicyAssignmentScope @default(global)
+  departmentId Int?                       @map("department_id")
+  roleId       Int?                       @map("role_id")
+  profileId    Int?                       @map("profile_id")
+  priority     Int                        @default(100)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1223,15 +1248,15 @@ model LeaveDelegation {
 model LeaveRequest {
   id Int @id @default(autoincrement())
 
-  employeeProfileId       Int  @map("employee_profile_id")
-  leaveTypeId             Int  @map("leave_type_id")
-  policyId                Int? @map("policy_id")
+  employeeProfileId        Int  @map("employee_profile_id")
+  leaveTypeId              Int  @map("leave_type_id")
+  policyId                 Int? @map("policy_id")
   currentApproverProfileId Int? @map("current_approver_profile_id")
 
-  startDate       DateTime       @map("start_date")
-  endDate         DateTime       @map("end_date")
-  startsAt        DateTime?      @map("starts_at")
-  endsAt          DateTime?      @map("ends_at")
+  startDate       DateTime        @map("start_date")
+  endDate         DateTime        @map("end_date")
+  startsAt        DateTime?       @map("starts_at")
+  endsAt          DateTime?       @map("ends_at")
   startDayPortion LeaveDayPortion @default(full_day) @map("start_day_portion")
   endDayPortion   LeaveDayPortion @default(full_day) @map("end_day_portion")
 
@@ -1240,12 +1265,12 @@ model LeaveRequest {
   requestedHours Decimal @default(0) @map("requested_hours") @db.Decimal(8, 2)
   deductedHours  Decimal @default(0) @map("deducted_hours") @db.Decimal(8, 2)
 
-  status             LeaveRequestStatus @default(pending_manager_approval)
-  reason             String?            @db.Text
-  declineReason      String?            @map("decline_reason") @db.Text
-  cancellationReason String?            @map("cancellation_reason") @db.Text
-  approvalRouteSnapshot Json?           @map("approval_route_snapshot")
-  validationSnapshot Json?              @map("validation_snapshot")
+  status                LeaveRequestStatus @default(pending_manager_approval)
+  reason                String?            @db.Text
+  declineReason         String?            @map("decline_reason") @db.Text
+  cancellationReason    String?            @map("cancellation_reason") @db.Text
+  approvalRouteSnapshot Json?              @map("approval_route_snapshot")
+  validationSnapshot    Json?              @map("validation_snapshot")
 
   submittedAt DateTime  @default(now()) @map("submitted_at")
   approvedAt  DateTime? @map("approved_at")
@@ -1255,10 +1280,10 @@ model LeaveRequest {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  employee        Profile   @relation("LeaveRequestEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  leaveType       LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  employee        Profile      @relation("LeaveRequestEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  leaveType       LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
   policy          LeavePolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
-  currentApprover Profile?  @relation("LeaveRequestCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
+  currentApprover Profile?     @relation("LeaveRequestCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
 
   approvalSteps LeaveApprovalStep[]
   ledgerEntries LeaveLedgerEntry[]
@@ -1276,21 +1301,21 @@ model LeaveRequest {
 model LeaveApprovalStep {
   id Int @id @default(autoincrement())
 
-  leaveRequestId          Int                 @map("leave_request_id")
-  stepNumber              Int                 @map("step_number")
-  stageType               LeaveApprovalStageType @map("stage_type")
-  approverProfileId       Int                 @map("approver_profile_id")
-  delegatedFromProfileId  Int?                @map("delegated_from_profile_id")
-  decision                LeaveApprovalDecision @default(pending)
-  notes                   String?             @db.Text
-  actedAt                 DateTime?           @map("acted_at")
+  leaveRequestId         Int                    @map("leave_request_id")
+  stepNumber             Int                    @map("step_number")
+  stageType              LeaveApprovalStageType @map("stage_type")
+  approverProfileId      Int                    @map("approver_profile_id")
+  delegatedFromProfileId Int?                   @map("delegated_from_profile_id")
+  decision               LeaveApprovalDecision  @default(pending)
+  notes                  String?                @db.Text
+  actedAt                DateTime?              @map("acted_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  leaveRequest   LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
-  approver       Profile      @relation("LeaveApprovalStepApprover", fields: [approverProfileId], references: [id], onDelete: Cascade)
-  delegatedFrom  Profile?     @relation("LeaveApprovalStepDelegatedFrom", fields: [delegatedFromProfileId], references: [id], onDelete: SetNull)
+  leaveRequest  LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  approver      Profile      @relation("LeaveApprovalStepApprover", fields: [approverProfileId], references: [id], onDelete: Cascade)
+  delegatedFrom Profile?     @relation("LeaveApprovalStepDelegatedFrom", fields: [delegatedFromProfileId], references: [id], onDelete: SetNull)
 
   @@unique([leaveRequestId, stepNumber])
   @@index([approverProfileId, decision])
@@ -1305,20 +1330,20 @@ model LeaveBalance {
   leaveTypeId       Int @map("leave_type_id")
   leaveYear         Int @map("leave_year")
 
-  openingBalance  Decimal @default(0) @map("opening_balance") @db.Decimal(8, 2)
-  accruedUnits    Decimal @default(0) @map("accrued_units") @db.Decimal(8, 2)
+  openingBalance   Decimal @default(0) @map("opening_balance") @db.Decimal(8, 2)
+  accruedUnits     Decimal @default(0) @map("accrued_units") @db.Decimal(8, 2)
   carriedOverUnits Decimal @default(0) @map("carried_over_units") @db.Decimal(8, 2)
-  adjustedUnits   Decimal @default(0) @map("adjusted_units") @db.Decimal(8, 2)
-  usedUnits       Decimal @default(0) @map("used_units") @db.Decimal(8, 2)
-  pendingUnits    Decimal @default(0) @map("pending_units") @db.Decimal(8, 2)
-  availableUnits  Decimal @default(0) @map("available_units") @db.Decimal(8, 2)
+  adjustedUnits    Decimal @default(0) @map("adjusted_units") @db.Decimal(8, 2)
+  usedUnits        Decimal @default(0) @map("used_units") @db.Decimal(8, 2)
+  pendingUnits     Decimal @default(0) @map("pending_units") @db.Decimal(8, 2)
+  availableUnits   Decimal @default(0) @map("available_units") @db.Decimal(8, 2)
 
   lastCalculatedAt DateTime? @map("last_calculated_at")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  employee      Profile           @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  leaveType     LeaveType         @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  employee      Profile            @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  leaveType     LeaveType          @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
   ledgerEntries LeaveLedgerEntry[]
 
   @@unique([employeeProfileId, leaveTypeId, leaveYear])
@@ -1329,16 +1354,16 @@ model LeaveBalance {
 model LeaveLedgerEntry {
   id Int @id @default(autoincrement())
 
-  leaveBalanceId      Int?  @map("leave_balance_id")
-  employeeProfileId   Int   @map("employee_profile_id")
-  leaveTypeId         Int   @map("leave_type_id")
-  leaveRequestId      Int?  @map("leave_request_id")
-  createdByProfileId  Int?  @map("created_by_profile_id")
-  leaveYear           Int   @map("leave_year")
-  transactionType     LeaveBalanceTransactionType @map("transaction_type")
-  units               Decimal @db.Decimal(8, 2)
-  note                String? @db.Text
-  effectiveDate       DateTime @map("effective_date")
+  leaveBalanceId     Int?                        @map("leave_balance_id")
+  employeeProfileId  Int                         @map("employee_profile_id")
+  leaveTypeId        Int                         @map("leave_type_id")
+  leaveRequestId     Int?                        @map("leave_request_id")
+  createdByProfileId Int?                        @map("created_by_profile_id")
+  leaveYear          Int                         @map("leave_year")
+  transactionType    LeaveBalanceTransactionType @map("transaction_type")
+  units              Decimal                     @db.Decimal(8, 2)
+  note               String?                     @db.Text
+  effectiveDate      DateTime                    @map("effective_date")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -1356,13 +1381,13 @@ model LeaveLedgerEntry {
 model LeaveRequestSegment {
   id Int @id @default(autoincrement())
 
-  leaveRequestId     Int @map("leave_request_id")
-  leaveDate          DateTime @map("leave_date")
-  startMinuteOfDay   Int? @map("start_minute_of_day")
-  endMinuteOfDay     Int? @map("end_minute_of_day")
-  hours              Decimal @db.Decimal(8, 2)
-  timeEntryId        Int? @map("time_entry_id")
-  syncStatus         LeaveRequestSegmentSyncStatus @default(projected) @map("sync_status")
+  leaveRequestId   Int                           @map("leave_request_id")
+  leaveDate        DateTime                      @map("leave_date")
+  startMinuteOfDay Int?                          @map("start_minute_of_day")
+  endMinuteOfDay   Int?                          @map("end_minute_of_day")
+  hours            Decimal                       @db.Decimal(8, 2)
+  timeEntryId      Int?                          @map("time_entry_id")
+  syncStatus       LeaveRequestSegmentSyncStatus @default(projected) @map("sync_status")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1379,10 +1404,10 @@ model LeaveRequestSegment {
 model RequisitionType {
   id Int @id @default(autoincrement())
 
-  code         String @unique
+  code         String  @unique
   name         String
   description  String?
-  sourceModule String @map("source_module")
+  sourceModule String  @map("source_module")
   isActive     Boolean @default(true) @map("is_active")
 
   requiresJob        Boolean @default(false) @map("requires_job")
@@ -1405,40 +1430,40 @@ model RequisitionType {
 model RequisitionRequest {
   id Int @id @default(autoincrement())
 
-  requisitionNumber        String  @unique @map("requisition_number")
-  requisitionTypeId        Int     @map("requisition_type_id")
-  requesterProfileId       Int     @map("requester_profile_id")
-  requesterDepartmentId    Int?    @map("requester_department_id")
-  currentApproverProfileId Int?    @map("current_approver_profile_id")
+  requisitionNumber        String @unique @map("requisition_number")
+  requisitionTypeId        Int    @map("requisition_type_id")
+  requesterProfileId       Int    @map("requester_profile_id")
+  requesterDepartmentId    Int?   @map("requester_department_id")
+  currentApproverProfileId Int?   @map("current_approver_profile_id")
 
-  sourceModule String @map("source_module")
+  sourceModule String            @map("source_module")
   status       RequisitionStatus @default(pending_manager_approval)
 
-  title                String
-  justification        String?  @db.Text
-  amount               Decimal  @db.Decimal(14, 2)
-  amountBreakdown      Json?    @map("amount_breakdown")
-  currency             String   @default("KES")
-  quantity             Decimal? @db.Decimal(12, 2)
-  neededByDate         DateTime? @map("needed_by_date")
-  vendorName           String?   @map("vendor_name")
-  clientId             Int?      @map("client_id")
-  jobId                Int?      @map("job_id")
-  isClientRecoverable  Boolean   @default(false) @map("is_client_recoverable")
-  taxImpactNotes       String?   @map("tax_impact_notes") @db.Text
-  moduleData           Json?     @map("module_data")
-  approvalRouteSnapshot Json?    @map("approval_route_snapshot")
+  title                 String
+  justification         String?   @db.Text
+  amount                Decimal   @db.Decimal(14, 2)
+  amountBreakdown       Json?     @map("amount_breakdown")
+  currency              String    @default("KES")
+  quantity              Decimal?  @db.Decimal(12, 2)
+  neededByDate          DateTime? @map("needed_by_date")
+  vendorName            String?   @map("vendor_name")
+  clientId              Int?      @map("client_id")
+  jobId                 Int?      @map("job_id")
+  isClientRecoverable   Boolean   @default(false) @map("is_client_recoverable")
+  taxImpactNotes        String?   @map("tax_impact_notes") @db.Text
+  moduleData            Json?     @map("module_data")
+  approvalRouteSnapshot Json?     @map("approval_route_snapshot")
 
-  declineReason      String?  @map("decline_reason") @db.Text
-  cancellationReason String?  @map("cancellation_reason") @db.Text
-  releasedAt         DateTime? @map("released_at")
-  releasedByProfileId Int?     @map("released_by_profile_id")
-  releaseNotes       String?   @map("release_notes") @db.Text
-  accountabilityDueAt DateTime? @map("accountability_due_at")
-  accountabilityStatus RequisitionAccountabilityStatus @default(not_released) @map("accountability_status")
-  accountabilitySubmittedAt DateTime? @map("accountability_submitted_at")
-  accountabilitySubmittedByProfileId Int? @map("accountability_submitted_by_profile_id")
-  accountabilityNotes String? @map("accountability_notes") @db.Text
+  declineReason                      String?                         @map("decline_reason") @db.Text
+  cancellationReason                 String?                         @map("cancellation_reason") @db.Text
+  releasedAt                         DateTime?                       @map("released_at")
+  releasedByProfileId                Int?                            @map("released_by_profile_id")
+  releaseNotes                       String?                         @map("release_notes") @db.Text
+  accountabilityDueAt                DateTime?                       @map("accountability_due_at")
+  accountabilityStatus               RequisitionAccountabilityStatus @default(not_released) @map("accountability_status")
+  accountabilitySubmittedAt          DateTime?                       @map("accountability_submitted_at")
+  accountabilitySubmittedByProfileId Int?                            @map("accountability_submitted_by_profile_id")
+  accountabilityNotes                String?                         @map("accountability_notes") @db.Text
 
   submittedAt DateTime  @default(now()) @map("submitted_at")
   approvedAt  DateTime? @map("approved_at")
@@ -1448,14 +1473,14 @@ model RequisitionRequest {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  requisitionType RequisitionType @relation(fields: [requisitionTypeId], references: [id], onDelete: Restrict)
-  requester       Profile         @relation("RequisitionRequester", fields: [requesterProfileId], references: [id], onDelete: Cascade)
-  requesterDepartment Department? @relation(fields: [requesterDepartmentId], references: [id], onDelete: SetNull)
-  currentApprover Profile?        @relation("RequisitionCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
-  releasedBy      Profile?        @relation("RequisitionReleasedBy", fields: [releasedByProfileId], references: [id], onDelete: SetNull)
-  accountabilitySubmittedBy Profile? @relation("RequisitionAccountabilitySubmittedBy", fields: [accountabilitySubmittedByProfileId], references: [id], onDelete: SetNull)
-  client          Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  job             Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  requisitionType           RequisitionType @relation(fields: [requisitionTypeId], references: [id], onDelete: Restrict)
+  requester                 Profile         @relation("RequisitionRequester", fields: [requesterProfileId], references: [id], onDelete: Cascade)
+  requesterDepartment       Department?     @relation(fields: [requesterDepartmentId], references: [id], onDelete: SetNull)
+  currentApprover           Profile?        @relation("RequisitionCurrentApprover", fields: [currentApproverProfileId], references: [id], onDelete: SetNull)
+  releasedBy                Profile?        @relation("RequisitionReleasedBy", fields: [releasedByProfileId], references: [id], onDelete: SetNull)
+  accountabilitySubmittedBy Profile?        @relation("RequisitionAccountabilitySubmittedBy", fields: [accountabilitySubmittedByProfileId], references: [id], onDelete: SetNull)
+  client                    Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  job                       Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   approvalSteps RequisitionApprovalStep[]
 
@@ -1473,13 +1498,13 @@ model RequisitionRequest {
 model RequisitionApprovalStep {
   id Int @id @default(autoincrement())
 
-  requisitionRequestId Int @map("requisition_request_id")
-  stepNumber           Int @map("step_number")
+  requisitionRequestId Int                          @map("requisition_request_id")
+  stepNumber           Int                          @map("step_number")
   stageType            RequisitionApprovalStageType @map("stage_type")
-  approverProfileId    Int @map("approver_profile_id")
-  decision             RequisitionApprovalDecision @default(pending)
-  notes                String? @db.Text
-  actedAt              DateTime? @map("acted_at")
+  approverProfileId    Int                          @map("approver_profile_id")
+  decision             RequisitionApprovalDecision  @default(pending)
+  notes                String?                      @db.Text
+  actedAt              DateTime?                    @map("acted_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1500,17 +1525,17 @@ model RequisitionApprovalStep {
 model Feedback {
   id Int @id @default(autoincrement())
 
-  giverProfileId     Int @map("giver_profile_id")
-  recipientProfileId Int @map("recipient_profile_id")
+  giverProfileId     Int  @map("giver_profile_id")
+  recipientProfileId Int  @map("recipient_profile_id")
   jobId              Int? @map("job_id")
 
-  title   String
-  content String
-  type    String @default("general")
-  message String? @db.Text
+  title        String
+  content      String
+  type         String                 @default("general")
+  message      String?                @db.Text
   feedbackType ContinuousFeedbackType @default(praise) @map("feedback_type")
-  isPrivate Boolean @default(false) @map("is_private")
-  visibility FeedbackVisibility @default(all)
+  isPrivate    Boolean                @default(false) @map("is_private")
+  visibility   FeedbackVisibility     @default(all)
 
   isAnonymous Boolean @default(false) @map("is_anonymous")
   status      String  @default("pending")
@@ -1529,25 +1554,25 @@ model Feedback {
 }
 
 model TrainingRecord {
-  id                   Int                  @id @default(autoincrement())
-  employeeProfileId    Int?                 @map("employee_profile_id")
-  createdByProfileId   Int                  @map("created_by_profile_id")
-  departmentId         Int?                 @map("department_id")
-  courseName           String               @map("course_name")
-  trainingType         TrainingRecordType   @default(internal) @map("training_type")
-  status               TrainingRecordStatus @default(planned)
-  deliveryMode         String?              @map("delivery_mode")
-  startDate            DateTime             @map("start_date")
-  endDate              DateTime?            @map("end_date")
+  id                   Int                      @id @default(autoincrement())
+  employeeProfileId    Int?                     @map("employee_profile_id")
+  createdByProfileId   Int                      @map("created_by_profile_id")
+  departmentId         Int?                     @map("department_id")
+  courseName           String                   @map("course_name")
+  trainingType         TrainingRecordType       @default(internal) @map("training_type")
+  status               TrainingRecordStatus     @default(planned)
+  deliveryMode         String?                  @map("delivery_mode")
+  startDate            DateTime                 @map("start_date")
+  endDate              DateTime?                @map("end_date")
   provider             String?
-  cost                 Decimal              @default(0) @db.Decimal(14, 2)
-  completionPercentage Decimal              @default(0) @map("completion_percentage") @db.Decimal(5, 2)
-  certificateUrl       String?              @map("certificate_url")
+  cost                 Decimal                  @default(0) @db.Decimal(14, 2)
+  completionPercentage Decimal                  @default(0) @map("completion_percentage") @db.Decimal(5, 2)
+  certificateUrl       String?                  @map("certificate_url")
   sourceType           TrainingRecordSourceType @default(manual) @map("source_type")
-  learningAssignmentId Int?                 @unique @map("learning_assignment_id")
+  learningAssignmentId Int?                     @unique @map("learning_assignment_id")
   notes                String?
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
+  createdAt            DateTime                 @default(now()) @map("created_at")
+  updatedAt            DateTime                 @updatedAt @map("updated_at")
 
   employee           Profile?            @relation("TrainingRecordEmployee", fields: [employeeProfileId], references: [id], onDelete: SetNull)
   creator            Profile             @relation("TrainingRecordCreator", fields: [createdByProfileId], references: [id], onDelete: Cascade)
@@ -1575,8 +1600,8 @@ model SkillAssessment {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  employee   Profile    @relation("SkillAssessmentEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  assessor   Profile    @relation("SkillAssessmentAssessor", fields: [assessorProfileId], references: [id], onDelete: Cascade)
+  employee   Profile     @relation("SkillAssessmentEmployee", fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  assessor   Profile     @relation("SkillAssessmentAssessor", fields: [assessorProfileId], references: [id], onDelete: Cascade)
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
 
   @@index([employeeProfileId, assessmentDate])
@@ -1715,14 +1740,14 @@ model InductionChecklist {
   completedItems    Int             @default(0) @map("completed_items")
   completionPercent Decimal         @default(0) @map("completion_percent") @db.Decimal(5, 2)
 
-  assignedByProfileId Int?      @map("assigned_by_profile_id")
-  dueDate             DateTime? @map("due_date")
-  completedAt         DateTime? @map("completed_at")
-  employeeAcknowledgedAt DateTime? @map("employee_acknowledged_at")
-  employeeAcknowledgedByProfileId Int? @map("employee_acknowledged_by_profile_id")
-  hrSignedOffAt DateTime? @map("hr_signed_off_at")
-  hrSignedOffByProfileId Int? @map("hr_signed_off_by_profile_id")
-  hrSignoffNotes String? @map("hr_signoff_notes") @db.Text
+  assignedByProfileId             Int?      @map("assigned_by_profile_id")
+  dueDate                         DateTime? @map("due_date")
+  completedAt                     DateTime? @map("completed_at")
+  employeeAcknowledgedAt          DateTime? @map("employee_acknowledged_at")
+  employeeAcknowledgedByProfileId Int?      @map("employee_acknowledged_by_profile_id")
+  hrSignedOffAt                   DateTime? @map("hr_signed_off_at")
+  hrSignedOffByProfileId          Int?      @map("hr_signed_off_by_profile_id")
+  hrSignoffNotes                  String?   @map("hr_signoff_notes") @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1741,15 +1766,15 @@ model InductionChecklistItem {
   id          Int @id @default(autoincrement())
   checklistId Int @map("checklist_id")
 
-  itemName    String  @map("item_name")
-  description String?
-  orderIndex  Int     @default(0) @map("order_index")
-  sectionKey  String  @default("general") @map("section_key")
-  sectionLabel String @default("General") @map("section_label")
-  ownerRole   String? @map("owner_role")
-  itemType    String  @default("task") @map("item_type")
-  resourceUrl String? @map("resource_url")
-  comments    String? @db.Text
+  itemName     String  @map("item_name")
+  description  String?
+  orderIndex   Int     @default(0) @map("order_index")
+  sectionKey   String  @default("general") @map("section_key")
+  sectionLabel String  @default("General") @map("section_label")
+  ownerRole    String? @map("owner_role")
+  itemType     String  @default("task") @map("item_type")
+  resourceUrl  String? @map("resource_url")
+  comments     String? @db.Text
 
   isCompleted          Boolean   @default(false) @map("is_completed")
   completedByProfileId Int?      @map("completed_by_profile_id")
@@ -1871,17 +1896,17 @@ model Document {
 
   engagementLetters EngagementLetter[] @relation("EngagementLetterDocument")
 
-  candidateOfferLetters RecruitmentCandidate[]     @relation("CandidateOfferLetter")
-  checklistItemDocs     InductionChecklistItem[]   @relation("ChecklistItemDocument")
-  clientOnboardingChecklistItemDocs ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemDocument")
-  offboardingItemDocs   OffboardingChecklistItem[] @relation("OffboardingItemDocument")
-  learningModuleDocuments        LearningModule[]      @relation("LearningModuleDocument")
-  certificateTemplateBackgrounds CertificateTemplate[] @relation("CertificateTemplateBackground")
-  certificateTemplateSignatures  CertificateTemplate[] @relation("CertificateTemplateSignature")
-  globalCertificateTemplateBackgrounds GlobalCertificateTemplate[] @relation("GlobalCertificateTemplateBackground")
-  globalCertificateTemplateSignatures  GlobalCertificateTemplate[] @relation("GlobalCertificateTemplateSignature")
-  issuedLearningCertificates     IssuedCertificate[]   @relation("IssuedCertificateDocument")
-  jobInvoiceDocuments            JobInvoice[]          @relation("JobInvoiceDocument")
+  candidateOfferLetters                RecruitmentCandidate[]          @relation("CandidateOfferLetter")
+  checklistItemDocs                    InductionChecklistItem[]        @relation("ChecklistItemDocument")
+  clientOnboardingChecklistItemDocs    ClientOnboardingChecklistItem[] @relation("ClientOnboardingChecklistItemDocument")
+  offboardingItemDocs                  OffboardingChecklistItem[]      @relation("OffboardingItemDocument")
+  learningModuleDocuments              LearningModule[]                @relation("LearningModuleDocument")
+  certificateTemplateBackgrounds       CertificateTemplate[]           @relation("CertificateTemplateBackground")
+  certificateTemplateSignatures        CertificateTemplate[]           @relation("CertificateTemplateSignature")
+  globalCertificateTemplateBackgrounds GlobalCertificateTemplate[]     @relation("GlobalCertificateTemplateBackground")
+  globalCertificateTemplateSignatures  GlobalCertificateTemplate[]     @relation("GlobalCertificateTemplateSignature")
+  issuedLearningCertificates           IssuedCertificate[]             @relation("IssuedCertificateDocument")
+  jobInvoiceDocuments                  JobInvoice[]                    @relation("JobInvoiceDocument")
 
   @@index([entityType, entityId])
   @@index([documentType])
@@ -1889,36 +1914,36 @@ model Document {
 }
 
 model KnowledgeHubResource {
-  id          Int      @id @default(autoincrement())
-  title       String
-  summary     String?
-  domain      String
-  resourceType String   @map("resource_type")
-  assetKind   String    @default("link") @map("asset_kind")
-  submodules  String[] @default([])
-  tags        String[] @default([])
-  linkUrl     String?  @map("link_url")
-  assetFileName String? @map("asset_file_name")
-  assetMimeType String? @map("asset_mime_type")
-  content     String?
-  allowDownload Boolean @default(true) @map("allow_download")
-  isFeatured  Boolean  @default(false) @map("is_featured")
-  isPublished Boolean  @default(true) @map("is_published")
-  publishedAt DateTime? @map("published_at")
+  id                         Int                     @id @default(autoincrement())
+  title                      String
+  summary                    String?
+  domain                     String
+  resourceType               String                  @map("resource_type")
+  assetKind                  String                  @default("link") @map("asset_kind")
+  submodules                 String[]                @default([])
+  tags                       String[]                @default([])
+  linkUrl                    String?                 @map("link_url")
+  assetFileName              String?                 @map("asset_file_name")
+  assetMimeType              String?                 @map("asset_mime_type")
+  content                    String?
+  allowDownload              Boolean                 @default(true) @map("allow_download")
+  isFeatured                 Boolean                 @default(false) @map("is_featured")
+  isPublished                Boolean                 @default(true) @map("is_published")
+  publishedAt                DateTime?               @map("published_at")
   estimatedDurationMinutes   Int?                    @map("estimated_duration_minutes")
   completionMode             KnowledgeCompletionMode @default(manual) @map("completion_mode")
   completionThresholdPercent Decimal?                @map("completion_threshold_percent") @db.Decimal(5, 2)
   minReadSeconds             Int?                    @map("min_read_seconds")
   pointsOnCompletion         Int                     @default(0) @map("points_on_completion")
 
-  createdByProfileId Int? @map("created_by_profile_id")
-  updatedByProfileId Int? @map("updated_by_profile_id")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdByProfileId Int?     @map("created_by_profile_id")
+  updatedByProfileId Int?     @map("updated_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   progressEntries KnowledgeHubResourceProgress[]
   quiz            KnowledgeHubQuiz?
-  learningModules LearningModule[] @relation("LearningModuleKnowledgeResource")
+  learningModules LearningModule[]               @relation("LearningModuleKnowledgeResource")
 
   @@index([domain])
   @@index([resourceType])
@@ -1961,7 +1986,7 @@ model KnowledgeHubQuiz {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  resource  KnowledgeHubResource         @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  resource  KnowledgeHubResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   questions KnowledgeHubQuizQuestion[]
   attempts  KnowledgeHubQuizAttempt[]
 
@@ -1970,15 +1995,15 @@ model KnowledgeHubQuiz {
 }
 
 model KnowledgeHubQuizQuestion {
-  id           Int                       @id @default(autoincrement())
-  quizId       Int                       @map("quiz_id")
-  questionType LearningQuizQuestionType  @map("question_type")
+  id           Int                      @id @default(autoincrement())
+  quizId       Int                      @map("quiz_id")
+  questionType LearningQuizQuestionType @map("question_type")
   prompt       String
-  displayOrder Int                       @map("display_order")
-  required     Boolean                   @default(true)
-  explanation  String?                   @db.Text
-  createdAt    DateTime                  @default(now()) @map("created_at")
-  updatedAt    DateTime                  @updatedAt @map("updated_at")
+  displayOrder Int                      @map("display_order")
+  required     Boolean                  @default(true)
+  explanation  String?                  @db.Text
+  createdAt    DateTime                 @default(now()) @map("created_at")
+  updatedAt    DateTime                 @updatedAt @map("updated_at")
 
   quiz    KnowledgeHubQuiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
   options KnowledgeHubQuizOption[]
@@ -1989,11 +2014,11 @@ model KnowledgeHubQuizQuestion {
 }
 
 model KnowledgeHubQuizOption {
-  id           Int      @id @default(autoincrement())
-  questionId   Int      @map("question_id")
+  id           Int     @id @default(autoincrement())
+  questionId   Int     @map("question_id")
   label        String
-  isCorrect    Boolean  @default(false) @map("is_correct")
-  displayOrder Int      @map("display_order")
+  isCorrect    Boolean @default(false) @map("is_correct")
+  displayOrder Int     @map("display_order")
 
   question         KnowledgeHubQuizQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
   answerSelections KnowledgeHubQuizAnswerOption[]
@@ -2003,20 +2028,20 @@ model KnowledgeHubQuizOption {
 }
 
 model KnowledgeHubQuizAttempt {
-  id          Int                        @id @default(autoincrement())
-  quizId      Int                        @map("quiz_id")
-  profileId   Int                        @map("profile_id")
-  attemptNo   Int                        @map("attempt_no")
-  score       Decimal                    @default(0) @db.Decimal(5, 2)
-  status      LearningQuizAttemptStatus  @default(in_progress)
-  startedAt   DateTime                   @default(now()) @map("started_at")
-  submittedAt DateTime?                  @map("submitted_at")
-  passedAt    DateTime?                  @map("passed_at")
-  createdAt   DateTime                   @default(now()) @map("created_at")
-  updatedAt   DateTime                   @updatedAt @map("updated_at")
+  id          Int                       @id @default(autoincrement())
+  quizId      Int                       @map("quiz_id")
+  profileId   Int                       @map("profile_id")
+  attemptNo   Int                       @map("attempt_no")
+  score       Decimal                   @default(0) @db.Decimal(5, 2)
+  status      LearningQuizAttemptStatus @default(in_progress)
+  startedAt   DateTime                  @default(now()) @map("started_at")
+  submittedAt DateTime?                 @map("submitted_at")
+  passedAt    DateTime?                 @map("passed_at")
+  createdAt   DateTime                  @default(now()) @map("created_at")
+  updatedAt   DateTime                  @updatedAt @map("updated_at")
 
-  quiz    KnowledgeHubQuiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  profile Profile                @relation("KnowledgeHubQuizAttemptProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  quiz    KnowledgeHubQuiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  profile Profile                  @relation("KnowledgeHubQuizAttemptProfile", fields: [profileId], references: [id], onDelete: Cascade)
   answers KnowledgeHubQuizAnswer[]
 
   @@unique([quizId, profileId, attemptNo])
@@ -2033,8 +2058,8 @@ model KnowledgeHubQuizAnswer {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  attempt         KnowledgeHubQuizAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  question        KnowledgeHubQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attempt         KnowledgeHubQuizAttempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question        KnowledgeHubQuizQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
   selectedOptions KnowledgeHubQuizAnswerOption[]
 
   @@unique([attemptId, questionId])
@@ -2191,10 +2216,10 @@ model LearningAssignment {
   moduleProgressEntries LearningModuleProgress[]
   attendanceRecords     LearningAttendanceRecord[]
   quizAttempts          LearningQuizAttempt[]
-  certificate           IssuedCertificate?      @relation("LearningAssignmentCertificate")
+  certificate           IssuedCertificate?         @relation("LearningAssignmentCertificate")
   trainingFeedback      TrainingFeedback?
   impactAssessmentTask  ImpactAssessmentTask?
-  trainingRecord        TrainingRecord?         @relation("LearningAssignmentTrainingRecord")
+  trainingRecord        TrainingRecord?            @relation("LearningAssignmentTrainingRecord")
 
   @@unique([programVersionId, employeeProfileId])
   @@index([employeeProfileId, status])
@@ -2294,13 +2319,13 @@ model LearningQuizQuestion {
 }
 
 model LearningQuizOption {
-  id           Int      @id @default(autoincrement())
-  questionId   Int      @map("question_id")
+  id           Int     @id @default(autoincrement())
+  questionId   Int     @map("question_id")
   label        String
-  isCorrect    Boolean  @default(false) @map("is_correct")
-  displayOrder Int      @map("display_order")
+  isCorrect    Boolean @default(false) @map("is_correct")
+  displayOrder Int     @map("display_order")
 
-  question         LearningQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  question         LearningQuizQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
   answerSelections LearningQuizAnswerOption[]
 
   @@index([questionId, displayOrder])
@@ -2308,20 +2333,20 @@ model LearningQuizOption {
 }
 
 model LearningQuizAttempt {
-  id           Int                        @id @default(autoincrement())
-  quizId       Int                        @map("quiz_id")
-  assignmentId Int                        @map("assignment_id")
-  attemptNo    Int                        @map("attempt_no")
-  score        Decimal                    @default(0) @db.Decimal(5, 2)
-  status       LearningQuizAttemptStatus  @default(in_progress)
-  startedAt    DateTime                   @default(now()) @map("started_at")
-  submittedAt  DateTime?                  @map("submitted_at")
-  passedAt     DateTime?                  @map("passed_at")
-  createdAt    DateTime                   @default(now()) @map("created_at")
-  updatedAt    DateTime                   @updatedAt @map("updated_at")
+  id           Int                       @id @default(autoincrement())
+  quizId       Int                       @map("quiz_id")
+  assignmentId Int                       @map("assignment_id")
+  attemptNo    Int                       @map("attempt_no")
+  score        Decimal                   @default(0) @db.Decimal(5, 2)
+  status       LearningQuizAttemptStatus @default(in_progress)
+  startedAt    DateTime                  @default(now()) @map("started_at")
+  submittedAt  DateTime?                 @map("submitted_at")
+  passedAt     DateTime?                 @map("passed_at")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+  updatedAt    DateTime                  @updatedAt @map("updated_at")
 
-  quiz       LearningQuiz       @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  assignment LearningAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  quiz       LearningQuiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  assignment LearningAssignment   @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   answers    LearningQuizAnswer[]
 
   @@unique([quizId, assignmentId, attemptNo])
@@ -2338,8 +2363,8 @@ model LearningQuizAnswer {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  attempt         LearningQuizAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  question        LearningQuizQuestion      @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attempt         LearningQuizAttempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question        LearningQuizQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
   selectedOptions LearningQuizAnswerOption[]
 
   @@unique([attemptId, questionId])
@@ -2413,23 +2438,23 @@ model GlobalCertificateTemplate {
 }
 
 model IssuedCertificate {
-  id                    Int               @id @default(autoincrement())
-  assignmentId          Int               @unique @map("assignment_id")
-  certificateTemplateId Int?              @map("certificate_template_id")
-  globalCertificateTemplateId Int?        @map("global_certificate_template_id")
-  documentId            Int?              @map("document_id")
-  certificateNumber     String            @unique @map("certificate_number")
-  verificationCode      String            @unique @map("verification_code")
-  status                CertificateStatus @default(issued)
-  issuedAt              DateTime          @default(now()) @map("issued_at")
-  revokedAt             DateTime?         @map("revoked_at")
-  createdAt             DateTime          @default(now()) @map("created_at")
-  updatedAt             DateTime          @updatedAt @map("updated_at")
+  id                          Int               @id @default(autoincrement())
+  assignmentId                Int               @unique @map("assignment_id")
+  certificateTemplateId       Int?              @map("certificate_template_id")
+  globalCertificateTemplateId Int?              @map("global_certificate_template_id")
+  documentId                  Int?              @map("document_id")
+  certificateNumber           String            @unique @map("certificate_number")
+  verificationCode            String            @unique @map("verification_code")
+  status                      CertificateStatus @default(issued)
+  issuedAt                    DateTime          @default(now()) @map("issued_at")
+  revokedAt                   DateTime?         @map("revoked_at")
+  createdAt                   DateTime          @default(now()) @map("created_at")
+  updatedAt                   DateTime          @updatedAt @map("updated_at")
 
-  assignment          LearningAssignment @relation("LearningAssignmentCertificate", fields: [assignmentId], references: [id], onDelete: Cascade)
-  certificateTemplate CertificateTemplate? @relation(fields: [certificateTemplateId], references: [id], onDelete: SetNull)
+  assignment                LearningAssignment         @relation("LearningAssignmentCertificate", fields: [assignmentId], references: [id], onDelete: Cascade)
+  certificateTemplate       CertificateTemplate?       @relation(fields: [certificateTemplateId], references: [id], onDelete: SetNull)
   globalCertificateTemplate GlobalCertificateTemplate? @relation("IssuedCertificateGlobalTemplate", fields: [globalCertificateTemplateId], references: [id], onDelete: SetNull)
-  document            Document?            @relation("IssuedCertificateDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  document                  Document?                  @relation("IssuedCertificateDocument", fields: [documentId], references: [id], onDelete: SetNull)
 
   @@index([certificateTemplateId])
   @@index([globalCertificateTemplateId])
@@ -2467,8 +2492,8 @@ model ImpactAssessmentTask {
   createdAt        DateTime               @default(now()) @map("created_at")
   updatedAt        DateTime               @updatedAt @map("updated_at")
 
-  assignment LearningAssignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  manager    Profile                  @relation("ImpactAssessmentManager", fields: [managerProfileId], references: [id], onDelete: Restrict)
+  assignment LearningAssignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  manager    Profile                   @relation("ImpactAssessmentManager", fields: [managerProfileId], references: [id], onDelete: Restrict)
   response   ImpactAssessmentResponse?
 
   @@index([managerProfileId, status])
@@ -2548,9 +2573,9 @@ model ClientOnboarding {
   uploadedBy Profile  @relation("ClientOnboardingUploader", fields: [uploadedByProfileId], references: [id], onDelete: Restrict)
   hrReviewer Profile? @relation("ClientOnboardingReviewer", fields: [hrReviewerProfileId], references: [id], onDelete: SetNull)
 
-  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  client     Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  job        Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  department Department?                @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  client     Client?                    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  job        Job?                       @relation(fields: [jobId], references: [id], onDelete: SetNull)
   checklist  ClientOnboardingChecklist?
 
   @@index([status])
@@ -2560,8 +2585,8 @@ model ClientOnboarding {
 }
 
 model ClientOnboardingChecklist {
-  id                 Int  @id @default(autoincrement())
-  clientOnboardingId Int  @unique @map("client_onboarding_id")
+  id                 Int @id @default(autoincrement())
+  clientOnboardingId Int @unique @map("client_onboarding_id")
 
   checklistName     String          @default("Standard Client Onboarding") @map("checklist_name")
   status            ChecklistStatus @default(pending)
@@ -2949,7 +2974,8 @@ model BudgetCap {
 
 model TimeEntry {
   id                Int  @id @default(autoincrement())
-  jobId             Int  @map("job_id")
+  jobId             Int? @map("job_id")
+  proposalId        Int? @map("proposal_id")
   taskId            Int? @map("task_id")
   employeeProfileId Int  @map("employee_profile_id")
 
@@ -2976,22 +3002,26 @@ model TimeEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  task     Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  employee Profile  @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  approver Profile? @relation("ApprovedTimeEntries", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  proposal Proposal? @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  task     Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  employee Profile   @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  approver Profile?  @relation("ApprovedTimeEntries", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
 
   approvalRequests   TimeEntryApprovalRequest[]
   overBudgetRequests TimeOverBudgetRequest[]
   leaveSegments      LeaveRequestSegment[]
 
   /// Business rule (enforced in service layer):
-  /// Only allow time entry creation when a JobStaffAssignment exists for (employeeProfileId, jobId).
+  /// Only allow time entry creation when a JobStaffAssignment exists for (employeeProfileId, jobId)
+  /// or an approved ProposalTeamMember exists for (employeeProfileId, proposalId).
 
   @@index([employeeProfileId, dateWorked])
   @@index([employeeProfileId, jobId, dateWorked])
+  @@index([employeeProfileId, proposalId, dateWorked])
   @@index([jobId, dateWorked])
   @@index([jobId]) // optional (hot FK lookups)
+  @@index([proposalId])
   @@index([taskId])
   @@map("time_entries")
 }
@@ -3129,7 +3159,7 @@ model ClientPayment {
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
   job    Job?   @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
-  revenueAllocations RevenueAllocation[]
+  revenueAllocations  RevenueAllocation[]
   invoiceApplications JobInvoicePaymentApplication[]
 
   @@index([clientId])
@@ -3149,7 +3179,7 @@ model JobInvoiceTemplate {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
-  createdBy Profile? @relation("JobInvoiceTemplateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  createdBy Profile?     @relation("JobInvoiceTemplateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
   invoices  JobInvoice[]
 
   @@index([createdByProfileId])
@@ -3186,15 +3216,15 @@ model JobInvoice {
   createdAt            DateTime         @default(now()) @map("created_at")
   updatedAt            DateTime         @updatedAt @map("updated_at")
 
-  job             Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  client          Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  milestoneTask   Task?               @relation("JobInvoiceMilestoneTask", fields: [milestoneTaskId], references: [id], onDelete: SetNull)
-  template        JobInvoiceTemplate? @relation(fields: [jobInvoiceTemplateId], references: [id], onDelete: SetNull)
-  generatedBy     Profile?            @relation("JobInvoiceGeneratedBy", fields: [generatedByProfileId], references: [id], onDelete: SetNull)
-  issuedBy        Profile?            @relation("JobInvoiceIssuedBy", fields: [issuedByProfileId], references: [id], onDelete: SetNull)
-  document        Document?           @relation("JobInvoiceDocument", fields: [documentId], references: [id], onDelete: SetNull)
-  lines           JobInvoiceLine[]
-  statusHistory   JobInvoiceStatusHistory[]
+  job                 Job                            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  client              Client                         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  milestoneTask       Task?                          @relation("JobInvoiceMilestoneTask", fields: [milestoneTaskId], references: [id], onDelete: SetNull)
+  template            JobInvoiceTemplate?            @relation(fields: [jobInvoiceTemplateId], references: [id], onDelete: SetNull)
+  generatedBy         Profile?                       @relation("JobInvoiceGeneratedBy", fields: [generatedByProfileId], references: [id], onDelete: SetNull)
+  issuedBy            Profile?                       @relation("JobInvoiceIssuedBy", fields: [issuedByProfileId], references: [id], onDelete: SetNull)
+  document            Document?                      @relation("JobInvoiceDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  lines               JobInvoiceLine[]
+  statusHistory       JobInvoiceStatusHistory[]
   paymentApplications JobInvoicePaymentApplication[]
 
   @@index([jobId, status])
@@ -3335,8 +3365,8 @@ model ClientSatisfactionSurvey {
 // =============================
 
 model Proposal {
-  id       Int  @id @default(autoincrement())
-  clientId Int? @map("client_id")
+  id         Int     @id @default(autoincrement())
+  clientId   Int?    @map("client_id")
   clientName String? @map("client_name")
 
   proposalTitle String  @map("proposal_title")
@@ -3344,35 +3374,90 @@ model Proposal {
   proposedFee   Decimal @map("proposed_fee") @db.Decimal(14, 2)
   currency      String  @default("KES")
 
-  proposalDate         DateTime  @map("proposal_date")
-  expectedStart        DateTime? @map("expected_start")
-  expectedDurationDays Int?      @map("expected_duration_days")
+  proposalDate           DateTime  @map("proposal_date")
+  expectedStart          DateTime? @map("expected_start")
+  expectedDurationDays   Int?      @map("expected_duration_days")
+  deadlineDate           DateTime? @map("deadline_date")
+  dateAssigned           DateTime? @map("date_assigned")
+  employeeSubmissionDate DateTime? @map("employee_submission_date")
+  finalSubmittedAt       DateTime? @map("final_submitted_at")
 
   status      ProposalStatus @default(sent)
   probability Int            @default(50)
 
   createdByProfileId       Int? @map("created_by_profile_id")
   assignedPartnerProfileId Int? @map("assigned_partner_profile_id")
+  managerProfileId         Int? @map("manager_profile_id")
+  sourceProfileId          Int? @map("source_profile_id")
+  reviewerProfileId        Int? @map("reviewer_profile_id")
+  bdOwnerProfileId         Int? @map("bd_owner_profile_id")
+  departmentId             Int? @map("department_id")
 
   createdBy       Profile? @relation("ProposalCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
   assignedPartner Profile? @relation("ProposalAssignedPartner", fields: [assignedPartnerProfileId], references: [id], onDelete: SetNull)
+  manager         Profile? @relation("ProposalManager", fields: [managerProfileId], references: [id], onDelete: SetNull)
+  sourceProfile   Profile? @relation("ProposalSource", fields: [sourceProfileId], references: [id], onDelete: SetNull)
+  reviewerProfile Profile? @relation("ProposalReviewer", fields: [reviewerProfileId], references: [id], onDelete: SetNull)
+  bdOwner         Profile? @relation("ProposalBdOwner", fields: [bdOwnerProfileId], references: [id], onDelete: SetNull)
 
   wonAt      DateTime? @map("won_at")
   lostReason String?   @map("lost_reason")
 
-  notes String? @db.Text
+  proposalType          String?  @map("proposal_type")
+  requestedService      String?  @map("requested_service")
+  sourceName            String?  @map("source_name")
+  reviewerName          String?  @map("reviewer_name")
+  employeeDraftLink     String?  @map("employee_draft_link") @db.Text
+  bdFinalProposalLink   String?  @map("bd_final_proposal_link") @db.Text
+  finalSubmissionStatus String?  @map("final_submission_status")
+  awardStatus           String?  @map("award_status")
+  clientFeedback        String?  @map("client_feedback") @db.Text
+  managerDecisionNote   String?  @map("manager_decision_note") @db.Text
+  timeTakenHours        Decimal? @map("time_taken_hours") @db.Decimal(10, 2)
+  notes                 String?  @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client      Client?              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  department  Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  teamMembers ProposalTeamMember[]
+  timeEntries TimeEntry[]
 
   @@index([clientId])
   @@index([status])
   @@index([proposalDate])
   @@index([createdByProfileId])
   @@index([assignedPartnerProfileId])
+  @@index([managerProfileId])
+  @@index([departmentId])
+  @@index([bdOwnerProfileId])
   @@map("proposals")
+}
+
+model ProposalTeamMember {
+  id         Int @id @default(autoincrement())
+  proposalId Int @map("proposal_id")
+  profileId  Int @map("profile_id")
+
+  status              ProposalTeamMemberStatus @default(pending_manager_approval)
+  roleOnProposal      String?                  @map("role_on_proposal")
+  approvedByProfileId Int?                     @map("approved_by_profile_id")
+  approvedAt          DateTime?                @map("approved_at")
+  rejectionReason     String?                  @map("rejection_reason") @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proposal   Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  profile    Profile  @relation("ProposalTeamMemberProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  approvedBy Profile? @relation("ProposalTeamMemberApprover", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([proposalId, profileId])
+  @@index([profileId, status])
+  @@index([proposalId, status])
+  @@index([approvedByProfileId])
+  @@map("proposal_team_members")
 }
 
 model RevenueProjection {
@@ -3410,13 +3495,13 @@ model RevenueProjection {
 // =============================
 
 model EvaluationCycle {
-  id          Int      @id @default(autoincrement())
-  cycleName   String   @map("cycle_name")
-  description String?
-  cycleType   EvaluationCycleType @default(annual) @map("cycle_type")
-  startDate   DateTime @map("start_date")
-  endDate     DateTime @map("end_date")
-  departmentId Int?    @map("department_id")
+  id           Int                 @id @default(autoincrement())
+  cycleName    String              @map("cycle_name")
+  description  String?
+  cycleType    EvaluationCycleType @default(annual) @map("cycle_type")
+  startDate    DateTime            @map("start_date")
+  endDate      DateTime            @map("end_date")
+  departmentId Int?                @map("department_id")
 
   status EvaluationCycleStatus @default(draft) // v2.1 (was String)
 
@@ -3424,13 +3509,13 @@ model EvaluationCycle {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  definitions          EvaluationDefinition[]
-  performanceScores    PerformanceScore[]
-  assignments          EvaluationAssignment[] @relation("EvaluationCycleAssignments")
-  employeeGoals        EmployeeGoal[]
-  calibrationSessions  CalibrationSession[]
-  performanceReviews   PerformanceReview[]
-  developmentPlans     DevelopmentPlan[]
+  definitions         EvaluationDefinition[]
+  performanceScores   PerformanceScore[]
+  assignments         EvaluationAssignment[] @relation("EvaluationCycleAssignments")
+  employeeGoals       EmployeeGoal[]
+  calibrationSessions CalibrationSession[]
+  performanceReviews  PerformanceReview[]
+  developmentPlans    DevelopmentPlan[]
 
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   createdBy  Profile?    @relation("EvaluationCycleCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
@@ -3472,8 +3557,8 @@ model EvaluationDefinition {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  cycle      EvaluationCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  department Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  cycle      EvaluationCycle?    @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  department Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   template   EvaluationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   createdBy Profile? @relation("EvalCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
@@ -3486,15 +3571,15 @@ model EvaluationDefinition {
 }
 
 model EvaluationAssignment {
-  id                     Int @id @default(autoincrement())
-  evaluationDefinitionId Int @map("evaluation_definition_id")
+  id                     Int  @id @default(autoincrement())
+  evaluationDefinitionId Int  @map("evaluation_definition_id")
   cycleId                Int? @map("cycle_id")
 
-  evaluatorProfileId Int @map("evaluator_profile_id")
-  evaluateeProfileId Int @map("evaluatee_profile_id")
+  evaluatorProfileId Int       @map("evaluator_profile_id")
+  evaluateeProfileId Int       @map("evaluatee_profile_id")
   dueDate            DateTime? @map("due_date")
 
-  evaluatorType EvaluatorType @default(manager) @map("evaluator_type")
+  evaluatorType EvaluatorType           @default(manager) @map("evaluator_type")
   relationship  EvaluationRelationship? @default(manager)
 
   status EvaluationAssignmentStatus @default(pending)
@@ -3520,8 +3605,8 @@ model EvaluationAssignment {
   definition EvaluationDefinition @relation(fields: [evaluationDefinitionId], references: [id], onDelete: Cascade)
   cycle      EvaluationCycle?     @relation("EvaluationCycleAssignments", fields: [cycleId], references: [id], onDelete: SetNull)
 
-  evaluator Profile @relation("EvalEvaluator", fields: [evaluatorProfileId], references: [id], onDelete: Cascade)
-  evaluatee Profile @relation("EvalEvaluatee", fields: [evaluateeProfileId], references: [id], onDelete: Cascade)
+  evaluator       Profile              @relation("EvalEvaluator", fields: [evaluatorProfileId], references: [id], onDelete: Cascade)
+  evaluatee       Profile              @relation("EvalEvaluatee", fields: [evaluateeProfileId], references: [id], onDelete: Cascade)
   responseRecords EvaluationResponse[]
 
   @@unique([evaluationDefinitionId, evaluatorProfileId, evaluateeProfileId, evaluatorType])
@@ -3541,7 +3626,7 @@ model EvaluationTemplate {
   competencies Json @default(dbgenerated("'[]'::jsonb"))
   questions    Json @default(dbgenerated("'[]'::jsonb"))
 
-  isDefault Boolean @default(false) @map("is_default")
+  isDefault Boolean  @default(false) @map("is_default")
   isActive  Boolean  @default(true) @map("is_active")
   createdBy Int?     @map("created_by")
   createdAt DateTime @default(now()) @map("created_at")
@@ -3567,9 +3652,9 @@ model EvaluationQuestion {
   createdAt    DateTime                   @default(now()) @map("created_at")
   updatedAt    DateTime                   @updatedAt @map("updated_at")
 
-  template    EvaluationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  competency  Competency?        @relation(fields: [competencyId], references: [id], onDelete: SetNull)
-  responses   EvaluationResponse[]
+  template   EvaluationTemplate   @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  competency Competency?          @relation(fields: [competencyId], references: [id], onDelete: SetNull)
+  responses  EvaluationResponse[]
 
   @@index([templateId, order])
   @@index([competencyId])
@@ -3655,10 +3740,10 @@ model PerformanceScore {
 
   calculatedAt DateTime @default(now()) @map("calculated_at")
 
-  employee            Profile             @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  cycle               EvaluationCycle?    @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
-  calibratedBy        Profile?            @relation("PerformanceScoreCalibratedBy", fields: [calibratedByProfileId], references: [id], onDelete: SetNull)
-  calibrationSession  CalibrationSession? @relation(fields: [calibrationSessionId], references: [id], onDelete: SetNull)
+  employee           Profile             @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  cycle              EvaluationCycle?    @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
+  calibratedBy       Profile?            @relation("PerformanceScoreCalibratedBy", fields: [calibratedByProfileId], references: [id], onDelete: SetNull)
+  calibrationSession CalibrationSession? @relation(fields: [calibrationSessionId], references: [id], onDelete: SetNull)
 
   @@unique([employeeProfileId, evaluationCycleId, period])
   @@index([employeeProfileId])
@@ -3732,21 +3817,21 @@ enum EmployeeGoalStatus {
 }
 
 model EmployeeGoal {
-  id                  Int                @id @default(autoincrement())
-  profileId           Int                @map("profile_id")
-  evaluationCycleId   Int?               @map("evaluation_cycle_id")
-  bscKpiKey           String?            @map("bsc_kpi_key")
-  title               String
-  description         String?            @db.Text
-  targetValue         Decimal?           @map("target_value") @db.Decimal(10, 2)
-  actualValue         Decimal?           @map("actual_value") @db.Decimal(10, 2)
-  weight              Decimal            @default(1) @db.Decimal(5, 2)
-  status              EmployeeGoalStatus @default(draft)
-  dueDate             DateTime?          @map("due_date")
-  managerComment      String?            @map("manager_comment") @db.Text
-  acknowledgedAt      DateTime?          @map("acknowledged_at")
-  createdAt           DateTime           @default(now()) @map("created_at")
-  updatedAt           DateTime           @updatedAt @map("updated_at")
+  id                Int                @id @default(autoincrement())
+  profileId         Int                @map("profile_id")
+  evaluationCycleId Int?               @map("evaluation_cycle_id")
+  bscKpiKey         String?            @map("bsc_kpi_key")
+  title             String
+  description       String?            @db.Text
+  targetValue       Decimal?           @map("target_value") @db.Decimal(10, 2)
+  actualValue       Decimal?           @map("actual_value") @db.Decimal(10, 2)
+  weight            Decimal            @default(1) @db.Decimal(5, 2)
+  status            EmployeeGoalStatus @default(draft)
+  dueDate           DateTime?          @map("due_date")
+  managerComment    String?            @map("manager_comment") @db.Text
+  acknowledgedAt    DateTime?          @map("acknowledged_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
 
   profile         Profile          @relation(fields: [profileId], references: [id], onDelete: Cascade)
   evaluationCycle EvaluationCycle? @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
@@ -3757,17 +3842,17 @@ model EmployeeGoal {
 }
 
 model BalancedScorecardCycle {
-  id               Int                          @id @default(autoincrement())
-  key              String                       @unique
-  name             String
-  cadence          BalancedScorecardCadence
-  startDate        DateTime                     @map("start_date")
-  endDate          DateTime                     @map("end_date")
-  status           BalancedScorecardCycleStatus @default(draft)
-  activeVersionId  Int?                         @unique @map("active_version_id")
-  createdByProfileId Int?                       @map("created_by_profile_id")
-  createdAt        DateTime                     @default(now()) @map("created_at")
-  updatedAt        DateTime                     @updatedAt @map("updated_at")
+  id                 Int                          @id @default(autoincrement())
+  key                String                       @unique
+  name               String
+  cadence            BalancedScorecardCadence
+  startDate          DateTime                     @map("start_date")
+  endDate            DateTime                     @map("end_date")
+  status             BalancedScorecardCycleStatus @default(draft)
+  activeVersionId    Int?                         @unique @map("active_version_id")
+  createdByProfileId Int?                         @map("created_by_profile_id")
+  createdAt          DateTime                     @default(now()) @map("created_at")
+  updatedAt          DateTime                     @updatedAt @map("updated_at")
 
   versions      BalancedScorecardVersion[] @relation("BalancedScorecardCycleVersions")
   activeVersion BalancedScorecardVersion?  @relation("BalancedScorecardActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
@@ -3778,23 +3863,23 @@ model BalancedScorecardCycle {
 }
 
 model BalancedScorecardVersion {
-  id               Int                            @id @default(autoincrement())
-  cycleId          Int                            @map("cycle_id")
-  versionNumber    Int                            @map("version_number")
-  label            String?
-  status           BalancedScorecardVersionStatus @default(draft)
-  publishedAt      DateTime?                      @map("published_at")
-  createdByProfileId Int?                         @map("created_by_profile_id")
-  createdAt        DateTime                       @default(now()) @map("created_at")
-  updatedAt        DateTime                       @updatedAt @map("updated_at")
+  id                 Int                            @id @default(autoincrement())
+  cycleId            Int                            @map("cycle_id")
+  versionNumber      Int                            @map("version_number")
+  label              String?
+  status             BalancedScorecardVersionStatus @default(draft)
+  publishedAt        DateTime?                      @map("published_at")
+  createdByProfileId Int?                           @map("created_by_profile_id")
+  createdAt          DateTime                       @default(now()) @map("created_at")
+  updatedAt          DateTime                       @updatedAt @map("updated_at")
 
-  cycle            BalancedScorecardCycle         @relation("BalancedScorecardCycleVersions", fields: [cycleId], references: [id], onDelete: Cascade)
-  activatedByCycle BalancedScorecardCycle?        @relation("BalancedScorecardActiveVersion")
-  perspectives     BalancedScorecardPerspective[]
-  goals            BalancedScorecardGoal[]
-  kpis             BalancedScorecardKpi[]
-  initiatives      BalancedScorecardInitiative[]
-  kpiAssignments   BalancedScorecardKpiAssignment[]
+  cycle              BalancedScorecardCycle               @relation("BalancedScorecardCycleVersions", fields: [cycleId], references: [id], onDelete: Cascade)
+  activatedByCycle   BalancedScorecardCycle?              @relation("BalancedScorecardActiveVersion")
+  perspectives       BalancedScorecardPerspective[]
+  goals              BalancedScorecardGoal[]
+  kpis               BalancedScorecardKpi[]
+  initiatives        BalancedScorecardInitiative[]
+  kpiAssignments     BalancedScorecardKpiAssignment[]
   measurementPeriods BalancedScorecardMeasurementPeriod[]
 
   @@unique([cycleId, versionNumber])
@@ -3803,30 +3888,30 @@ model BalancedScorecardVersion {
 }
 
 model BalancedScorecardMeasurementPeriod {
-  id                 Int                                     @id @default(autoincrement())
-  key                String                                  @unique
-  scorecardVersionId Int                                     @map("scorecard_version_id")
-  label              String
-  cadence            BalancedScorecardCadence
-  periodStart        DateTime                                @map("period_start")
-  periodEnd          DateTime                                @map("period_end")
-  status             BalancedScorecardMeasurementPeriodStatus @default(draft)
-  generatedAt        DateTime?                               @map("generated_at")
-  generatedByProfileId Int?                                  @map("generated_by_profile_id")
-  submittedAt        DateTime?                               @map("submitted_at")
-  submittedByProfileId Int?                                  @map("submitted_by_profile_id")
-  reviewedAt         DateTime?                               @map("reviewed_at")
-  reviewedByProfileId Int?                                   @map("reviewed_by_profile_id")
-  approvedAt         DateTime?                               @map("approved_at")
-  approvedByProfileId Int?                                   @map("approved_by_profile_id")
-  closedAt           DateTime?                               @map("closed_at")
-  closedByProfileId  Int?                                    @map("closed_by_profile_id")
-  latestComment      String?                                 @map("latest_comment") @db.Text
-  createdByProfileId Int?                                    @map("created_by_profile_id")
-  createdAt          DateTime                                @default(now()) @map("created_at")
-  updatedAt          DateTime                                @updatedAt @map("updated_at")
+  id                   Int                                      @id @default(autoincrement())
+  key                  String                                   @unique
+  scorecardVersionId   Int                                      @map("scorecard_version_id")
+  label                String
+  cadence              BalancedScorecardCadence
+  periodStart          DateTime                                 @map("period_start")
+  periodEnd            DateTime                                 @map("period_end")
+  status               BalancedScorecardMeasurementPeriodStatus @default(draft)
+  generatedAt          DateTime?                                @map("generated_at")
+  generatedByProfileId Int?                                     @map("generated_by_profile_id")
+  submittedAt          DateTime?                                @map("submitted_at")
+  submittedByProfileId Int?                                     @map("submitted_by_profile_id")
+  reviewedAt           DateTime?                                @map("reviewed_at")
+  reviewedByProfileId  Int?                                     @map("reviewed_by_profile_id")
+  approvedAt           DateTime?                                @map("approved_at")
+  approvedByProfileId  Int?                                     @map("approved_by_profile_id")
+  closedAt             DateTime?                                @map("closed_at")
+  closedByProfileId    Int?                                     @map("closed_by_profile_id")
+  latestComment        String?                                  @map("latest_comment") @db.Text
+  createdByProfileId   Int?                                     @map("created_by_profile_id")
+  createdAt            DateTime                                 @default(now()) @map("created_at")
+  updatedAt            DateTime                                 @updatedAt @map("updated_at")
 
-  scorecardVersion BalancedScorecardVersion           @relation(fields: [scorecardVersionId], references: [id], onDelete: Cascade)
+  scorecardVersion BalancedScorecardVersion             @relation(fields: [scorecardVersionId], references: [id], onDelete: Cascade)
   snapshots        BalancedScorecardKpiSnapshot[]
   reviews          BalancedScorecardMeasurementReview[]
   kpiDataPoints    BalancedScorecardKpiDataPoint[]
@@ -3863,20 +3948,20 @@ model CheckIn {
 // =============================
 
 model BalancedScorecardPerspective {
-  id               Int      @id @default(autoincrement())
-  key              String   @unique
-  scorecardVersionId Int?   @map("scorecard_version_id")
-  name             String
-  ownerName        String?  @map("owner_name")
-  summary          String?  @db.Text
-  sortOrder        Int      @default(0) @map("sort_order")
-  isActive         Boolean  @default(true) @map("is_active")
-  createdByProfileId Int?   @map("created_by_profile_id")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                 Int      @id @default(autoincrement())
+  key                String   @unique
+  scorecardVersionId Int?     @map("scorecard_version_id")
+  name               String
+  ownerName          String?  @map("owner_name")
+  summary            String?  @db.Text
+  sortOrder          Int      @default(0) @map("sort_order")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdByProfileId Int?     @map("created_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
   scorecardVersion BalancedScorecardVersion? @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
-  goals BalancedScorecardGoal[]
+  goals            BalancedScorecardGoal[]
 
   @@index([scorecardVersionId, sortOrder])
   @@index([sortOrder])
@@ -3885,23 +3970,23 @@ model BalancedScorecardPerspective {
 }
 
 model BalancedScorecardGoal {
-  id               Int      @id @default(autoincrement())
-  key              String   @unique
-  perspectiveId    Int      @map("perspective_id")
-  scorecardVersionId Int?   @map("scorecard_version_id")
-  title            String
-  description      String?  @db.Text
-  ownerName        String?  @map("owner_name")
-  sortOrder        Int      @default(0) @map("sort_order")
-  isActive         Boolean  @default(true) @map("is_active")
-  createdByProfileId Int?   @map("created_by_profile_id")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                 Int      @id @default(autoincrement())
+  key                String   @unique
+  perspectiveId      Int      @map("perspective_id")
+  scorecardVersionId Int?     @map("scorecard_version_id")
+  title              String
+  description        String?  @db.Text
+  ownerName          String?  @map("owner_name")
+  sortOrder          Int      @default(0) @map("sort_order")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdByProfileId Int?     @map("created_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
 
-  scorecardVersion BalancedScorecardVersion? @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
-  perspective BalancedScorecardPerspective @relation(fields: [perspectiveId], references: [id], onDelete: Cascade)
-  kpis        BalancedScorecardKpi[]
-  initiatives BalancedScorecardInitiative[]
+  scorecardVersion BalancedScorecardVersion?     @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
+  perspective      BalancedScorecardPerspective  @relation(fields: [perspectiveId], references: [id], onDelete: Cascade)
+  kpis             BalancedScorecardKpi[]
+  initiatives      BalancedScorecardInitiative[]
 
   @@index([scorecardVersionId, sortOrder])
   @@index([perspectiveId, sortOrder])
@@ -3910,50 +3995,50 @@ model BalancedScorecardGoal {
 }
 
 model BalancedScorecardKpi {
-  id               Int      @id @default(autoincrement())
-  key              String   @unique
-  goalId           Int      @map("goal_id")
-  scorecardVersionId Int?   @map("scorecard_version_id")
-  metricKey        String   @map("metric_key")
-  trackingMode     String   @default("template") @map("tracking_mode")
-  measurementType  String?  @map("measurement_type")
-  targetDirection  String?  @map("target_direction")
-  targetValue      Decimal? @map("target_value") @db.Decimal(14, 2)
-  currentActualValue Decimal? @map("current_actual_value") @db.Decimal(14, 2)
-  lastMeasurementNote String? @map("last_measurement_note") @db.Text
-  name             String
-  description      String?  @db.Text
-  formula          String?  @db.Text
-  frequency        String
-  unit             String
-  weight           Int
-  firmTarget       String   @map("firm_target")
-  ownerName        String?  @map("owner_name")
-  ownerProfileId   Int?     @map("owner_profile_id")
-  statusLogic      String?  @map("status_logic") @db.Text
-  updateFrequency  String?  @map("update_frequency")
-  sortOrder        Int      @default(0) @map("sort_order")
-  isActive         Boolean  @default(true) @map("is_active")
-  firmTemplateId   Int?     @map("firm_template_id")
-  createdByProfileId Int?   @map("created_by_profile_id")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                  Int      @id @default(autoincrement())
+  key                 String   @unique
+  goalId              Int      @map("goal_id")
+  scorecardVersionId  Int?     @map("scorecard_version_id")
+  metricKey           String   @map("metric_key")
+  trackingMode        String   @default("template") @map("tracking_mode")
+  measurementType     String?  @map("measurement_type")
+  targetDirection     String?  @map("target_direction")
+  targetValue         Decimal? @map("target_value") @db.Decimal(14, 2)
+  currentActualValue  Decimal? @map("current_actual_value") @db.Decimal(14, 2)
+  lastMeasurementNote String?  @map("last_measurement_note") @db.Text
+  name                String
+  description         String?  @db.Text
+  formula             String?  @db.Text
+  frequency           String
+  unit                String
+  weight              Int
+  firmTarget          String   @map("firm_target")
+  ownerName           String?  @map("owner_name")
+  ownerProfileId      Int?     @map("owner_profile_id")
+  statusLogic         String?  @map("status_logic") @db.Text
+  updateFrequency     String?  @map("update_frequency")
+  sortOrder           Int      @default(0) @map("sort_order")
+  isActive            Boolean  @default(true) @map("is_active")
+  firmTemplateId      Int?     @map("firm_template_id")
+  createdByProfileId  Int?     @map("created_by_profile_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
-  scorecardVersion    BalancedScorecardVersion? @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
-  goal                BalancedScorecardGoal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  ownerProfile        Profile?                  @relation("BalancedScorecardKpiOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
-  firmTemplate        BalancedScorecardKpi?     @relation("FirmCascadeKpis", fields: [firmTemplateId], references: [id], onDelete: SetNull)
-  cascadedInstances   BalancedScorecardKpi[]    @relation("FirmCascadeKpis")
-  initiatives         BalancedScorecardInitiative[]
-  actualHistory       BalancedScorecardKpiActualHistory[]
-  snapshots           BalancedScorecardKpiSnapshot[]
-  assignments         BalancedScorecardKpiAssignment[]
-  engineFormula       BalancedScorecardKpiFormula?
-  scoringRule         BalancedScorecardKpiScoringRule?
-  trackingPlan        BalancedScorecardKpiTrackingPlan?
-  dataPoints          BalancedScorecardKpiDataPoint[]
-  results             BalancedScorecardKpiResult[]
-  actions             BalancedScorecardKpiAction[]
+  scorecardVersion  BalancedScorecardVersion?           @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
+  goal              BalancedScorecardGoal               @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  ownerProfile      Profile?                            @relation("BalancedScorecardKpiOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
+  firmTemplate      BalancedScorecardKpi?               @relation("FirmCascadeKpis", fields: [firmTemplateId], references: [id], onDelete: SetNull)
+  cascadedInstances BalancedScorecardKpi[]              @relation("FirmCascadeKpis")
+  initiatives       BalancedScorecardInitiative[]
+  actualHistory     BalancedScorecardKpiActualHistory[]
+  snapshots         BalancedScorecardKpiSnapshot[]
+  assignments       BalancedScorecardKpiAssignment[]
+  engineFormula     BalancedScorecardKpiFormula?
+  scoringRule       BalancedScorecardKpiScoringRule?
+  trackingPlan      BalancedScorecardKpiTrackingPlan?
+  dataPoints        BalancedScorecardKpiDataPoint[]
+  results           BalancedScorecardKpiResult[]
+  actions           BalancedScorecardKpiAction[]
 
   @@index([scorecardVersionId, sortOrder])
   @@index([goalId, sortOrder])
@@ -4047,8 +4132,8 @@ model BalancedScorecardKpiTrackingPlan {
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
-  kpi         BalancedScorecardKpi             @relation(fields: [kpiId], references: [id], onDelete: Cascade)
-  updateOwner Profile?                         @relation("BalancedScorecardKpiTrackingUpdateOwner", fields: [updateOwnerProfileId], references: [id], onDelete: SetNull)
+  kpi         BalancedScorecardKpi                @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  updateOwner Profile?                            @relation("BalancedScorecardKpiTrackingUpdateOwner", fields: [updateOwnerProfileId], references: [id], onDelete: SetNull)
   inputs      BalancedScorecardKpiTrackingInput[]
 
   @@index([trackingType])
@@ -4077,21 +4162,21 @@ model BalancedScorecardKpiTrackingInput {
 }
 
 model BalancedScorecardKpiDataPoint {
-  id                  Int                          @id @default(autoincrement())
-  kpiId               Int                          @map("kpi_id")
-  measurementPeriodId Int                          @map("measurement_period_id")
-  inputKey            String                       @map("input_key")
-  rawValue            String                       @map("raw_value") @db.Text
-  normalizedValue     Decimal?                     @map("normalized_value") @db.Decimal(14, 2)
-  evidenceUrl         String?                      @map("evidence_url") @db.Text
-  note                String?                      @db.Text
-  sourceType          String                       @map("source_type")
-  submittedByProfileId Int?                        @map("submitted_by_profile_id")
-  submittedAt         DateTime                     @default(now()) @map("submitted_at")
-  dataQualityStatus   BalancedScorecardDataQualityStatus @default(healthy) @map("data_quality_status")
+  id                   Int                                @id @default(autoincrement())
+  kpiId                Int                                @map("kpi_id")
+  measurementPeriodId  Int                                @map("measurement_period_id")
+  inputKey             String                             @map("input_key")
+  rawValue             String                             @map("raw_value") @db.Text
+  normalizedValue      Decimal?                           @map("normalized_value") @db.Decimal(14, 2)
+  evidenceUrl          String?                            @map("evidence_url") @db.Text
+  note                 String?                            @db.Text
+  sourceType           String                             @map("source_type")
+  submittedByProfileId Int?                               @map("submitted_by_profile_id")
+  submittedAt          DateTime                           @default(now()) @map("submitted_at")
+  dataQualityStatus    BalancedScorecardDataQualityStatus @default(healthy) @map("data_quality_status")
 
   kpi               BalancedScorecardKpi               @relation(fields: [kpiId], references: [id], onDelete: Cascade)
-  measurementPeriod BalancedScorecardMeasurementPeriod  @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
+  measurementPeriod BalancedScorecardMeasurementPeriod @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
   submittedBy       Profile?                           @relation("BalancedScorecardKpiDataPointSubmittedBy", fields: [submittedByProfileId], references: [id], onDelete: SetNull)
 
   @@unique([measurementPeriodId, kpiId, inputKey])
@@ -4113,7 +4198,7 @@ model BalancedScorecardKpiResult {
   calculatedAt        DateTime        @default(now()) @map("calculated_at")
   lockedAt            DateTime?       @map("locked_at")
 
-  kpi               BalancedScorecardKpi              @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  kpi               BalancedScorecardKpi               @relation(fields: [kpiId], references: [id], onDelete: Cascade)
   measurementPeriod BalancedScorecardMeasurementPeriod @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
   actions           BalancedScorecardKpiAction[]
 
@@ -4124,15 +4209,15 @@ model BalancedScorecardKpiResult {
 }
 
 model BalancedScorecardKpiAction {
-  id                  Int      @id @default(autoincrement())
-  kpiId               Int      @map("kpi_id")
-  resultId            Int?     @map("result_id")
-  title               String
-  ownerProfileId      Int?     @map("owner_profile_id")
-  status              String   @default("open")
-  dueDate             DateTime? @map("due_date")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  id             Int       @id @default(autoincrement())
+  kpiId          Int       @map("kpi_id")
+  resultId       Int?      @map("result_id")
+  title          String
+  ownerProfileId Int?      @map("owner_profile_id")
+  status         String    @default("open")
+  dueDate        DateTime? @map("due_date")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   kpi          BalancedScorecardKpi        @relation(fields: [kpiId], references: [id], onDelete: Cascade)
   result       BalancedScorecardKpiResult? @relation(fields: [resultId], references: [id], onDelete: SetNull)
@@ -4145,42 +4230,42 @@ model BalancedScorecardKpiAction {
 }
 
 model BalancedScorecardKpiSnapshot {
-  id                  Int                              @id @default(autoincrement())
-  measurementPeriodId Int                              @map("measurement_period_id")
-  kpiId               Int                              @map("kpi_id")
-  metricKey           String                           @map("metric_key")
-  kpiKey              String                           @map("kpi_key")
-  kpiName             String                           @map("kpi_name")
-  goalKey             String                           @map("goal_key")
-  goalTitle           String                           @map("goal_title")
-  perspectiveKey      String                           @map("perspective_key")
-  perspectiveName     String                           @map("perspective_name")
-  trackingMode        String                           @map("tracking_mode")
+  id                  Int                                @id @default(autoincrement())
+  measurementPeriodId Int                                @map("measurement_period_id")
+  kpiId               Int                                @map("kpi_id")
+  metricKey           String                             @map("metric_key")
+  kpiKey              String                             @map("kpi_key")
+  kpiName             String                             @map("kpi_name")
+  goalKey             String                             @map("goal_key")
+  goalTitle           String                             @map("goal_title")
+  perspectiveKey      String                             @map("perspective_key")
+  perspectiveName     String                             @map("perspective_name")
+  trackingMode        String                             @map("tracking_mode")
   frequency           String
   unit                String
   weight              Int
-  firmTarget          String                           @map("firm_target")
-  targetValue         Decimal?                         @map("target_value") @db.Decimal(14, 2)
-  targetLabel         String?                          @map("target_label")
-  actualValue         Decimal?                         @map("actual_value") @db.Decimal(14, 2)
-  actualLabel         String                           @map("actual_label")
-  weightedScore       Int                              @map("weighted_score")
-  status              DashboardStatus                  @default(at_risk)
-  statusLogic         String?                          @map("status_logic") @db.Text
-  updateFrequency     String?                          @map("update_frequency")
-  initiativeProgress  Int                              @default(0) @map("initiative_progress")
-  trend               Json                             @default(dbgenerated("'[]'::jsonb"))
-  ownerName           String?                          @map("owner_name")
-  ownerUpdate         String?                          @map("owner_update") @db.Text
-  snapshotStatus      BalancedScorecardSnapshotStatus  @default(generated) @map("snapshot_status")
+  firmTarget          String                             @map("firm_target")
+  targetValue         Decimal?                           @map("target_value") @db.Decimal(14, 2)
+  targetLabel         String?                            @map("target_label")
+  actualValue         Decimal?                           @map("actual_value") @db.Decimal(14, 2)
+  actualLabel         String                             @map("actual_label")
+  weightedScore       Int                                @map("weighted_score")
+  status              DashboardStatus                    @default(at_risk)
+  statusLogic         String?                            @map("status_logic") @db.Text
+  updateFrequency     String?                            @map("update_frequency")
+  initiativeProgress  Int                                @default(0) @map("initiative_progress")
+  trend               Json                               @default(dbgenerated("'[]'::jsonb"))
+  ownerName           String?                            @map("owner_name")
+  ownerUpdate         String?                            @map("owner_update") @db.Text
+  snapshotStatus      BalancedScorecardSnapshotStatus    @default(generated) @map("snapshot_status")
   dataQualityStatus   BalancedScorecardDataQualityStatus @default(healthy) @map("data_quality_status")
-  dataQualityNote     String?                          @map("data_quality_note") @db.Text
-  actualAsOf          DateTime?                        @map("actual_as_of")
-  measuredAt          DateTime                         @default(now()) @map("measured_at")
-  measurementContext  Json?                            @map("measurement_context")
+  dataQualityNote     String?                            @map("data_quality_note") @db.Text
+  actualAsOf          DateTime?                          @map("actual_as_of")
+  measuredAt          DateTime                           @default(now()) @map("measured_at")
+  measurementContext  Json?                              @map("measurement_context")
 
-  measurementPeriod BalancedScorecardMeasurementPeriod @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
-  kpi               BalancedScorecardKpi              @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  measurementPeriod BalancedScorecardMeasurementPeriod  @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
+  kpi               BalancedScorecardKpi                @relation(fields: [kpiId], references: [id], onDelete: Cascade)
   traces            BalancedScorecardKpiSnapshotTrace[]
 
   @@unique([measurementPeriodId, kpiId])
@@ -4191,18 +4276,18 @@ model BalancedScorecardKpiSnapshot {
 }
 
 model BalancedScorecardKpiSnapshotTrace {
-  id                Int                              @id @default(autoincrement())
-  snapshotId        Int                              @map("snapshot_id")
-  sourceType        BalancedScorecardTraceSourceType @map("source_type")
-  sourceKey         String                           @map("source_key")
-  sourceLabel       String                           @map("source_label")
+  id                Int                                @id @default(autoincrement())
+  snapshotId        Int                                @map("snapshot_id")
+  sourceType        BalancedScorecardTraceSourceType   @map("source_type")
+  sourceKey         String                             @map("source_key")
+  sourceLabel       String                             @map("source_label")
   dataQualityStatus BalancedScorecardDataQualityStatus @default(healthy) @map("data_quality_status")
-  recordCount       Int?                             @map("record_count")
-  rawValue          Decimal?                         @map("raw_value") @db.Decimal(14, 2)
-  normalizedValue   Decimal?                         @map("normalized_value") @db.Decimal(14, 2)
-  note              String?                          @db.Text
+  recordCount       Int?                               @map("record_count")
+  rawValue          Decimal?                           @map("raw_value") @db.Decimal(14, 2)
+  normalizedValue   Decimal?                           @map("normalized_value") @db.Decimal(14, 2)
+  note              String?                            @db.Text
   metadata          Json?
-  createdAt         DateTime                         @default(now()) @map("created_at")
+  createdAt         DateTime                           @default(now()) @map("created_at")
 
   snapshot BalancedScorecardKpiSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
@@ -4212,14 +4297,14 @@ model BalancedScorecardKpiSnapshotTrace {
 }
 
 model BalancedScorecardMeasurementReview {
-  id                  Int                                     @id @default(autoincrement())
-  measurementPeriodId Int                                     @map("measurement_period_id")
+  id                  Int                                       @id @default(autoincrement())
+  measurementPeriodId Int                                       @map("measurement_period_id")
   action              BalancedScorecardReviewAction
   fromStatus          BalancedScorecardMeasurementPeriodStatus? @map("from_status")
   toStatus            BalancedScorecardMeasurementPeriodStatus  @map("to_status")
-  comment             String?                                 @db.Text
-  actedByProfileId    Int?                                    @map("acted_by_profile_id")
-  actedAt             DateTime                                @default(now()) @map("acted_at")
+  comment             String?                                   @db.Text
+  actedByProfileId    Int?                                      @map("acted_by_profile_id")
+  actedAt             DateTime                                  @default(now()) @map("acted_at")
 
   measurementPeriod BalancedScorecardMeasurementPeriod @relation(fields: [measurementPeriodId], references: [id], onDelete: Cascade)
 
@@ -4228,25 +4313,25 @@ model BalancedScorecardMeasurementReview {
 }
 
 model BalancedScorecardEmployeeContribution {
-  id                    Int                                   @id @default(autoincrement())
-  profileId             Int                                   @map("profile_id")
-  contributionKey       String                                @map("contribution_key")
-  sourceType            BalancedScorecardContributionSourceType @map("source_type")
-  sourceReferenceId     Int?                                  @map("source_reference_id")
-  title                 String
-  initiativeTitle       String?                               @map("initiative_title")
-  linkedKpiKey          String?                               @map("linked_kpi_key")
-  dueDate               DateTime?                             @map("due_date")
-  acknowledgedAt        DateTime?                             @map("acknowledged_at")
-  acknowledgedByProfileId Int?                                @map("acknowledged_by_profile_id")
-  latestProgress        Int?                                  @map("latest_progress")
-  latestComment         String?                               @map("latest_comment") @db.Text
-  lastUpdatedAt         DateTime?                             @map("last_updated_at")
-  createdAt             DateTime                              @default(now()) @map("created_at")
-  updatedAt             DateTime                              @updatedAt @map("updated_at")
+  id                      Int                                     @id @default(autoincrement())
+  profileId               Int                                     @map("profile_id")
+  contributionKey         String                                  @map("contribution_key")
+  sourceType              BalancedScorecardContributionSourceType @map("source_type")
+  sourceReferenceId       Int?                                    @map("source_reference_id")
+  title                   String
+  initiativeTitle         String?                                 @map("initiative_title")
+  linkedKpiKey            String?                                 @map("linked_kpi_key")
+  dueDate                 DateTime?                               @map("due_date")
+  acknowledgedAt          DateTime?                               @map("acknowledged_at")
+  acknowledgedByProfileId Int?                                    @map("acknowledged_by_profile_id")
+  latestProgress          Int?                                    @map("latest_progress")
+  latestComment           String?                                 @map("latest_comment") @db.Text
+  lastUpdatedAt           DateTime?                               @map("last_updated_at")
+  createdAt               DateTime                                @default(now()) @map("created_at")
+  updatedAt               DateTime                                @updatedAt @map("updated_at")
 
-  profile        Profile                                @relation("BalancedScorecardContributionProfile", fields: [profileId], references: [id], onDelete: Cascade)
-  acknowledgedBy Profile?                               @relation("BalancedScorecardContributionAcknowledgedBy", fields: [acknowledgedByProfileId], references: [id], onDelete: SetNull)
+  profile        Profile                                       @relation("BalancedScorecardContributionProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  acknowledgedBy Profile?                                      @relation("BalancedScorecardContributionAcknowledgedBy", fields: [acknowledgedByProfileId], references: [id], onDelete: SetNull)
   updates        BalancedScorecardEmployeeContributionUpdate[]
 
   @@unique([profileId, contributionKey])
@@ -4256,12 +4341,12 @@ model BalancedScorecardEmployeeContribution {
 }
 
 model BalancedScorecardEmployeeContributionUpdate {
-  id                Int      @id @default(autoincrement())
-  contributionId    Int      @map("contribution_id")
-  progress          Int
-  comment           String?  @db.Text
-  createdByProfileId Int?    @map("created_by_profile_id")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                 Int      @id @default(autoincrement())
+  contributionId     Int      @map("contribution_id")
+  progress           Int
+  comment            String?  @db.Text
+  createdByProfileId Int?     @map("created_by_profile_id")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   contribution BalancedScorecardEmployeeContribution @relation(fields: [contributionId], references: [id], onDelete: Cascade)
   createdBy    Profile?                              @relation("BalancedScorecardContributionUpdateCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
@@ -4292,11 +4377,11 @@ model BalancedScorecardInitiative {
   createdAt          DateTime        @default(now()) @map("created_at")
   updatedAt          DateTime        @updatedAt @map("updated_at")
 
-  scorecardVersion   BalancedScorecardVersion?       @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
-  goal             BalancedScorecardGoal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  kpi              BalancedScorecardKpi        @relation(fields: [kpiId], references: [id], onDelete: Cascade)
-  ownerProfile     Profile?                    @relation("BalancedScorecardInitiativeOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
-  parentInitiative BalancedScorecardInitiative? @relation("BalancedScorecardInitiativeTree", fields: [parentInitiativeId], references: [id], onDelete: SetNull)
+  scorecardVersion BalancedScorecardVersion?     @relation(fields: [scorecardVersionId], references: [id], onDelete: SetNull)
+  goal             BalancedScorecardGoal         @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  kpi              BalancedScorecardKpi          @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  ownerProfile     Profile?                      @relation("BalancedScorecardInitiativeOwner", fields: [ownerProfileId], references: [id], onDelete: SetNull)
+  parentInitiative BalancedScorecardInitiative?  @relation("BalancedScorecardInitiativeTree", fields: [parentInitiativeId], references: [id], onDelete: SetNull)
   childInitiatives BalancedScorecardInitiative[] @relation("BalancedScorecardInitiativeTree")
 
   @@index([scorecardVersionId, sortOrder])
@@ -4343,9 +4428,9 @@ model CalibrationSession {
   createdAt            DateTime                 @default(now()) @map("created_at")
   updatedAt            DateTime                 @updatedAt @map("updated_at")
 
-  cycle        EvaluationCycle                @relation(fields: [evaluationCycleId], references: [id], onDelete: Cascade)
-  facilitator  Profile?                       @relation("CalibrationSessionFacilitator", fields: [facilitatorProfileId], references: [id], onDelete: SetNull)
-  department   Department?                    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  cycle        EvaluationCycle                 @relation(fields: [evaluationCycleId], references: [id], onDelete: Cascade)
+  facilitator  Profile?                        @relation("CalibrationSessionFacilitator", fields: [facilitatorProfileId], references: [id], onDelete: SetNull)
+  department   Department?                     @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   participants CalibrationSessionParticipant[]
   scores       PerformanceScore[]
 
@@ -4416,8 +4501,8 @@ model DevelopmentPlan {
   createdAt         DateTime              @default(now()) @map("created_at")
   updatedAt         DateTime              @updatedAt @map("updated_at")
 
-  profile         Profile          @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  evaluationCycle EvaluationCycle? @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
+  profile         Profile               @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  evaluationCycle EvaluationCycle?      @relation(fields: [evaluationCycleId], references: [id], onDelete: SetNull)
   items           DevelopmentPlanItem[]
 
   @@index([profileId, status])

@@ -564,12 +564,13 @@ export async function getReportingWorkspace(params: {
     .sort((a, b) => b.totalHours - a.totalHours);
 
   const jobReportById = new Map(jobReportRows.map((row) => [row.jobId, row] as const));
-  const productivityMap = timeEntries.reduce((acc, entry) => {
-      const jobReport = jobReportById.get(entry.jobId);
+  const productivityMap = timeEntries.filter((entry) => entry.jobId !== null).reduce((acc, entry) => {
+      const jobId = Number(entry.jobId);
+      const jobReport = jobReportById.get(jobId);
       if (!jobReport) return acc;
-      const key = `${entry.jobId}:${entry.employeeProfileId}`;
+      const key = `${jobId}:${entry.employeeProfileId}`;
       const existing = acc.get(key) || {
-        jobId: entry.jobId,
+        jobId,
         job: jobReport.job,
         client: jobReport.client,
         employeeName: fullName(entry.employee),

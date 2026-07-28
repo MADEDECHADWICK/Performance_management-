@@ -177,7 +177,7 @@ router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), c
 router.use('/performance-bands', authMiddleware, requireModuleAccess('evaluations'), performanceBandsRoutes);
 router.use('/development-plans', authMiddleware, requireModuleAccess('evaluations'), developmentPlansRoutes);
 router.use('/evaluation-reports', authMiddleware, requireModuleAccess('evaluations'), evaluationReportsRoutes);
-router.use('/proposals', authMiddleware, requireModuleAccess('proposals'), proposalsRoutes);
+router.use('/proposals', proposalsRoutes);
 router.use('/surveys', surveysRoutes);
 router.use('/feedback', authMiddleware, requireModuleAccess('evaluations'), feedbackRoutes);
 router.use('/checkins', authMiddleware, requireModuleAccess('evaluations'), checkInRoutes);

@@ -11,7 +11,8 @@ import type {
 } from './types';
 
 interface CreateTimeEntryPayload {
-  jobId: number;
+  jobId?: number | null;
+  proposalId?: number | null;
   taskId?: number;
   date?: string;
   dateWorked?: string;
@@ -28,6 +29,7 @@ interface TimeEntryFilters {
   pageSize?: number;
   employeeProfileId?: number;
   jobId?: number;
+  proposalId?: number;
   taskId?: number;
   status?: TimeEntryStatus | TimeEntryStatus[];
   billableOnly?: boolean;
@@ -61,6 +63,7 @@ export const timeEntriesAPI = {
     if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
     if (filters?.employeeProfileId) params.append('employeeProfileId', String(filters.employeeProfileId));
     if (filters?.jobId) params.append('jobId', String(filters.jobId));
+    if (filters?.proposalId) params.append('proposalId', String(filters.proposalId));
     if (filters?.taskId) params.append('taskId', String(filters.taskId));
     if (filters?.status) {
       if (Array.isArray(filters.status)) {
@@ -87,6 +90,7 @@ export const timeEntriesAPI = {
     if (filters?.page) params.append('page', String(filters.page));
     if (filters?.pageSize) params.append('pageSize', String(filters.pageSize));
     if (filters?.jobId) params.append('jobId', String(filters.jobId));
+    if (filters?.proposalId) params.append('proposalId', String(filters.proposalId));
     if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
     if (filters?.dateTo) params.append('dateTo', filters.dateTo);
     if (filters?.status) {
@@ -114,6 +118,7 @@ export const timeEntriesAPI = {
   create: async (data: CreateTimeEntryPayload): Promise<TimeEntry> => {
     const payload = {
       jobId: data.jobId,
+      proposalId: data.proposalId,
       taskId: data.taskId,
       dateWorked: data.dateWorked ?? data.date,
       hours: data.hours,

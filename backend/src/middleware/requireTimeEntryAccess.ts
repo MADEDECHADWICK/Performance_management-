@@ -52,6 +52,7 @@ export const requireTimeEntryAccess = async (
       where: { id: timeEntryId },
       include: {
         job: true,
+        proposal: true,
         employee: {
           select: {
             id: true,
@@ -70,13 +71,15 @@ export const requireTimeEntryAccess = async (
     const isOwner = timeEntry.employeeProfileId === requesterProfileId;
 
     const isManagerRole = hasAnyRole(requesterRoles, ["manager"]);
-    const managesJob = timeEntry.job.managerProfileId === requesterProfileId;
+    const managesJob = timeEntry.job?.managerProfileId === requesterProfileId;
+    const managesProposal = timeEntry.proposal?.managerProfileId === requesterProfileId;
     const managesEmployee = timeEntry.employee?.managerId === requesterProfileId;
-    const isScopedManager = isManagerRole && (managesJob || managesEmployee);
+    const isScopedManager = isManagerRole && (managesJob || managesProposal || managesEmployee);
 
     const isPartner =
       hasAnyRole(requesterRoles, ["partner"]) &&
-      timeEntry.job.partnerProfileId === requesterProfileId;
+      (timeEntry.job?.partnerProfileId === requesterProfileId ||
+        timeEntry.proposal?.assignedPartnerProfileId === requesterProfileId);
 
     const hasAccess = isAdmin || isOwner || isScopedManager || isPartner;
 

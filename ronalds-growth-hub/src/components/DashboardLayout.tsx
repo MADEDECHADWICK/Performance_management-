@@ -725,7 +725,6 @@ function AppSidebar({
                 <SidebarGroupContent>
                   <SidebarMenu>
                     <NavItem path="/client-portfolio" icon={Users} label="Client Portfolio" viewKey="clients.portfolio" module="clients" />
-                    <NavItem path="/business-development" icon={TrendingUp} label="Business Development" viewKey="clients.business_development" module="proposals" />
                     <NavItem path="/partner-metrics" icon={BarChart3} label="Partner Metrics" viewKey="partner.metrics" module="reports" />
                     <NavItem path="/team-overview" icon={Briefcase} label="Team Overview" viewKey="jobs.team_overview" module="jobs" />
                   </SidebarMenu>
@@ -752,6 +751,7 @@ function AppSidebar({
 	                    <NavItem path="/department-dashboard" icon={BarChart3} label="Department Dashboard" viewKey="dashboard.department" module="dashboard" />
 		                    <NavItem path="/leave/approvals" icon={Calendar} label="Leave Approvals" viewKey="leave.approvals" module="leave" action="approve" />
 		                    <NavItem path="/requisitions/approvals" icon={FileText} label="Requisition Approvals" viewKey="requisitions.approvals" module="requisitions" action="approve" />
+                    <NavItem path="/business-development" icon={TrendingUp} label="Proposal Reviews" viewKey="clients.business_development" module="proposals" />
 		                    <NavItem path="/staff-development" icon={ArrowUpCircle} label="Staff Development" viewKey="team.staff_development" module="evaluations" />
 	                    <NavItem path="/workload-management" icon={Briefcase} label="Workload Management" viewKey="jobs.workload_management" module="jobs" />
 	                  </SidebarMenu>
