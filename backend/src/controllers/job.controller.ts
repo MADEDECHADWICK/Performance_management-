@@ -3,6 +3,7 @@
  * Handles all job-related operations
  */
 
+
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import jobService from "../services/jobs.service";
