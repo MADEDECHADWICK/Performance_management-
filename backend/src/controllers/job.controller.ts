@@ -1,5 +1,5 @@
 /**
- * Job Controller (v2.1 Schema Aligned)
+ * Job Controller
  * Handles all job-related operations
  */
 

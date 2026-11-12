@@ -18,7 +18,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Check, ExternalLink, Plus, Search, Send, X } from "lucide-react";
 
@@ -98,6 +97,12 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 
 const unwrapProposal = (payload: Proposal | { data?: Proposal }) =>
   "id" in payload ? payload : payload.data;
+
+const formatDate = (value?: string | Date | null) =>
+  value ? new Date(value).toLocaleDateString() : "-";
+
+const formatMoney = (currency?: string | null, value?: number | string | null) =>
+  `${currency || "KES"} ${Number(value || 0).toLocaleString()}`;
 
 export default function BusinessDevelopment() {
   const { toast } = useToast();
@@ -472,48 +477,70 @@ export default function BusinessDevelopment() {
             ) : proposals.length === 0 ? (
               <div className="py-10 text-center text-muted-foreground">No proposals found.</div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Proposal</TableHead>
-                    <TableHead>Ownership</TableHead>
-                    <TableHead>Team</TableHead>
-                    <TableHead>Links</TableHead>
-                    <TableHead>BD Finalization</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {proposals.map((proposal) => {
-                    const bdDraft = bdDrafts[proposal.id] || {};
-                    return (
-                      <TableRow key={proposal.id} className="align-top">
-                        <TableCell className="min-w-64">
-                          <div className="font-medium">{proposal.proposalTitle}</div>
-                          <div className="text-xs text-muted-foreground">{proposal.client?.clientName || proposal.clientName} · {proposal.requestedService || proposal.serviceType}</div>
-                          <Badge className="mt-2" variant={STATUS_VARIANTS[proposal.status] || "outline"}>{STATUS_LABELS[proposal.status] || proposal.status}</Badge>
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            {proposal.currency} {Number(proposal.proposedFee || 0).toLocaleString()} · deadline {proposal.deadlineDate ? new Date(proposal.deadlineDate).toLocaleDateString() : "-"}
+              <div className="space-y-3">
+                {proposals.map((proposal) => {
+                  const bdDraft = bdDrafts[proposal.id] || {};
+                  const clientLabel = proposal.client?.clientName || proposal.clientName || "No client";
+                  const serviceLabel = proposal.requestedService || proposal.serviceType || "No service";
+                  const canActOnProposal =
+                    canManagerReview && ["submitted_to_manager", "manager_changes_requested", "draft"].includes(proposal.status);
+
+                  return (
+                    <div key={proposal.id} className="rounded-lg border bg-card p-4 shadow-sm">
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
+                        <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                        <section className="space-y-2">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <h3 className="text-sm font-semibold leading-5 text-foreground">{proposal.proposalTitle}</h3>
+                              <p className="text-xs text-muted-foreground">{clientLabel} - {serviceLabel}</p>
+                            </div>
+                            <Badge variant={STATUS_VARIANTS[proposal.status] || "outline"}>
+                              {STATUS_LABELS[proposal.status] || proposal.status}
+                            </Badge>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="text-sm">Dept: {proposal.department?.name || "-"}</div>
-                          <div className="text-sm">Partner: {getName(proposal.assignedPartner) || "-"}</div>
-                          <div className="text-sm">Manager: {getName(proposal.manager) || "-"}</div>
-                          <div className="text-xs text-muted-foreground">Source: {proposal.sourceName || getName(proposal.sourceProfile) || "-"}</div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
+                          <div className="grid grid-cols-2 gap-2 rounded-md bg-muted/40 p-2 text-xs">
+                            <div>
+                              <div className="text-muted-foreground">Value</div>
+                              <div className="font-medium">{formatMoney(proposal.currency, proposal.proposedFee)}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground">Deadline</div>
+                              <div className="font-medium">{formatDate(proposal.deadlineDate)}</div>
+                            </div>
+                          </div>
+                        </section>
+
+                        <section className="space-y-1 text-sm">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Ownership</div>
+                          <div>Dept: {proposal.department?.name || "-"}</div>
+                          <div>Partner: {getName(proposal.assignedPartner) || "-"}</div>
+                          <div>Manager: {getName(proposal.manager) || "-"}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Source: {proposal.sourceName || getName(proposal.sourceProfile) || "-"}
+                          </div>
+                        </section>
+
+                        <section className="space-y-2">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team</div>
+                          <div className="space-y-1.5">
+                            {(proposal.teamMembers || []).length === 0 && (
+                              <div className="rounded-md border border-dashed px-2 py-2 text-xs text-muted-foreground">
+                                No team members
+                              </div>
+                            )}
                             {(proposal.teamMembers || []).map((member) => (
-                              <div key={member.id} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-xs">
-                                <span>{getName(member.profile)}</span>
-                                <div className="flex items-center gap-1">
-                                  <Badge variant={member.status === "approved" ? "default" : member.status === "rejected" ? "destructive" : "outline"}>{member.status.replace(/_/g, " ")}</Badge>
+                              <div key={member.id} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-xs">
+                                <span className="min-w-0 truncate">{getName(member.profile)}</span>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <Badge variant={member.status === "approved" ? "default" : member.status === "rejected" ? "destructive" : "outline"}>
+                                    {member.status.replace(/_/g, " ")}
+                                  </Badge>
                                   {canManagerReview && !["approved", "removed"].includes(member.status) && (
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      className="h-6 px-2 text-xs"
+                                      className="h-7 px-2 text-xs"
                                       onClick={() => teamMemberMutation.mutate({ proposalId: proposal.id, teamMemberId: member.id, status: "approved" })}
                                       disabled={teamMemberMutation.isPending}
                                     >
@@ -524,7 +551,7 @@ export default function BusinessDevelopment() {
                                     <Button
                                       size="sm"
                                       variant="destructive"
-                                      className="h-6 px-2 text-xs"
+                                      className="h-7 px-2 text-xs"
                                       onClick={() => teamMemberMutation.mutate({ proposalId: proposal.id, teamMemberId: member.id, status: "rejected" })}
                                       disabled={teamMemberMutation.isPending}
                                     >
@@ -535,69 +562,135 @@ export default function BusinessDevelopment() {
                               </div>
                             ))}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-2 text-sm">
+                          <div className="space-y-1 border-t pt-2 text-sm">
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Links</div>
                             {proposal.employeeDraftLink ? (
                               <a className="inline-flex items-center gap-1 text-primary hover:underline" href={proposal.employeeDraftLink} target="_blank" rel="noreferrer">
                                 Employee draft <ExternalLink className="h-3 w-3" />
                               </a>
-                            ) : <div className="text-muted-foreground">No employee draft link</div>}
+                            ) : (
+                              <div className="text-muted-foreground">No employee draft</div>
+                            )}
                             {proposal.bdFinalProposalLink ? (
-                              <a className="inline-flex items-center gap-1 text-primary hover:underline" href={proposal.bdFinalProposalLink} target="_blank" rel="noreferrer">
-                                BD final <ExternalLink className="h-3 w-3" />
+                              <a className="block text-primary hover:underline" href={proposal.bdFinalProposalLink} target="_blank" rel="noreferrer">
+                                <span className="inline-flex items-center gap-1">BD final <ExternalLink className="h-3 w-3" /></span>
                               </a>
-                            ) : <div className="text-muted-foreground">No BD final link</div>}
+                            ) : (
+                              <div className="text-muted-foreground">No BD final link</div>
+                            )}
                           </div>
-                        </TableCell>
-                        <TableCell className="min-w-72">
+                        </section>
+                        </div>
+
+                        <section className="min-w-0 rounded-md border bg-muted/20 p-3">
+                          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">BD finalization</div>
                           {canBdFinalize ? (
-                            <div className="space-y-2">
-                              <Input placeholder="Final Google link" value={bdDraft.bdFinalProposalLink ?? proposal.bdFinalProposalLink ?? ""} onChange={(event) => setBdField(proposal.id, { bdFinalProposalLink: event.target.value })} />
-                              <div className="grid grid-cols-2 gap-2">
-                                <Input type="date" value={bdDraft.finalSubmittedAt ?? proposal.finalSubmittedAt?.slice(0, 10) ?? ""} onChange={(event) => setBdField(proposal.id, { finalSubmittedAt: event.target.value })} />
-                                <Select value={(bdDraft.status as ProposalStatus) || proposal.status} onValueChange={(status) => setBdField(proposal.id, { status: status as ProposalStatus })}>
-                                  <SelectTrigger><SelectValue /></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="bd_in_progress">BD editing</SelectItem>
-                                    <SelectItem value="ready_for_client_submission">Ready</SelectItem>
-                                    <SelectItem value="submitted_to_client">Submitted</SelectItem>
-                                    <SelectItem value="won">Won</SelectItem>
-                                    <SelectItem value="lost">Lost</SelectItem>
-                                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                            <div className="grid gap-2">
+                              <div className="space-y-1">
+                                <Label className="text-xs">Final Google link</Label>
+                                <Input
+                                  className="h-8"
+                                  placeholder="https://docs.google.com/..."
+                                  value={bdDraft.bdFinalProposalLink ?? proposal.bdFinalProposalLink ?? ""}
+                                  onChange={(event) => setBdField(proposal.id, { bdFinalProposalLink: event.target.value })}
+                                />
                               </div>
-                              <div className="grid grid-cols-2 gap-2">
-                                <Input placeholder="Final submission status" value={bdDraft.finalSubmissionStatus ?? proposal.finalSubmissionStatus ?? ""} onChange={(event) => setBdField(proposal.id, { finalSubmissionStatus: event.target.value })} />
-                                <Input placeholder="Award status" value={bdDraft.awardStatus ?? proposal.awardStatus ?? ""} onChange={(event) => setBdField(proposal.id, { awardStatus: event.target.value })} />
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Submitted date</Label>
+                                  <Input
+                                    className="h-8"
+                                    type="date"
+                                    value={bdDraft.finalSubmittedAt ?? proposal.finalSubmittedAt?.slice(0, 10) ?? ""}
+                                    onChange={(event) => setBdField(proposal.id, { finalSubmittedAt: event.target.value })}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Workflow status</Label>
+                                  <Select value={(bdDraft.status as ProposalStatus) || proposal.status} onValueChange={(status) => setBdField(proposal.id, { status: status as ProposalStatus })}>
+                                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="bd_in_progress">BD editing</SelectItem>
+                                      <SelectItem value="ready_for_client_submission">Ready</SelectItem>
+                                      <SelectItem value="submitted_to_client">Submitted</SelectItem>
+                                      <SelectItem value="won">Won</SelectItem>
+                                      <SelectItem value="lost">Lost</SelectItem>
+                                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               </div>
-                              <Textarea placeholder="Client feedback" value={bdDraft.clientFeedback ?? proposal.clientFeedback ?? ""} onChange={(event) => setBdField(proposal.id, { clientFeedback: event.target.value })} />
-                              <Textarea placeholder="Comments" value={bdDraft.notes ?? proposal.notes ?? ""} onChange={(event) => setBdField(proposal.id, { notes: event.target.value })} />
-                              <Button size="sm" onClick={() => bdMutation.mutate({ id: proposal.id, data: bdDraft })} disabled={bdMutation.isPending}>
-                                <Send className="mr-2 h-3 w-3" /> Save BD update
-                              </Button>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Submission status</Label>
+                                  <Input
+                                    className="h-8"
+                                    placeholder="Submitted / pending"
+                                    value={bdDraft.finalSubmissionStatus ?? proposal.finalSubmissionStatus ?? ""}
+                                    onChange={(event) => setBdField(proposal.id, { finalSubmissionStatus: event.target.value })}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Award status</Label>
+                                  <Input
+                                    className="h-8"
+                                    placeholder="Won / lost / pending"
+                                    value={bdDraft.awardStatus ?? proposal.awardStatus ?? ""}
+                                    onChange={(event) => setBdField(proposal.id, { awardStatus: event.target.value })}
+                                  />
+                                </div>
+                              </div>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Client feedback</Label>
+                                  <Textarea
+                                    className="min-h-16 resize-y"
+                                    value={bdDraft.clientFeedback ?? proposal.clientFeedback ?? ""}
+                                    onChange={(event) => setBdField(proposal.id, { clientFeedback: event.target.value })}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Comments</Label>
+                                  <Textarea
+                                    className="min-h-16 resize-y"
+                                    value={bdDraft.notes ?? proposal.notes ?? ""}
+                                    onChange={(event) => setBdField(proposal.id, { notes: event.target.value })}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex justify-end">
+                                <Button size="sm" className="h-8" onClick={() => bdMutation.mutate({ id: proposal.id, data: bdDraft })} disabled={bdMutation.isPending}>
+                                  <Send className="mr-2 h-3 w-3" /> Save
+                                </Button>
+                              </div>
                             </div>
                           ) : (
                             <div className="text-sm text-muted-foreground">BD finalization is restricted.</div>
                           )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {canManagerReview && ["submitted_to_manager", "manager_changes_requested", "draft"].includes(proposal.status) ? (
-                            <div className="flex justify-end gap-2">
-                              <Button size="sm" variant="outline" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "changes_requested" })}>Changes</Button>
-                              <Button size="sm" variant="destructive" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "reject" })}><X className="h-3 w-3" /></Button>
-                              <Button size="sm" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "approve" })}><Check className="h-3 w-3" /></Button>
+                        </section>
+
+                        <section className="flex items-start justify-end lg:col-start-2">
+                          {canActOnProposal ? (
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="outline" className="h-8" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "changes_requested" })}>
+                                Changes
+                              </Button>
+                              <Button size="sm" variant="destructive" className="h-8 w-8 p-0" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "reject" })}>
+                                <X className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" className="h-8 w-8 p-0" onClick={() => managerMutation.mutate({ id: proposal.id, decision: "approve" })}>
+                                <Check className="h-3 w-3" />
+                              </Button>
                             </div>
                           ) : (
-                            <span className="text-xs text-muted-foreground">No action</span>
+                            <span className="whitespace-nowrap text-xs text-muted-foreground">No action</span>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                        </section>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </CardContent>
         </Card>

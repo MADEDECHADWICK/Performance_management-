@@ -32,6 +32,9 @@ interface UpdateProfileInput {
   managerId?: number | null;
   status?: 'active' | 'inactive' | 'separated';
   separationDate?: Date | string | null;
+  standardDailyHours?: number;
+  billableTargetPercent?: number;
+  nonBillableTargetPercent?: number;
 }
 
 export class ProfileService {
@@ -265,6 +268,19 @@ export class ProfileService {
       );
     }
 
+    if (
+      canManageOrg &&
+      ('standardDailyHours' in input ||
+        'billableTargetPercent' in input ||
+        'nonBillableTargetPercent' in input)
+    ) {
+      allowedFields.push(
+        'standardDailyHours',
+        'billableTargetPercent',
+        'nonBillableTargetPercent'
+      );
+    }
+
     const updateData: Record<string, any> = {};
 
     for (const field of allowedFields) {
@@ -278,6 +294,28 @@ export class ProfileService {
           updateData[field] = value;
         }
       }
+    }
+
+    if (updateData.standardDailyHours !== undefined) {
+      updateData.standardDailyHours = Number(updateData.standardDailyHours);
+    }
+
+    if (
+      updateData.billableTargetPercent !== undefined ||
+      updateData.nonBillableTargetPercent !== undefined
+    ) {
+      const billable =
+        updateData.billableTargetPercent !== undefined
+          ? Number(updateData.billableTargetPercent)
+          : 100 - Number(updateData.nonBillableTargetPercent);
+      const nonBillable =
+        updateData.nonBillableTargetPercent !== undefined
+          ? Number(updateData.nonBillableTargetPercent)
+          : 100 - billable;
+
+      updateData.billableTargetPercent = billable;
+      updateData.nonBillableTargetPercent = nonBillable;
+      updateData.utilizationTarget = Number((billable / 100).toFixed(4));
     }
 
     if (typeof updateData.managerId === 'number' && updateData.managerId === profileId) {

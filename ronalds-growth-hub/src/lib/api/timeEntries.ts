@@ -22,6 +22,50 @@ interface CreateTimeEntryPayload {
   description?: string;
   billable?: boolean;
   nonBillableCategory?: string | null;
+  nonBillableActivityId?: number | null;
+}
+
+export interface NonBillableActivity {
+  id: number;
+  code: string;
+  name: string;
+  categoryGroup: string;
+  isProductive: boolean;
+  requiresJob: boolean;
+}
+
+export type UtilizationPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+
+export interface UtilizationSummary {
+  profileId: number;
+  period: UtilizationPeriod;
+  label: string;
+  startDate: string;
+  endDate: string;
+  standardDailyHours: number;
+  billableTargetPercent: number;
+  nonBillableTargetPercent: number;
+  workingDays: number;
+  holidayDays: number;
+  approvedLeaveHours: number;
+  expectedWorkingHours: number;
+  expectedBillableHours: number;
+  expectedNonBillableHours: number;
+  actualBillableHours: number;
+  actualNonBillableHours: number;
+  actualProductiveNonBillableHours: number;
+  actualOtherNonBillableHours: number;
+  billableAchievementPercent: number;
+  nonBillableAchievementPercent: number;
+  billableVarianceHours: number;
+  nonBillableVarianceHours: number;
+  targetHours: number;
+  utilizationPercent: number;
+  utilizationVarianceHours: number;
+  utilizationStatus: 'on_track' | 'at_risk' | 'off_track';
+  benchmarkPercent: number;
+  status: 'on_track' | 'at_risk' | 'off_track';
+  statusBasis: 'billable' | 'non_billable';
 }
 
 interface TimeEntryFilters {
@@ -127,8 +171,34 @@ export const timeEntriesAPI = {
       description: data.description,
       billable: data.billable,
       nonBillableCategory: data.nonBillableCategory,
+      nonBillableActivityId: data.nonBillableActivityId,
     };
     return api.post('/time-entries', payload);
+  },
+
+  /**
+   * List active non-billable activities that can be logged without a job
+   */
+  listNonBillableActivities: async (): Promise<NonBillableActivity[]> => {
+    return api.get('/time-entries/non-billable-activities');
+  },
+
+  /**
+   * Get billable/non-billable threshold summaries for a period
+   */
+  getUtilization: async (params?: {
+    period?: UtilizationPeriod;
+    periods?: UtilizationPeriod[];
+    date?: string;
+    profileId?: number;
+  }): Promise<UtilizationSummary[] | UtilizationSummary> => {
+    const search = new URLSearchParams();
+    if (params?.period) search.append('period', params.period);
+    if (params?.periods?.length) search.append('periods', params.periods.join(','));
+    if (params?.date) search.append('date', params.date);
+    if (params?.profileId) search.append('profileId', String(params.profileId));
+    const query = search.toString();
+    return api.get(`/time-entries/utilization${query ? `?${query}` : ''}`);
   },
 
   /**

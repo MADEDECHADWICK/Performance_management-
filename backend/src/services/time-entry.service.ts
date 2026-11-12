@@ -504,8 +504,6 @@ export class TimeEntryService {
   }
 
   private static readonly NON_BILLABLE_CATEGORIES = new Set([
-    'leave',
-    'public_holiday',
     'internal',
     'training',
     'over_budget',
@@ -519,10 +517,63 @@ export class TimeEntryService {
       throw {
         statusCode: 400,
         message:
-          'nonBillableCategory must be one of: leave, public_holiday, internal, training, over_budget, other',
+          'nonBillableCategory must be one of: internal, training, over_budget, other. Leave and public holidays are managed by the leave module.',
       };
     }
     return normalized as NonBillableCategory;
+  }
+
+  private static readonly ACTIVITY_LEGACY_CATEGORY: Record<string, NonBillableCategory> = {
+    client: NonBillableCategory.other,
+    delivery: NonBillableCategory.other,
+    internal: NonBillableCategory.internal,
+    learning: NonBillableCategory.training,
+    marketing: NonBillableCategory.other,
+    other: NonBillableCategory.other,
+  };
+
+  private static async resolveNonBillableActivity(
+    activityId: unknown,
+    opts?: { requireNoJob?: boolean }
+  ) {
+    const id = Number(activityId);
+    if (!Number.isFinite(id) || id <= 0) {
+      throw { statusCode: 400, message: 'Valid nonBillableActivityId is required' };
+    }
+
+    const activity = await prisma.nonBillableActivity.findUnique({
+      where: { id },
+    });
+
+    if (!activity || !activity.isActive) {
+      throw { statusCode: 400, message: 'Non-billable activity is invalid or inactive' };
+    }
+
+    if (opts?.requireNoJob && activity.requiresJob) {
+      throw {
+        statusCode: 400,
+        message: 'This non-billable activity requires a job',
+      };
+    }
+
+    return activity;
+  }
+
+  private static mapActivityToLegacyCategory(activity: {
+    categoryGroup?: string | null;
+  }): NonBillableCategory {
+    const group = String(activity?.categoryGroup || '').toLowerCase();
+    return (
+      TimeEntryService.ACTIVITY_LEGACY_CATEGORY[group] ?? NonBillableCategory.other
+    );
+  }
+
+  private static async resolveProfileCostRate(profileId: number) {
+    const profile = await prisma.profile.findUnique({
+      where: { id: profileId },
+      select: { role: { select: { costRate: true, billingRate: true } } },
+    });
+    return Number(profile?.role?.costRate ?? profile?.role?.billingRate ?? 0);
   }
 
   private static normalizeDescription(description: unknown) {
@@ -783,11 +834,15 @@ export class TimeEntryService {
       where.OR = [
         { job: { partnerProfileId: auth.profileId } },
         { proposal: { assignedPartnerProfileId: auth.profileId } },
+        { employeeProfileId: auth.profileId },
+        { employee: { managerId: auth.profileId } },
       ];
     } else if (roleName === 'manager') {
       where.OR = [
         { job: { managerProfileId: auth.profileId } },
         { proposal: { managerProfileId: auth.profileId } },
+        { employeeProfileId: auth.profileId },
+        { employee: { managerId: auth.profileId } },
       ];
     }
 
@@ -832,6 +887,15 @@ export class TimeEntryService {
               title: true,
             },
           },
+          nonBillableActivity: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              categoryGroup: true,
+              isProductive: true,
+            },
+          },
         },
         skip,
         take: pageSize,
@@ -866,8 +930,77 @@ export class TimeEntryService {
       throw { statusCode: 400, message: 'Time entries cannot be logged for future dates' };
     }
 
+    const hasJob = jobId !== undefined && jobId !== null && jobId !== '';
+    const hasProposal =
+      proposalId !== undefined && proposalId !== null && proposalId !== '';
+    const hasActivity =
+      input.nonBillableActivityId !== undefined &&
+      input.nonBillableActivityId !== null &&
+      input.nonBillableActivityId !== '';
+
+    // Standalone non-billable entry (no job / proposal required)
+    if (hasActivity) {
+      if (hasJob || hasProposal) {
+        throw {
+          statusCode: 400,
+          message: 'Provide nonBillableActivityId without jobId or proposalId',
+        };
+      }
+      if (input.billable === true) {
+        throw {
+          statusCode: 400,
+          message: 'Standalone non-billable activities cannot be marked billable',
+        };
+      }
+
+      const activity = await TimeEntryService.resolveNonBillableActivity(
+        input.nonBillableActivityId,
+        { requireNoJob: true }
+      );
+
+      await TimeEntryService.assertNotOnApprovedLeave(
+        auth.profileId,
+        resolvedDateWorked,
+        resolvedTimeInput.startedAt,
+        resolvedTimeInput.endedAt
+      );
+
+      const normalizedDescription = TimeEntryService.normalizeDescription(rawDescription);
+      const costRate = await TimeEntryService.resolveProfileCostRate(auth.profileId);
+      const costAmount = Number((entryHours * costRate).toFixed(2));
+
+      return prisma.timeEntry.create({
+        data: {
+          jobId: null,
+          proposalId: null,
+          taskId: null,
+          employeeProfileId: auth.profileId,
+          dateWorked: resolvedDateWorked,
+          startedAt: resolvedTimeInput.startedAt,
+          endedAt: resolvedTimeInput.endedAt,
+          hours: entryHours,
+          billable: false,
+          nonBillableCategory: TimeEntryService.mapActivityToLegacyCategory(activity),
+          nonBillableActivityId: activity.id,
+          description: normalizedDescription,
+          billableAmount: 0,
+          costAmount,
+          profitLoss: -costAmount,
+          status: 'pending',
+        },
+        include: {
+          nonBillableActivity: true,
+          employee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+    }
+
+    if (!hasJob && !hasProposal) {
+      throw { statusCode: 400, message: 'Provide a jobId, proposalId, or nonBillableActivityId' };
+    }
+
     // ✅ VERIFY JOB EXISTS
-    if (proposalId && !jobId) {
+    if (hasProposal && !hasJob) {
       await TimeEntryService.ensureProposalReadyForTimeLogging(
         Number(proposalId),
         auth.profileId
@@ -1378,6 +1511,15 @@ export class TimeEntryService {
             title: true,
           },
         },
+        nonBillableActivity: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            categoryGroup: true,
+            isProductive: true,
+          },
+        },
       },
     });
 
@@ -1392,13 +1534,13 @@ export class TimeEntryService {
     const canView =
       TimeEntryService.isAdminRole(auth.roleName) ||
       TimeEntryService.hasScopedManagerAccess(auth.roleName, auth.profileId, {
-        jobManagerProfileId: timeEntry.job.managerProfileId,
+        jobManagerProfileId: timeEntry.job?.managerProfileId,
         employeeManagerId: timeEntry.employee?.managerId,
       }) ||
       TimeEntryService.hasPartnerAccess(
         auth.roleName,
         auth.profileId,
-        timeEntry.job.partnerProfileId
+        timeEntry.job?.partnerProfileId
       ) ||
       timeEntry.employeeProfileId === auth.profileId;
 
@@ -1451,13 +1593,6 @@ export class TimeEntryService {
       };
     }
 
-    if (!timeEntry.job?.jobCosting && !isAdmin) {
-      throw {
-        statusCode: 400,
-        message: 'Job costing must be completed before updating time',
-      };
-    }
-
     // ✅ VERIFY STATUS - can only update draft entries
     if (timeEntry.status !== 'pending') {
       throw {
@@ -1485,6 +1620,81 @@ export class TimeEntryService {
       resolvedTimeInput.startedAt,
       resolvedTimeInput.endedAt
     );
+
+    // Standalone non-billable activity and proposal entries have no job
+    // allocation/cap logic.
+    if (!timeEntry.jobId) {
+      const normalizedDescription = TimeEntryService.normalizeDescription(
+        rawDescription ?? timeEntry.description
+      );
+
+      let activityId = timeEntry.nonBillableActivityId ?? null;
+      if (
+        input.nonBillableActivityId !== undefined &&
+        input.nonBillableActivityId !== null &&
+        input.nonBillableActivityId !== ''
+      ) {
+        const activity = await TimeEntryService.resolveNonBillableActivity(
+          input.nonBillableActivityId,
+          { requireNoJob: !timeEntry.proposalId }
+        );
+        activityId = activity.id;
+      }
+
+      const parsedDate = input.dateWorked
+        ? TimeEntryService.parseDateInput(input.dateWorked)
+        : null;
+
+      if (timeEntry.proposalId) {
+        return prisma.timeEntry.update({
+          where: { id: timeEntryId },
+          data: {
+            hours: resolvedTimeInput.hours,
+            startedAt: resolvedTimeInput.startedAt,
+            endedAt: resolvedTimeInput.endedAt,
+            description: normalizedDescription,
+            dateWorked: parsedDate ?? timeEntry.dateWorked,
+          },
+          include: {
+            proposal: { select: { id: true, proposalTitle: true, clientName: true } },
+            employee: { select: { id: true, firstName: true, lastName: true } },
+          },
+        });
+      }
+
+      const costRate = await TimeEntryService.resolveProfileCostRate(
+        timeEntry.employeeProfileId
+      );
+      const costAmount = Number((resolvedTimeInput.hours * costRate).toFixed(2));
+
+      return prisma.timeEntry.update({
+        where: { id: timeEntryId },
+        data: {
+          hours: resolvedTimeInput.hours,
+          startedAt: resolvedTimeInput.startedAt,
+          endedAt: resolvedTimeInput.endedAt,
+          description: normalizedDescription,
+          dateWorked: parsedDate ?? timeEntry.dateWorked,
+          nonBillableActivityId: activityId,
+          billable: false,
+          billableAmount: 0,
+          costAmount,
+          profitLoss: -costAmount,
+        },
+        include: {
+          nonBillableActivity: true,
+          employee: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+    }
+
+    if (!timeEntry.job?.jobCosting && !isAdmin) {
+      throw {
+        statusCode: 400,
+        message: 'Job costing must be completed before updating time',
+      };
+    }
+
     let taskContext: { id: number; estimatedHours: number } | null = null;
 
     if (timeEntry.taskId) {
@@ -1943,22 +2153,26 @@ export class TimeEntryService {
           select: { id: true, jobName: true, managerProfileId: true },
         },
         employee: {
-          select: { id: true, firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, managerId: true },
         },
       },
     });
 
-    if (updated.job.managerProfileId) {
+    const approverProfileId =
+      updated.job?.managerProfileId ?? updated.employee?.managerId ?? null;
+    const entryLabel = updated.job?.jobName || 'a non-billable activity';
+
+    if (approverProfileId) {
       await NotificationService.createNotification(
         {
-          recipientProfileId: updated.job.managerProfileId,
+          recipientProfileId: approverProfileId,
           type: 'action',
           title: 'Time entry submitted for approval',
-          message: `${updated.employee.firstName} ${updated.employee.lastName} submitted time for "${updated.job.jobName}".`,
+          message: `${updated.employee.firstName} ${updated.employee.lastName} submitted time for "${entryLabel}".`,
           actionRequired: true,
-          jobId: updated.job.id,
+          jobId: updated.job?.id,
           timeEntryId: updated.id,
-          link: `/workload-management?jobId=${updated.job.id}`,
+          link: updated.job ? `/workload-management?jobId=${updated.job.id}` : '/timesheets',
         },
         { userId: auth.userId, profileId: auth.profileId, roleName: auth.roleName }
       );
@@ -2005,13 +2219,13 @@ export class TimeEntryService {
 
     const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isScopedManager = TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
-      jobManagerProfileId: timeEntry.job.managerProfileId,
+      jobManagerProfileId: timeEntry.job?.managerProfileId,
       employeeManagerId: timeEntry.employee?.managerId,
     });
     const isPartnerOfJob = TimeEntryService.hasPartnerAccess(
       roleName,
       auth.profileId,
-      timeEntry.job.partnerProfileId
+      timeEntry.job?.partnerProfileId
     );
 
     if (!isAdmin && !isScopedManager && !isPartnerOfJob) {
@@ -2030,10 +2244,12 @@ export class TimeEntryService {
     }
 
     // Re-validate budget cap in case it was lowered between submission and approval
-    const jobCosting = await prisma.jobCosting.findUnique({
-      where: { jobId: timeEntry.jobId },
-      select: { budgetCap: { select: { capEnforced: true, allowOverage: true, totalAllocatedHours: true } } },
-    });
+    const jobCosting = timeEntry.jobId
+      ? await prisma.jobCosting.findUnique({
+          where: { jobId: timeEntry.jobId },
+          select: { budgetCap: { select: { capEnforced: true, allowOverage: true, totalAllocatedHours: true } } },
+        })
+      : null;
     if (jobCosting?.budgetCap?.capEnforced && !jobCosting.budgetCap.allowOverage) {
       const totalAllocatedHours = Number(jobCosting.budgetCap.totalAllocatedHours);
       const sum = await prisma.timeEntry.aggregate({
@@ -2098,9 +2314,9 @@ export class TimeEntryService {
           recipientProfileId: timeEntry.employeeProfileId,
           type: 'info',
           title: 'Time entry approved',
-          message: `Your time entry for "${updated.job.jobName}" was approved.`,
+          message: `Your time entry for "${updated.job?.jobName || 'a non-billable activity'}" was approved.`,
           actionRequired: false,
-          jobId: updated.job.id,
+          jobId: updated.job?.id,
           timeEntryId: updated.id,
           link: `/timesheets`,
         },
@@ -2148,13 +2364,13 @@ export class TimeEntryService {
 
     const isAdmin = TimeEntryService.isAdminRole(roleName);
     const isScopedManager = TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
-      jobManagerProfileId: timeEntry.job.managerProfileId,
+      jobManagerProfileId: timeEntry.job?.managerProfileId,
       employeeManagerId: timeEntry.employee?.managerId,
     });
     const isPartnerOfJob = TimeEntryService.hasPartnerAccess(
       roleName,
       auth.profileId,
-      timeEntry.job.partnerProfileId
+      timeEntry.job?.partnerProfileId
     );
 
     if (!isAdmin && !isScopedManager && !isPartnerOfJob) {
@@ -2211,9 +2427,9 @@ export class TimeEntryService {
           recipientProfileId: timeEntry.employeeProfileId,
           type: 'action',
           title: 'Time entry rejected',
-          message: `Your time entry for "${updated.job.jobName}" was rejected.`,
+          message: `Your time entry for "${updated.job?.jobName || 'a non-billable activity'}" was rejected.`,
           actionRequired: true,
-          jobId: updated.job.id,
+          jobId: updated.job?.id,
           timeEntryId: updated.id,
           link: `/timesheets`,
         },
@@ -2769,10 +2985,12 @@ export class TimeEntryService {
     if (!isAdmin) {
       const unauthorized = entriesWithAccessContext.filter((entry) => {
         if (roleName === 'partner') {
-          return entry.job.partnerProfileId !== auth.profileId;
+          const ownsJob = entry.job?.partnerProfileId === auth.profileId;
+          const managesEmployee = entry.employee?.managerId === auth.profileId;
+          return !ownsJob && !managesEmployee;
         }
         return !TimeEntryService.hasScopedManagerAccess(roleName, auth.profileId, {
-          jobManagerProfileId: entry.job.managerProfileId,
+          jobManagerProfileId: entry.job?.managerProfileId,
           employeeManagerId: entry.employee?.managerId,
         });
       });

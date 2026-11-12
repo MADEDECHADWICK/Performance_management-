@@ -70,6 +70,7 @@ export const ALL_VIEW_KEYS = [
   "analytics.partner",
   "analytics.hr",
   "analytics.gmp",
+  "analytics.utilization",
   "partner.metrics",
   "partner.portfolio_summary",
   "kpi.scorecard",
@@ -116,6 +117,7 @@ const FINANCE_VIEW_KEYS = [
   "finance.invoices",
   "kpi.scorecard",
   "analytics.finance",
+  "analytics.utilization",
 ] as const;
 
 const MANAGER_VIEW_KEYS = [
@@ -137,6 +139,7 @@ const MANAGER_VIEW_KEYS = [
   "kpi.scorecard",
   "reports.workspace",
   "analytics.manager",
+  "analytics.utilization",
 ] as const;
 
 const PARTNER_VIEW_KEYS = [
@@ -156,6 +159,7 @@ const PARTNER_VIEW_KEYS = [
   "evaluations.project_view",
   "finance.summary",
   "analytics.partner",
+  "analytics.utilization",
 ] as const;
 
 const GMP_VIEW_KEYS = [
@@ -199,6 +203,7 @@ const GMP_VIEW_KEYS = [
   "reports.workspace",
   "reports.audit_logs",
   "analytics.gmp",
+  "analytics.utilization",
   "partner.metrics",
   "partner.portfolio_summary",
   "kpi.scorecard",

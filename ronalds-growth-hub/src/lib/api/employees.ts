@@ -36,6 +36,9 @@ interface CreateEmployeePayload {
   isPartner?: boolean;
   financialTarget?: number;
   utilizationTarget?: number;
+  standardDailyHours?: number;
+  billableTargetPercent?: number;
+  nonBillableTargetPercent?: number;
 }
 
 interface UpdateEmployeePayload extends Partial<CreateEmployeePayload> {

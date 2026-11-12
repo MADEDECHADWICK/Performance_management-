@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { buildPrimaryRoleAuthContext } from '../auth/accessRoles';
 import { TimeEntryService } from '../services/time-entry.service';
+import { TimeUtilizationService } from '../services/timeUtilization.service';
+import prisma from '../prisma';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
 const buildAuthContext = (req: AuthRequest) => buildPrimaryRoleAuthContext(req);
@@ -605,6 +607,83 @@ export class TimeEntryController {
       const summary = await TimeEntryService.getJobAllocationSummary(jobId, auth);
 
       res.json(successResponse(summary, 'Job allocation summary retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500, error.details)
+      );
+    }
+  }
+
+  /**
+   * GET /time-entries/non-billable-activities
+   * List active non-billable activities that can be logged without a job.
+   */
+  static async listNonBillableActivities(_req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const activities = await prisma.nonBillableActivity.findMany({
+        where: { isActive: true, requiresJob: false },
+        orderBy: [{ categoryGroup: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          categoryGroup: true,
+          isProductive: true,
+          requiresJob: true,
+        },
+      });
+
+      res.json(successResponse(activities, 'Non-billable activities retrieved'));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500, error.details)
+      );
+    }
+  }
+
+  /**
+   * GET /time-entries/utilization
+   * Threshold summary for daily/weekly/monthly/quarterly/yearly.
+   */
+  static async getUtilization(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const auth = buildAuthContext(req);
+      const requestedProfileId = req.query.profileId
+        ? Number(req.query.profileId)
+        : auth.profileId;
+
+      if (!Number.isFinite(requestedProfileId) || requestedProfileId <= 0) {
+        res.status(400).json(errorResponse('Valid profileId is required', 400));
+        return;
+      }
+
+      await TimeUtilizationService.assertCanViewProfile(requestedProfileId, auth);
+
+      const anchorRaw = typeof req.query.date === 'string' ? req.query.date : '';
+      const anchorDate = anchorRaw ? new Date(anchorRaw) : new Date();
+      if (Number.isNaN(anchorDate.getTime())) {
+        res.status(400).json(errorResponse('Valid date is required', 400));
+        return;
+      }
+
+      if (req.query.period !== undefined) {
+        const period = TimeUtilizationService.resolvePeriod(req.query.period);
+        const summary = await TimeUtilizationService.getSummary(
+          requestedProfileId,
+          period,
+          anchorDate
+        );
+        res.json(successResponse(summary, 'Utilization summary retrieved'));
+        return;
+      }
+
+      const periods = TimeUtilizationService.resolvePeriods(req.query.periods);
+      const summaries = await TimeUtilizationService.getSummaries(
+        requestedProfileId,
+        periods,
+        anchorDate
+      );
+      res.json(successResponse(summaries, 'Utilization summaries retrieved'));
     } catch (error: any) {
       res.status(error.statusCode || 500).json(
         errorResponse(error.message, error.statusCode || 500, error.details)

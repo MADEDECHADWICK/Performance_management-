@@ -11,6 +11,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { timeEntriesAPI, jobsAPI } from '@/lib/api';
+import type {
+  NonBillableActivity,
+  UtilizationPeriod,
+  UtilizationSummary,
+} from '@/lib/api/timeEntries';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '@/components/DashboardLayout';
@@ -69,6 +74,8 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Target,
+  ClipboardList,
 } from 'lucide-react';
 
 interface Job {
@@ -105,6 +112,14 @@ interface TimeEntry {
   endTime?: string;
   sourceType?: 'manual' | 'leave_request';
   nonBillableCategory?: string | null;
+  nonBillableActivityId?: number | null;
+  nonBillableActivity?: {
+    id: number;
+    code: string;
+    name: string;
+    categoryGroup: string;
+    isProductive: boolean;
+  } | null;
   leaveRequestId?: number | null;
   leaveStatus?: string | null;
   isProjectedLeave?: boolean;
@@ -147,11 +162,23 @@ interface JobAllocationSummary {
 const nonBillableCategoryOptions = [
   { value: 'internal', label: 'Internal' },
   { value: 'training', label: 'Training' },
-  { value: 'leave', label: 'Leave' },
-  { value: 'public_holiday', label: 'Public holiday' },
   { value: 'over_budget', label: 'Over budget' },
   { value: 'other', label: 'Other' },
 ];
+
+const utilizationPeriodOptions: Array<{ value: UtilizationPeriod; label: string }> = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Quarterly' },
+  { value: 'yearly', label: 'Yearly' },
+];
+
+const utilizationToneClass = (status?: UtilizationSummary['status']) => {
+  if (status === 'on_track') return 'text-emerald-600';
+  if (status === 'at_risk') return 'text-amber-600';
+  return 'text-rose-600';
+};
 
 const STATUS_COLORS = {
   pending: 'bg-gray-100 text-gray-800',
@@ -215,6 +242,17 @@ export default function TimesheetsNew() {
     nonBillableCategory: 'internal',
   });
 
+  const [showNonBillableDialog, setShowNonBillableDialog] = useState(false);
+  const [nonBillableForm, setNonBillableForm] = useState({
+    activityId: '',
+    date: format(new Date(), 'yyyy-MM-dd'),
+    startTime: '',
+    endTime: '',
+    hours: 0,
+    description: '',
+  });
+  const [utilizationPeriod, setUtilizationPeriod] = useState<UtilizationPeriod>('weekly');
+
   const [additionalTimeRequest, setAdditionalTimeRequest] = useState({
     jobId: '',
     additionalHours: 0,
@@ -253,6 +291,28 @@ export default function TimesheetsNew() {
         isManager || isPartner ? { status: 'pending' } : undefined
       ),
   });
+
+  const { data: activitiesData } = useQuery({
+    queryKey: ['non-billable-activities'],
+    queryFn: () => timeEntriesAPI.listNonBillableActivities(),
+  });
+  const nonBillableActivities = (activitiesData || []) as NonBillableActivity[];
+
+  const { data: utilizationData } = useQuery({
+    queryKey: [
+      'time-utilization',
+      utilizationPeriod,
+      format(selectedDate, 'yyyy-MM-dd'),
+    ],
+    queryFn: () =>
+      timeEntriesAPI.getUtilization({
+        period: utilizationPeriod,
+        date: format(selectedDate, 'yyyy-MM-dd'),
+      }),
+  });
+  const utilization = (
+    Array.isArray(utilizationData) ? utilizationData[0] : utilizationData
+  ) as UtilizationSummary | undefined;
 
   const toNumber = (value: unknown, fallback = 0) => {
     const parsed = Number(value);
@@ -508,6 +568,34 @@ export default function TimesheetsNew() {
           setShowRequestTimeDialog(true);
         }
       }
+    },
+  });
+
+  const createNonBillableMutation = useMutation({
+    mutationFn: (data: any) => timeEntriesAPI.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['my-time-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['time-utilization'] });
+      setShowNonBillableDialog(false);
+      setNonBillableForm({
+        activityId: '',
+        date: format(new Date(), 'yyyy-MM-dd'),
+        startTime: '',
+        endTime: '',
+        hours: 0,
+        description: '',
+      });
+      toast({
+        title: 'Non-billable entry created',
+        description: 'Your non-billable activity has been submitted for approval.',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Unable to save non-billable entry.',
+        variant: 'destructive',
+      });
     },
   });
 
@@ -828,6 +916,51 @@ export default function TimesheetsNew() {
     createEntryMutation.mutate(payload);
   };
 
+  const handleCreateNonBillable = () => {
+    if (!nonBillableForm.activityId) {
+      toast({
+        title: 'Error',
+        description: 'Select a non-billable activity.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const hasTimeRange = Boolean(nonBillableForm.startTime && nonBillableForm.endTime);
+    if (!hasTimeRange && (!nonBillableForm.hours || nonBillableForm.hours <= 0)) {
+      toast({
+        title: 'Error',
+        description: 'Enter hours or a start and end time.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const payload: Record<string, any> = {
+      nonBillableActivityId: Number(nonBillableForm.activityId),
+      dateWorked: nonBillableForm.date,
+      description: nonBillableForm.description.trim() || undefined,
+      billable: false,
+    };
+
+    if (hasTimeRange) {
+      payload.startedAt = `${nonBillableForm.date}T${nonBillableForm.startTime}:00`;
+      payload.endedAt = `${nonBillableForm.date}T${nonBillableForm.endTime}:00`;
+    } else {
+      payload.hours = nonBillableForm.hours;
+    }
+
+    createNonBillableMutation.mutate(payload);
+  };
+
+  const handleNonBillableTimeChange = (field: 'startTime' | 'endTime', value: string) => {
+    const next = { ...nonBillableForm, [field]: value };
+    if (next.startTime && next.endTime) {
+      next.hours = calculateHoursFromTime(next.startTime, next.endTime);
+    }
+    setNonBillableForm(next);
+  };
+
   const handleRequestAdditionalTime = () => {
     if (!additionalTimeRequest.jobId) {
       toast({ title: 'Error', description: 'Select a job before requesting hours.', variant: 'destructive' });
@@ -879,7 +1012,11 @@ export default function TimesheetsNew() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setShowEntryDialog(true)}>
+            <Button variant="outline" onClick={() => setShowNonBillableDialog(true)}>
+              <ClipboardList className="h-4 w-4 mr-2" />
+              Log Non-Billable
+            </Button>
+            <Button onClick={() => setShowEntryDialog(true)}>
               <Plus className="h-4 w-4 mr-2" />
               Log Time
             </Button>
@@ -1020,6 +1157,98 @@ export default function TimesheetsNew() {
                   <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />Non-billable</span>
                 </div>
               </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Billable / Non-billable threshold progress */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Target className="h-4 w-4 text-primary" />
+                  Utilization & Thresholds
+                </CardTitle>
+                <CardDescription>
+                  {utilization
+                    ? `${utilization.label} • ${utilization.standardDailyHours}h/day target • ${utilization.billableTargetPercent}% billable benchmark`
+                    : 'Billable hours vs the daily target'}
+                </CardDescription>
+              </div>
+              <Select
+                value={utilizationPeriod}
+                onValueChange={(value) => setUtilizationPeriod(value as UtilizationPeriod)}
+              >
+                <SelectTrigger className="w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {utilizationPeriodOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {utilization ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium">Billable utilization</span>
+                      <span className="text-muted-foreground">
+                        {utilization.actualBillableHours.toFixed(1)}h /{' '}
+                        {utilization.targetHours.toFixed(1)}h
+                      </span>
+                    </div>
+                    <Progress
+                      value={Math.min(100, Math.max(0, utilization.utilizationPercent))}
+                    />
+                    <p className={`text-xs ${utilizationToneClass(utilization.utilizationStatus)}`}>
+                      {utilization.utilizationPercent.toFixed(0)}% of{' '}
+                      {utilization.standardDailyHours}h/day target •{' '}
+                      {utilization.utilizationVarianceHours >= 0 ? '+' : ''}
+                      {utilization.utilizationVarianceHours.toFixed(1)}h variance
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium">Productive non-billable</span>
+                      <span className="text-muted-foreground">
+                        {utilization.actualProductiveNonBillableHours.toFixed(1)}h /{' '}
+                        {utilization.expectedNonBillableHours.toFixed(1)}h
+                      </span>
+                    </div>
+                    <Progress
+                      value={Math.min(
+                        100,
+                        Math.max(0, utilization.nonBillableAchievementPercent)
+                      )}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {utilization.nonBillableAchievementPercent.toFixed(0)}% of allowance •{' '}
+                      {utilization.nonBillableVarianceHours >= 0 ? '+' : ''}
+                      {utilization.nonBillableVarianceHours.toFixed(1)}h variance
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>Working days: {utilization.workingDays}</span>
+                  <span>Approved leave: {utilization.approvedLeaveHours.toFixed(1)}h</span>
+                  <span>Other non-billable: {utilization.actualOtherNonBillableHours.toFixed(1)}h</span>
+                  <span className={utilizationToneClass(utilization.utilizationStatus)}>
+                    Status: {utilization.utilizationStatus.replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No threshold data available for this period yet.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -1179,12 +1408,16 @@ export default function TimesheetsNew() {
                                 <p className="font-medium">
                                   {isProjectedLeaveEntry(entry)
                                     ? entry.leaveType?.name || 'Leave'
-                                    : entry.job?.jobName || 'Unassigned'}
+                                    : entry.nonBillableActivity?.name ||
+                                      entry.job?.jobName ||
+                                      'Unassigned'}
                                 </p>
                                 <p className="text-sm text-muted-foreground">
                                   {isProjectedLeaveEntry(entry)
                                     ? 'Auto-projected from approved/pending leave'
-                                    : entry.job?.client?.clientName}
+                                    : entry.nonBillableActivity
+                                      ? 'Standalone non-billable'
+                                      : entry.job?.client?.clientName}
                                 </p>
                               </div>
                             </TableCell>
@@ -1403,7 +1636,9 @@ export default function TimesheetsNew() {
                             <TableCell>
                               {formatDateSafe(entry.date || (entry as any).dateWorked, 'MMM d')}
                             </TableCell>
-                            <TableCell>{entry.job?.jobName}</TableCell>
+                            <TableCell>
+                              {entry.nonBillableActivity?.name || entry.job?.jobName || '-'}
+                            </TableCell>
                             <TableCell className="max-w-xs truncate">
                               {entry.description}
                             </TableCell>
@@ -1572,6 +1807,128 @@ export default function TimesheetsNew() {
             </TabsContent>
           )}
         </Tabs>
+
+        {/* Log Non-Billable Activity Dialog */}
+        <Dialog open={showNonBillableDialog} onOpenChange={setShowNonBillableDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Log Non-Billable Activity</DialogTitle>
+              <DialogDescription>
+                Record productive non-billable time without a job. Leave and public holidays
+                are handled by the leave module.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div>
+                <Label>Activity *</Label>
+                <Select
+                  value={nonBillableForm.activityId}
+                  onValueChange={(value) =>
+                    setNonBillableForm((prev) => ({ ...prev, activityId: value }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a non-billable activity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nonBillableActivities.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                        No activities configured
+                      </div>
+                    ) : (
+                      nonBillableActivities.map((activity) => (
+                        <SelectItem key={activity.id} value={String(activity.id)}>
+                          {activity.name}
+                          {!activity.isProductive ? ' (non-productive)' : ''}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Date *</Label>
+                <Input
+                  type="date"
+                  value={nonBillableForm.date}
+                  onChange={(e) =>
+                    setNonBillableForm((prev) => ({ ...prev, date: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Start Time</Label>
+                  <Input
+                    type="time"
+                    value={nonBillableForm.startTime}
+                    onChange={(e) => handleNonBillableTimeChange('startTime', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>End Time</Label>
+                  <Input
+                    type="time"
+                    value={nonBillableForm.endTime}
+                    onChange={(e) => handleNonBillableTimeChange('endTime', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label>Hours *</Label>
+                <Input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  value={nonBillableForm.hours}
+                  onChange={(e) =>
+                    setNonBillableForm((prev) => ({
+                      ...prev,
+                      hours: Number(e.target.value),
+                    }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Auto-calculated when start and end time are provided.
+                </p>
+              </div>
+
+              <div>
+                <Label>Description</Label>
+                <Textarea
+                  value={nonBillableForm.description}
+                  onChange={(e) =>
+                    setNonBillableForm((prev) => ({
+                      ...prev,
+                      description: e.target.value,
+                    }))
+                  }
+                  placeholder="What non-billable work did you do?"
+                  rows={3}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowNonBillableDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateNonBillable}
+                disabled={createNonBillableMutation.isPending}
+              >
+                {createNonBillableMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <ClipboardList className="h-4 w-4 mr-2" />
+                )}
+                Save Entry
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Log Time Dialog */}
         <Dialog open={showEntryDialog} onOpenChange={setShowEntryDialog}>

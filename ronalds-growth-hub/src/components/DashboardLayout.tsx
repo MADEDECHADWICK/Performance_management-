@@ -491,6 +491,13 @@ function AppSidebar({
                 action={analyticsNav.action}
               />
               <NavItem
+                path="/utilization"
+                icon={Target}
+                label="Utilization"
+                viewKey="analytics.utilization"
+                module="reports"
+              />
+              <NavItem
                 path="/bsc-management"
                 icon={Target}
                 label="BSC & KPIs"

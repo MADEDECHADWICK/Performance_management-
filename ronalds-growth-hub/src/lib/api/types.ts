@@ -83,6 +83,9 @@ export interface Profile {
   backgroundCheckDate?: string;
   financialTarget?: number;
   utilizationTarget: number;
+  standardDailyHours?: number;
+  billableTargetPercent?: number;
+  nonBillableTargetPercent?: number;
   createdAt: string;
   updatedAt: string;
   // Relations

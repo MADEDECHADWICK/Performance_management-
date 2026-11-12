@@ -158,6 +158,28 @@ router.get(
 );
 
 /**
+ * GET /time-entries/non-billable-activities
+ * List active non-billable activities usable without a job
+ */
+router.get(
+  "/non-billable-activities",
+  authMiddleware,
+  loadProfile,
+  TimeEntryController.listNonBillableActivities
+);
+
+/**
+ * GET /time-entries/utilization
+ * Billable/non-billable threshold summary by period
+ */
+router.get(
+  "/utilization",
+  authMiddleware,
+  loadProfile,
+  TimeEntryController.getUtilization
+);
+
+/**
  * GET /time-entries/:timeEntryId
  * Get specific time entry
  */

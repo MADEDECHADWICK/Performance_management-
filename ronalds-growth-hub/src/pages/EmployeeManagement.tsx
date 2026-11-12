@@ -506,6 +506,9 @@ const EmployeeManagement = () => {
     hire_date: "",
     status: "active",
     hourly_rate: "",
+    standard_daily_hours: "8",
+    billable_target_percent: "80",
+    non_billable_target_percent: "20",
   });
   const [accessRoles, setAccessRoles] = useState<string[]>(DEFAULT_ACCESS_ROLES);
   
@@ -1402,6 +1405,9 @@ const EmployeeManagement = () => {
       hire_date: new Date().toISOString().split("T")[0],
       status: "active",
       hourly_rate: "",
+      standard_daily_hours: "8",
+      billable_target_percent: "80",
+      non_billable_target_percent: "20",
     });
     setEmployeeDialogOpen(true);
   };
@@ -1705,6 +1711,10 @@ const EmployeeManagement = () => {
         hireDate: employeeForm.hire_date || null,
         status: employeeForm.status,
         hourlyRate: employeeForm.hourly_rate ? parseFloat(employeeForm.hourly_rate) : null,
+        standardDailyHours: parseFloat(employeeForm.standard_daily_hours) || 8,
+        billableTargetPercent: parseFloat(employeeForm.billable_target_percent) || 80,
+        nonBillableTargetPercent:
+          parseFloat(employeeForm.non_billable_target_percent) || 20,
       });
 
       const emailDelivery = (onboardingResponse as any)?.emailDelivery;
@@ -2856,6 +2866,72 @@ const EmployeeManagement = () => {
                   <p className="text-xs text-muted-foreground">
                     Auto-filled from the selected position.
                   </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="emp-standard-hours">Standard Daily Hours</Label>
+                  <Input
+                    id="emp-standard-hours"
+                    type="number"
+                    step="0.25"
+                    min="0.25"
+                    max="24"
+                    value={employeeForm.standard_daily_hours}
+                    onChange={(e) =>
+                      setEmployeeForm({
+                        ...employeeForm,
+                        standard_daily_hours: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="emp-billable-percent">Billable Threshold %</Label>
+                  <Input
+                    id="emp-billable-percent"
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="100"
+                    value={employeeForm.billable_target_percent}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      const numeric = Number(value);
+                      setEmployeeForm({
+                        ...employeeForm,
+                        billable_target_percent: value,
+                        non_billable_target_percent:
+                          Number.isFinite(numeric) && value !== ""
+                            ? String(Math.max(0, 100 - numeric))
+                            : employeeForm.non_billable_target_percent,
+                      });
+                    }}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="emp-non-billable-percent">Non-billable %</Label>
+                  <Input
+                    id="emp-non-billable-percent"
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="100"
+                    value={employeeForm.non_billable_target_percent}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      const numeric = Number(value);
+                      setEmployeeForm({
+                        ...employeeForm,
+                        non_billable_target_percent: value,
+                        billable_target_percent:
+                          Number.isFinite(numeric) && value !== ""
+                            ? String(Math.max(0, 100 - numeric))
+                            : employeeForm.billable_target_percent,
+                      });
+                    }}
+                  />
                 </div>
               </div>
 

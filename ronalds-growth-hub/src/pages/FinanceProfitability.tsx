@@ -30,7 +30,13 @@ import {
   YAxis,
 } from "recharts";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
+import {
+  writeOffsAPI,
+  type JobWriteOffResult,
+  type TimeWriteOffResult,
+} from "@/lib/api/writeOffs";
 
 
 type JobProfitability = {
@@ -54,6 +60,11 @@ export default function FinanceProfitability() {
   const [jobProfitability, setJobProfitability] = useState<JobProfitability[]>([]);
   const [search, setSearch] = useState("");
   const [marginFilter, setMarginFilter] = useState("");
+
+  const [writeOffPeriod, setWriteOffPeriod] = useState("monthly");
+  const [writeOffTime, setWriteOffTime] = useState<TimeWriteOffResult | null>(null);
+  const [writeOffJobs, setWriteOffJobs] = useState<JobWriteOffResult | null>(null);
+  const [writeOffLoading, setWriteOffLoading] = useState(false);
 
   const loadProfitability = async () => {
     try {
@@ -82,6 +93,40 @@ export default function FinanceProfitability() {
   useEffect(() => {
     loadProfitability();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        setWriteOffLoading(true);
+        const data = await writeOffsAPI.getSummary({
+          period: writeOffPeriod as any,
+          date: new Date().toISOString().slice(0, 10),
+        });
+        if (cancelled) return;
+        setWriteOffTime(data.time);
+        setWriteOffJobs(data.jobs);
+      } catch (error: any) {
+        if (cancelled) return;
+        if (error?.status !== 403) {
+          console.error("Write-off load error:", error);
+        }
+        setWriteOffTime(null);
+        setWriteOffJobs(null);
+      } finally {
+        if (!cancelled) setWriteOffLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [writeOffPeriod]);
+
+  const formatMoney = (value?: number) =>
+    `KES ${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+  const formatHours = (value?: number) => `${Number(value || 0).toFixed(1)}h`;
 
   const filteredJobs = useMemo(() => {
     return jobProfitability.filter((job) => {
@@ -456,6 +501,344 @@ export default function FinanceProfitability() {
                     </div>
                   </div>
                 ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle>Write-offs</CardTitle>
+                <CardDescription>
+                  Non-billable time write-offs and job over-servicing write-offs across the firm.
+                </CardDescription>
+              </div>
+              <div className="w-full md:w-44">
+                <Label htmlFor="writeOffPeriod">Period</Label>
+                <select
+                  id="writeOffPeriod"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={writeOffPeriod}
+                  onChange={(event) => setWriteOffPeriod(event.target.value)}
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {writeOffLoading ? (
+              <PageLoader message="Loading write-offs..." minHeightClassName="min-h-[160px]" />
+            ) : (
+              <>
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Time write-off value</p>
+                    <p className="text-2xl font-bold text-rose-600">
+                      {formatMoney(writeOffTime?.firm.writeOffValue)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {writeOffTime?.label || "-"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Time write-off hours</p>
+                    <p className="text-2xl font-bold">
+                      {formatHours(writeOffTime?.firm.writeOffHours)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {Number(writeOffTime?.firm.writeOffRatePercent || 0).toFixed(1)}% of logged hours
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Job write-off value</p>
+                    <p className="text-2xl font-bold text-rose-600">
+                      {formatMoney(writeOffJobs?.firm.writeOffValue)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {writeOffJobs?.firm.jobsWithWriteOff || 0} jobs written off
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xs text-muted-foreground">Job write-off rate</p>
+                    <p className="text-2xl font-bold">
+                      {Number(writeOffJobs?.firm.writeOffRatePercent || 0).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      of delivered value
+                    </p>
+                  </div>
+                </div>
+
+                <Tabs defaultValue="jobs">
+                  <TabsList>
+                    <TabsTrigger value="jobs">Job write-offs</TabsTrigger>
+                    <TabsTrigger value="time">Time write-offs</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="jobs" className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-4">
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Delivered value</p>
+                        <p className="text-lg font-semibold">
+                          {formatMoney(writeOffJobs?.firm.deliveredValue)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Fee basis</p>
+                        <p className="text-lg font-semibold">
+                          {formatMoney(writeOffJobs?.firm.feeBasis)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Write-off</p>
+                        <p className="text-lg font-semibold text-rose-600">
+                          {formatMoney(writeOffJobs?.firm.writeOffValue)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Jobs affected</p>
+                        <p className="text-lg font-semibold">
+                          {writeOffJobs?.firm.jobsWithWriteOff || 0} / {writeOffJobs?.firm.jobCount || 0}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="max-h-[420px] overflow-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Job</TableHead>
+                            <TableHead>Client</TableHead>
+                            <TableHead>Partner</TableHead>
+                            <TableHead className="text-right">Delivered</TableHead>
+                            <TableHead className="text-right">Fee basis</TableHead>
+                            <TableHead className="text-right">Write-off</TableHead>
+                            <TableHead className="text-right">Write-off %</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(writeOffJobs?.topWriteOffs || []).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={7} className="text-center text-muted-foreground">
+                                No job write-offs for this period.
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {(writeOffJobs?.topWriteOffs || []).map((job) => (
+                            <TableRow key={job.jobId}>
+                              <TableCell>{job.jobCode || job.jobName}</TableCell>
+                              <TableCell>{job.clientName}</TableCell>
+                              <TableCell>{job.partnerName || "Unassigned"}</TableCell>
+                              <TableCell className="text-right">{formatMoney(job.deliveredValue)}</TableCell>
+                              <TableCell className="text-right">{formatMoney(job.feeBasis)}</TableCell>
+                              <TableCell className="text-right font-semibold text-rose-600">
+                                {formatMoney(job.writeOffValue)}
+                              </TableCell>
+                              <TableCell className="text-right">{job.writeOffPercent.toFixed(1)}%</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">By partner</div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Partner</TableHead>
+                              <TableHead className="text-right">Delivered</TableHead>
+                              <TableHead className="text-right">Write-off</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(writeOffJobs?.byPartner || []).map((group) => (
+                              <TableRow key={group.key}>
+                                <TableCell>{group.name}</TableCell>
+                                <TableCell className="text-right">{formatMoney(group.deliveredValue)}</TableCell>
+                                <TableCell className="text-right text-rose-600">{formatMoney(group.writeOffValue)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">By department</div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Department</TableHead>
+                              <TableHead className="text-right">Delivered</TableHead>
+                              <TableHead className="text-right">Write-off</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(writeOffJobs?.byDepartment || []).map((group) => (
+                              <TableRow key={group.key}>
+                                <TableCell>{group.name}</TableCell>
+                                <TableCell className="text-right">{formatMoney(group.deliveredValue)}</TableCell>
+                                <TableCell className="text-right text-rose-600">{formatMoney(group.writeOffValue)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="time" className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-4">
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Write-off value</p>
+                        <p className="text-lg font-semibold text-rose-600">
+                          {formatMoney(writeOffTime?.firm.writeOffValue)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Write-off hours</p>
+                        <p className="text-lg font-semibold">
+                          {formatHours(writeOffTime?.firm.writeOffHours)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Non-billable hours</p>
+                        <p className="text-lg font-semibold">
+                          {formatHours(writeOffTime?.firm.nonBillableHours)}
+                        </p>
+                      </div>
+                      <div className="rounded-md border p-3">
+                        <p className="text-xs text-muted-foreground">Write-off rate</p>
+                        <p className="text-lg font-semibold">
+                          {Number(writeOffTime?.firm.writeOffRatePercent || 0).toFixed(1)}%
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="max-h-[380px] overflow-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Employee</TableHead>
+                            <TableHead>Department</TableHead>
+                            <TableHead>Partner</TableHead>
+                            <TableHead className="text-right">Non-billable</TableHead>
+                            <TableHead className="text-right">Write-off hrs</TableHead>
+                            <TableHead className="text-right">Write-off value</TableHead>
+                            <TableHead className="text-right">Rate</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(writeOffTime?.byEmployee || []).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={7} className="text-center text-muted-foreground">
+                                No time write-offs for this period.
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {(writeOffTime?.byEmployee || []).map((employee) => (
+                            <TableRow key={employee.key}>
+                              <TableCell>{employee.name}</TableCell>
+                              <TableCell>{employee.departmentName || "Unassigned"}</TableCell>
+                              <TableCell>
+                                {employee.partnerName ||
+                                  (employee.partnerProfileId
+                                    ? `Partner ${employee.partnerProfileId}`
+                                    : "Unassigned")}
+                              </TableCell>
+                              <TableCell className="text-right">{formatHours(employee.nonBillableHours)}</TableCell>
+                              <TableCell className="text-right">{formatHours(employee.writeOffHours)}</TableCell>
+                              <TableCell className="text-right font-semibold text-rose-600">
+                                {formatMoney(employee.writeOffValue)}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {employee.writeOffRatePercent.toFixed(1)}%
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">By department</div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Department</TableHead>
+                              <TableHead className="text-right">Write-off hrs</TableHead>
+                              <TableHead className="text-right">Write-off value</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(writeOffTime?.byDepartment || []).map((group) => (
+                              <TableRow key={group.key}>
+                                <TableCell>{group.name}</TableCell>
+                                <TableCell className="text-right">{formatHours(group.writeOffHours)}</TableCell>
+                                <TableCell className="text-right text-rose-600">{formatMoney(group.writeOffValue)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">By partner</div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Partner</TableHead>
+                              <TableHead className="text-right">Write-off hrs</TableHead>
+                              <TableHead className="text-right">Write-off value</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(writeOffTime?.byPartner || []).map((group) => (
+                              <TableRow key={group.key}>
+                                <TableCell>{group.name}</TableCell>
+                                <TableCell className="text-right">{formatHours(group.writeOffHours)}</TableCell>
+                                <TableCell className="text-right text-rose-600">{formatMoney(group.writeOffValue)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border">
+                      <div className="border-b p-3 text-sm font-medium">By activity</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Activity</TableHead>
+                            <TableHead>Valuation</TableHead>
+                            <TableHead className="text-right">Hours</TableHead>
+                            <TableHead className="text-right">Write-off value</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(writeOffTime?.byActivity || []).map((activity) => (
+                            <TableRow key={activity.key}>
+                              <TableCell>{activity.name}</TableCell>
+                              <TableCell>
+                                {activity.valuation === "billing_rate" ? "Billing rate" : "Cost rate"}
+                              </TableCell>
+                              <TableCell className="text-right">{formatHours(activity.hours)}</TableCell>
+                              <TableCell className="text-right text-rose-600">{formatMoney(activity.value)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              </>
             )}
           </CardContent>
         </Card>

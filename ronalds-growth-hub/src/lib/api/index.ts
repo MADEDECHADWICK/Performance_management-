@@ -32,6 +32,8 @@ export { default as opsAPI } from './ops';
 export { default as leaveAPI } from './leave';
 export { default as requisitionsAPI } from './requisitions';
 export { default as reportingAPI } from './reporting';
+export { default as writeOffsAPI } from './writeOffs';
+export { default as utilizationAPI } from './utilization';
 
 // Convenience grouped import
 import authAPI from './auth';

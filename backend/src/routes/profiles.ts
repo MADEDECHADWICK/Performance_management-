@@ -68,6 +68,18 @@ const updateProfileValidators = [
     .optional({ nullable: true })
     .isISO8601()
     .withMessage('separationDate must be a valid ISO date'),
+  body('standardDailyHours')
+    .optional()
+    .isFloat({ min: 0.25, max: 24 })
+    .withMessage('standardDailyHours must be between 0.25 and 24'),
+  body('billableTargetPercent')
+    .optional()
+    .isFloat({ min: 0, max: 100 })
+    .withMessage('billableTargetPercent must be between 0 and 100'),
+  body('nonBillableTargetPercent')
+    .optional()
+    .isFloat({ min: 0, max: 100 })
+    .withMessage('nonBillableTargetPercent must be between 0 and 100'),
 ];
 
 const listProfileValidators = [

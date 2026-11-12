@@ -58,6 +58,7 @@ const FeedbackHub = lazy(() => import("./pages/evaluations/FeedbackHub"));
 
 // Analytics
 const ModuleAnalytics = lazy(() => import("./pages/ModuleAnalytics"));
+const Utilization = lazy(() => import("./pages/Utilization"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
 const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
 const FinanceCollections = lazy(() => import("./pages/FinanceCollections"));
@@ -526,6 +527,14 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <ModuleAnalytics module="gmp" />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/utilization"
+                element={
+                  <AppRouteGuard>
+                    <Utilization />
                   </AppRouteGuard>
                 }
               />

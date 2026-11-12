@@ -312,6 +312,12 @@ enum NonBillableCategory {
   other
 }
 
+enum WriteOffValuation {
+  none
+  billing_rate
+  cost_rate
+}
+
 enum EvaluatorType {
   self
   manager
@@ -898,6 +904,10 @@ model Profile {
 
   financialTarget   Decimal? @map("financial_target") @db.Decimal(14, 2)
   utilizationTarget Decimal  @default(0.75) @map("utilization_target") @db.Decimal(5, 2)
+
+  standardDailyHours       Decimal @default(8)  @map("standard_daily_hours") @db.Decimal(5, 2)
+  billableTargetPercent    Decimal @default(80) @map("billable_target_percent") @db.Decimal(5, 2)
+  nonBillableTargetPercent Decimal @default(20) @map("non_billable_target_percent") @db.Decimal(5, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2984,10 +2994,11 @@ model TimeEntry {
   startedAt DateTime? @map("started_at")
   endedAt   DateTime? @map("ended_at")
 
-  hours               Decimal              @default(0) @db.Decimal(10, 2)
-  billable            Boolean              @default(true)
-  nonBillableCategory NonBillableCategory? @map("non_billable_category")
-  description         String?
+  hours                 Decimal              @default(0) @db.Decimal(10, 2)
+  billable              Boolean              @default(true)
+  nonBillableCategory   NonBillableCategory? @map("non_billable_category")
+  nonBillableActivityId Int?                 @map("non_billable_activity_id")
+  description           String?
 
   status TimeEntryStatus @default(submitted)
 
@@ -3002,11 +3013,12 @@ model TimeEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  proposal Proposal? @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  task     Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  employee Profile   @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
-  approver Profile?  @relation("ApprovedTimeEntries", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+  job                 Job?               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  proposal            Proposal?          @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  task                Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  employee            Profile            @relation(fields: [employeeProfileId], references: [id], onDelete: Cascade)
+  approver            Profile?           @relation("ApprovedTimeEntries", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+  nonBillableActivity NonBillableActivity? @relation(fields: [nonBillableActivityId], references: [id], onDelete: SetNull)
 
   approvalRequests   TimeEntryApprovalRequest[]
   overBudgetRequests TimeOverBudgetRequest[]
@@ -3023,7 +3035,30 @@ model TimeEntry {
   @@index([jobId]) // optional (hot FK lookups)
   @@index([proposalId])
   @@index([taskId])
+  @@index([nonBillableActivityId])
   @@map("time_entries")
+}
+
+model NonBillableActivity {
+  id              Int     @id @default(autoincrement())
+  code            String  @unique
+  name            String
+  categoryGroup   String  @map("category_group")
+  description     String?
+  isProductive      Boolean           @default(true) @map("is_productive")
+  requiresJob       Boolean           @default(false) @map("requires_job")
+  isActive          Boolean           @default(true) @map("is_active")
+  sortOrder         Int               @default(0) @map("sort_order")
+  writeOffValuation WriteOffValuation @default(none) @map("write_off_valuation")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @default(now()) @map("updated_at")
+
+  timeEntries TimeEntry[]
+
+  @@index([isActive, categoryGroup])
+  @@index([writeOffValuation])
+  @@map("non_billable_activities")
 }
 
 model TimeEntryApprovalRequest {

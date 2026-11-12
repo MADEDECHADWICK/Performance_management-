@@ -4,9 +4,9 @@
 
 import { body, param, query } from "express-validator";
 
-const nonBillableCategories = ["leave", "public_holiday", "internal", "training", "over_budget", "other"];
+const nonBillableCategories = ["internal", "training", "over_budget", "other"];
 const nonBillableCategoryMessage =
-  "nonBillableCategory must be one of: leave, public_holiday, internal, training, over_budget, other";
+  "nonBillableCategory must be one of: internal, training, over_budget, other. Leave and public holidays are managed by the leave module.";
 
 /**
  * Common param validator
@@ -90,6 +90,11 @@ export const createTimeEntryValidators = [
     .isIn(nonBillableCategories)
     .withMessage(nonBillableCategoryMessage),
 
+  body("nonBillableActivityId")
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .withMessage("Valid nonBillableActivityId required if provided"),
+
   body("description")
     .optional({ nullable: true })
     .isString()
@@ -97,21 +102,33 @@ export const createTimeEntryValidators = [
     .isLength({ min: 1, max: 2000 })
     .withMessage("Description must be 1-2000 characters if provided"),
 
-  // Enforce: hours OR (startedAt & endedAt)
+  // Enforce: exactly one of jobId, proposalId, or nonBillableActivityId
   body().custom((value) => {
     const hasJob = value.jobId !== undefined && value.jobId !== null && value.jobId !== "";
     const hasProposal = value.proposalId !== undefined && value.proposalId !== null && value.proposalId !== "";
+    const hasActivity =
+      value.nonBillableActivityId !== undefined &&
+      value.nonBillableActivityId !== null &&
+      value.nonBillableActivityId !== "";
 
-    if (hasJob && hasProposal) {
-      throw new Error("Provide either jobId or proposalId, not both");
+    const sourceCount = [hasJob, hasProposal, hasActivity].filter(Boolean).length;
+    if (sourceCount === 0) {
+      throw new Error("Provide a jobId, proposalId, or nonBillableActivityId");
     }
-
-    if (!hasJob && !hasProposal) {
-      throw new Error("Provide either jobId or proposalId");
+    if (sourceCount > 1) {
+      throw new Error("Provide only one of jobId, proposalId, or nonBillableActivityId");
     }
 
     if (hasProposal && value.taskId) {
       throw new Error("taskId is only valid for job time entries");
+    }
+
+    if (hasActivity && value.taskId) {
+      throw new Error("taskId is only valid for job time entries");
+    }
+
+    if (hasActivity && value.billable === true) {
+      throw new Error("Standalone non-billable activities cannot be marked billable");
     }
 
     return true;
@@ -146,9 +163,13 @@ export const createTimeEntryValidators = [
   }),
 
   body().custom((value) => {
-    if (value.billable === false && !value.nonBillableCategory) {
+    const hasActivity =
+      value.nonBillableActivityId !== undefined &&
+      value.nonBillableActivityId !== null &&
+      value.nonBillableActivityId !== "";
+    if (value.billable === false && !value.nonBillableCategory && !hasActivity) {
       throw new Error(
-        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, over_budget, other)"
+        "nonBillableCategory or nonBillableActivityId is required when billable is false (internal, training, over_budget, other)"
       );
     }
     return true;
@@ -192,6 +213,11 @@ export const updateTimeEntryValidators = [
     .isIn(nonBillableCategories)
     .withMessage(nonBillableCategoryMessage),
 
+  body("nonBillableActivityId")
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .withMessage("Valid nonBillableActivityId required if provided"),
+
   body("description")
     .optional({ nullable: true })
     .isString()
@@ -232,9 +258,13 @@ export const updateTimeEntryValidators = [
   }),
 
   body().custom((value) => {
-    if (value.billable === false && !value.nonBillableCategory) {
+    const hasActivity =
+      value.nonBillableActivityId !== undefined &&
+      value.nonBillableActivityId !== null &&
+      value.nonBillableActivityId !== "";
+    if (value.billable === false && !value.nonBillableCategory && !hasActivity) {
       throw new Error(
-        "nonBillableCategory is required when billable is false (leave, public_holiday, internal, training, over_budget, other)"
+        "nonBillableCategory or nonBillableActivityId is required when billable is false (internal, training, over_budget, other)"
       );
     }
     return true;

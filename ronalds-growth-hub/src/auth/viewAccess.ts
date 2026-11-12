@@ -408,6 +408,15 @@ export const VIEW_PERMISSION_DEFINITIONS: ViewPermissionDefinition[] = [
     patterns: [/^\/calibration(?:\/|$)/],
   },
   {
+    key: "analytics.utilization",
+    label: "Utilization",
+    category: "Analytics",
+    module: "reports",
+    action: "read",
+    defaultPath: "/utilization",
+    patterns: [/^\/utilization(?:\/|$)/],
+  },
+  {
     key: "finance.summary",
     label: "Financial Summary",
     category: "Finance",

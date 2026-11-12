@@ -50,6 +50,8 @@ import financeDashboardRoutes from './financeDashboard';
 import gmpDashboardRoutes from './gmpDashboard';
 import hrDashboardRoutes from './hrDashboard';
 import jobProfitabilityRoutes from './jobProfitability';
+import writeOffRoutes from './writeOffs';
+import utilizationRoutes from './utilization';
 import managerDashboardRoutes from './managerDashboard';
 import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
 import notificationsRoutes from './notifications';
@@ -145,6 +147,8 @@ router.use('/audit-logs', authMiddleware, requireModuleAccess('reports'), auditL
 router.use('/financial-summary', authMiddleware, requireModuleAccess('finance', 'read'), financialSummaryRoutes);
 router.use('/finance-dashboard', authMiddleware, requireModuleAccess('finance', 'read'), financeDashboardRoutes);
 router.use('/job-profitability', authMiddleware, requireModuleAccess('finance'), jobProfitabilityRoutes);
+router.use('/write-offs', authMiddleware, requireModuleAccess('finance', 'read'), writeOffRoutes);
+router.use('/utilization', authMiddleware, requireModuleAccess('reports', 'read'), utilizationRoutes);
 router.use('/evaluation-assignments', authMiddleware, requireModuleAccess('evaluations'), evaluationAssignmentsRoutes);
 router.use('/evaluation-cycles', authMiddleware, requireModuleAccess('evaluations'), evaluationCyclesRoutes);
 router.use('/evaluation-templates', authMiddleware, requireModuleAccess('evaluations'), evaluationTemplatesRoutes);

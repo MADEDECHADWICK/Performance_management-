@@ -337,6 +337,9 @@ const onboardUser = async (req: AuthRequest, res: any) => {
     roleId,
     positionRoleId,
     authRole,
+    standardDailyHours,
+    billableTargetPercent,
+    nonBillableTargetPercent,
   } = req.body || {};
 
   if (!email) return res.status(400).json({ error: "Email is required" });
@@ -398,6 +401,21 @@ const onboardUser = async (req: AuthRequest, res: any) => {
     const resolvedPosition = String(position || "").trim() || null;
     const resolvedPhone = String(phone || "").trim() || null;
 
+    const parseThresholdPercent = (value: unknown, fallback: number) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return fallback;
+      return parsed;
+    };
+    const resolvedStandardDailyHours = (() => {
+      const parsed = Number(standardDailyHours);
+      return Number.isFinite(parsed) && parsed > 0 && parsed <= 24 ? parsed : 8;
+    })();
+    const resolvedBillablePercent = parseThresholdPercent(billableTargetPercent, 80);
+    const resolvedNonBillablePercent = parseThresholdPercent(
+      nonBillableTargetPercent,
+      Math.max(0, 100 - resolvedBillablePercent)
+    );
+
     const temporaryPassword = createTemporaryPassword();
     const passwordHash = await bcrypt.hash(temporaryPassword, 10);
     const tempPasswordExpiry = new Date(
@@ -429,6 +447,10 @@ const onboardUser = async (req: AuthRequest, res: any) => {
           managerId: resolvedManagerId || undefined,
           hireDate: resolvedHireDate || undefined,
           onboardingStatus: "pending",
+          standardDailyHours: resolvedStandardDailyHours,
+          billableTargetPercent: resolvedBillablePercent,
+          nonBillableTargetPercent: resolvedNonBillablePercent,
+          utilizationTarget: Number((resolvedBillablePercent / 100).toFixed(4)),
         },
       });
 
