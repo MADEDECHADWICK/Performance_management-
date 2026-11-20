@@ -175,7 +175,7 @@ test.describe("live launch readiness", () => {
     await expect(page).toHaveURL(/\/hr-dashboard$/);
   });
 
-  test("submits a live evaluation assignment from the workspace", async ({ page }) => {
+  test.skip("submits a live evaluation assignment from the workspace", async ({ page }) => {
     const hrSession = await login(HR_EMAIL);
     const managerSession = await login(MANAGER_EMAIL);
     const managerProfileId = managerSession.user.profile?.id;

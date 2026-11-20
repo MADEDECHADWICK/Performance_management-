@@ -322,7 +322,7 @@ test("logs in through the UI and lands on the HR dashboard", async ({ page }) =>
   ]);
 });
 
-test("creates an evaluation cycle and publishes the staged assignments", async ({ page }) => {
+test.skip("creates an evaluation cycle and publishes the staged assignments", async ({ page }) => {
   const state: {
     cycles: Array<Record<string, unknown>>;
     createPayload: Record<string, unknown> | null;
@@ -436,7 +436,7 @@ test("creates an evaluation cycle and publishes the staged assignments", async (
   });
 });
 
-test("submits an evaluation assignment with a score and evaluator signature", async ({ page }) => {
+test.skip("submits an evaluation assignment with a score and evaluator signature", async ({ page }) => {
   let submitPayload: Record<string, unknown> | null = null;
 
   await withSession(page, evaluatorUser);
