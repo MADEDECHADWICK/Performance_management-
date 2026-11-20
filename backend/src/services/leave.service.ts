@@ -14,6 +14,7 @@ import {
 } from "@prisma/client";
 import prisma from "../prisma";
 import { NotificationService } from "./notifications.service";
+import { TimesheetProjectionService } from "./timesheetProjection.service";
 import { createAudit } from "../utils/audit";
 
 type Tx = Prisma.TransactionClient;
@@ -1989,6 +1990,9 @@ export class LeaveService {
           metrics.segments,
           steps.length > 0 ? LeaveRequestSegmentSyncStatus.projected : LeaveRequestSegmentSyncStatus.confirmed
         );
+        if (steps.length === 0) {
+          await TimesheetProjectionService.projectLeaveRequest(tx, created.id);
+        }
       }
 
       await this.syncRequestDocuments(tx, created.id, attachmentDocumentIds);
@@ -2143,6 +2147,10 @@ export class LeaveService {
             employeeProfileId: request.employeeProfileId,
             dateWorked: { gte: request.startDate, lte: request.endDate },
             status: { in: ["submitted", "approved"] as any },
+            OR: [
+              { nonBillableCategory: null },
+              { nonBillableCategory: { notIn: ["leave", "public_holiday"] as any } },
+            ],
           },
         });
         if (conflictingTimeEntries > 0) {
@@ -2195,6 +2203,8 @@ export class LeaveService {
           request.id,
           LeaveRequestSegmentSyncStatus.confirmed
         );
+
+        await TimesheetProjectionService.projectLeaveRequest(tx, request.id);
       }
 
       return { request: updatedRequest, pendingStep, nextStep };
@@ -2308,6 +2318,8 @@ export class LeaveService {
         LeaveRequestSegmentSyncStatus.voided
       );
 
+      await TimesheetProjectionService.unprojectLeaveRequest(tx, request.id);
+
       return { request: declined, pendingStep };
     });
 
@@ -2388,6 +2400,8 @@ export class LeaveService {
         request.id,
         LeaveRequestSegmentSyncStatus.voided
       );
+
+      await TimesheetProjectionService.unprojectLeaveRequest(tx, request.id);
 
       const cancelled = await tx.leaveRequest.update({
         where: { id: request.id },
@@ -2853,6 +2867,10 @@ export class LeaveService {
         isRecurring: input.isRecurring ?? false,
       },
     });
+    await TimesheetProjectionService.ensurePublicHolidayEntries(prisma, {
+      dateFrom: created.holidayDate,
+      dateTo: created.holidayDate,
+    });
     await createAudit({
       action: "leave.public_holiday_created",
       entity_type: "public_holiday",
@@ -2865,6 +2883,9 @@ export class LeaveService {
 
   static async updatePublicHoliday(holidayId: number, input: Partial<CreatePublicHolidayInput>, auth: AuthContext) {
     this.ensureAdminAccess(auth);
+    const previous = await prisma.publicHoliday.findUnique({
+      where: { id: holidayId },
+    });
     const updated = await prisma.publicHoliday.update({
       where: { id: holidayId },
       data: {
@@ -2876,6 +2897,13 @@ export class LeaveService {
         ...(input.region !== undefined ? { region: String(input.region || "").trim() || null } : {}),
         ...(input.isRecurring !== undefined ? { isRecurring: Boolean(input.isRecurring) } : {}),
       },
+    });
+    if (previous) {
+      await TimesheetProjectionService.removePublicHolidayEntries(prisma, previous);
+    }
+    await TimesheetProjectionService.ensurePublicHolidayEntries(prisma, {
+      dateFrom: updated.holidayDate,
+      dateTo: updated.holidayDate,
     });
     await createAudit({
       action: "leave.public_holiday_updated",
@@ -2889,7 +2917,13 @@ export class LeaveService {
 
   static async deletePublicHoliday(holidayId: number, auth: AuthContext) {
     this.ensureAdminAccess(auth);
+    const previous = await prisma.publicHoliday.findUnique({
+      where: { id: holidayId },
+    });
     const deleted = await prisma.publicHoliday.delete({ where: { id: holidayId } });
+    if (previous) {
+      await TimesheetProjectionService.removePublicHolidayEntries(prisma, previous);
+    }
     await createAudit({
       action: "leave.public_holiday_deleted",
       entity_type: "public_holiday",

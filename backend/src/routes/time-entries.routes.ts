@@ -91,6 +91,17 @@ router.patch(
 );
 
 /**
+ * GET /time-entries/over-budget-requests
+ * List allocation-excess requests
+ */
+router.get(
+  "/over-budget-requests",
+  authMiddleware,
+  loadProfile,
+  TimeEntryController.listOverBudgetRequests
+);
+
+/**
  * PATCH /time-entries/over-budget-requests/:requestId/approve
  * Approve over-budget request (manager stage or partner stage)
  */

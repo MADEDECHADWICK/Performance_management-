@@ -1,5 +1,0 @@
-#,Section,Role,Module,Issue Description,Status
-1,2.2,Employee/Manager,Auth + All Modules,"Pending onboarding users could still access protected module APIs by direct backend calls (UI-only gate).",Fixed
-2,2.2,Employee/Manager,Documents,"Multipart upload passed isRequired as string; Prisma expected boolean, causing onboarding evidence upload failures.",Fixed
-3,2.2,Employee/Manager,Onboarding Checklist,"Checklist item completion/document attach endpoints were blocked by users:write module guard for non-HR roles.",Fixed
-4,2.2,Manager,Documents,"Manager module fallback had documents read-only, preventing required onboarding document submission.",Fixed

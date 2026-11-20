@@ -146,7 +146,9 @@ type WriteOffValuation = "none" | "billing_rate" | "cost_rate";
 
 const legacyValuation = (category?: string | null): WriteOffValuation => {
   const normalized = String(category || "").toLowerCase();
-  if (normalized === "over_budget") return "billing_rate";
+  if (normalized === "over_budget" || normalized === "client_write_off") {
+    return "billing_rate";
+  }
   if (normalized === "other") return "cost_rate";
   return "none";
 };
@@ -491,6 +493,9 @@ export class WriteOffService {
         client: { select: { clientName: true } },
         department: { select: { id: true, name: true, partnerProfileId: true } },
         partner: { select: { id: true, firstName: true, lastName: true } },
+        staffing: {
+          select: { employeeProfileId: true, assignedHourlyRate: true },
+        },
         jobCosting: {
           select: {
             jobFee: true,
@@ -517,7 +522,13 @@ export class WriteOffService {
             billable: true,
             billableAmount: true,
             costAmount: true,
-            employee: { select: { firstName: true, lastName: true } },
+            employee: {
+              select: {
+                firstName: true,
+                lastName: true,
+                role: { select: { billingRate: true } },
+              },
+            },
           },
         },
         invoices: {
@@ -558,10 +569,24 @@ export class WriteOffService {
           .filter((entry) => entry.billable)
           .reduce((sum, entry) => sum + toNumber(entry.hours), 0)
       );
+      const nonBillableEntries = job.timeEntries.filter((entry) => !entry.billable);
       const periodNonBillableHours = roundHours(
-        job.timeEntries
-          .filter((entry) => !entry.billable)
-          .reduce((sum, entry) => sum + toNumber(entry.hours), 0)
+        nonBillableEntries.reduce((sum, entry) => sum + toNumber(entry.hours), 0)
+      );
+      const assignmentRates = new Map<number, number>();
+      job.staffing.forEach((assignment) => {
+        assignmentRates.set(
+          assignment.employeeProfileId,
+          toNumber(assignment.assignedHourlyRate)
+        );
+      });
+      const periodNonBillableValue = roundMoney(
+        nonBillableEntries.reduce((sum, entry) => {
+          const rate =
+            assignmentRates.get(entry.employeeProfileId) ||
+            toNumber(entry.employee?.role?.billingRate);
+          return sum + toNumber(entry.hours) * rate;
+        }, 0)
       );
       const lifetimeBillableValue = lifetimeValueMap.get(job.id) ?? periodBillableValue;
       const agreedFee = toNumber(job.jobCosting?.jobFee) || toNumber(job.fixedFeeAmount);
@@ -569,8 +594,16 @@ export class WriteOffService {
         lifetimeBillableValue > 0
           ? roundMoney(agreedFee * (periodBillableValue / lifetimeBillableValue))
           : roundMoney(agreedFee);
-      const writeOffValue = roundMoney(Math.max(0, periodBillableValue - feeBasis));
+      const overServiceWriteOffValue = roundMoney(
+        Math.max(0, periodBillableValue - feeBasis)
+      );
+      const writeOffValue = roundMoney(
+        overServiceWriteOffValue + periodNonBillableValue
+      );
       const writeUpValue = roundMoney(Math.max(0, feeBasis - periodBillableValue));
+      const totalServiceValue = roundMoney(
+        periodBillableValue + periodNonBillableValue
+      );
       const plannedValue = roundMoney(
         (job.jobCosting?.allocations || []).reduce(
           (sum, allocation) =>
@@ -634,9 +667,12 @@ export class WriteOffService {
         deliveredValue: periodBillableValue,
         deliveredHours: periodBillableHours,
         nonBillableHours: periodNonBillableHours,
+        nonBillableValue: periodNonBillableValue,
+        totalServiceValue,
+        overServiceWriteOffValue,
         writeOffValue,
         writeUpValue,
-        writeOffPercent: percent(writeOffValue, periodBillableValue),
+        writeOffPercent: percent(writeOffValue, totalServiceValue),
         plannedValue,
         plannedCost,
         invoicedRevenue,
@@ -660,12 +696,25 @@ export class WriteOffService {
         jobCount: rows.length,
         jobsWithWriteOff: rows.filter((row) => row.writeOffValue > 0).length,
         deliveredValue,
+        nonBillableValue: roundMoney(
+          rows.reduce((sum, row) => sum + row.nonBillableValue, 0)
+        ),
+        totalServiceValue: roundMoney(
+          rows.reduce((sum, row) => sum + row.totalServiceValue, 0)
+        ),
         feeBasis: roundMoney(rows.reduce((sum, row) => sum + row.feeBasis, 0)),
+        overServiceWriteOffValue: roundMoney(
+          rows.reduce((sum, row) => sum + row.overServiceWriteOffValue, 0)
+        ),
         writeOffValue,
         writeUpValue: roundMoney(
           rows.reduce((sum, row) => sum + row.writeUpValue, 0)
         ),
-        writeOffRatePercent: percent(writeOffValue, deliveredValue),
+        writeOffRatePercent: percent(
+          writeOffValue,
+          deliveredValue +
+            roundMoney(rows.reduce((sum, row) => sum + row.nonBillableValue, 0))
+        ),
         plannedValue: roundMoney(
           rows.reduce((sum, row) => sum + row.plannedValue, 0)
         ),

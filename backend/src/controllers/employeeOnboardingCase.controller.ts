@@ -175,4 +175,64 @@ export class EmployeeOnboardingCaseController {
       );
     }
   }
+
+  static async submitDocuments(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOnboardingCaseService.submitDocuments(
+        caseId,
+        authFromReq(req)
+      );
+      res.json(successResponse(result, "Onboarding documents submitted"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.submitDocuments error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to submit onboarding documents", e.statusCode ?? 400, e.details)
+      );
+    }
+  }
+
+  static async submit(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOnboardingCaseService.submit(caseId, authFromReq(req));
+      res.json(successResponse(result, "Onboarding submitted for HR review"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.submit error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to submit onboarding", e.statusCode ?? 400, e.details)
+      );
+    }
+  }
+
+  static async requestChanges(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const note = String(req.body?.note || "");
+      const result = await EmployeeOnboardingCaseService.requestChanges(
+        caseId,
+        note,
+        authFromReq(req)
+      );
+      res.json(successResponse(result, "Changes requested"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.requestChanges error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to request changes", e.statusCode ?? 400)
+      );
+    }
+  }
+
+  static async activate(req: AuthRequest, res: Response) {
+    try {
+      const caseId = Number(req.params.caseId);
+      const result = await EmployeeOnboardingCaseService.activate(caseId, authFromReq(req));
+      res.json(successResponse(result, "Employee onboarding activated"));
+    } catch (e: any) {
+      console.error("EmployeeOnboardingCaseController.activate error:", e);
+      res.status(e.statusCode ?? 400).json(
+        errorResponse(e.message ?? "Failed to activate onboarding", e.statusCode ?? 400)
+      );
+    }
+  }
 }

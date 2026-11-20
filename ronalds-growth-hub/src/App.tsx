@@ -13,6 +13,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 const SetPassword = lazy(() => import("./pages/SetPassword"));
+const AcceptInvite = lazy(() => import("./pages/AcceptInvite"));
 const CertificateVerification = lazy(() => import("./pages/CertificateVerification"));
 
 // Dashboards
@@ -47,18 +48,14 @@ const EmployeeManagement = lazy(() => import("./pages/EmployeeManagement"));
 const BalancedScorecardModule = lazy(() => import("./pages/BalancedScorecardModule"));
 const ReportsWorkspace = lazy(() => import("./pages/ReportsWorkspace"));
 
-// Evaluations
+// Surveys
 const ClientEvaluation = lazy(() => import("./pages/ClientEvaluation"));
-const ProjectEvaluations = lazy(() => import("./pages/ProjectEvaluations"));
-const EvaluationDashboard = lazy(() => import("./pages/evaluations/EvaluationDashboard"));
-const EvaluationCycleManager = lazy(() => import("./pages/evaluations/EvaluationCycleManager"));
-const EvaluationForm = lazy(() => import("./pages/evaluations/EvaluationForm"));
-const EvaluationResults = lazy(() => import("./pages/evaluations/EvaluationResults"));
-const FeedbackHub = lazy(() => import("./pages/evaluations/FeedbackHub"));
 
 // Analytics
 const ModuleAnalytics = lazy(() => import("./pages/ModuleAnalytics"));
 const Utilization = lazy(() => import("./pages/Utilization"));
+const TimesheetReports = lazy(() => import("./pages/TimesheetReports"));
+const Performance = lazy(() => import("./pages/Performance"));
 const FinancialSummary = lazy(() => import("./pages/FinancialSummary"));
 const FinanceDashboard = lazy(() => import("./pages/FinanceDashboard"));
 const FinanceCollections = lazy(() => import("./pages/FinanceCollections"));
@@ -86,7 +83,6 @@ const MarketingDashboard = lazy(() => import("./pages/MarketingDashboard"));
 const EngagementLetters = lazy(() => import("./pages/EngagementLetters"));
 const ClientOnboardingQueue = lazy(() => import("./pages/ClientOnboardingQueue"));
 const PartnerPortfolioSummary = lazy(() => import("./pages/PartnerPortfolioSummary"));
-const Calibration = lazy(() => import("./pages/Calibration"));
 
 // Document & Surveys
 const DocumentManagement = lazy(() => import("./pages/DocumentManagement"));
@@ -130,6 +126,7 @@ const App = () => (
               {/* Public Routes */}
               <Route path="/" element={<Index />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/accept-invite" element={<AcceptInvite />} />
               <Route path="/set-password" element={<SetPassword />} />
               <Route path="/certificates/verify" element={<CertificateVerification />} />
               <Route path="/certificates/verify/:verificationCode" element={<CertificateVerification />} />
@@ -394,14 +391,6 @@ const App = () => (
                 }
               />
               <Route
-                path="/calibration"
-                element={
-                  <AppRouteGuard>
-                    <Calibration />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
                 path="/recruitment-candidates"
                 element={
                   <AppRouteGuard>
@@ -410,68 +399,9 @@ const App = () => (
                 }
               />
               
-              {/* Evaluations */}
-              <Route path="/evaluations" element={<AppRouteGuard><EvaluationDashboard /></AppRouteGuard>} />
-              <Route
-                path="/evaluations/cycles"
-                element={
-                  <AppRouteGuard>
-                    <EvaluationCycleManager />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/evaluations/assignments/:assignmentId"
-                element={
-                  <AppRouteGuard>
-                    <EvaluationForm />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/evaluations/cycles/:cycleId/results"
-                element={
-                  <AppRouteGuard>
-                    <EvaluationResults />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/evaluations/feedback"
-                element={
-                  <AppRouteGuard>
-                    <FeedbackHub />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/project-evaluations"
-                element={
-                  <AppRouteGuard>
-                    <ProjectEvaluations />
-                  </AppRouteGuard>
-                }
-              />
+              {/* Client surveys */}
               <Route path="/client-evaluation/:token" element={<ClientEvaluation />} />
               <Route path="/survey/:token" element={<ClientEvaluation />} />
-              
-              {/* Feedback */}
-              <Route
-                path="/feedback"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations/feedback" replace />
-                  </AppRouteGuard>
-                }
-              />
-              <Route
-                path="/continuous-feedback"
-                element={
-                  <AppRouteGuard>
-                    <Navigate to="/evaluations/feedback" replace />
-                  </AppRouteGuard>
-                }
-              />
               
               {/* Analytics */}
               <Route
@@ -535,6 +465,22 @@ const App = () => (
                 element={
                   <AppRouteGuard>
                     <Utilization />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/timesheet-reports"
+                element={
+                  <AppRouteGuard>
+                    <TimesheetReports />
+                  </AppRouteGuard>
+                }
+              />
+              <Route
+                path="/performance"
+                element={
+                  <AppRouteGuard>
+                    <Performance />
                   </AppRouteGuard>
                 }
               />

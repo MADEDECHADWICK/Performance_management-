@@ -158,6 +158,10 @@ const documentsAPI = {
     return api.get(`/documents/${id}`);
   },
 
+  getAccessUrl: async (id: number): Promise<{ url: string; expiresInSeconds?: number }> => {
+    return api.get(`/documents/${id}/access-url`);
+  },
+
   /**
    * Upload a new document
    */

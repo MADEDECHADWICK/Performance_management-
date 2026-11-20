@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, FileText } from "lucide-react";
+import documentsAPI from "@/lib/api/documents";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ interface DocumentPreviewDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
+  documentId?: number | null;
   filePath?: string | null;
   fileName?: string | null;
   mimeType?: string | null;
@@ -49,12 +51,37 @@ export default function DocumentPreviewDialog({
   open,
   onOpenChange,
   title,
+  documentId,
   filePath,
   fileName,
   mimeType,
   description,
 }: DocumentPreviewDialogProps) {
-  const resolvedUrl = useMemo(() => resolveDocumentUrl(filePath), [filePath]);
+  const fallbackUrl = useMemo(() => resolveDocumentUrl(filePath), [filePath]);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!documentId) {
+      setSignedUrl(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    documentsAPI
+      .getAccessUrl(documentId)
+      .then((response) => {
+        if (!cancelled) setSignedUrl(response.url);
+      })
+      .catch(() => {
+        if (!cancelled) setSignedUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId]);
+
+  const resolvedUrl = signedUrl || fallbackUrl;
   const previewSandbox = filePath?.startsWith("http://") || filePath?.startsWith("https://")
     ? "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
     : undefined;

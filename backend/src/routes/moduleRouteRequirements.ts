@@ -1,4 +1,4 @@
-// This file defines the module requirements for each top-level route in the application. It specifies which modules and actions are required to access each route, allowing for centralized management of access control based on module permissions. The requirements can be of two types: "single", where a specific module (and optionally an action) is required, or "any", where access is granted if the user has any one of a specified set of module permissions. This structure enables flexible and maintainable access control policies across the application's routes.
+﻿// This file defines the module requirements for each top-level route in the application. It specifies which modules and actions are required to access each route, allowing for centralized management of access control based on module permissions. The requirements can be of two types: "single", where a specific module (and optionally an action) is required, or "any", where access is granted if the user has any one of a specified set of module permissions. This structure enables flexible and maintainable access control policies across the application's routes.
 import { ModuleAction, ModuleKey } from "../services/moduleAccess.service";
 
 type SingleRouteRequirement = {
@@ -31,7 +31,6 @@ export const ROUTE_MODULE_REQUIREMENTS: RouteModuleRequirement[] = [
   { path: "/onboarding", type: "single", moduleKey: "users", action: "read" },
   { path: "/onboarding-policies", type: "single", moduleKey: "users" },
   { path: "/offboarding", type: "single", moduleKey: "users" },
-  { path: "/evaluations", type: "single", moduleKey: "evaluations" },
   { path: "/induction-checklist", type: "single", moduleKey: "users", action: "read" },
   {
     path: "/partners",
@@ -51,13 +50,27 @@ export const ROUTE_MODULE_REQUIREMENTS: RouteModuleRequirement[] = [
   { path: "/financial-summary", type: "single", moduleKey: "finance", action: "read" },
   { path: "/finance-dashboard", type: "single", moduleKey: "finance", action: "read" },
   { path: "/job-profitability", type: "single", moduleKey: "finance" },
-  { path: "/evaluation-assignments", type: "single", moduleKey: "evaluations" },
-  { path: "/evaluation-cycles", type: "single", moduleKey: "evaluations" },
-  { path: "/evaluation-templates", type: "single", moduleKey: "evaluations" },
+  { path: "/write-offs", type: "single", moduleKey: "finance", action: "read" },
+  { path: "/utilization", type: "single", moduleKey: "reports", action: "read" },
+  {
+    path: "/timesheet-reports",
+    type: "any",
+    anyOf: [
+      { moduleKey: "reports", action: "read" },
+      { moduleKey: "time_entries", action: "read" },
+      { moduleKey: "time_entries", action: "write" },
+    ],
+  },
+  {
+    path: "/performance-report",
+    type: "any",
+    anyOf: [
+      { moduleKey: "reports", action: "read" },
+      { moduleKey: "dashboard", action: "read" },
+    ],
+  },
   { path: "/employee-goals", type: "single", moduleKey: "evaluations" },
   { path: "/competencies", type: "single", moduleKey: "evaluations" },
-  { path: "/client-evaluations", type: "single", moduleKey: "evaluations" },
-  { path: "/continuous-feedback", type: "single", moduleKey: "evaluations" },
   { path: "/performance-reviews", type: "single", moduleKey: "evaluations" },
   { path: "/non-financial-performance", type: "single", moduleKey: "evaluations" },
   { path: "/development-recommendations", type: "single", moduleKey: "evaluations" },
@@ -73,14 +86,9 @@ export const ROUTE_MODULE_REQUIREMENTS: RouteModuleRequirement[] = [
   { path: "/performance-scores", type: "single", moduleKey: "reports" },
   { path: "/performance-framework", type: "single", moduleKey: "dashboard" },
   { path: "/kpi-cascade", type: "single", moduleKey: "dashboard", action: "read" },
-  { path: "/project-evaluations", type: "single", moduleKey: "evaluations" },
-  { path: "/calibration", type: "single", moduleKey: "evaluations" },
   { path: "/performance-bands", type: "single", moduleKey: "evaluations" },
   { path: "/development-plans", type: "single", moduleKey: "evaluations" },
-  { path: "/evaluation-reports", type: "single", moduleKey: "evaluations" },
   { path: "/proposals", type: "single", moduleKey: "proposals" },
-  { path: "/feedback", type: "single", moduleKey: "evaluations" },
-  { path: "/checkins", type: "single", moduleKey: "evaluations" },
   { path: "/notifications", type: "single", moduleKey: "notifications" },
   {
     path: "/ops",

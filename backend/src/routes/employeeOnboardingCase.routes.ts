@@ -117,4 +117,42 @@ router.post(
   EmployeeOnboardingCaseController.acknowledgePolicy
 );
 
+/**
+ * POST /onboarding-cases/:caseId/submit-documents
+ * Employee submits Step 1 documents to HR. Missing documents do not block.
+ */
+router.post(
+  "/:caseId/submit-documents",
+  authenticated(),
+  EmployeeOnboardingCaseController.submitDocuments
+);
+
+/**
+ * POST /onboarding-cases/:caseId/submit
+ * Employee submits the full onboarding assessment after reading all policies.
+ */
+router.post(
+  "/:caseId/submit",
+  authenticated(),
+  EmployeeOnboardingCaseController.submit
+);
+
+/**
+ * POST /onboarding-cases/:caseId/request-changes (HR/Admin)
+ */
+router.post(
+  "/:caseId/request-changes",
+  withRoles("hr", "super_admin"),
+  EmployeeOnboardingCaseController.requestChanges
+);
+
+/**
+ * POST /onboarding-cases/:caseId/activate (HR/Admin)
+ */
+router.post(
+  "/:caseId/activate",
+  withRoles("hr", "super_admin"),
+  EmployeeOnboardingCaseController.activate
+);
+
 export default router;

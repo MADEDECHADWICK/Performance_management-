@@ -1089,6 +1089,15 @@ export const performanceFrameworkAPI = {
     api.get<{ goalId: number; totalWeight: number; kpiCount: number }>(
       `/performance-framework/goals/${goalId}/weight-summary`
     ),
+
+  getEvaluationCycles: () =>
+    api.get<Array<{
+      id: number;
+      title: string;
+      status: string;
+      startDate: string;
+      endDate: string;
+    }>>('/performance-framework/evaluation-cycles'),
 };
 
 export default performanceFrameworkAPI;

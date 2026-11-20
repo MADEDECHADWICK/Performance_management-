@@ -3,8 +3,7 @@ import nodemailer from "nodemailer";
 type SendOnboardingEmailInput = {
   to: string;
   fullName: string;
-  temporaryPassword: string;
-  loginUrl: string;
+  inviteUrl: string;
   expiresAt: Date;
 };
 
@@ -23,26 +22,24 @@ const formatExpiry = (date: Date) =>
   });
 
 const buildMessage = (input: SendOnboardingEmailInput) => {
-  const subject = "Your Ronalds LLP account is ready";
+  const subject = "Set your Ronalds LLP password and start onboarding";
   const text = [
     `Hello ${input.fullName},`,
     "",
     "Your account has been created in Ronalds LLP Performance Management.",
     "",
-    `Temporary password: ${input.temporaryPassword}`,
-    `Login: ${input.loginUrl}`,
-    `Temporary password expiry: ${formatExpiry(input.expiresAt)}`,
+    `Set your password and start onboarding: ${input.inviteUrl}`,
+    `This one-time link expires: ${formatExpiry(input.expiresAt)}`,
     "",
-    "After sign-in, you will be required to set a new password.",
+    "If the link has expired, contact HR to resend your invitation.",
   ].join("\n");
 
   const html = `
     <p>Hello ${input.fullName},</p>
     <p>Your account has been created in Ronalds LLP Performance Management.</p>
-    <p><strong>Temporary password:</strong> ${input.temporaryPassword}</p>
-    <p><strong>Login:</strong> <a href="${input.loginUrl}">${input.loginUrl}</a></p>
-    <p><strong>Temporary password expiry:</strong> ${formatExpiry(input.expiresAt)}</p>
-    <p>After sign-in, you will be required to set a new password.</p>
+    <p><a href="${input.inviteUrl}"><strong>Set your password and start onboarding</strong></a></p>
+    <p>This one-time link expires: ${formatExpiry(input.expiresAt)}</p>
+    <p>If the link has expired, contact HR to resend your invitation.</p>
   `;
 
   return { subject, text, html };

@@ -107,6 +107,11 @@ interface TimeEntry {
   billable: boolean;
   status: 'pending' | 'submitted' | 'approved' | 'rejected';
   job?: Job;
+  proposal?: {
+    id: number;
+    proposalTitle: string;
+    clientName?: string | null;
+  } | null;
   task?: Task;
   startTime?: string;
   endTime?: string;
@@ -141,6 +146,21 @@ interface JobBudgetInfo {
   usedHours: number;
   remainingHours: number;
   isBillableAvailable: boolean;
+  billableAllocatedHours: number;
+  nonBillableAllocatedHours: number;
+  billableUsedHours: number;
+  nonBillableUsedHours: number;
+  billableRemainingHours: number;
+  nonBillableRemainingHours: number;
+}
+
+interface WeeklyEntryRow {
+  key: string;
+  date: string;
+  jobId: string;
+  hours: number;
+  description: string;
+  billable: boolean;
 }
 
 interface JobAllocationSummary {
@@ -157,14 +177,13 @@ interface JobAllocationSummary {
   allowedEmployeeHours: number;
   remainingJobHours: number;
   remainingEmployeeHours: number;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
+  billableLoggedHours?: number;
+  nonBillableLoggedHours?: number;
+  billableRemainingHours?: number;
+  nonBillableRemainingHours?: number;
 }
-
-const nonBillableCategoryOptions = [
-  { value: 'internal', label: 'Internal' },
-  { value: 'training', label: 'Training' },
-  { value: 'over_budget', label: 'Over budget' },
-  { value: 'other', label: 'Other' },
-];
 
 const utilizationPeriodOptions: Array<{ value: UtilizationPeriod; label: string }> = [
   { value: 'daily', label: 'Daily' },
@@ -253,6 +272,9 @@ export default function TimesheetsNew() {
   });
   const [utilizationPeriod, setUtilizationPeriod] = useState<UtilizationPeriod>('weekly');
 
+  const [showWeeklyDialog, setShowWeeklyDialog] = useState(false);
+  const [weeklyRows, setWeeklyRows] = useState<WeeklyEntryRow[]>([]);
+
   const [additionalTimeRequest, setAdditionalTimeRequest] = useState({
     jobId: '',
     additionalHours: 0,
@@ -290,6 +312,12 @@ export default function TimesheetsNew() {
       timeEntriesAPI.listApprovalRequests(
         isManager || isPartner ? { status: 'pending' } : undefined
       ),
+  });
+
+  const { data: overAllocationData } = useQuery({
+    queryKey: ['over-allocation-requests', isManager, isPartner],
+    queryFn: () => timeEntriesAPI.listOverBudgetRequests({ status: 'pending' }),
+    enabled: isManager || isPartner,
   });
 
   const { data: activitiesData } = useQuery({
@@ -335,6 +363,7 @@ export default function TimesheetsNew() {
 
   const formatEntryTypeLabel = (entry: TimeEntry) => {
     if (isProjectedLeaveEntry(entry)) return 'Leave';
+    if (entry.nonBillableCategory === 'public_holiday') return 'Public Holiday';
     return entry.billable ? 'Billable' : 'Non-Billable';
   };
 
@@ -404,7 +433,11 @@ export default function TimesheetsNew() {
   const approvalRequests = Array.isArray(approvalRequestsPayload)
     ? approvalRequestsPayload
     : approvalRequestsPayload?.data || [];
-  const approvalsBadgeCount = pendingApprovals.length + approvalRequests.length;
+  const overAllocationRequests = Array.isArray(overAllocationData)
+    ? overAllocationData
+    : (overAllocationData as any)?.data || [];
+  const approvalsBadgeCount =
+    pendingApprovals.length + approvalRequests.length + overAllocationRequests.length;
   const filteredPendingApprovals = useMemo(() => {
     if (
       requestedTab !== 'approvals' ||
@@ -473,26 +506,46 @@ export default function TimesheetsNew() {
   const getJobBudgetInfo = useCallback((jobId: number): JobBudgetInfo => {
     const job = myJobs.find(j => j.id === jobId);
     if (!job) {
-      return { jobId, allocatedHours: 0, usedHours: 0, remainingHours: 0, isBillableAvailable: false };
+      return {
+        jobId,
+        allocatedHours: 0,
+        usedHours: 0,
+        remainingHours: 0,
+        isBillableAvailable: false,
+        billableAllocatedHours: 0,
+        nonBillableAllocatedHours: 0,
+        billableUsedHours: 0,
+        nonBillableUsedHours: 0,
+        billableRemainingHours: 0,
+        nonBillableRemainingHours: 0,
+      };
     }
 
     const allocation = allocationSummaries[jobId];
     if (allocation) {
-      const baseAllocatedHours = allocation.allowedEmployeeHours > 0
-        ? allocation.allowedEmployeeHours
-        : allocation.allowedJobHours > 0
-          ? allocation.allowedJobHours
-          : Number(job.budgetHours) || 0;
-
-      const usedHours = allocation.loggedEmployeeHours || 0;
-      const remainingHours = Math.max(0, baseAllocatedHours - usedHours);
+      const billableAllocatedHours = Number(allocation.billableAllocatedHours || 0);
+      const nonBillableAllocatedHours = Number(allocation.nonBillableAllocatedHours || 0);
+      const billableUsedHours = Number(allocation.billableLoggedHours || 0);
+      const nonBillableUsedHours = Number(allocation.nonBillableLoggedHours || 0);
+      const billableRemainingHours = Math.max(0, billableAllocatedHours - billableUsedHours);
+      const nonBillableRemainingHours = Math.max(
+        0,
+        nonBillableAllocatedHours - nonBillableUsedHours
+      );
+      const baseAllocatedHours = billableAllocatedHours + nonBillableAllocatedHours;
 
       return {
         jobId,
         allocatedHours: baseAllocatedHours,
-        usedHours,
-        remainingHours,
-        isBillableAvailable: remainingHours > 0,
+        usedHours: billableUsedHours + nonBillableUsedHours,
+        remainingHours: billableRemainingHours + nonBillableRemainingHours,
+        isBillableAvailable: billableRemainingHours > 0,
+        billableAllocatedHours,
+        nonBillableAllocatedHours,
+        billableUsedHours,
+        nonBillableUsedHours,
+        billableRemainingHours,
+        nonBillableRemainingHours,
       };
     }
 
@@ -500,6 +553,12 @@ export default function TimesheetsNew() {
     const usedHours = jobEntries
       .filter(e => ['pending', 'submitted', 'approved'].includes(e.status))
       .reduce((sum, e) => sum + (e.hours || 0), 0);
+    const billableUsedHours = jobEntries
+      .filter(
+        (entry) =>
+          entry.billable && ['pending', 'submitted', 'approved'].includes(entry.status)
+      )
+      .reduce((sum, entry) => sum + (entry.hours || 0), 0);
 
     const allocatedHours = Number(job.budgetHours) || 0;
     const remainingHours = Math.max(0, allocatedHours - usedHours);
@@ -510,6 +569,12 @@ export default function TimesheetsNew() {
       usedHours,
       remainingHours,
       isBillableAvailable: remainingHours > 0,
+      billableAllocatedHours: allocatedHours,
+      nonBillableAllocatedHours: 0,
+      billableUsedHours,
+      nonBillableUsedHours: Math.max(0, usedHours - billableUsedHours),
+      billableRemainingHours: remainingHours,
+      nonBillableRemainingHours: 0,
     };
   }, [allocationSummaries, myJobs, timeEntries]);
 
@@ -599,6 +664,57 @@ export default function TimesheetsNew() {
     },
   });
 
+  const createWeeklyEntriesMutation = useMutation({
+    mutationFn: async (rows: WeeklyEntryRow[]) => {
+      const created: any[] = [];
+      const errors: Array<{ date: string; message: string }> = [];
+
+      for (const row of rows) {
+        try {
+          const entry = await timeEntriesAPI.create({
+            jobId: Number(row.jobId),
+            dateWorked: row.date,
+            hours: Number(row.hours),
+            description: row.description?.trim() || undefined,
+            billable: row.billable,
+          });
+          created.push(entry);
+        } catch (error: any) {
+          errors.push({
+            date: row.date,
+            message: error?.message || 'Unable to save entry',
+          });
+        }
+      }
+
+      return { created, errors };
+    },
+    onSuccess: ({ created, errors }) => {
+      queryClient.invalidateQueries({ queryKey: ['my-time-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['time-utilization'] });
+      if (errors.length > 0) {
+        toast({
+          title: 'Weekly timesheet partially saved',
+          description: `${created.length} saved, ${errors.length} failed. ${errors[0].date}: ${errors[0].message}`,
+          variant: 'destructive',
+        });
+        return;
+      }
+      setShowWeeklyDialog(false);
+      toast({
+        title: 'Weekly timesheet saved',
+        description: `${created.length} ${created.length === 1 ? 'entry' : 'entries'} created.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error?.message || 'Unable to save the weekly timesheet.',
+        variant: 'destructive',
+      });
+    },
+  });
+
   const submitEntriesMutation = useMutation({
     mutationFn: (ids: number[]) => timeEntriesAPI.submitBulk(ids),
     onSuccess: (result) => {
@@ -653,6 +769,60 @@ export default function TimesheetsNew() {
       toast({ title: 'Request rejected', description: 'Additional hours rejected.' });
     },
   });
+
+  const approveOverAllocationMutation = useMutation({
+    mutationFn: (payload: { requestId: number; note?: string }) =>
+      timeEntriesAPI.approveOverBudgetRequest(payload.requestId, payload.note),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['over-allocation-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['pending-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['my-time-entries'] });
+      toast({ title: 'Over-allocation approved', description: 'The excess hours were approved.' });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Unable to approve over-allocation',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const rejectOverAllocationMutation = useMutation({
+    mutationFn: (payload: { requestId: number; note: string }) =>
+      timeEntriesAPI.rejectOverBudgetRequest(payload.requestId, payload.note),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['over-allocation-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['pending-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['my-time-entries'] });
+      toast({ title: 'Over-allocation rejected', description: 'The excess hours were voided.' });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Unable to reject over-allocation',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const handleApproveOverAllocation = (requestId: number) => {
+    const note = window.prompt('Manager note for approval (optional):') || '';
+    approveOverAllocationMutation.mutate({ requestId, note });
+  };
+
+  const handleRejectOverAllocation = (requestId: number) => {
+    const note = window.prompt('Reason for rejecting the excess hours:') || '';
+    if (!note.trim()) {
+      toast({
+        title: 'Reason required',
+        description: 'Add a note explaining why the excess is rejected.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    rejectOverAllocationMutation.mutate({ requestId, note: note.trim() });
+  };
 
   const requestApprovalMutation = useMutation({
     mutationFn: (payload: { jobId: number; additionalHours: number; justification: string; requestType?: string }) =>
@@ -754,12 +924,6 @@ export default function TimesheetsNew() {
       return;
     }
 
-    const hours = elapsedSeconds / 3600;
-    const budgetInfo = getJobBudgetInfo(timer.jobId);
-    
-    // Auto-set billable type based on budget
-    const billable = budgetInfo.isBillableAvailable && hours <= budgetInfo.remainingHours;
-    
     createEntryMutation.mutate({
       jobId: timer.jobId,
       taskId: timer.taskId || undefined,
@@ -767,8 +931,7 @@ export default function TimesheetsNew() {
       startedAt: timer.startTime.toISOString(),
       endedAt: now.toISOString(),
       description,
-      billable,
-      nonBillableCategory: billable ? undefined : 'over_budget',
+      billable: entryForm.billable,
     });
     
     setTimer({
@@ -844,14 +1007,10 @@ export default function TimesheetsNew() {
   };
 
   const handleJobChange = (jobId: string) => {
-    const budgetInfo = getJobBudgetInfo(Number(jobId));
     setEntryForm(prev => ({
       ...prev,
       jobId,
       taskId: '',
-      // Auto-set billable based on budget availability
-      billable: budgetInfo.isBillableAvailable,
-      nonBillableCategory: budgetInfo.isBillableAvailable ? prev.nonBillableCategory : 'over_budget',
     }));
     window.setTimeout(() => {
       quickTimerNotesInputRef.current?.focus();
@@ -889,8 +1048,7 @@ export default function TimesheetsNew() {
       return;
     }
     
-    const budgetInfo = getJobBudgetInfo(Number(entryForm.jobId));
-    const billable = entryForm.billable && budgetInfo.isBillableAvailable;
+    const billable = entryForm.billable;
     const hasTimeRange = Boolean(entryForm.startTime && entryForm.endTime);
     const startedAt = hasTimeRange ? `${entryForm.date}T${entryForm.startTime}:00` : undefined;
     const endedAt = hasTimeRange ? `${entryForm.date}T${entryForm.endTime}:00` : undefined;
@@ -902,9 +1060,6 @@ export default function TimesheetsNew() {
       description: entryForm.description,
       billable,
     };
-    if (!billable) {
-      payload.nonBillableCategory = entryForm.billable ? 'over_budget' : entryForm.nonBillableCategory;
-    }
 
     if (hasTimeRange) {
       payload.startedAt = startedAt;
@@ -961,6 +1116,75 @@ export default function TimesheetsNew() {
     setNonBillableForm(next);
   };
 
+  const openWeeklyDialog = () => {
+    const today = new Date();
+    const rows: WeeklyEntryRow[] = [0, 1, 2, 3, 4].map((offset) => {
+      const date = addDays(weekStart, offset);
+      return {
+        key: `week-${today.getTime()}-${offset}`,
+        date: format(date, 'yyyy-MM-dd'),
+        jobId: '',
+        hours: 0,
+        description: '',
+        billable: true,
+      };
+    });
+    setWeeklyRows(rows);
+    setShowWeeklyDialog(true);
+  };
+
+  const updateWeeklyRow = (key: string, patch: Partial<WeeklyEntryRow>) => {
+    setWeeklyRows((prev) =>
+      prev.map((row) => (row.key === key ? { ...row, ...patch } : row))
+    );
+  };
+
+  const addWeeklyRow = () => {
+    setWeeklyRows((prev) => [
+      ...prev,
+      {
+        key: `week-${Date.now()}-${prev.length}`,
+        date: format(weekStart, 'yyyy-MM-dd'),
+        jobId: '',
+        hours: 0,
+        description: '',
+        billable: true,
+      },
+    ]);
+  };
+
+  const removeWeeklyRow = (key: string) => {
+    setWeeklyRows((prev) => prev.filter((row) => row.key !== key));
+  };
+
+  const handleSaveWeekly = () => {
+    const rows = weeklyRows.filter(
+      (row) => row.jobId && Number(row.hours) > 0
+    );
+    if (rows.length === 0) {
+      toast({
+        title: 'Nothing to save',
+        description: 'Add at least one job entry with hours.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    for (const row of rows) {
+      const job = myJobs.find((item: Job) => item.id === Number(row.jobId));
+      if (!canLogTimeOnJob(job)) {
+        toast({
+          title: 'Job setup incomplete',
+          description: `The selected job for ${row.date} is not ready for timesheets.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
+    createWeeklyEntriesMutation.mutate(rows);
+  };
+
   const handleRequestAdditionalTime = () => {
     if (!additionalTimeRequest.jobId) {
       toast({ title: 'Error', description: 'Select a job before requesting hours.', variant: 'destructive' });
@@ -1011,7 +1235,11 @@ export default function TimesheetsNew() {
               Track your time on assigned jobs
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={openWeeklyDialog}>
+              <Calendar className="h-4 w-4 mr-2" />
+              Weekly Timesheet
+            </Button>
             <Button variant="outline" onClick={() => setShowNonBillableDialog(true)}>
               <ClipboardList className="h-4 w-4 mr-2" />
               Log Non-Billable
@@ -1172,8 +1400,8 @@ export default function TimesheetsNew() {
                 </CardTitle>
                 <CardDescription>
                   {utilization
-                    ? `${utilization.label} • ${utilization.standardDailyHours}h/day target • ${utilization.billableTargetPercent}% billable benchmark`
-                    : 'Billable hours vs the daily target'}
+                    ? `${utilization.label} • ${utilization.billableTargetPercent}% of ${utilization.standardDailyHours}h/day = ${utilization.targetHours.toFixed(1)}h target`
+                    : 'Billable hours vs the threshold target'}
                 </CardDescription>
               </div>
               <Select
@@ -1209,8 +1437,7 @@ export default function TimesheetsNew() {
                       value={Math.min(100, Math.max(0, utilization.utilizationPercent))}
                     />
                     <p className={`text-xs ${utilizationToneClass(utilization.utilizationStatus)}`}>
-                      {utilization.utilizationPercent.toFixed(0)}% of{' '}
-                      {utilization.standardDailyHours}h/day target •{' '}
+                      {utilization.utilizationPercent.toFixed(0)}% of billable target •{' '}
                       {utilization.utilizationVarianceHours >= 0 ? '+' : ''}
                       {utilization.utilizationVarianceHours.toFixed(1)}h variance
                     </p>
@@ -1288,13 +1515,18 @@ export default function TimesheetsNew() {
             {(isManager || isPartner) && (
               <TabsTrigger value="approvals">
                 Pending Approvals
-                {(pendingApprovals.length > 0 || approvalRequests.length > 0) && (
+                {approvalsBadgeCount > 0 && (
                   <span className="ml-2 flex items-center gap-1">
                     {pendingApprovals.length > 0 && (
                       <Badge variant="destructive">Entries {pendingApprovals.length}</Badge>
                     )}
                     {approvalRequests.length > 0 && (
                       <Badge variant="secondary">Requests {approvalRequests.length}</Badge>
+                    )}
+                    {overAllocationRequests.length > 0 && (
+                      <Badge variant="outline">
+                        Over-allocation {overAllocationRequests.length}
+                      </Badge>
                     )}
                   </span>
                 )}
@@ -1408,16 +1640,22 @@ export default function TimesheetsNew() {
                                 <p className="font-medium">
                                   {isProjectedLeaveEntry(entry)
                                     ? entry.leaveType?.name || 'Leave'
-                                    : entry.nonBillableActivity?.name ||
-                                      entry.job?.jobName ||
-                                      'Unassigned'}
+                                    : entry.nonBillableCategory === 'public_holiday'
+                                      ? 'Public Holiday'
+                                      : entry.nonBillableActivity?.name ||
+                                        entry.job?.jobName ||
+                                        entry.proposal?.proposalTitle ||
+                                        'Unassigned'}
                                 </p>
                                 <p className="text-sm text-muted-foreground">
                                   {isProjectedLeaveEntry(entry)
                                     ? 'Auto-projected from approved/pending leave'
-                                    : entry.nonBillableActivity
-                                      ? 'Standalone non-billable'
-                                      : entry.job?.client?.clientName}
+                                    : entry.nonBillableCategory === 'public_holiday'
+                                      ? 'Public holiday'
+                                      : entry.nonBillableActivity
+                                        ? 'Standalone non-billable'
+                                        : entry.job?.client?.clientName ||
+                                          (entry.proposal ? 'Proposal' : null)}
                                 </p>
                               </div>
                             </TableCell>
@@ -1429,7 +1667,7 @@ export default function TimesheetsNew() {
                             </TableCell>
                             <TableCell>
                               <Badge variant={entry.billable ? 'default' : 'secondary'}>
-                                {entry.billable ? 'Billable' : 'Non-Billable'}
+                                {formatEntryTypeLabel(entry)}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -1546,15 +1784,36 @@ export default function TimesheetsNew() {
                       }
                       className="mb-4"
                     />
-                    <div className="grid grid-cols-4 gap-4 text-sm">
+                    <div className="grid grid-cols-3 gap-4 text-sm md:grid-cols-5">
                       <div>
                         <p className="text-muted-foreground">This Week</p>
                         <p className="font-medium">{jobTotalHours.toFixed(1)}h</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Remaining Billable</p>
-                        <p className={`font-medium ${budgetInfo.remainingHours <= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {budgetInfo.remainingHours.toFixed(1)}h
+                        <p className="text-muted-foreground">Billable budget</p>
+                        <p className="font-medium">
+                          {budgetInfo.billableUsedHours.toFixed(1)} /{' '}
+                          {budgetInfo.billableAllocatedHours.toFixed(1)}h
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Non-billable budget</p>
+                        <p className="font-medium">
+                          {budgetInfo.nonBillableUsedHours.toFixed(1)} /{' '}
+                          {budgetInfo.nonBillableAllocatedHours.toFixed(1)}h
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Remaining</p>
+                        <p
+                          className={`font-medium ${
+                            budgetInfo.billableRemainingHours <= 0
+                              ? 'text-amber-600'
+                              : 'text-green-600'
+                          }`}
+                        >
+                          {budgetInfo.billableRemainingHours.toFixed(1)}h billable /{' '}
+                          {budgetInfo.nonBillableRemainingHours.toFixed(1)}h non-billable
                         </p>
                       </div>
                       <div>
@@ -1637,7 +1896,10 @@ export default function TimesheetsNew() {
                               {formatDateSafe(entry.date || (entry as any).dateWorked, 'MMM d')}
                             </TableCell>
                             <TableCell>
-                              {entry.nonBillableActivity?.name || entry.job?.jobName || '-'}
+                              {entry.nonBillableActivity?.name ||
+                                entry.job?.jobName ||
+                                entry.proposal?.proposalTitle ||
+                                '-'}
                             </TableCell>
                             <TableCell className="max-w-xs truncate">
                               {entry.description}
@@ -1804,6 +2066,89 @@ export default function TimesheetsNew() {
                   )}
                 </CardContent>
               </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Over-allocation Requests</CardTitle>
+                  <CardDescription>
+                    Approve or reject excess hours per timesheet entry. Rejected excess is void.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {overAllocationRequests.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <CheckCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <p>No pending over-allocation requests</p>
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Job</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead className="text-right">Excess</TableHead>
+                          <TableHead className="text-right">Entry hours</TableHead>
+                          <TableHead>Reason</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {overAllocationRequests.map((request: any) => (
+                          <TableRow key={request.id}>
+                            <TableCell>
+                              {request.employee?.firstName} {request.employee?.lastName}
+                            </TableCell>
+                            <TableCell>
+                              <div>
+                                <p className="font-medium">{request.job?.jobName}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {request.job?.client?.clientName}
+                                </p>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={request.billableType === 'billable' ? 'default' : 'secondary'}>
+                                {request.billableType === 'billable' ? 'Billable' : 'Non-billable'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right font-medium text-amber-600">
+                              {Number(request.requestedAdditional || 0).toFixed(2)}h
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {Number(request.timeEntry?.hours || 0).toFixed(2)}h
+                            </TableCell>
+                            <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                              {request.requestReason || request.timeEntry?.description || '-'}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleApproveOverAllocation(request.id)}
+                                  disabled={approveOverAllocationMutation.isPending}
+                                >
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-red-600"
+                                  onClick={() => handleRejectOverAllocation(request.id)}
+                                  disabled={rejectOverAllocationMutation.isPending}
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
           )}
         </Tabs>
@@ -1839,7 +2184,6 @@ export default function TimesheetsNew() {
                       nonBillableActivities.map((activity) => (
                         <SelectItem key={activity.id} value={String(activity.id)}>
                           {activity.name}
-                          {!activity.isProductive ? ' (non-productive)' : ''}
                         </SelectItem>
                       ))
                     )}
@@ -1930,6 +2274,133 @@ export default function TimesheetsNew() {
           </DialogContent>
         </Dialog>
 
+        {/* Weekly Timesheet Dialog */}
+        <Dialog open={showWeeklyDialog} onOpenChange={setShowWeeklyDialog}>
+          <DialogContent className="max-w-5xl">
+            <DialogHeader>
+              <DialogTitle>Weekly Timesheet</DialogTitle>
+              <DialogDescription>
+                {format(weekStart, 'MMM d')} - {format(weekEnd, 'MMM d, yyyy')} · add an
+                entry for any day and mark it billable or non-billable.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="max-h-[55vh] overflow-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[150px]">Date</TableHead>
+                      <TableHead className="min-w-[220px]">Job</TableHead>
+                      <TableHead className="w-[100px]">Hours</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="w-[90px]">Billable</TableHead>
+                      <TableHead className="w-[50px]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {weeklyRows.map((row) => (
+                      <TableRow key={row.key}>
+                        <TableCell>
+                          <Input
+                            type="date"
+                            value={row.date}
+                            onChange={(e) =>
+                              updateWeeklyRow(row.key, { date: e.target.value })
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <select
+                            className="w-full rounded-md border border-input bg-background px-2 py-2 text-sm"
+                            value={row.jobId}
+                            onChange={(e) =>
+                              updateWeeklyRow(row.key, { jobId: e.target.value })
+                            }
+                          >
+                            <option value="">Select a job</option>
+                            {myJobs.map((job) => (
+                              <option key={job.id} value={job.id}>
+                                {job.jobCode} - {job.jobName}
+                              </option>
+                            ))}
+                          </select>
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            step="0.25"
+                            min="0"
+                            value={row.hours}
+                            onChange={(e) =>
+                              updateWeeklyRow(row.key, {
+                                hours: Number(e.target.value),
+                              })
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            value={row.description}
+                            onChange={(e) =>
+                              updateWeeklyRow(row.key, {
+                                description: e.target.value,
+                              })
+                            }
+                            placeholder="What did you work on?"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Switch
+                            checked={row.billable}
+                            onCheckedChange={(checked) =>
+                              updateWeeklyRow(row.key, { billable: checked })
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeWeeklyRow(row.key)}
+                            disabled={weeklyRows.length <= 1}
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <Button variant="outline" size="sm" onClick={addWeeklyRow}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add entry
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Non-billable job time is recorded as a write-off.
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowWeeklyDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveWeekly}
+                disabled={createWeeklyEntriesMutation.isPending}
+              >
+                {createWeeklyEntriesMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Calendar className="h-4 w-4 mr-2" />
+                )}
+                Save Week
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Log Time Dialog */}
         <Dialog open={showEntryDialog} onOpenChange={setShowEntryDialog}>
           <DialogContent className="max-w-md">
@@ -1978,16 +2449,35 @@ export default function TimesheetsNew() {
                       }
 
                       const budgetInfo = getJobBudgetInfo(Number(entryForm.jobId));
+                      const remaining =
+                        entryForm.billable
+                          ? budgetInfo.billableRemainingHours
+                          : budgetInfo.nonBillableRemainingHours;
+                      const willExceed = entryForm.hours > remaining;
                       return (
-                        <div className={budgetInfo.remainingHours <= 0 ? 'text-red-600' : 'text-muted-foreground'}>
-                          {budgetInfo.remainingHours <= 0 ? (
-                            <span className="flex items-center gap-1">
-                              <AlertTriangle className="h-4 w-4" />
-                              Budget exhausted - entry will be non-billable
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                            <span>
+                              Billable: {budgetInfo.billableUsedHours.toFixed(1)}h /{' '}
+                              {budgetInfo.billableAllocatedHours.toFixed(1)}h
                             </span>
-                          ) : (
-                            <span>{budgetInfo.remainingHours.toFixed(1)}h billable remaining</span>
-                          )}
+                            <span>
+                              Non-billable: {budgetInfo.nonBillableUsedHours.toFixed(1)}h /{' '}
+                              {budgetInfo.nonBillableAllocatedHours.toFixed(1)}h
+                            </span>
+                          </div>
+                          <div className={willExceed ? 'text-amber-600' : 'text-muted-foreground'}>
+                            {willExceed ? (
+                              <span className="flex items-center gap-1">
+                                <AlertTriangle className="h-4 w-4" />
+                                Excess hours will be sent to your manager for approval
+                              </span>
+                            ) : (
+                              <span>
+                                {remaining.toFixed(1)}h {entryForm.billable ? 'billable' : 'non-billable'} remaining
+                              </span>
+                            )}
+                          </div>
                         </div>
                       );
                     })()}
@@ -2049,36 +2539,14 @@ export default function TimesheetsNew() {
                 <Switch
                   checked={entryForm.billable}
                   onCheckedChange={(checked) =>
-                    setEntryForm(prev => ({
-                      ...prev,
-                      billable: checked,
-                      nonBillableCategory: checked ? prev.nonBillableCategory : 'internal',
-                    }))
+                    setEntryForm(prev => ({ ...prev, billable: checked }))
                   }
-                  disabled={entryForm.jobId && !getJobBudgetInfo(Number(entryForm.jobId)).isBillableAvailable}
                 />
               </div>
               {!entryForm.billable && (
-                <div>
-                  <Label>Non-billable category</Label>
-                  <Select
-                    value={entryForm.nonBillableCategory}
-                    onValueChange={(value) =>
-                      setEntryForm(prev => ({ ...prev, nonBillableCategory: value }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {nonBillableCategoryOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Non-billable time on a job is recorded as a write-off.
+                </p>
               )}
             </div>
             <DialogFooter>

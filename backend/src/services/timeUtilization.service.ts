@@ -54,16 +54,6 @@ const resolveStatus = (achievementPercent: number): UtilizationStatus => {
   return "off_track";
 };
 
-const resolveBenchmarkStatus = (
-  utilizationPercent: number,
-  benchmarkPercent: number
-): UtilizationStatus => {
-  const benchmark = Number.isFinite(benchmarkPercent) ? benchmarkPercent : 100;
-  if (utilizationPercent >= benchmark) return "on_track";
-  if (utilizationPercent >= Math.max(0, benchmark - 15)) return "at_risk";
-  return "off_track";
-};
-
 const average = (values: number[]) =>
   values.length
     ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1))
@@ -427,8 +417,8 @@ export class TimeUtilizationService {
         : nonBillableAchievementPercent;
 
     const utilizationPercent =
-      expectedWorkingHours > 0
-        ? (actualBillableHours / expectedWorkingHours) * 100
+      expectedBillableHours > 0
+        ? (actualBillableHours / expectedBillableHours) * 100
         : 0;
 
     return {
@@ -456,15 +446,12 @@ export class TimeUtilizationService {
       nonBillableVarianceHours: roundHours(
         actualProductiveNonBillableHours - expectedNonBillableHours
       ),
-      targetHours: roundHours(expectedWorkingHours),
+      targetHours: roundHours(expectedBillableHours),
       utilizationPercent: roundPercent(utilizationPercent),
       utilizationVarianceHours: roundHours(
-        actualBillableHours - expectedWorkingHours
+        actualBillableHours - expectedBillableHours
       ),
-      utilizationStatus: resolveBenchmarkStatus(
-        utilizationPercent,
-        thresholds.billableTargetPercent
-      ),
+      utilizationStatus: resolveStatus(utilizationPercent),
       benchmarkPercent: roundPercent(thresholds.billableTargetPercent),
       status: resolveStatus(statusAchievement),
       statusBasis,
@@ -583,10 +570,14 @@ export class TimeUtilizationService {
       const loggedHours = loggedMap.get(profile.id) || 0;
       const approvedLeaveHours = leaveMap.get(profile.id) || 0;
       const dailyHours = Number(profile.standardDailyHours || 8) || 8;
-      const targetHours = Math.max(0, workingDays * dailyHours - approvedLeaveHours);
+      const benchmarkPercent = Number(profile.billableTargetPercent || 0) || 80;
+      const availableHours = Math.max(
+        0,
+        workingDays * dailyHours - approvedLeaveHours
+      );
+      const targetHours = availableHours * (benchmarkPercent / 100);
       const utilizationPercent =
         targetHours > 0 ? (billableHours / targetHours) * 100 : 0;
-      const benchmarkPercent = Number(profile.billableTargetPercent || 0) || 80;
       const department = profile.department;
       return {
         profileId: profile.id,
@@ -602,7 +593,7 @@ export class TimeUtilizationService {
         utilizationPercent: roundPercent(utilizationPercent),
         benchmarkPercent: roundPercent(benchmarkPercent),
         varianceHours: roundHours(billableHours - targetHours),
-        status: resolveBenchmarkStatus(utilizationPercent, benchmarkPercent),
+        status: resolveStatus(utilizationPercent),
         includedInAverages: targetHours > 0,
       };
     });
@@ -654,7 +645,7 @@ export class TimeUtilizationService {
         benchmarkPercent,
         memberCount: deptMembers.length,
         eligibleMemberCount: eligible.length,
-        status: resolveBenchmarkStatus(utilizationPercent, benchmarkPercent),
+        status: resolveStatus(utilizationPercent),
       };
     });
 
@@ -714,7 +705,7 @@ export class TimeUtilizationService {
             (sum, department) => sum + department.memberCount,
             0
           ),
-          status: resolveBenchmarkStatus(utilizationPercent, benchmarkPercent),
+          status: resolveStatus(utilizationPercent),
         };
       })
       .sort((a, b) => a.utilizationPercent - b.utilizationPercent);
@@ -779,10 +770,7 @@ export class TimeUtilizationService {
           (sum, partner) => sum + partner.memberCount,
           0
         ),
-        status: resolveBenchmarkStatus(
-          organizationUtilization,
-          organizationBenchmark
-        ),
+        status: resolveStatus(organizationUtilization),
       },
       byPartner: partners,
       byDepartment: departments.sort(

@@ -36,6 +36,13 @@ interface RegisterPayload {
   status?: string;
 }
 
+export interface InviteValidationResponse {
+  valid: boolean;
+  email: string;
+  name?: string;
+  expiresAt: string;
+}
+
 export const authAPI = {
   /**
    * Login user with email and password
@@ -67,6 +74,44 @@ export const authAPI = {
       status: payload.status,
     });
     return response;
+  },
+
+  /**
+   * Validate a one-time onboarding invitation link.
+   */
+  validateInvite: async (token: string): Promise<InviteValidationResponse> => {
+    const params = new URLSearchParams({ token });
+    return api.get<InviteValidationResponse>(`/auth/invite/validate?${params.toString()}`);
+  },
+
+  /**
+   * Accept a one-time onboarding invitation and set the password.
+   */
+  acceptInvite: async (
+    token: string,
+    newPassword: string
+  ): Promise<LoginSuccessResponse> => {
+    const response = await api.post<LoginSuccessResponse>('/auth/accept-invite', {
+      token,
+      newPassword,
+    });
+    if (response.token) {
+      setToken(response.token);
+      setUser(response.user);
+    }
+    return response;
+  },
+
+  /**
+   * Resend a one-time onboarding invitation.
+   */
+  resendInvite: async (profileId: number): Promise<{
+    message: string;
+    emailDelivery: string;
+    emailDeliveryReason?: string;
+    inviteExpiresAt: string;
+  }> => {
+    return api.post('/auth/resend-invite', { profileId });
   },
 
   /**

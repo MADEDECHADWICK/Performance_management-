@@ -25,9 +25,11 @@ import {
   FileText,
   Upload,
   BookOpen,
+  Send,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { rolesAPI } from "@/lib/api";
+import authAPI from "@/lib/api/auth";
 import documentsAPI from "@/lib/api/documents";
 import { CANONICAL_ROLES, resolveCanonicalRole } from "@/auth/canonicalRoles";
 import UserRoleManagement from "@/components/UserRoleManagement";
@@ -48,6 +50,12 @@ interface Employee {
   department?: {
     name: string;
   };
+  manager?: {
+    id?: number;
+    firstName?: string;
+    lastName?: string;
+  } | null;
+  onboardingStatus?: string;
 }
 
 interface Department {
@@ -84,6 +92,11 @@ interface OnboardingCase {
   profileId?: number;
   candidateId?: number;
   status: string;
+  reviewStatus?: string | null;
+  reviewNote?: string | null;
+  submittedAt?: string | null;
+  documentsSubmittedAt?: string | null;
+  reviewedAt?: string | null;
   startDate?: string;
   dueDate?: string;
   hrOwner?: {
@@ -129,6 +142,7 @@ interface InductionChecklistItem {
   itemType?: string | null;
   resourceUrl?: string | null;
   comments?: string | null;
+  employeeNote?: string | null;
   requiresDocument: boolean;
   documentId?: number | null;
   document?: ChecklistDocument | null;
@@ -543,7 +557,11 @@ const EmployeeManagement = () => {
   const [checklistUploadBusy, setChecklistUploadBusy] = useState<number | null>(null);
   const [checklistActionBusy, setChecklistActionBusy] = useState<string | null>(null);
   const [checklistCommentDrafts, setChecklistCommentDrafts] = useState<Record<number, string>>({});
-  const [checklistSignoffNotes, setChecklistSignoffNotes] = useState("");
+
+  const [changesDialogOpen, setChangesDialogOpen] = useState(false);
+  const [changesCaseId, setChangesCaseId] = useState<number | null>(null);
+  const [changesNote, setChangesNote] = useState("");
+  const [reviewActionBusy, setReviewActionBusy] = useState<number | null>(null);
   const [offboardingDialogOpen, setOffboardingDialogOpen] = useState(false);
   const [remindingChecklistId, setRemindingChecklistId] = useState<number | null>(null);
   const [offboardingEmployeeId, setOffboardingEmployeeId] = useState<string>("");
@@ -561,6 +579,7 @@ const EmployeeManagement = () => {
 
   const [dueDateEdits, setDueDateEdits] = useState<Record<number, string>>({});
   const [savingDueDateId, setSavingDueDateId] = useState<number | null>(null);
+  const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -592,14 +611,20 @@ const EmployeeManagement = () => {
         const email = emp.email ?? emp.user?.email ?? "";
         const hireDate = emp.hire_date ?? emp.hireDate ?? null;
         const position =
-          emp.position ??
           emp.positionTitle ??
+          emp.position ??
           emp.position_title ??
-          emp.role?.name ??
           "";
         const departmentId =
           emp.department_id ?? emp.departmentId ?? emp.department?.id ?? "";
         const managerId = emp.manager_id ?? emp.managerId ?? emp.manager?.id ?? null;
+        const manager =
+          emp.manager ??
+          (managerId
+            ? safeEmployees.find(
+                (candidate: any) => String(candidate.id) === String(managerId)
+              ) ?? null
+            : null);
         return {
           ...emp,
           first_name: firstName,
@@ -611,6 +636,7 @@ const EmployeeManagement = () => {
           department_id: departmentId,
           manager_id: managerId ? String(managerId) : null,
           managerId: managerId ? String(managerId) : null,
+          manager,
         };
       });
 
@@ -736,7 +762,7 @@ const EmployeeManagement = () => {
       (detail.items || []).map((item) => [item.id, item.comments || ""])
     );
     setChecklistCommentDrafts(nextComments);
-    setChecklistSignoffNotes(detail.hrSignoffNotes || "");
+
     return detail;
   };
 
@@ -1033,26 +1059,68 @@ const EmployeeManagement = () => {
     }
   };
 
-  const signoffChecklistAsHr = async (checklistId: number) => {
-    try {
-      setChecklistActionBusy(`signoff:${checklistId}`);
-      await apiFetch("POST", `/induction-checklist/${checklistId}/hr-signoff`, {
-        notes: checklistSignoffNotes || undefined,
-      });
-      await refreshActiveChecklist(checklistId);
-      await loadLifecycleData();
+
+  const openRequestChangesDialog = (caseId: number) => {
+    setChangesCaseId(caseId);
+    setChangesNote("");
+    setChangesDialogOpen(true);
+  };
+
+  const handleRequestOnboardingChanges = async () => {
+    if (!changesCaseId) return;
+    if (!changesNote.trim()) {
       toast({
-        title: "Checklist signed off",
-        description: "Induction is now fully completed for this employee.",
+        title: "Note required",
+        description: "Explain what the employee should correct.",
+        variant: "destructive",
       });
+      return;
+    }
+    try {
+      setReviewActionBusy(changesCaseId);
+      await apiFetch("POST", `/onboarding/${changesCaseId}/request-changes`, {
+        note: changesNote.trim(),
+      });
+      toast({
+        title: "Changes requested",
+        description: "The employee has been notified to update and resubmit.",
+      });
+      setChangesDialogOpen(false);
+      setChangesCaseId(null);
+      setChangesNote("");
+      await loadLifecycleData();
     } catch (error: any) {
       toast({
-        title: "Unable to sign off checklist",
+        title: "Unable to request changes",
         description: error.message || "Please try again.",
         variant: "destructive",
       });
     } finally {
-      setChecklistActionBusy(null);
+      setReviewActionBusy(null);
+    }
+  };
+
+  const handleActivateOnboarding = async (caseId: number) => {
+    if (!confirm("Activate this employee? This completes onboarding and opens their system modules.")) {
+      return;
+    }
+    try {
+      setReviewActionBusy(caseId);
+      await apiFetch("POST", `/onboarding/${caseId}/activate`);
+      toast({
+        title: "Employee activated",
+        description: "Onboarding is complete and the employee can now access their modules.",
+      });
+      await loadLifecycleData();
+      await loadData();
+    } catch (error: any) {
+      toast({
+        title: "Unable to activate employee",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setReviewActionBusy(null);
     }
   };
 
@@ -1117,6 +1185,56 @@ const EmployeeManagement = () => {
       emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       emp.position?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const getEmployeeDepartmentName = (employee: Employee) => {
+    if (employee.department?.name) return employee.department.name;
+    const departmentId = employee.department_id || (employee as any).departmentId;
+    if (!departmentId) return "-";
+    return (
+      departments.find((department) => String(department.id) === String(departmentId))
+        ?.name || "-"
+    );
+  };
+
+  const getEmployeeManagerName = (employee: Employee) => {
+    const manager =
+      employee.manager ||
+      (employee.manager_id || employee.managerId
+        ? employees.find(
+            (candidate) =>
+              String(candidate.id) === String(employee.manager_id || employee.managerId)
+          )
+        : null);
+    if (!manager) return "-";
+    const managerRow = manager as any;
+    return `${managerRow.first_name ?? managerRow.firstName ?? ""} ${
+      managerRow.last_name ?? managerRow.lastName ?? ""
+    }`.trim() || "-";
+  };
+
+  const handleResendInvite = async (employee: Employee) => {
+    try {
+      setResendingInviteId(String(employee.id));
+      const response = await authAPI.resendInvite(Number(employee.id));
+      toast({
+        title: "Invitation resent",
+        description:
+          response.emailDelivery === "sent"
+            ? `A new one-time link was emailed to ${employee.email}.`
+            : response.emailDeliveryReason === "dummy_mode"
+              ? "A new link was created, but email delivery is disabled in dummy mode."
+              : "A new link was created, but email delivery failed. Check SMTP settings.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Unable to resend invitation",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setResendingInviteId(null);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -1908,6 +2026,7 @@ const EmployeeManagement = () => {
                           <TableHead>Email</TableHead>
                           <TableHead>Position</TableHead>
                           <TableHead>Department</TableHead>
+                          <TableHead>Manager</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Hire Date</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
@@ -1916,7 +2035,7 @@ const EmployeeManagement = () => {
                       <TableBody>
                         {filteredEmployees.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                            <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                               No employees found
                             </TableCell>
                           </TableRow>
@@ -1928,7 +2047,8 @@ const EmployeeManagement = () => {
                               </TableCell>
                               <TableCell>{employee.email}</TableCell>
                               <TableCell>{employee.position || "-"}</TableCell>
-                              <TableCell>{employee.department?.name || "-"}</TableCell>
+                              <TableCell>{getEmployeeDepartmentName(employee)}</TableCell>
+                              <TableCell>{getEmployeeManagerName(employee)}</TableCell>
                               <TableCell>
                                 <Badge className={getStatusColor(employee.status)}>
                                   {employee.status?.replace("_", " ")}
@@ -1956,6 +2076,21 @@ const EmployeeManagement = () => {
                                   <Pencil className="h-4 w-4 mr-1" />
                                   Edit
                                 </Button>
+                                {String(employee.onboardingStatus || "").toLowerCase() !==
+                                  "completed" && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleResendInvite(employee)}
+                                    disabled={resendingInviteId === String(employee.id)}
+                                    className="text-primary hover:text-primary"
+                                  >
+                                    <Send className="h-4 w-4 mr-1" />
+                                    {resendingInviteId === String(employee.id)
+                                      ? "Sending..."
+                                      : "Resend invite"}
+                                  </Button>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -2201,11 +2336,33 @@ const EmployeeManagement = () => {
                                         Stage: {oc.candidate.stage.replace("_", " ")}
                                       </div>
                                     )}
+                                    {oc.reviewStatus === "changes_requested" && oc.reviewNote && (
+                                      <div className="text-xs text-amber-700">
+                                        HR note: {oc.reviewNote}
+                                      </div>
+                                    )}
                                   </TableCell>
                                   <TableCell>
-                                    <Badge variant={statusBadgeVariant(oc.status)}>
-                                      {oc.status.replace("_", " ")}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge variant={statusBadgeVariant(oc.status)}>
+                                        {oc.status.replace("_", " ")}
+                                      </Badge>
+                                      {oc.reviewStatus && oc.reviewStatus !== "draft" && (
+                                        <Badge
+                                          variant={
+                                            oc.reviewStatus === "approved"
+                                              ? "default"
+                                              : oc.reviewStatus === "submitted"
+                                                ? "secondary"
+                                                : oc.reviewStatus === "changes_requested"
+                                                  ? "destructive"
+                                                  : "outline"
+                                          }
+                                        >
+                                          {oc.reviewStatus.replace("_", " ")}
+                                        </Badge>
+                                      )}
+                                    </div>
                                   </TableCell>
                                   <TableCell>
                                     {oc.inductionChecklist ? (
@@ -2276,6 +2433,37 @@ const EmployeeManagement = () => {
                                           Await profile
                                         </Button>
                                       )}
+                                      {oc.reviewStatus === "submitted" && (
+                                        <>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => openRequestChangesDialog(oc.id)}
+                                            disabled={reviewActionBusy === oc.id}
+                                          >
+                                            Request changes
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleActivateOnboarding(oc.id)}
+                                            disabled={reviewActionBusy === oc.id}
+                                          >
+                                            Activate user
+                                          </Button>
+                                        </>
+                                      )}
+                                      {oc.reviewStatus === "approved" && (
+                                        <Badge variant="default">Activated</Badge>
+                                      )}
+                                      {(!oc.reviewStatus ||
+                                        oc.reviewStatus === "draft" ||
+                                        oc.reviewStatus === "changes_requested") && (
+                                        <span className="text-xs text-muted-foreground">
+                                          {oc.documentsSubmittedAt
+                                            ? "Documents submitted - awaiting assessment"
+                                            : "Awaiting employee submission"}
+                                        </span>
+                                      )}
                                     </div>
                                   </TableCell>
                                 </TableRow>
@@ -2289,6 +2477,42 @@ const EmployeeManagement = () => {
                 )}
               </CardContent>
             </Card>
+
+            <Dialog open={changesDialogOpen} onOpenChange={setChangesDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Request onboarding changes</DialogTitle>
+                  <DialogDescription>
+                    Explain what the employee should correct. They will be able to update and
+                    resubmit.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  <Label>Note to employee *</Label>
+                  <Textarea
+                    value={changesNote}
+                    onChange={(event) => setChangesNote(event.target.value)}
+                    rows={4}
+                    placeholder="e.g. The KRA PIN copy is not legible. Please re-upload."
+                  />
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setChangesDialogOpen(false)}
+                    disabled={Boolean(reviewActionBusy)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleRequestOnboardingChanges}
+                    disabled={Boolean(reviewActionBusy)}
+                  >
+                    {reviewActionBusy ? "Sending..." : "Send to employee"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <Card>
               <CardHeader>
@@ -2741,7 +2965,7 @@ const EmployeeManagement = () => {
               </div>
 
               <div className="grid gap-2">
-                <Label htmlFor="emp-billing-position">Billing Position *</Label>
+                <Label htmlFor="emp-billing-position">Rate (billing role) *</Label>
                 <Select
                   value={employeeForm.role_id || ""}
                   onValueChange={(value) => {
@@ -2751,7 +2975,6 @@ const EmployeeManagement = () => {
                     setEmployeeForm({
                       ...employeeForm,
                       role_id: value,
-                      position: selectedRole?.name || "",
                       hourly_rate: selectedRole?.billingRate
                         ? String(selectedRole.billingRate)
                         : "",
@@ -2775,20 +2998,20 @@ const EmployeeManagement = () => {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Billing rate is derived from this position.
+                  Billing rate is derived from this role. Position below is the job title only.
                 </p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="emp-position">Position</Label>
+                  <Label htmlFor="emp-position">Position (job title)</Label>
                   <Input
                     id="emp-position"
                     value={employeeForm.position}
                     onChange={(e) =>
                       setEmployeeForm({ ...employeeForm, position: e.target.value })
                     }
-                    placeholder="Optional title override"
+                    placeholder="e.g. Audit Associate"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -3580,6 +3803,16 @@ const EmployeeManagement = () => {
                                 {item.description && (
                                   <p className="text-xs text-muted-foreground">{item.description}</p>
                                 )}
+                                {item.employeeNote && (
+                                  <p className="text-xs text-amber-700">
+                                    Employee note: {item.employeeNote}
+                                  </p>
+                                )}
+                                {item.comments && (
+                                  <p className="text-xs text-muted-foreground">
+                                    HR note: {item.comments}
+                                  </p>
+                                )}
                                 {resourceUrl && (
                                   <div className="mt-2">
                                     <Button variant="link" className="h-auto p-0 text-xs" asChild>
@@ -3703,34 +3936,11 @@ const EmployeeManagement = () => {
                     </div>
                   ))}
                 </div>
-                <div className="space-y-3 rounded-lg border border-border p-3">
-                  <div>
-                    <div className="font-medium">Final HR signoff</div>
-                    <div className="text-xs text-muted-foreground">
-                      Sign off once every induction item is complete and the employee has acknowledged the induction.
-                    </div>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>HR signoff notes</Label>
-                    <Textarea
-                      rows={3}
-                      value={checklistSignoffNotes}
-                      onChange={(event) => setChecklistSignoffNotes(event.target.value)}
-                      placeholder="Summarize any final induction remarks, exceptions, or observations"
-                    />
-                  </div>
-                  <div className="flex justify-end">
-                    <Button
-                      disabled={
-                        Boolean(checklistActionBusy) ||
-                        !activeChecklist.employeeAcknowledgedAt ||
-                        (activeChecklist.items || []).some((item) => !item.isCompleted)
-                      }
-                      onClick={() => void signoffChecklistAsHr(activeChecklist.id)}
-                    >
-                      {activeChecklist.hrSignedOffAt ? "Re-sign off checklist" : "Sign off checklist"}
-                    </Button>
-                  </div>
+                <div className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
+                  Review the uploaded documents and induction acknowledgements, then use
+                  <span className="font-medium text-foreground"> Activate user </span>
+                  in the onboarding table to complete onboarding and open the employee's
+                  modules.
                 </div>
               </div>
             )}

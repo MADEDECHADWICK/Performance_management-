@@ -12,8 +12,8 @@ import { canonicalizeRoles } from "@/auth/canonicalRoles";
 const PASSWORD_SETUP_TOKEN_KEY = "rg_password_setup_token";
 
 const authBenefits = [
-  { icon: Target, text: "Track evaluations, workloads, and development progress in one place." },
-  { icon: Users, text: "Capture feedback across manager, peer, and client views." },
+  { icon: Target, text: "Track KPIs, workloads, and development progress in one place." },
+  { icon: Users, text: "Connect team contributions to balanced scorecard outcomes." },
   { icon: TrendingUp, text: "Connect individual delivery to business performance." },
 ];
 

@@ -293,7 +293,7 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
         barSeries: [{ key: "score", label: "Score", color: CHART_COLORS[0] }],
         insights: [
           `${payload?.unreadCount || 0} unread notifications need review.`,
-          "Stay current on evaluations and delivery metrics to improve non-financial signals.",
+          "Stay current on delivery metrics to improve non-financial signals.",
         ],
       };
     }
@@ -558,17 +558,12 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
 
       return {
         title: "HR Analytics",
-        subtitle: "Workforce health, evaluation coverage, and approval exposure.",
+        subtitle: "Workforce health and approval exposure.",
         stats: [
           {
             label: "Total Employees",
             value: String(toNumber(metrics?.totalEmployees)),
             description: "Active workforce records",
-          },
-          {
-            label: "Active Evaluations",
-            value: String(toNumber(metrics?.activeEvaluations)),
-            description: `${toNumber(metrics?.pendingEvaluations)} pending`,
           },
           {
             label: "Utilization",
@@ -598,7 +593,6 @@ const buildAnalyticsModel = (module: AnalyticsModule, payload: any): AnalyticsMo
         barSeries: [{ key: "amount", label: "Amount", color: CHART_COLORS[0] }],
         insights: [
           `${toNumber(approvalControls?.controls?.jobsOverFeeCap)} jobs are currently above fee cap.`,
-          "Clear pending evaluations early to reduce appraisal backlog.",
         ],
       };
     }

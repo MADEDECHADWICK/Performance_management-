@@ -12,11 +12,8 @@ const canonicalizeNotificationLink = (link?: string | null) => {
   const normalized = String(link || '').trim();
   if (!normalized) return null;
 
-  const assignmentMatch = normalized.match(
-    /^\/(?:evaluation|complete-evaluation|evaluations)\/(\d+)$/
-  );
-  if (assignmentMatch) {
-    return `/evaluations/assignments/${assignmentMatch[1]}`;
+  if (/^\/(?:evaluation|complete-evaluation|evaluations)(?:\/|$)/.test(normalized)) {
+    return null;
   }
 
   return normalized;

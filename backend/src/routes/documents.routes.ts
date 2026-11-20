@@ -69,6 +69,15 @@ router.post(
 );
 
 /**
+ * GET /documents/:documentId/access-url
+ */
+router.get(
+  "/:documentId/access-url",
+  withDocumentAccess(),
+  DocumentController.getDocumentAccessUrl
+);
+
+/**
  * GET /documents/:documentId
  */
 router.get(

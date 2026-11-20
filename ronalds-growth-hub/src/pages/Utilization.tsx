@@ -1,18 +1,32 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import PageLoader from "@/components/ui/page-loader";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   utilizationAPI,
+  type UtilizationCascadeDepartment,
+  type UtilizationCascadeMember,
+  type UtilizationCascadePartner,
   type UtilizationCascadeResult,
   type UtilizationPeriod,
   type UtilizationStatus,
 } from "@/lib/api/utilization";
+import { getPeriodRange } from "@/lib/reportPeriods";
 
 const PERIOD_OPTIONS: Array<{ value: UtilizationPeriod; label: string }> = [
   { value: "daily", label: "Daily" },
@@ -46,6 +60,31 @@ const toneText = (status: UtilizationStatus) =>
 const formatPercent = (value?: number) => `${Number(value || 0).toFixed(1)}%`;
 const formatHours = (value?: number) => `${Number(value || 0).toFixed(1)}h`;
 
+const downloadCsv = (
+  filename: string,
+  headers: string[],
+  rows: Array<Array<string | number | null>>
+) => {
+  const escape = (value: string | number | null) => {
+    const raw = String(value ?? "");
+    return raw.includes(",") || raw.includes('"') || raw.includes("\n")
+      ? `"${raw.replace(/"/g, '""')}"`
+      : raw;
+  };
+  const content = [headers, ...rows].map((row) => row.map(escape).join(",")).join("\n");
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+type UtilizationTab = "partners" | "departments" | "individuals";
+
 const UtilizationBar = ({
   value,
   benchmark,
@@ -57,15 +96,29 @@ const UtilizationBar = ({
     <Progress value={Math.min(100, Math.max(0, value))} />
     <div className="flex justify-between text-[10px] text-muted-foreground">
       <span>{formatPercent(value)}</span>
-      <span>benchmark {formatPercent(benchmark)}</span>
+      <span>threshold {formatPercent(benchmark)}</span>
     </div>
   </div>
 );
 
 export default function Utilization() {
   const [period, setPeriod] = useState<UtilizationPeriod>("monthly");
+  const [startDate, setStartDate] = useState(() => getPeriodRange("monthly").startDate);
+  const [endDate, setEndDate] = useState(() => getPeriodRange("monthly").endDate);
   const [data, setData] = useState<UtilizationCascadeResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<UtilizationTab>("partners");
+  const [viewOpen, setViewOpen] = useState(false);
+  const [selectedPartner, setSelectedPartner] = useState<UtilizationCascadePartner | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = useState<UtilizationCascadeDepartment | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<UtilizationCascadeMember | null>(null);
+
+  const handlePeriodChange = (next: UtilizationPeriod) => {
+    setPeriod(next);
+    const range = getPeriodRange(next);
+    setStartDate(range.startDate);
+    setEndDate(range.endDate);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -74,7 +127,8 @@ export default function Utilization() {
         setLoading(true);
         const response = await utilizationAPI.getCascade({
           period,
-          date: new Date().toISOString().slice(0, 10),
+          dateFrom: startDate || undefined,
+          dateTo: endDate || undefined,
         });
         if (!cancelled) setData(response);
       } catch {
@@ -87,7 +141,236 @@ export default function Utilization() {
     return () => {
       cancelled = true;
     };
-  }, [period]);
+  }, [period, startDate, endDate]);
+
+  const exportCurrentTab = () => {
+    if (!data) return;
+    if (activeTab === "partners") {
+      downloadCsv(
+        "utilization-partners.csv",
+        ["Partner", "Departments", "Members", "Billable", "Target", "Utilization", "Threshold", "Status"],
+        data.byPartner.map((partner) => [
+          partner.name,
+          partner.departmentCount,
+          partner.memberCount,
+          partner.billableHours,
+          partner.targetHours,
+          partner.utilizationPercent,
+          partner.benchmarkPercent,
+          statusLabel(partner.status),
+        ])
+      );
+      return;
+    }
+    if (activeTab === "departments") {
+      downloadCsv(
+        "utilization-departments.csv",
+        [
+          "Department",
+          "Partner",
+          "Members",
+          "Eligible members",
+          "Billable",
+          "Target",
+          "Utilization",
+          "Threshold",
+          "Status",
+        ],
+        data.byDepartment.map((department) => [
+          department.name,
+          department.partnerName || "",
+          department.memberCount,
+          department.eligibleMemberCount,
+          department.billableHours,
+          department.targetHours,
+          department.utilizationPercent,
+          department.benchmarkPercent,
+          statusLabel(department.status),
+        ])
+      );
+      return;
+    }
+    downloadCsv(
+      "utilization-individuals.csv",
+      [
+        "Employee",
+        "Department",
+        "Partner",
+        "Billable",
+        "Target",
+        "Leave",
+        "Utilization",
+        "Threshold",
+        "Status",
+        "Included in averages",
+      ],
+      data.byEmployee.map((employee) => [
+        employee.name,
+        employee.departmentName || "",
+        employee.partnerName || "",
+        employee.billableHours,
+        employee.targetHours,
+        employee.approvedLeaveHours,
+        employee.utilizationPercent,
+        employee.benchmarkPercent,
+        statusLabel(employee.status),
+        employee.includedInAverages ? "Yes" : "No",
+      ])
+    );
+  };
+
+  const openPartner = (partner: UtilizationCascadePartner) => {
+    setSelectedPartner(partner);
+    setSelectedDepartment(null);
+    setSelectedEmployee(null);
+    setViewOpen(true);
+  };
+
+  const openDepartment = (department: UtilizationCascadeDepartment) => {
+    setSelectedPartner(null);
+    setSelectedDepartment(department);
+    setSelectedEmployee(null);
+    setViewOpen(true);
+  };
+
+  const openEmployee = (employee: UtilizationCascadeMember) => {
+    setSelectedPartner(null);
+    setSelectedDepartment(null);
+    setSelectedEmployee(employee);
+    setViewOpen(true);
+  };
+
+  const exportSelected = () => {
+    if (!data) return;
+    const rows: Array<Array<string | number | null>> = [];
+    const headers = [
+      "Section",
+      "Name",
+      "Department",
+      "Partner",
+      "Members",
+      "Billable",
+      "Target",
+      "Utilization",
+      "Threshold",
+      "Status",
+    ];
+
+    if (selectedPartner) {
+      rows.push([
+        "Partner",
+        selectedPartner.name,
+        "",
+        selectedPartner.name,
+        selectedPartner.memberCount,
+        selectedPartner.billableHours,
+        selectedPartner.targetHours,
+        selectedPartner.utilizationPercent,
+        selectedPartner.benchmarkPercent,
+        statusLabel(selectedPartner.status),
+      ]);
+      data.byDepartment
+        .filter((department) => department.partnerProfileId === selectedPartner.partnerProfileId)
+        .forEach((department) => {
+          rows.push([
+            "Department",
+            department.name,
+            department.name,
+            selectedPartner.name,
+            department.memberCount,
+            department.billableHours,
+            department.targetHours,
+            department.utilizationPercent,
+            department.benchmarkPercent,
+            statusLabel(department.status),
+          ]);
+        });
+      data.byEmployee
+        .filter((employee) => employee.partnerProfileId === selectedPartner.partnerProfileId)
+        .forEach((employee) => {
+          rows.push([
+            "Employee",
+            employee.name,
+            employee.departmentName || "",
+            selectedPartner.name,
+            "",
+            employee.billableHours,
+            employee.targetHours,
+            employee.utilizationPercent,
+            employee.benchmarkPercent,
+            statusLabel(employee.status),
+          ]);
+        });
+      downloadCsv("utilization-partner-report.csv", headers, rows);
+      return;
+    }
+
+    if (selectedDepartment) {
+      rows.push([
+        "Department",
+        selectedDepartment.name,
+        selectedDepartment.name,
+        selectedDepartment.partnerName || "",
+        selectedDepartment.memberCount,
+        selectedDepartment.billableHours,
+        selectedDepartment.targetHours,
+        selectedDepartment.utilizationPercent,
+        selectedDepartment.benchmarkPercent,
+        statusLabel(selectedDepartment.status),
+      ]);
+      data.byEmployee
+        .filter((employee) => employee.departmentId === selectedDepartment.departmentId)
+        .forEach((employee) => {
+          rows.push([
+            "Employee",
+            employee.name,
+            employee.departmentName || "",
+            selectedDepartment.partnerName || "",
+            "",
+            employee.billableHours,
+            employee.targetHours,
+            employee.utilizationPercent,
+            employee.benchmarkPercent,
+            statusLabel(employee.status),
+          ]);
+        });
+      downloadCsv("utilization-department-report.csv", headers, rows);
+      return;
+    }
+
+    if (selectedEmployee) {
+      rows.push([
+        "Employee",
+        selectedEmployee.name,
+        selectedEmployee.departmentName || "",
+        selectedEmployee.partnerName || "",
+        "",
+        selectedEmployee.billableHours,
+        selectedEmployee.targetHours,
+        selectedEmployee.utilizationPercent,
+        selectedEmployee.benchmarkPercent,
+        statusLabel(selectedEmployee.status),
+      ]);
+      downloadCsv("utilization-employee-report.csv", headers, rows);
+    }
+  };
+
+  const selectedPartnerDepartments = selectedPartner
+    ? data?.byDepartment.filter(
+        (department) => department.partnerProfileId === selectedPartner.partnerProfileId
+      ) || []
+    : [];
+  const selectedPartnerEmployees = selectedPartner
+    ? data?.byEmployee.filter(
+        (employee) => employee.partnerProfileId === selectedPartner.partnerProfileId
+      ) || []
+    : [];
+  const selectedDepartmentEmployees = selectedDepartment
+    ? data?.byEmployee.filter(
+        (employee) => employee.departmentId === selectedDepartment.departmentId
+      ) || []
+    : [];
+  const currentView = selectedPartner || selectedDepartment || selectedEmployee;
 
   return (
     <DashboardLayout>
@@ -96,24 +379,47 @@ export default function Utilization() {
           <div>
             <h1 className="text-3xl font-bold">Utilization</h1>
             <p className="text-muted-foreground">
-              Billable hours against the daily target, cascading from individuals to departments,
-              partners, and the organization.
+              Billable hours against each employee's threshold-adjusted working-hours target,
+              cascading from individuals to departments, partners, and the organization.
             </p>
           </div>
-          <div className="w-full md:w-44">
-            <Label htmlFor="utilizationPeriod">Period</Label>
-            <select
-              id="utilizationPeriod"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={period}
-              onChange={(event) => setPeriod(event.target.value as UtilizationPeriod)}
-            >
-              {PERIOD_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-end">
+            <div className="w-full md:w-44">
+              <Label htmlFor="utilizationPeriod">Period</Label>
+              <select
+                id="utilizationPeriod"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={period}
+                onChange={(event) => handlePeriodChange(event.target.value as UtilizationPeriod)}
+              >
+                {PERIOD_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="w-full md:w-40">
+              <Label htmlFor="utilizationStartDate">Start date</Label>
+              <Input
+                id="utilizationStartDate"
+                type="date"
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+              />
+            </div>
+            <div className="w-full md:w-40">
+              <Label htmlFor="utilizationEndDate">End date</Label>
+              <Input
+                id="utilizationEndDate"
+                type="date"
+                value={endDate}
+                onChange={(event) => setEndDate(event.target.value)}
+              />
+            </div>
+            <Button variant="outline" onClick={exportCurrentTab} disabled={!data}>
+              Export CSV
+            </Button>
           </div>
         </div>
 
@@ -131,7 +437,7 @@ export default function Utilization() {
               <CardHeader>
                 <CardTitle>Organization utilization</CardTitle>
                 <CardDescription>
-                  {data.label} • {data.workingDays} working days • {data.holidayDays} holidays
+                  {data.label} â€¢ {data.workingDays} working days â€¢ {data.holidayDays} holidays
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -142,7 +448,7 @@ export default function Utilization() {
                       {formatPercent(data.organization.utilizationPercent)}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      benchmark {formatPercent(data.organization.benchmarkPercent)}
+                      threshold {formatPercent(data.organization.benchmarkPercent)} of working hours
                     </p>
                   </div>
                   <div className="rounded-lg border p-4">
@@ -160,7 +466,7 @@ export default function Utilization() {
                       {data.organization.partnerCount} partners
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {data.organization.departmentCount} departments •{" "}
+                      {data.organization.departmentCount} departments â€¢{" "}
                       {data.organization.memberCount} members
                     </p>
                   </div>
@@ -181,7 +487,10 @@ export default function Utilization() {
               </CardContent>
             </Card>
 
-            <Tabs defaultValue="partners">
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) => setActiveTab(value as UtilizationTab)}
+            >
               <TabsList>
                 <TabsTrigger value="partners">Partners</TabsTrigger>
                 <TabsTrigger value="departments">Departments</TabsTrigger>
@@ -196,7 +505,7 @@ export default function Utilization() {
                       Simple average of each partner's departments.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="max-h-[520px] overflow-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -207,12 +516,13 @@ export default function Utilization() {
                           <TableHead className="text-right">Target</TableHead>
                           <TableHead>Utilization</TableHead>
                           <TableHead>Status</TableHead>
+                          <TableHead className="sticky right-0 border-l bg-background text-right">Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {data.byPartner.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-muted-foreground">
+                            <TableCell colSpan={8} className="text-center text-muted-foreground">
                               No partner-linked departments for this period.
                             </TableCell>
                           </TableRow>
@@ -235,6 +545,11 @@ export default function Utilization() {
                                 {statusLabel(partner.status)}
                               </Badge>
                             </TableCell>
+                            <TableCell className="sticky right-0 border-l bg-background text-right">
+                              <Button size="sm" variant="outline" onClick={() => openPartner(partner)}>
+                                View
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -251,7 +566,7 @@ export default function Utilization() {
                       Simple average of each department's members.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="max-h-[520px] overflow-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -262,12 +577,13 @@ export default function Utilization() {
                           <TableHead className="text-right">Target</TableHead>
                           <TableHead>Utilization</TableHead>
                           <TableHead>Status</TableHead>
+                          <TableHead className="sticky right-0 border-l bg-background text-right">Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {data.byDepartment.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-muted-foreground">
+                            <TableCell colSpan={8} className="text-center text-muted-foreground">
                               No department data for this period.
                             </TableCell>
                           </TableRow>
@@ -298,6 +614,15 @@ export default function Utilization() {
                                 {statusLabel(department.status)}
                               </Badge>
                             </TableCell>
+                            <TableCell className="sticky right-0 border-l bg-background text-right">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openDepartment(department)}
+                              >
+                                View
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -311,10 +636,11 @@ export default function Utilization() {
                   <CardHeader>
                     <CardTitle>Individual utilization</CardTitle>
                     <CardDescription>
-                      Billable hours logged vs working days × daily hours, less approved leave.
+                      Billable hours vs (working days Ã— daily hours âˆ’ approved leave) Ã— billable
+                      threshold.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="max-h-[520px] overflow-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -326,12 +652,13 @@ export default function Utilization() {
                           <TableHead className="text-right">Leave</TableHead>
                           <TableHead>Utilization</TableHead>
                           <TableHead>Status</TableHead>
+                          <TableHead className="sticky right-0 border-l bg-background text-right">Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {data.byEmployee.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={8} className="text-center text-muted-foreground">
+                            <TableCell colSpan={9} className="text-center text-muted-foreground">
                               No employee data for this period.
                             </TableCell>
                           </TableRow>
@@ -362,6 +689,15 @@ export default function Utilization() {
                                 <Badge variant="outline">No target</Badge>
                               )}
                             </TableCell>
+                            <TableCell className="sticky right-0 border-l bg-background text-right">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openEmployee(employee)}
+                              >
+                                View
+                              </Button>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -372,7 +708,223 @@ export default function Utilization() {
             </Tabs>
           </>
         )}
+
+        <Dialog open={viewOpen} onOpenChange={setViewOpen}>
+          <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-5xl overflow-x-hidden overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {selectedPartner?.name || selectedDepartment?.name || selectedEmployee?.name || "Utilization detail"}
+              </DialogTitle>
+              <DialogDescription>
+                {selectedPartner
+                  ? "Partner breakdown"
+                  : selectedDepartment
+                    ? "Department breakdown"
+                    : "Individual utilization"}
+              </DialogDescription>
+            </DialogHeader>
+
+            {currentView && (
+              <div className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">Utilization</p>
+                    <p className={`text-2xl font-bold ${toneText(currentView.status)}`}>
+                      {formatPercent(currentView.utilizationPercent)}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">Billable hours</p>
+                    <p className="text-2xl font-bold">{formatHours(currentView.billableHours)}</p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">Target hours</p>
+                    <p className="text-2xl font-bold">{formatHours(currentView.targetHours)}</p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <Badge className={statusClass(currentView.status)}>
+                      {statusLabel(currentView.status)}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Utilization vs threshold</span>
+                    <span>{formatPercent(currentView.benchmarkPercent)}</span>
+                  </div>
+                  <UtilizationBar
+                    value={currentView.utilizationPercent}
+                    benchmark={currentView.benchmarkPercent}
+                  />
+                </div>
+
+                {selectedPartner && (
+                  <>
+                    <div className="min-w-0 overflow-hidden rounded-md border">
+                      <div className="border-b p-2 text-sm font-medium">Departments</div>
+                      <div className="max-h-[220px] overflow-auto">
+                        <Table className="text-xs">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Department</TableHead>
+                              <TableHead className="text-right">Members</TableHead>
+                              <TableHead className="text-right">Billable</TableHead>
+                              <TableHead className="text-right">Target</TableHead>
+                              <TableHead>Utilization</TableHead>
+                              <TableHead>Status</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {selectedPartnerDepartments.length === 0 && (
+                              <TableRow>
+                                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                  No departments.
+                                </TableCell>
+                              </TableRow>
+                            )}
+                            {selectedPartnerDepartments.map((department) => (
+                              <TableRow key={department.departmentId ?? department.name}>
+                                <TableCell className="font-medium">{department.name}</TableCell>
+                                <TableCell className="text-right">{department.memberCount}</TableCell>
+                                <TableCell className="text-right">{formatHours(department.billableHours)}</TableCell>
+                                <TableCell className="text-right">{formatHours(department.targetHours)}</TableCell>
+                                <TableCell>
+                                  <UtilizationBar
+                                    value={department.utilizationPercent}
+                                    benchmark={department.benchmarkPercent}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Badge className={statusClass(department.status)}>
+                                    {statusLabel(department.status)}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 overflow-hidden rounded-md border">
+                      <div className="border-b p-2 text-sm font-medium">Staff</div>
+                      <div className="max-h-[240px] overflow-auto">
+                        <Table className="text-xs">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Employee</TableHead>
+                              <TableHead>Department</TableHead>
+                              <TableHead className="text-right">Billable</TableHead>
+                              <TableHead className="text-right">Target</TableHead>
+                              <TableHead>Utilization</TableHead>
+                              <TableHead>Status</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {selectedPartnerEmployees.length === 0 && (
+                              <TableRow>
+                                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                  No staff.
+                                </TableCell>
+                              </TableRow>
+                            )}
+                            {selectedPartnerEmployees.map((employee) => (
+                              <TableRow key={employee.profileId}>
+                                <TableCell className="font-medium">{employee.name}</TableCell>
+                                <TableCell>{employee.departmentName || "-"}</TableCell>
+                                <TableCell className="text-right">{formatHours(employee.billableHours)}</TableCell>
+                                <TableCell className="text-right">{formatHours(employee.targetHours)}</TableCell>
+                                <TableCell>
+                                  <UtilizationBar
+                                    value={employee.utilizationPercent}
+                                    benchmark={employee.benchmarkPercent}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Badge className={statusClass(employee.status)}>
+                                    {statusLabel(employee.status)}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {selectedDepartment && (
+                  <div className="min-w-0 overflow-hidden rounded-md border">
+                    <div className="border-b p-2 text-sm font-medium">Staff</div>
+                    <div className="max-h-[260px] overflow-auto">
+                      <Table className="text-xs">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Employee</TableHead>
+                            <TableHead>Partner</TableHead>
+                            <TableHead className="text-right">Billable</TableHead>
+                            <TableHead className="text-right">Target</TableHead>
+                            <TableHead>Utilization</TableHead>
+                            <TableHead>Status</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedDepartmentEmployees.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                No staff.
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {selectedDepartmentEmployees.map((employee) => (
+                            <TableRow key={employee.profileId}>
+                              <TableCell className="font-medium">{employee.name}</TableCell>
+                              <TableCell>{employee.partnerName || "-"}</TableCell>
+                              <TableCell className="text-right">{formatHours(employee.billableHours)}</TableCell>
+                              <TableCell className="text-right">{formatHours(employee.targetHours)}</TableCell>
+                              <TableCell>
+                                <UtilizationBar
+                                  value={employee.utilizationPercent}
+                                  benchmark={employee.benchmarkPercent}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Badge className={statusClass(employee.status)}>
+                                  {statusLabel(employee.status)}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+
+                {selectedEmployee && (
+                  <p className="text-sm text-muted-foreground">
+                    Individual job contribution and timesheet detail are available in
+                    Timesheet Reports â†’ Staff Detailed.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <DialogFooter className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={exportSelected}>
+                Export report
+              </Button>
+              <Button variant="outline" onClick={() => setViewOpen(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );
 }
+

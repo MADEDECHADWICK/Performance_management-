@@ -126,8 +126,9 @@ export class ProfileService {
       prisma.profile.findMany({
         where,
         include: {
-          role: { select: { id: true, name: true } },
+          role: { select: { id: true, name: true, billingRate: true } },
           department: { select: { id: true, name: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
           user: { select: { email: true } },
         },
         skip,
@@ -154,8 +155,9 @@ export class ProfileService {
     const profile = await prisma.profile.findUnique({
       where: { id: profileId },
       include: {
-        role: { select: { id: true, name: true } },
+        role: { select: { id: true, name: true, billingRate: true } },
         department: { select: { id: true, name: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
         user: { select: { id: true, email: true } },
       },
     });
@@ -353,8 +355,9 @@ export class ProfileService {
           updatedAt: new Date(),
         },
         include: {
-          role: { select: { id: true, name: true } },
+          role: { select: { id: true, name: true, billingRate: true } },
           department: { select: { id: true, name: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
           user: { select: { id: true, email: true } },
         },
       });
@@ -491,8 +494,9 @@ export class ProfileService {
       include: {
         profile: {
           include: {
-            role: { select: { id: true, name: true } },
+            role: { select: { id: true, name: true, billingRate: true } },
             department: { select: { id: true, name: true } },
+        manager: { select: { id: true, firstName: true, lastName: true } },
           },
         },
       },
@@ -604,7 +608,7 @@ export class ProfileService {
           include: {
             profiles: {
               include: {
-                role: { select: { id: true, name: true } },
+                role: { select: { id: true, name: true, billingRate: true } },
               },
             },
           },

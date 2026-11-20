@@ -81,7 +81,7 @@ const AuditLogs = () => {
             Audit Logs
           </h2>
           <p className="text-muted-foreground">
-            Track all evaluation submissions and system changes
+            Track all system changes and user actions
           </p>
         </div>
 

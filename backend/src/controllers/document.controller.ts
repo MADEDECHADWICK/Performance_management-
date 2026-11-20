@@ -7,7 +7,11 @@ import { AuthRequest } from "../middleware/auth";
 import { DocumentService } from "../services/documents.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 import { DocumentAccessLevel, DocumentVerificationStatus } from "@prisma/client";
-import { deleteStoredUpload, storeUploadedFile } from "../config/uploads";
+import {
+  deleteStoredUpload,
+  getStoredUploadReadUrl,
+  storeUploadedFile,
+} from "../config/uploads";
 import { logger, toLogContext } from "../lib/logger";
 
 const buildAuth = (req: AuthRequest) => ({
@@ -175,6 +179,22 @@ export class DocumentController {
       logger.error("document_load_failed", toLogContext(error));
       const status = error.statusCode ?? 500;
       res.status(status).json(errorResponse(error.message || "Failed to retrieve document", status));
+    }
+  }
+
+  static async getDocumentAccessUrl(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const documentId = Number(req.params.documentId);
+      const document = await DocumentService.getDocumentById(documentId);
+      const url = await getStoredUploadReadUrl("documents", document.filePath);
+      if (!url) {
+        res.status(404).json(errorResponse("Document file is not available", 404));
+        return;
+      }
+      res.json(successResponse({ url, expiresInSeconds: 900 }, "Document access URL created"));
+    } catch (error: any) {
+      const status = error.statusCode ?? 500;
+      res.status(status).json(errorResponse(error.message || "Failed to create document URL", status));
     }
   }
 

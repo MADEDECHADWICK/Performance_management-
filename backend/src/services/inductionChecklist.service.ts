@@ -1,8 +1,4 @@
-import {
-  ChecklistStatus,
-  DocumentVerificationStatus,
-  OnboardingStatus,
-} from "@prisma/client";
+import { ChecklistStatus, OnboardingStatus } from "@prisma/client";
 import prisma from "../prisma";
 import { NotificationService } from "./notifications.service";
 import { createAudit } from "../utils/audit";
@@ -218,6 +214,7 @@ class InductionChecklistServiceClass {
           status: true,
           hrOwnerProfileId: true,
           dueDate: true,
+          documentsSubmittedAt: true,
         },
       },
       items: {
@@ -257,6 +254,33 @@ class InductionChecklistServiceClass {
     return this.withResolvedChecklistItems(checklist);
   }
 
+  private isHrOnlyDocumentItem(item: {
+    ownerRole?: string | null;
+    itemType?: string | null;
+    requiresDocument?: boolean | null;
+    sectionKey?: string | null;
+  }) {
+    const ownerRole = this.resolveOwnerRoleForItem(item);
+    const isDocument =
+      item.itemType === "document_upload" ||
+      Boolean(item.requiresDocument) ||
+      item.sectionKey === "employee_checklist" ||
+      item.sectionKey === "employee_file";
+    return ownerRole === "hr" && isDocument;
+  }
+
+  private filterChecklistForViewer<
+    T extends { items?: Array<Record<string, any>> }
+  >(checklist: T, auth: AuthContext): T {
+    if (this.isPrivileged(auth) || !Array.isArray(checklist.items)) {
+      return checklist;
+    }
+    return {
+      ...checklist,
+      items: checklist.items.filter((item) => !this.isHrOnlyDocumentItem(item)),
+    } as T;
+  }
+
   private async assertCanViewChecklist(
     checklistId: number,
     auth: AuthContext,
@@ -275,7 +299,7 @@ class InductionChecklistServiceClass {
       throw err;
     }
 
-    return checklist;
+    return this.filterChecklistForViewer(checklist, auth) as typeof checklist;
   }
 
   private async assertCanActOnItem(
@@ -336,28 +360,18 @@ class InductionChecklistServiceClass {
       checklist.items.some((item) => item.documentId || item.comments || item.completedAt) ||
       Boolean(checklist.employeeAcknowledgedAt || checklist.hrSignedOffAt);
     const allItemsComplete = totalItems > 0 && completedItems === totalItems;
-    const canBeCompleted =
-      allItemsComplete &&
-      Boolean(checklist.employeeAcknowledgedAt) &&
-      Boolean(checklist.hrSignedOffAt);
+    const alreadyCompleted = checklist.status === ChecklistStatus.completed;
+    const allDocumentsAttached = checklist.items.every(
+      (item) => !item.requiresDocument || Boolean(item.documentId)
+    );
 
-    let status: ChecklistStatus = ChecklistStatus.pending;
-    if (canBeCompleted) {
-      status = ChecklistStatus.completed;
-    } else if (hasActivity) {
-      status = ChecklistStatus.in_progress;
-    }
+    const status: ChecklistStatus = alreadyCompleted
+      ? ChecklistStatus.completed
+      : hasActivity
+        ? ChecklistStatus.in_progress
+        : ChecklistStatus.pending;
 
-    const signoffReset =
-      allItemsComplete
-        ? {}
-        : {
-            employeeAcknowledgedAt: null,
-            employeeAcknowledgedByProfileId: null,
-            hrSignedOffAt: null,
-            hrSignedOffByProfileId: null,
-            hrSignoffNotes: null,
-          };
+    const signoffReset = {};
 
     const updated = await prisma.inductionChecklist.update({
       where: { id: checklistId },
@@ -372,16 +386,11 @@ class InductionChecklistServiceClass {
       include: this.buildChecklistInclude(),
     });
 
-    const allRequiredDocumentsVerified = updated.items.every((item) => {
-      if (!item.requiresDocument) return true;
-      return item.document?.verificationStatus === DocumentVerificationStatus.verified;
-    });
-
     await prisma.profile.update({
       where: { id: updated.employeeProfileId },
       data: {
-        onboardingChecklistCompleted: allItemsComplete && allRequiredDocumentsVerified,
-        inductionCompleted: status === ChecklistStatus.completed,
+        onboardingChecklistCompleted: allItemsComplete && allDocumentsAttached,
+        inductionCompleted: alreadyCompleted,
       },
     });
 
@@ -391,10 +400,9 @@ class InductionChecklistServiceClass {
       await prisma.profile.update({
         where: { id: updated.employeeProfileId },
         data: {
-          onboardingStatus:
-            status === ChecklistStatus.completed
-              ? OnboardingStatus.completed
-              : hasActivity
+          onboardingStatus: alreadyCompleted
+            ? OnboardingStatus.completed
+            : hasActivity
               ? OnboardingStatus.in_progress
               : OnboardingStatus.pending,
         },
@@ -548,16 +556,33 @@ class InductionChecklistServiceClass {
   }
 
   async completeItem(checklistId: number, itemId: number, auth: AuthContext) {
-    const { item, ownerRole } = await this.assertCanActOnItem(checklistId, itemId, auth);
+    const { checklist, item, ownerRole } = await this.assertCanActOnItem(
+      checklistId,
+      itemId,
+      auth
+    );
+
+    const isDocumentItem =
+      item.itemType === "document_upload" ||
+      Boolean(item.requiresDocument) ||
+      item.sectionKey === "employee_checklist" ||
+      item.sectionKey === "employee_file";
+    if (
+      ownerRole === "employee" &&
+      !isDocumentItem &&
+      checklist.onboardingCase &&
+      !checklist.onboardingCase.documentsSubmittedAt
+    ) {
+      const err = new Error(
+        "Submit your onboarding documents before starting the policy assessment"
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
 
     if (item.requiresDocument) {
       if (!item.documentId || !item.document) {
         const err = new Error("Attach the required document before completing this item");
-        (err as any).statusCode = 400;
-        throw err;
-      }
-      if (item.document.verificationStatus !== DocumentVerificationStatus.verified) {
-        const err = new Error("This document must be verified by HR before the item can be completed");
         (err as any).statusCode = 400;
         throw err;
       }
@@ -584,7 +609,8 @@ class InductionChecklistServiceClass {
       },
     }).catch(() => null);
 
-    return this.refreshChecklistProgress(checklistId);
+    const refreshed = await this.refreshChecklistProgress(checklistId);
+    return this.filterChecklistForViewer(refreshed, auth);
   }
 
   async attachItemDocument(
@@ -593,7 +619,11 @@ class InductionChecklistServiceClass {
     documentId: number,
     auth: AuthContext
   ) {
-    const { item } = await this.assertCanActOnItem(checklistId, itemId, auth);
+    const { checklist, item, ownerRole } = await this.assertCanActOnItem(
+      checklistId,
+      itemId,
+      auth
+    );
     if (!item.requiresDocument) {
       const err = new Error("This checklist item does not require a document");
       (err as any).statusCode = 400;
@@ -635,7 +665,96 @@ class InductionChecklistServiceClass {
       },
     }).catch(() => null);
 
-    return this.refreshChecklistProgress(checklistId);
+    if (
+      ownerRole === "employee" &&
+      !this.isPrivileged(auth) &&
+      checklist.onboardingCase?.documentsSubmittedAt &&
+      checklist.onboardingCase.hrOwnerProfileId
+    ) {
+      const employeeName = `${checklist.employee.firstName} ${checklist.employee.lastName}`.trim();
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: checklist.onboardingCase.hrOwnerProfileId,
+          type: "action",
+          title: "Onboarding document updated",
+          message: `${employeeName} uploaded a document after submitting onboarding. Please review the update.`,
+          actionRequired: true,
+          link: "/employee-management",
+        },
+        {
+          userId: auth.userId,
+          profileId: auth.profileId,
+          roleName: auth.roles?.[0],
+        }
+      ).catch(() => null);
+    }
+
+    const refreshed = await this.refreshChecklistProgress(checklistId);
+    return this.filterChecklistForViewer(refreshed, auth);
+  }
+
+  async updateEmployeeNote(
+    checklistId: number,
+    itemId: number,
+    note: string,
+    auth: AuthContext
+  ) {
+    const { checklist, item, ownerRole } = await this.assertCanActOnItem(
+      checklistId,
+      itemId,
+      auth
+    );
+    const isEmployee = checklist.employeeProfileId === auth.profileId;
+    const isDocumentItem =
+      item.itemType === "document_upload" ||
+      Boolean(item.requiresDocument) ||
+      item.sectionKey === "employee_checklist" ||
+      item.sectionKey === "employee_file";
+
+    if (!isEmployee || ownerRole !== "employee" || !isDocumentItem) {
+      const err = new Error("Only the employee can add a note to their document");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    await prisma.inductionChecklistItem.update({
+      where: { id: itemId },
+      data: {
+        employeeNote: String(note || "").trim() || null,
+      },
+    });
+
+    await createAudit({
+      action: "update_induction_checklist_employee_note",
+      entity_type: "InductionChecklistItem",
+      entity_id: itemId,
+      user_id: auth.userId,
+      metadata: { checklistId },
+    }).catch(() => null);
+
+    if (
+      checklist.onboardingCase?.documentsSubmittedAt &&
+      checklist.onboardingCase.hrOwnerProfileId
+    ) {
+      const employeeName = `${checklist.employee.firstName} ${checklist.employee.lastName}`.trim();
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: checklist.onboardingCase.hrOwnerProfileId,
+          type: "info",
+          title: "Employee note added to onboarding document",
+          message: `${employeeName} added a note to "${item.itemName}".`,
+          actionRequired: false,
+          link: "/employee-management",
+        },
+        {
+          userId: auth.userId,
+          profileId: auth.profileId,
+          roleName: auth.roles?.[0],
+        }
+      ).catch(() => null);
+    }
+
+    return this.getChecklistById(checklistId, auth);
   }
 
   async updateItemComments(
@@ -680,7 +799,16 @@ class InductionChecklistServiceClass {
       throw err;
     }
 
-    if (!checklist.items.length || checklist.items.some((item) => !item.isCompleted)) {
+    if (checklist.onboardingCase && !checklist.onboardingCase.documentsSubmittedAt) {
+      const err = new Error(
+        "Submit your onboarding documents before acknowledging policies"
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const visibleItems = this.filterChecklistForViewer(checklist, auth).items;
+    if (!visibleItems.length || visibleItems.some((item) => !item.isCompleted)) {
       const err = new Error("Complete all induction items before acknowledging the checklist");
       (err as any).statusCode = 400;
       throw err;
@@ -722,7 +850,8 @@ class InductionChecklistServiceClass {
       },
     }).catch(() => null);
 
-    return this.refreshChecklistProgress(checklistId);
+    const refreshed = await this.refreshChecklistProgress(checklistId);
+    return this.filterChecklistForViewer(refreshed, auth);
   }
 
   async hrSignoffChecklist(checklistId: number, notes: string | undefined, auth: AuthContext) {

@@ -92,6 +92,51 @@ class EmployeeOnboardingCaseServiceImpl {
     );
   }
 
+  private async notifyHrForCase(
+    record: { hrOwnerProfileId?: number | null },
+    input: { title: string; message: string },
+    auth: AuthContext
+  ) {
+    const recipientIds = record.hrOwnerProfileId
+      ? [record.hrOwnerProfileId]
+      : (
+          await prisma.profile.findMany({
+            where: {
+              user: {
+                roles: {
+                  some: {
+                    role: {
+                      name: { in: ["hr", "super_admin", "gmp"] },
+                    },
+                  },
+                },
+              },
+            },
+            select: { id: true },
+          })
+        ).map((profile) => profile.id);
+
+    await Promise.all(
+      recipientIds.map((recipientProfileId) =>
+        NotificationService.createNotification(
+          {
+            recipientProfileId,
+            type: "action",
+            title: input.title,
+            message: input.message,
+            actionRequired: true,
+            link: "/employee-management",
+          },
+          {
+            userId: auth.userId,
+            profileId: auth.profileId,
+            roleName: auth.roles?.[0],
+          }
+        ).catch(() => null)
+      )
+    );
+  }
+
   private async assertCanView(caseId: number, auth: AuthContext) {
     if (this.isPrivileged(auth)) return;
 
@@ -250,7 +295,7 @@ class EmployeeOnboardingCaseServiceImpl {
         employee: { select: { id: true, firstName: true, lastName: true, user: { select: { email: true } } } },
         hrOwner: { select: { id: true, firstName: true, lastName: true } },
         inductionChecklist: {
-          include: { items: { orderBy: { orderIndex: "asc" } } },
+          select: { id: true, status: true, completionPercent: true },
         },
         stages: {
           orderBy: { orderIndex: "asc" },
@@ -501,17 +546,15 @@ class EmployeeOnboardingCaseServiceImpl {
       acknowledgedDocumentIds.has(id)
     );
     const checklistCompleted = onboardingCase.inductionChecklist?.status === "completed";
+    const alreadyCompleted = onboardingCase.status === OnboardingStatus.completed;
 
-    let nextStatus: OnboardingStatus = OnboardingStatus.pending;
-    if (checklistCompleted && allPoliciesAcknowledged) {
-      nextStatus = OnboardingStatus.completed;
-    } else if (
-      checklistCompleted ||
-      assignedDocumentIds.length > 0 ||
-      acknowledgedDocumentIds.size > 0
-    ) {
-      nextStatus = OnboardingStatus.in_progress;
-    }
+    const nextStatus: OnboardingStatus = alreadyCompleted
+      ? OnboardingStatus.completed
+      : checklistCompleted ||
+          assignedDocumentIds.length > 0 ||
+          acknowledgedDocumentIds.size > 0
+        ? OnboardingStatus.in_progress
+        : OnboardingStatus.pending;
 
     if (nextStatus !== onboardingCase.status) {
       await prisma.employeeOnboardingCase.update({
@@ -520,12 +563,7 @@ class EmployeeOnboardingCaseServiceImpl {
       });
     }
 
-    if (onboardingCase.profileId && nextStatus === OnboardingStatus.completed) {
-      await prisma.profile.update({
-        where: { id: onboardingCase.profileId },
-        data: { onboardingStatus: OnboardingStatus.completed },
-      });
-    }
+    // Activation is the only action that completes onboarding and opens modules.
 
     return {
       checklistCompleted,
@@ -808,6 +846,394 @@ class EmployeeOnboardingCaseServiceImpl {
     }).catch(() => null);
 
     return { acknowledged: true, summary };
+  }
+
+  async submitDocuments(caseId: number, auth: AuthContext) {
+    const record = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      select: {
+        id: true,
+        profileId: true,
+        hrOwnerProfileId: true,
+        status: true,
+        reviewStatus: true,
+      },
+    });
+
+    if (!record) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    if (!record.profileId || record.profileId !== auth.profileId) {
+      const err = new Error("Only the assigned employee can submit onboarding documents");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+    if (
+      record.status === OnboardingStatus.completed ||
+      String(record.reviewStatus || "").toLowerCase() === "approved"
+    ) {
+      const err = new Error("Onboarding is already complete");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const submittedAt = new Date();
+    const updated = await prisma.employeeOnboardingCase.update({
+      where: { id: caseId },
+      data: {
+        documentsSubmittedAt: submittedAt,
+        status: OnboardingStatus.in_progress,
+      },
+      select: {
+        id: true,
+        status: true,
+        reviewStatus: true,
+        documentsSubmittedAt: true,
+        submittedAt: true,
+        employee: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    const employeeName = updated.employee
+      ? `${updated.employee.firstName} ${updated.employee.lastName}`.trim()
+      : "An employee";
+
+    await this.notifyHrForCase(
+      record,
+      {
+        title: "Onboarding documents submitted",
+        message: `${employeeName} submitted onboarding documents. Review the uploaded files and any employee notes.`,
+      },
+      auth
+    );
+
+    await createAudit({
+      action: "onboarding.documents_submitted",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { employeeProfileId: record.profileId },
+    }).catch(() => null);
+
+    return updated;
+  }
+
+  async submit(caseId: number, auth: AuthContext) {
+    await this.assertCanView(caseId, auth);
+
+    const record = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      include: {
+        inductionChecklist: {
+          include: { items: true },
+        },
+      },
+    });
+
+    if (!record) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (!record.inductionChecklist) {
+      const err = new Error("No onboarding checklist has been assigned yet");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (!record.documentsSubmittedAt) {
+      const err = new Error(
+        "Submit your documents before starting the policy assessment"
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const items = record.inductionChecklist.items;
+    const isDocumentItem = (item: (typeof items)[number]) =>
+      item.itemType === "document_upload" ||
+      Boolean(item.requiresDocument) ||
+      item.sectionKey === "employee_checklist" ||
+      item.sectionKey === "employee_file";
+
+    const missingPolicies = items.filter(
+      (item) =>
+        !isDocumentItem(item) &&
+        String(item.ownerRole || "employee").toLowerCase() === "employee" &&
+        !item.isCompleted
+    );
+
+    if (missingPolicies.length > 0) {
+      const err = new Error(
+        "Read and acknowledge all assigned policies before submitting the full onboarding assessment"
+      );
+      (err as any).statusCode = 400;
+      (err as any).details = {
+        missingPolicies: missingPolicies.map((item) => item.itemName),
+      };
+      throw err;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.employeeOnboardingCase.update({
+        where: { id: caseId },
+        data: {
+          reviewStatus: "submitted",
+          submittedAt: new Date(),
+          reviewNote: null,
+          status: OnboardingStatus.in_progress,
+        },
+      });
+
+      await tx.inductionChecklist
+        .update({
+          where: { id: record.inductionChecklist!.id },
+          data: {
+            employeeAcknowledgedAt: new Date(),
+            employeeAcknowledgedByProfileId: auth.profileId,
+          },
+        })
+        .catch(() => null);
+
+      return tx.employeeOnboardingCase.findUnique({
+        where: { id: caseId },
+        include: {
+          employee: { select: { id: true, firstName: true, lastName: true } },
+          hrOwner: { select: { id: true, firstName: true, lastName: true } },
+          inductionChecklist: {
+            select: { id: true, status: true, completionPercent: true },
+          },
+        },
+      });
+    });
+
+    await this.notifyHrForCase(
+      record,
+      {
+        title: "Onboarding assessment submitted",
+        message: `${
+          updated?.employee
+            ? `${updated.employee.firstName} ${updated.employee.lastName}`.trim()
+            : "An employee"
+        } submitted the full onboarding assessment for review.`,
+      },
+      auth
+    );
+
+    await createAudit({
+      action: "onboarding.submitted",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { employeeProfileId: record.profileId },
+    }).catch(() => null);
+
+    return updated;
+  }
+
+  async requestChanges(caseId: number, note: string, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const cleanNote = String(note || "").trim();
+    if (!cleanNote) {
+      const err = new Error("A note is required when requesting changes");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const record = await this.getById(caseId, auth);
+    const updated = await prisma.employeeOnboardingCase.update({
+      where: { id: caseId },
+      data: {
+        reviewStatus: "changes_requested",
+        reviewNote: cleanNote,
+        reviewedAt: new Date(),
+        reviewedByProfileId: auth.profileId,
+        status: OnboardingStatus.in_progress,
+      },
+      include: {
+        employee: { select: { id: true, firstName: true, lastName: true } },
+        inductionChecklist: { include: { items: true } },
+      },
+    });
+
+    if (record.profileId) {
+      await NotificationService.createNotification(
+        {
+          recipientProfileId: record.profileId,
+          type: "action",
+          title: "Onboarding changes requested",
+          message: cleanNote,
+          actionRequired: true,
+          link: "/profile?tab=onboarding",
+        },
+        { userId: auth.userId, profileId: auth.profileId, roleName: auth.roles?.[0] }
+      ).catch(() => null);
+    }
+
+    await createAudit({
+      action: "onboarding.changes_requested",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { note: cleanNote },
+    }).catch(() => null);
+
+    return updated;
+  }
+
+  async activate(caseId: number, auth: AuthContext) {
+    if (!this.isPrivileged(auth)) {
+      const err = new Error("Forbidden");
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const record = await prisma.employeeOnboardingCase.findUnique({
+      where: { id: caseId },
+      include: {
+        inductionChecklist: {
+          select: {
+            id: true,
+            items: {
+              select: {
+                itemName: true,
+                itemType: true,
+                requiresDocument: true,
+                sectionKey: true,
+                ownerRole: true,
+                isCompleted: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!record) {
+      const err = new Error("Onboarding case not found");
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (!record.profileId) {
+      const err = new Error("Cannot activate onboarding without an employee profile");
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (!record.documentsSubmittedAt) {
+      const err = new Error(
+        "The employee has not submitted onboarding documents yet"
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (String(record.reviewStatus || "").toLowerCase() !== "submitted") {
+      const err = new Error(
+        "The full onboarding assessment must be submitted before activation"
+      );
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const isDocumentItem = (item: {
+      itemType: string | null;
+      requiresDocument: boolean;
+      sectionKey: string | null;
+    }) =>
+      item.itemType === "document_upload" ||
+      Boolean(item.requiresDocument) ||
+      item.sectionKey === "employee_checklist" ||
+      item.sectionKey === "employee_file";
+    const missingPolicies =
+      record.inductionChecklist?.items.filter(
+        (item) =>
+          !isDocumentItem(item) &&
+          String(item.ownerRole || "employee").toLowerCase() === "employee" &&
+          !item.isCompleted
+      ) || [];
+    if (missingPolicies.length > 0) {
+      const err = new Error(
+        "All assigned employee policies must be acknowledged before activation"
+      );
+      (err as any).statusCode = 400;
+      (err as any).details = {
+        missingPolicies: missingPolicies.map((item) => item.itemName),
+      };
+      throw err;
+    }
+
+    const activated = await prisma.$transaction(async (tx) => {
+      await tx.employeeOnboardingCase.update({
+        where: { id: caseId },
+        data: {
+          reviewStatus: "approved",
+          reviewedAt: new Date(),
+          reviewedByProfileId: auth.profileId,
+          status: OnboardingStatus.completed,
+        },
+      });
+
+      await tx.profile.update({
+        where: { id: record.profileId! },
+        data: {
+          onboardingStatus: OnboardingStatus.completed,
+          onboardingChecklistCompleted: true,
+          inductionCompleted: true,
+        },
+      });
+
+      if (record.inductionChecklist) {
+        await tx.inductionChecklist.update({
+          where: { id: record.inductionChecklist.id },
+          data: {
+            status: "completed",
+            completedAt: new Date(),
+            hrSignedOffAt: new Date(),
+            hrSignedOffByProfileId: auth.profileId,
+          },
+        });
+      }
+
+      return tx.employeeOnboardingCase.findUnique({
+        where: { id: caseId },
+        include: {
+          employee: { select: { id: true, firstName: true, lastName: true } },
+          inductionChecklist: { include: { items: true } },
+        },
+      });
+    });
+
+    await NotificationService.createNotification(
+      {
+        recipientProfileId: record.profileId,
+        type: "info",
+        title: "Onboarding complete",
+        message: "Your onboarding has been reviewed and activated. You can now access the system modules.",
+        actionRequired: false,
+        link: "/dashboard",
+      },
+      { userId: auth.userId, profileId: auth.profileId, roleName: auth.roles?.[0] }
+    ).catch(() => null);
+
+    await createAudit({
+      action: "onboarding.activated",
+      entity_type: "EmployeeOnboardingCase",
+      entity_id: caseId,
+      user_id: auth.userId,
+      metadata: { employeeProfileId: record.profileId },
+    }).catch(() => null);
+
+    return activated;
   }
 }
 

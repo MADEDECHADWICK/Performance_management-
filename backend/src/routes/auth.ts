@@ -29,9 +29,25 @@ import {
 const router = Router();
 
 const ONBOARDING_MARKER_PREFIX = "onboarding";
-const TEMP_PASSWORD_VALID_HOURS = Number(process.env.TEMP_PASSWORD_VALID_HOURS || 12);
 const SETUP_TOKEN_VALID_MINUTES = Number(process.env.SETUP_TOKEN_VALID_MINUTES || 15);
+const ONBOARDING_INVITE_VALID_HOURS = 7;
 const MIN_PASSWORD_LENGTH = 8;
+
+const hashInviteToken = (token: string) =>
+  crypto.createHash("sha256").update(String(token)).digest("hex");
+
+const createInviteToken = () => crypto.randomBytes(32).toString("hex");
+
+const resolveFrontendUrl = () =>
+  String(
+    process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:8080"
+  ).replace(/\/+$/, "");
+
+const buildInviteUrl = (token: string) =>
+  `${resolveFrontendUrl()}/accept-invite?token=${encodeURIComponent(token)}`;
+
+const createInviteExpiry = () =>
+  new Date(Date.now() + ONBOARDING_INVITE_VALID_HOURS * 60 * 60 * 1000);
 const ACCESS_TOKEN_VALID_HOURS = Math.max(
   1,
   Number(process.env.ACCESS_TOKEN_VALID_HOURS || 12)
@@ -76,35 +92,6 @@ const resolveEmployeeStatus = (value: unknown): "active" | "inactive" | "separat
   if (normalized === "separated" || normalized === "terminated") return "separated";
   return "active";
 };
-
-//Creating the temporary password to the user
-const createTemporaryPassword = () => {
-  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const lower = "abcdefghijkmnopqrstuvwxyz";
-  const numbers = "23456789";
-  const symbols = "!@#$%&*";
-  const all = upper + lower + numbers + symbols;
-
-  const pick = (chars: string) => chars[Math.floor(Math.random() * chars.length)];
-
-  const chars = [
-    pick(upper),
-    pick(lower),
-    pick(numbers),
-    pick(symbols),
-    ...Array.from({ length: 8 }, () => pick(all)),
-  ];
-
-  for (let i = chars.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-
-  return chars.join("");
-};
-
-const buildOnboardingMarker = (expiresAt: Date) =>
-  `${ONBOARDING_MARKER_PREFIX}:${expiresAt.getTime()}:${crypto.randomBytes(8).toString("hex")}`;
 
 const parseOnboardingMarker = (value: string | null | undefined): { expiresAt: Date } | null => {
   if (!value) return null;
@@ -416,21 +403,19 @@ const onboardUser = async (req: AuthRequest, res: any) => {
       Math.max(0, 100 - resolvedBillablePercent)
     );
 
-    const temporaryPassword = createTemporaryPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
-    const tempPasswordExpiry = new Date(
-      Date.now() + TEMP_PASSWORD_VALID_HOURS * 60 * 60 * 1000
-    );
-    const onboardingMarker = buildOnboardingMarker(tempPasswordExpiry);
+    const inviteToken = createInviteToken();
+    const inviteExpiry = createInviteExpiry();
 
     const created = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
           email: normalizedEmail,
-          password: passwordHash,
+          password: null,
           isActive: true,
           isVerified: false,
-          resetToken: onboardingMarker,
+          onboardingInviteTokenHash: hashInviteToken(inviteToken),
+          onboardingInviteExpiresAt: inviteExpiry,
+          onboardingInviteSentAt: new Date(),
         },
       });
 
@@ -475,15 +460,11 @@ const onboardUser = async (req: AuthRequest, res: any) => {
       return { user, profile, provisioning };
     });
 
-    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || "http://localhost:8080";
-    const loginUrl = `${frontendUrl.replace(/\/$/, "")}/auth`;
-
     const emailResult = await sendOnboardingEmail({
       to: normalizedEmail,
       fullName: `${resolvedFirstName} ${resolvedLastName}`.trim(),
-      temporaryPassword,
-      loginUrl,
-      expiresAt: tempPasswordExpiry,
+      inviteUrl: buildInviteUrl(inviteToken),
+      expiresAt: inviteExpiry,
     });
 
     const responsePayload: Record<string, unknown> = {
@@ -501,7 +482,7 @@ const onboardUser = async (req: AuthRequest, res: any) => {
         checklistId: created.provisioning.checklistId,
       },
       emailDelivery: emailResult.delivered ? "sent" : "not_sent",
-      temporaryPasswordExpiresAt: tempPasswordExpiry.toISOString(),
+      inviteExpiresAt: inviteExpiry.toISOString(),
     };
 
     if (!emailResult.delivered) {
@@ -524,12 +505,236 @@ const onboardUser = async (req: AuthRequest, res: any) => {
 router.post("/register", ...canOnboardUsers, onboardUser);
 router.post("/onboard-user", ...canOnboardUsers, onboardUser);
 
+router.get("/invite/validate", async (req, res) => {
+  const token = String(req.query.token || "").trim();
+  if (!token) {
+    return res.status(400).json({ error: "Invitation token is required" });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { onboardingInviteTokenHash: hashInviteToken(token) },
+    select: {
+      id: true,
+      email: true,
+      isActive: true,
+      onboardingInviteExpiresAt: true,
+      profile: {
+        select: {
+          firstName: true,
+          lastName: true,
+          onboardingStatus: true,
+          onboardingChecklistCompleted: true,
+          inductionCompleted: true,
+        },
+      },
+    },
+  });
+
+  if (!user) {
+    return res.status(401).json({
+      error: "This invitation link is invalid or has already been used.",
+      code: "INVITE_INVALID",
+    });
+  }
+  if (!user.isActive) {
+    return res.status(403).json({
+      error: "This account is inactive. Contact HR for help.",
+      code: "ACCOUNT_INACTIVE",
+    });
+  }
+  if (!user.onboardingInviteExpiresAt || isExpired(user.onboardingInviteExpiresAt)) {
+    return res.status(410).json({
+      error: "This invitation link has expired. Ask HR to resend your invitation.",
+      code: "INVITE_EXPIRED",
+    });
+  }
+
+  return res.json({
+    valid: true,
+    email: user.email,
+    name: user.profile
+      ? `${user.profile.firstName} ${user.profile.lastName}`.trim()
+      : undefined,
+    expiresAt: user.onboardingInviteExpiresAt.toISOString(),
+  });
+});
+
+router.post("/accept-invite", async (req, res) => {
+  const { token, newPassword } = req.body || {};
+  if (!token || !newPassword) {
+    return res.status(400).json({ error: "token and newPassword are required" });
+  }
+  if (String(newPassword).length < MIN_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+    });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { onboardingInviteTokenHash: hashInviteToken(String(token)) },
+      include: {
+        profile: {
+          select: {
+            id: true,
+            onboardingStatus: true,
+            onboardingChecklistCompleted: true,
+            inductionCompleted: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        error: "This invitation link is invalid or has already been used.",
+        code: "INVITE_INVALID",
+      });
+    }
+    if (!user.isActive) {
+      return res.status(403).json({
+        error: "This account is inactive. Contact HR for help.",
+        code: "ACCOUNT_INACTIVE",
+      });
+    }
+    if (!user.onboardingInviteExpiresAt || isExpired(user.onboardingInviteExpiresAt)) {
+      return res.status(410).json({
+        error: "This invitation link has expired. Ask HR to resend your invitation.",
+        code: "INVITE_EXPIRED",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        resetToken: null,
+        onboardingInviteTokenHash: null,
+        onboardingInviteExpiresAt: null,
+        onboardingInviteSentAt: null,
+        isVerified: true,
+        lastLogin: new Date(),
+      },
+    });
+
+    if (user.profile?.id) {
+      await ensureOnboardingProvisioning({ profileId: user.profile.id }).catch(
+        () => null
+      );
+    }
+
+    const refreshedUser = await loadAuthUser(user.email);
+    if (!refreshedUser) {
+      return res.status(500).json({ error: "Failed to complete invitation setup" });
+    }
+
+    const { authRoles } = buildAuthSnapshot(refreshedUser);
+    const session = await createSession(refreshedUser.id);
+    const accessToken = buildAccessToken(refreshedUser, authRoles, session.token);
+
+    return res.json({
+      token: accessToken,
+      sessionExpiresAt: session.expiresAt.toISOString(),
+      user: buildAuthUserPayload(refreshedUser),
+    });
+  } catch (error: any) {
+    console.error("Accept invite error:", error);
+    return res.status(500).json({ error: "Failed to accept invitation" });
+  }
+});
+
+router.post("/resend-invite", ...canOnboardUsers, async (req, res) => {
+  try {
+    const profileId = parsePositiveInt(req.body?.profileId ?? req.body?.profile_id);
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!profileId && !email) {
+      return res.status(400).json({ error: "profileId or email is required" });
+    }
+
+    const profile = profileId
+      ? await prisma.profile.findUnique({
+          where: { id: profileId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            onboardingStatus: true,
+            onboardingChecklistCompleted: true,
+            inductionCompleted: true,
+            user: { select: { id: true, email: true, isActive: true } },
+          },
+        })
+      : await prisma.profile.findFirst({
+          where: { user: { email } },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            onboardingStatus: true,
+            onboardingChecklistCompleted: true,
+            inductionCompleted: true,
+            user: { select: { id: true, email: true, isActive: true } },
+          },
+        });
+
+    if (!profile?.user) {
+      return res.status(404).json({ error: "Employee account not found" });
+    }
+    if (!profile.user.isActive) {
+      return res.status(403).json({ error: "Employee account is inactive" });
+    }
+    const onboardingComplete =
+      String(profile.onboardingStatus || "").toLowerCase() === "completed" &&
+      profile.onboardingChecklistCompleted &&
+      profile.inductionCompleted;
+    if (onboardingComplete) {
+      return res.status(409).json({ error: "Employee onboarding is already complete" });
+    }
+
+    const inviteToken = createInviteToken();
+    const inviteExpiry = createInviteExpiry();
+    await prisma.user.update({
+      where: { id: profile.user.id },
+      data: {
+        onboardingInviteTokenHash: hashInviteToken(inviteToken),
+        onboardingInviteExpiresAt: inviteExpiry,
+        onboardingInviteSentAt: new Date(),
+      },
+    });
+
+    const emailResult = await sendOnboardingEmail({
+      to: profile.user.email,
+      fullName: `${profile.firstName} ${profile.lastName}`.trim(),
+      inviteUrl: buildInviteUrl(inviteToken),
+      expiresAt: inviteExpiry,
+    });
+
+    return res.json({
+      message: "Invitation resent",
+      emailDelivery: emailResult.delivered ? "sent" : "not_sent",
+      ...(emailResult.delivered ? {} : { emailDeliveryReason: emailResult.reason || "unknown" }),
+      inviteExpiresAt: inviteExpiry.toISOString(),
+    });
+  } catch (error: any) {
+    console.error("Resend invite error:", error);
+    return res.status(500).json({ error: "Failed to resend invitation" });
+  }
+});
+
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
     return res.status(400).json({ error: "Email and password required" });
   try {
     let user = await loadAuthUser(String(email).trim().toLowerCase());
+    if (user?.onboardingInviteTokenHash) {
+      return res.status(403).json({
+        error:
+          "Use the invitation link sent to your email to set your password and start onboarding.",
+        code: "INVITE_PENDING",
+      });
+    }
     if (!user || !user.password)
       return res.status(401).json({ error: "Invalid credentials" });
     if (isUserBlockedFromLogin(user)) {

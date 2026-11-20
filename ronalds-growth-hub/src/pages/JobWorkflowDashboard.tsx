@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { documentsAPI, jobsAPI, timeEntriesAPI } from '@/lib/api';
+import { documentsAPI, employeesAPI, jobsAPI, timeEntriesAPI } from '@/lib/api';
 import { DOCUMENT_TYPES } from '@/lib/api/documents';
 import { ApiError } from '@/lib/api/client';
 import { scopeJobsForViewer } from '@/lib/jobs/scope';
@@ -23,6 +23,7 @@ import type {
   JobInvoiceMilestoneTrackingItem,
   JobWorkflowTrackingResponse,
 } from '@/lib/api/types';
+import type { JobWorkingDocumentLink } from '@/lib/api/jobs';
 import {
   ArrowLeft,
   Briefcase,
@@ -36,6 +37,9 @@ import {
   Flag,
   Plus,
   Trash2,
+  Link2,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -51,7 +55,7 @@ const statusColors: Record<string, string> = {
 const WORKFLOW_STATUS_TRANSITIONS: Record<string, Array<Job['status']>> = {
   planned: ['in_progress', 'cancelled'],
   in_progress: ['on_hold', 'completed', 'cancelled'],
-  on_hold: ['in_progress', 'cancelled'],
+  on_hold: ['in_progress', 'completed', 'cancelled'],
   completed: [],
   cancelled: [],
 };
@@ -156,10 +160,10 @@ const REQUIRED_DOCUMENTS_BY_TYPE: Record<RequiredDocumentType, RequiredDocumentD
 };
 
 const REQUIRED_DOCUMENT_TYPES_BY_JOB_STATUS: Partial<Record<Job['status'], RequiredDocumentType[]>> = {
-  planned: ['work_plan', 'budget'],
-  in_progress: ['work_plan', 'budget'],
-  on_hold: ['work_plan', 'budget'],
-  completed: ['work_plan', 'budget', 'draft_report', 'final_report'],
+  planned: [],
+  in_progress: [],
+  on_hold: [],
+  completed: ['draft_report', 'final_report'],
 };
 
 const MILESTONE_DOCUMENT_TYPE_OPTIONS = [
@@ -266,6 +270,26 @@ export default function JobWorkflowDashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [staff, setStaff] = useState<JobStaffAssignment[]>([]);
+  const [availableStaff, setAvailableStaff] = useState<any[]>([]);
+  const [assignmentDraft, setAssignmentDraft] = useState({
+    employeeProfileId: '',
+    assignedHourlyRate: '',
+    billableAllocatedHours: '',
+    nonBillableAllocatedHours: '',
+  });
+  const [assignmentBudgetDrafts, setAssignmentBudgetDrafts] = useState<
+    Record<number, { billable: string; nonBillable: string }>
+  >({});
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
+  const [workingLinks, setWorkingLinks] = useState<JobWorkingDocumentLink[]>([]);
+  const [linkDraft, setLinkDraft] = useState({
+    linkType: 'milestone_requirement',
+    label: '',
+    url: '',
+    milestoneTaskId: '',
+    notes: '',
+  });
+  const [linkBusy, setLinkBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState<Job['status'] | null>(null);
@@ -421,13 +445,26 @@ export default function JobWorkflowDashboard() {
     try {
       setTrackingLoading(true);
       const job = await jobsAPI.getById(jobId);
-      const [staffAssignments, tracking, invoiceMilestones] = await Promise.all([
+      const [staffAssignments, tracking, invoiceMilestones, links] = await Promise.all([
         jobsAPI.getStaff(jobId),
         jobsAPI.getTracking(jobId),
         jobsAPI.getInvoiceMilestones(jobId),
+        jobsAPI.getWorkingLinks(jobId),
       ]);
       setSelectedJob(job);
       setStaff(staffAssignments);
+      setWorkingLinks(links);
+      setAssignmentBudgetDrafts(
+        Object.fromEntries(
+          staffAssignments.map((assignment) => [
+            assignment.id,
+            {
+              billable: String(assignment.billableAllocatedHours || 0),
+              nonBillable: String(assignment.nonBillableAllocatedHours || 0),
+            },
+          ])
+        )
+      );
       setJobTracking(tracking);
       setPendingMilestoneUploads({});
       setPendingMilestoneDocumentTypes({});
@@ -702,9 +739,15 @@ export default function JobWorkflowDashboard() {
     [jobDocuments]
   );
 
-  const missingPartnerReviewDocuments = useMemo(
-    () => partnerReviewDocumentChecklist.filter((item) => !item.latestDocument),
-    [partnerReviewDocumentChecklist]
+  const missingPartnerReviewLinks = useMemo(
+    () =>
+      (['work_plan', 'budget'] as const).filter(
+        (type) =>
+          !workingLinks.some(
+            (link) => link.linkType === type && link.reviewStatus !== 'rejected'
+          )
+      ),
+    [workingLinks]
   );
 
   const jobTimeline = useMemo(() => {
@@ -1174,36 +1217,11 @@ export default function JobWorkflowDashboard() {
       return;
     }
 
-    let latestDocuments = jobDocuments;
-    const pendingPartnerReviewUploads = missingPartnerReviewDocuments.filter(
-      (item) => pendingUploads[item.type]
-    );
-
-    if (pendingPartnerReviewUploads.length > 0) {
-      for (const requirement of pendingPartnerReviewUploads) {
-        const uploaded = await uploadRequiredDocument(requirement.type, {
-          suppressSuccessToast: true,
-        });
-        if (!uploaded) {
-          return;
-        }
-      }
-      latestDocuments = await loadJobDocuments(selectedJob.id);
-    }
-
-    const remainingPartnerReviewDocuments = ['work_plan', 'budget']
-      .map((type) => REQUIRED_DOCUMENTS_BY_TYPE[type as RequiredDocumentType])
-      .filter(
-        (requirement) =>
-          !latestDocuments.some((doc) => documentMatchesRequirement(doc.documentType, requirement))
-      );
-
-    if (remainingPartnerReviewDocuments.length > 0) {
+    if (missingPartnerReviewLinks.length > 0) {
       toast({
-        title: 'Required Documents Missing',
-        description: `Upload ${remainingPartnerReviewDocuments
-          .map((item) => item.label)
-          .join(' and ')} before submitting costing for partner review.`,
+        title: 'Working links required',
+        description:
+          'Add Google Drive links for the work plan and budget/cost estimate before submitting costing for partner review.',
         variant: 'destructive',
       });
       return;
@@ -1281,6 +1299,177 @@ export default function JobWorkflowDashboard() {
       setCostingSaving(false);
     }
   };
+
+  const handleAssignStaff = async () => {
+    if (!selectedJob || !assignmentDraft.employeeProfileId) return;
+    const employee = availableStaff.find(
+      (item) => String(item.id) === assignmentDraft.employeeProfileId
+    );
+    const roleId = Number(employee?.role?.id || 0);
+    if (!roleId) {
+      toast({
+        title: 'Role required',
+        description: 'Set a billing role on the employee before assigning them.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      setAssignmentBusy(true);
+      await jobsAPI.assignStaff(selectedJob.id, {
+        employeeProfileId: Number(assignmentDraft.employeeProfileId),
+        assignedRoleId: roleId,
+        assignedHourlyRate: Number(
+          assignmentDraft.assignedHourlyRate || employee?.role?.billingRate || 0
+        ),
+        billableAllocatedHours: Number(assignmentDraft.billableAllocatedHours || 0),
+        nonBillableAllocatedHours: Number(
+          assignmentDraft.nonBillableAllocatedHours || 0
+        ),
+      });
+      setAssignmentDraft({
+        employeeProfileId: '',
+        assignedHourlyRate: '',
+        billableAllocatedHours: '',
+        nonBillableAllocatedHours: '',
+      });
+      await loadJobDetails(selectedJob.id);
+      toast({ title: 'Staff assigned', description: 'Budgets saved for this assignment.' });
+    } catch (error: any) {
+      toast({
+        title: 'Unable to assign staff',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAssignmentBusy(false);
+    }
+  };
+
+  const handleSaveAssignmentBudget = async (assignment: JobStaffAssignment) => {
+    if (!selectedJob) return;
+    const draft = assignmentBudgetDrafts[assignment.id];
+    if (!draft) return;
+    try {
+      setAssignmentBusy(true);
+      await jobsAPI.updateStaff(selectedJob.id, assignment.id, {
+        billableAllocatedHours: Number(draft.billable || 0),
+        nonBillableAllocatedHours: Number(draft.nonBillable || 0),
+      });
+      await loadJobDetails(selectedJob.id);
+      toast({ title: 'Budgets updated', description: 'Assignment hour budgets were saved.' });
+    } catch (error: any) {
+      toast({
+        title: 'Unable to update budgets',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAssignmentBusy(false);
+    }
+  };
+
+  const handleRemoveAssignment = async (assignment: JobStaffAssignment) => {
+    if (!selectedJob) return;
+    try {
+      setAssignmentBusy(true);
+      await jobsAPI.removeStaff(selectedJob.id, assignment.id);
+      await loadJobDetails(selectedJob.id);
+      toast({ title: 'Assignment removed', description: 'Staff removed from this job.' });
+    } catch (error: any) {
+      toast({
+        title: 'Unable to remove assignment',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAssignmentBusy(false);
+    }
+  };
+
+  const handleAddWorkingLink = async () => {
+    if (!selectedJob) return;
+    if (!linkDraft.label.trim() || !linkDraft.url.trim()) {
+      toast({
+        title: 'Link required',
+        description: 'Add a label and a Google Drive/Docs URL.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      setLinkBusy(true);
+      await jobsAPI.addWorkingLink(selectedJob.id, {
+        linkType: linkDraft.linkType as any,
+        label: linkDraft.label.trim(),
+        url: linkDraft.url.trim(),
+        milestoneTaskId: linkDraft.milestoneTaskId
+          ? Number(linkDraft.milestoneTaskId)
+          : undefined,
+        notes: linkDraft.notes || undefined,
+      });
+      setLinkDraft({
+        linkType: 'milestone_requirement',
+        label: '',
+        url: '',
+        milestoneTaskId: '',
+        notes: '',
+      });
+      setWorkingLinks(await jobsAPI.getWorkingLinks(selectedJob.id));
+      toast({ title: 'Link added', description: 'The working document link is awaiting review.' });
+    } catch (error: any) {
+      toast({
+        title: 'Unable to add link',
+        description: error?.message || 'Only Google Drive/Docs links are accepted.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  const handleReviewWorkingLink = async (
+    link: JobWorkingDocumentLink,
+    status: 'approved' | 'rejected'
+  ) => {
+    if (!selectedJob) return;
+    const notes =
+      window.prompt(
+        status === 'approved' ? 'Review note (optional):' : 'Reason for rejection:'
+      ) || '';
+    if (status === 'rejected' && !notes.trim()) {
+      toast({
+        title: 'Reason required',
+        description: 'Add a reason before rejecting the link.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      setLinkBusy(true);
+      await jobsAPI.reviewWorkingLink(selectedJob.id, link.id, { status, notes });
+      setWorkingLinks(await jobsAPI.getWorkingLinks(selectedJob.id));
+      toast({
+        title: status === 'approved' ? 'Link approved' : 'Link rejected',
+        description: 'The working document review was recorded.',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Unable to review link',
+        description: error?.message || 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    employeesAPI
+      .list({ page: 1, pageSize: 100, status: 'active' })
+      .then((response) => setAvailableStaff(response.data || []))
+      .catch(() => setAvailableStaff([]));
+  }, []);
 
   useEffect(() => {
     loadJobs();
@@ -2387,31 +2576,337 @@ export default function JobWorkflowDashboard() {
                         <CardHeader>
                           <CardTitle className="flex items-center gap-2">
                             <Users className="h-5 w-5" />
-                            Staff Assignments
+                            Staff Assignments & Hour Budgets
                           </CardTitle>
+                          <CardDescription>
+                            Billable and non-billable budgets are tracked separately for each assignment.
+                          </CardDescription>
                         </CardHeader>
-                        <CardContent className="space-y-2">
+                        <CardContent className="space-y-3">
+                          {canEditCosting && (
+                            <div className="grid gap-2 rounded-lg border p-3 md:grid-cols-5 md:items-end">
+                              <div className="md:col-span-2">
+                                <Label className="text-xs">Assign staff</Label>
+                                <Select
+                                  value={assignmentDraft.employeeProfileId}
+                                  onValueChange={(value) => {
+                                    const employee = availableStaff.find(
+                                      (item) => String(item.id) === value
+                                    );
+                                    setAssignmentDraft((prev) => ({
+                                      ...prev,
+                                      employeeProfileId: value,
+                                      assignedHourlyRate: employee?.role?.billingRate
+                                        ? String(employee.role.billingRate)
+                                        : prev.assignedHourlyRate,
+                                    }));
+                                  }}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select staff" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {availableStaff
+                                      .filter(
+                                        (employee) =>
+                                          !staff.some(
+                                            (assignment) =>
+                                              assignment.employeeProfileId === employee.id
+                                          )
+                                      )
+                                      .map((employee) => (
+                                        <SelectItem key={employee.id} value={String(employee.id)}>
+                                          {employee.firstName} {employee.lastName}
+                                        </SelectItem>
+                                      ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">Billable hours</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.25"
+                                  value={assignmentDraft.billableAllocatedHours}
+                                  onChange={(event) =>
+                                    setAssignmentDraft((prev) => ({
+                                      ...prev,
+                                      billableAllocatedHours: event.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Non-billable hours</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.25"
+                                  value={assignmentDraft.nonBillableAllocatedHours}
+                                  onChange={(event) =>
+                                    setAssignmentDraft((prev) => ({
+                                      ...prev,
+                                      nonBillableAllocatedHours: event.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <Button
+                                onClick={handleAssignStaff}
+                                disabled={assignmentBusy || !assignmentDraft.employeeProfileId}
+                              >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Assign
+                              </Button>
+                            </div>
+                          )}
+
                           {staff.length === 0 ? (
                             <p className="text-sm text-muted-foreground">No staff assigned.</p>
                           ) : (
-                            staff.map((assignment) => (
-                              <div
-                                key={assignment.id}
-                                className="flex items-center justify-between border-b pb-2 last:border-0"
+                            staff.map((assignment) => {
+                              const draft = assignmentBudgetDrafts[assignment.id] || {
+                                billable: String(assignment.billableAllocatedHours || 0),
+                                nonBillable: String(assignment.nonBillableAllocatedHours || 0),
+                              };
+                              return (
+                                <div key={assignment.id} className="rounded-lg border p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <p className="font-medium">
+                                        {assignment.employee
+                                          ? `${assignment.employee.firstName} ${assignment.employee.lastName}`
+                                          : 'Employee'}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {assignment.role?.name || 'Role not set'} • KES{' '}
+                                        {Number(assignment.assignedHourlyRate || 0).toLocaleString()}
+                                        /hr
+                                      </p>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      Billable {Number(assignment.billableAllocatedHours || 0).toFixed(1)}h
+                                      {' / '}
+                                      Non-billable{' '}
+                                      {Number(assignment.nonBillableAllocatedHours || 0).toFixed(1)}h
+                                    </div>
+                                  </div>
+                                  {canEditCosting && (
+                                    <div className="mt-2 grid gap-2 md:grid-cols-4 md:items-end">
+                                      <div>
+                                        <Label className="text-xs">Billable budget</Label>
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          step="0.25"
+                                          value={draft.billable}
+                                          onChange={(event) =>
+                                            setAssignmentBudgetDrafts((prev) => ({
+                                              ...prev,
+                                              [assignment.id]: {
+                                                ...draft,
+                                                billable: event.target.value,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                      </div>
+                                      <div>
+                                        <Label className="text-xs">Non-billable budget</Label>
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          step="0.25"
+                                          value={draft.nonBillable}
+                                          onChange={(event) =>
+                                            setAssignmentBudgetDrafts((prev) => ({
+                                              ...prev,
+                                              [assignment.id]: {
+                                                ...draft,
+                                                nonBillable: event.target.value,
+                                              },
+                                            }))
+                                          }
+                                        />
+                                      </div>
+                                      <Button
+                                        variant="outline"
+                                        onClick={() => handleSaveAssignmentBudget(assignment)}
+                                        disabled={assignmentBusy}
+                                      >
+                                        Save budgets
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        className="text-red-600"
+                                        onClick={() => handleRemoveAssignment(assignment)}
+                                        disabled={assignmentBusy}
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Remove
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Link2 className="h-5 w-5" />
+                            Working Document Links
+                          </CardTitle>
+                          <CardDescription>
+                            Google Drive/Docs links only. Milestone links need manager approval;
+                            work plan, budget, and cost estimates need partner approval.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <div className="grid gap-2 rounded-lg border p-3 md:grid-cols-6 md:items-end">
+                            <div>
+                              <Label className="text-xs">Type</Label>
+                              <Select
+                                value={linkDraft.linkType}
+                                onValueChange={(value) =>
+                                  setLinkDraft((prev) => ({ ...prev, linkType: value }))
+                                }
                               >
-                                <div>
-                                  <p className="font-medium">
-                                    {assignment.employee
-                                      ? `${assignment.employee.firstName} ${assignment.employee.lastName}`
-                                      : 'Employee'}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {assignment.role?.name || 'Role not set'}
-                                  </p>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="milestone_requirement">Milestone requirement</SelectItem>
+                                  <SelectItem value="work_plan">Work plan</SelectItem>
+                                  <SelectItem value="budget">Budget</SelectItem>
+                                  <SelectItem value="cost_estimate">Cost estimate</SelectItem>
+                                  <SelectItem value="proposal">Proposal</SelectItem>
+                                  <SelectItem value="other">Other</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label className="text-xs">Label</Label>
+                              <Input
+                                value={linkDraft.label}
+                                onChange={(event) =>
+                                  setLinkDraft((prev) => ({ ...prev, label: event.target.value }))
+                                }
+                                placeholder="e.g. Audit work plan"
+                              />
+                            </div>
+                            <div className="md:col-span-2">
+                              <Label className="text-xs">Google Drive/Docs URL</Label>
+                              <Input
+                                value={linkDraft.url}
+                                onChange={(event) =>
+                                  setLinkDraft((prev) => ({ ...prev, url: event.target.value }))
+                                }
+                                placeholder="https://docs.google.com/..."
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs">Milestone</Label>
+                              <Select
+                                value={linkDraft.milestoneTaskId || 'none'}
+                                onValueChange={(value) =>
+                                  setLinkDraft((prev) => ({
+                                    ...prev,
+                                    milestoneTaskId: value === 'none' ? '' : value,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Optional" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">Not milestone-specific</SelectItem>
+                                  {(invoiceTracking?.milestones || []).map((milestone) => (
+                                    <SelectItem key={milestone.taskId} value={String(milestone.taskId)}>
+                                      {milestone.title}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <Button onClick={handleAddWorkingLink} disabled={linkBusy}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add link
+                            </Button>
+                          </div>
+
+                          {workingLinks.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              No working document links added.
+                            </p>
+                          ) : (
+                            workingLinks.map((link) => (
+                              <div
+                                key={link.id}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-medium">{link.label}</span>
+                                    <Badge variant="outline">{link.linkType.replace(/_/g, ' ')}</Badge>
+                                    <Badge
+                                      variant={
+                                        link.reviewStatus === 'approved'
+                                          ? 'default'
+                                          : link.reviewStatus === 'rejected'
+                                            ? 'destructive'
+                                            : 'secondary'
+                                      }
+                                    >
+                                      {link.reviewStatus}
+                                    </Badge>
+                                  </div>
+                                  <a
+                                    href={link.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-xs text-primary underline"
+                                  >
+                                    Open Google link
+                                  </a>
+                                  {link.milestoneTask ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      Milestone: {link.milestoneTask.title}
+                                    </p>
+                                  ) : null}
+                                  {link.addedBy ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      Added by {link.addedBy.firstName} {link.addedBy.lastName}
+                                    </p>
+                                  ) : null}
                                 </div>
-                                <div className="text-sm font-medium">
-                                  KES {Number(assignment.assignedHourlyRate || 0).toLocaleString()}
-                                </div>
+                                {link.reviewStatus === 'pending' && (
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleReviewWorkingLink(link, 'approved')}
+                                      disabled={linkBusy}
+                                    >
+                                      <CheckCircle2 className="mr-1 h-4 w-4" />
+                                      Approve
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-red-600"
+                                      onClick={() => handleReviewWorkingLink(link, 'rejected')}
+                                      disabled={linkBusy}
+                                    >
+                                      <XCircle className="mr-1 h-4 w-4" />
+                                      Reject
+                                    </Button>
+                                  </div>
+                                )}
                               </div>
                             ))
                           )}
@@ -2420,21 +2915,62 @@ export default function JobWorkflowDashboard() {
 
                       <Card>
                         <CardHeader>
-                          <CardTitle>Project Evaluations</CardTitle>
-                          <CardDescription>Submit job-based reviews for assigned staff.</CardDescription>
+                          <CardTitle>Allocation & Write-off Reconciliation</CardTitle>
+                          <CardDescription>
+                            Billable and non-billable budgets against effective approved time.
+                          </CardDescription>
                         </CardHeader>
-                        <CardContent className="flex items-center justify-between gap-4">
-                          <div className="text-sm text-muted-foreground">
-                            Open the evaluation form for this job and record team performance.
-                          </div>
-                          <Button
-                            variant="outline"
-                            onClick={() => navigate(`/project-evaluations?jobId=${selectedJob.id}`)}
-                          >
-                            Evaluate Job
-                          </Button>
+                        <CardContent>
+                          {!trackingSnapshot?.allocation ? (
+                            <p className="text-sm text-muted-foreground">
+                              Allocation metrics are not available yet.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3 xl:grid-cols-6">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Billable budget</p>
+                                <p className="font-semibold">
+                                  {trackingSnapshot.allocation.billableActualHours.toFixed(1)}h /{' '}
+                                  {trackingSnapshot.allocation.billableAllocatedHours.toFixed(1)}h
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Non-billable budget</p>
+                                <p className="font-semibold">
+                                  {trackingSnapshot.allocation.nonBillableActualHours.toFixed(1)}h /{' '}
+                                  {trackingSnapshot.allocation.nonBillableAllocatedHours.toFixed(1)}h
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Approved billable excess</p>
+                                <p className="font-semibold text-emerald-700">
+                                  {trackingSnapshot.allocation.approvedBillableExcessHours.toFixed(1)}h
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Approved non-billable excess</p>
+                                <p className="font-semibold text-amber-700">
+                                  {trackingSnapshot.allocation.approvedNonBillableExcessHours.toFixed(1)}h
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Rejected excess (void)</p>
+                                <p className="font-semibold text-red-600">
+                                  {trackingSnapshot.allocation.rejectedExcessHours.toFixed(1)}h
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Total write-off</p>
+                                <p className="font-semibold">
+                                  {trackingSnapshot.allocation.totalWriteOffHours.toFixed(1)}h
+                                </p>
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
+
+
                     </>
                   )}
                 </TabsContent>
@@ -3294,7 +3830,7 @@ export default function JobWorkflowDashboard() {
                                 disabled={
                                   Boolean(partnerReviewSaving) ||
                                   costingStatus !== 'submitted' ||
-                                  missingPartnerReviewDocuments.length > 0
+                                  missingPartnerReviewLinks.length > 0
                                 }
                               >
                                 {partnerReviewSaving === 'approved' ? (
@@ -3747,6 +4283,7 @@ export default function JobWorkflowDashboard() {
               if (!open) setPreviewDocument(null);
             }}
             title={previewDocument?.fileName || 'Job Document'}
+            documentId={previewDocument?.id}
             filePath={previewDocument?.filePath}
             fileName={previewDocument?.fileName}
             mimeType={previewDocument?.mimeType}
@@ -4970,7 +5507,7 @@ export default function JobWorkflowDashboard() {
                                 disabled={
                                   Boolean(partnerReviewSaving) ||
                                   costingStatus !== 'submitted' ||
-                                  missingPartnerReviewDocuments.length > 0
+                                  missingPartnerReviewLinks.length > 0
                                 }
                               >
                                 {partnerReviewSaving === 'approved' ? (
@@ -5032,25 +5569,6 @@ export default function JobWorkflowDashboard() {
                     </Card>
                   )}
 
-                  {!isEmployeeExperience && (
-                    <Card>
-                    <CardHeader>
-                      <CardTitle>Project Evaluations</CardTitle>
-                      <CardDescription>Submit job-based reviews for assigned staff.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex items-center justify-between">
-                      <div className="text-sm text-muted-foreground">
-                        Open the evaluation form for this job and record team performance.
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => navigate(`/project-evaluations?jobId=${selectedJob.id}`)}
-                      >
-                        Evaluate Job
-                      </Button>
-                    </CardContent>
-                    </Card>
-                  )}
 
                   {!isEmployeeExperience && (
                     <Card>
@@ -5467,6 +5985,7 @@ export default function JobWorkflowDashboard() {
             if (!open) setPreviewDocument(null);
           }}
           title={previewDocument?.fileName || 'Job Document'}
+          documentId={previewDocument?.id}
           filePath={previewDocument?.filePath}
           fileName={previewDocument?.fileName}
           mimeType={previewDocument?.mimeType}

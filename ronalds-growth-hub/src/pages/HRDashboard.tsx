@@ -189,7 +189,7 @@ const HRDashboard = () => {
       first_name: profile.firstName ?? profile.first_name ?? "",
       last_name: profile.lastName ?? profile.last_name ?? "",
       email: user.email ?? profile.email ?? "",
-      position: profile.positionTitle ?? profile.position ?? profile.role?.name ?? "",
+      position: profile.positionTitle ?? profile.position ?? "",
       department_id: profile.departmentId ?? profile.department_id ?? "",
       phone: profile.phoneNumber ?? profile.phone_number ?? "",
     } as Profile;
@@ -368,17 +368,8 @@ const HRDashboard = () => {
         0
       );
 
-      const clientEvalsPayload = await apiFetch(
-        'GET',
-        `/client-evaluations?employeeIds=${profileId}`
-      );
-      const clientEvals = asRows(clientEvalsPayload);
-      const avgClientRating = clientEvals.length > 0
-        ? clientEvals.reduce(
-            (sum, row) => sum + toNumber(row.overallRating ?? row.overall_rating),
-            0
-          ) / clientEvals.length
-        : 0;
+      const clientEvals: any[] = [];
+      const avgClientRating = 0;
 
       const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
       const financialScore = Math.min(100, Math.round(utilizationRate));
@@ -555,7 +546,6 @@ const HRDashboard = () => {
   const defaultTab = enabledTabs[0] || "personal";
   const canUseDepartmentTools = hasModuleAccess("dashboard", "read");
   const canManageEmployees = hasModuleAccess("users", "read");
-  const canManageEvaluations = hasModuleAccess("evaluations", "read");
   const canViewFinanceTools = hasModuleAccess("finance", "read");
   const canViewAuditLogs = hasModuleAccess("reports", "read");
   const hrJobMetrics = [
@@ -774,22 +764,6 @@ const HRDashboard = () => {
                 </CardContent>
               </Card>
 
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Project Eval Score</CardTitle>
-                  <Award className="h-4 w-4 text-warning" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-foreground">
-                    {performance?.projectEvaluationScore || 0}%
-                  </div>
-                  <p className="text-xs text-muted-foreground">Job-based reviews</p>
-                  <MiniStatGraph
-                    value={performance?.projectEvaluationScore || 0}
-                    baseline={performance?.learningGrowthScore || 0}
-                  />
-                </CardContent>
-              </Card>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -856,20 +830,6 @@ const HRDashboard = () => {
                         <div 
                           className="bg-gradient-to-r from-secondary to-accent h-2 rounded-full" 
                           style={{ width: `${performance?.learningGrowthScore || 0}%` }} 
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="font-medium">Project Evaluations</span>
-                        <span className="text-warning font-semibold">
-                          {performance?.projectEvaluationScore || 0}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-muted rounded-full h-2">
-                        <div
-                          className="bg-gradient-to-r from-warning to-destructive h-2 rounded-full"
-                          style={{ width: `${performance?.projectEvaluationScore || 0}%` }}
                         />
                       </div>
                     </div>
@@ -958,25 +918,6 @@ const HRDashboard = () => {
                   </div>
                   <p className="text-xs text-muted-foreground">Active employees</p>
                   <MiniStatGraph value={companyMetrics?.totalEmployees || 0} />
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Active Evaluations</CardTitle>
-                  <Calendar className="h-4 w-4 text-info" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-foreground">
-                    {companyMetrics?.activeEvaluations || 0}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {companyMetrics?.pendingEvaluations || 0} pending completion
-                  </p>
-                  <MiniStatGraph
-                    value={companyMetrics?.activeEvaluations || 0}
-                    baseline={companyMetrics?.pendingEvaluations || 0}
-                  />
                 </CardContent>
               </Card>
 
@@ -1531,26 +1472,6 @@ const HRDashboard = () => {
                     <Button className="w-full">
                       <Users className="h-4 w-4 mr-2" />
                       Manage Employees
-                    </Button>
-                  </Link>
-                </CardContent>
-              </Card>
-              )}
-
-              {canManageEvaluations && (
-              <Card className="hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Calendar className="h-5 w-5 text-primary" />
-                    Evaluation Cycles
-                  </CardTitle>
-                  <CardDescription>Create and manage review periods</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Link to="/evaluations/cycles">
-                    <Button className="w-full">
-                      <Calendar className="h-4 w-4 mr-2" />
-                      Manage Evaluations
                     </Button>
                   </Link>
                 </CardContent>

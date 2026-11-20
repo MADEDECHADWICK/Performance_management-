@@ -104,6 +104,21 @@ jest.mock("../controllers/job.controller", () => ({
     getJobWorkflowTracking: jest.fn((_req: any, res: any) =>
       res.status(200).json({ ok: "getJobWorkflowTracking" })
     ),
+    listWorkingLinks: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "listWorkingLinks" })
+    ),
+    createWorkingLink: jest.fn((_req: any, res: any) =>
+      res.status(201).json({ ok: "createWorkingLink" })
+    ),
+    updateWorkingLink: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "updateWorkingLink" })
+    ),
+    removeWorkingLink: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "removeWorkingLink" })
+    ),
+    reviewWorkingLink: jest.fn((_req: any, res: any) =>
+      res.status(200).json({ ok: "reviewWorkingLink" })
+    ),
   },
 }));
 

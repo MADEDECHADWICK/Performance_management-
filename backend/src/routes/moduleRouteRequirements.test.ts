@@ -54,7 +54,7 @@ describe("module route requirements registry", () => {
     expect(Array.isArray(MODULE_REQUIREMENTS_BY_MODULE.evaluations)).toBe(true);
     expect(
       MODULE_REQUIREMENTS_BY_MODULE.evaluations.some(
-        (item) => item.path === "/evaluation-templates"
+        (item) => item.path === "/employee-goals"
       )
     ).toBe(true);
   });

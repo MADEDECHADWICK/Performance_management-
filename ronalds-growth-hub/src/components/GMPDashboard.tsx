@@ -594,15 +594,6 @@ export default function GMPDashboard() {
       route: "/jobs?status=overdue",
     },
     {
-      label: "Evaluations pending over 30 days",
-      value: dashboardData?.alertsSummary?.pendingEvaluationsOver30Days ?? alertsData?.pendingEvaluations?.length ?? 0,
-      tone:
-        (dashboardData?.alertsSummary?.pendingEvaluationsOver30Days ?? alertsData?.pendingEvaluations?.length ?? 0) > 0
-          ? "destructive"
-          : "secondary",
-      route: "/evaluations",
-    },
-    {
       label: "Over-budget / extra time approvals",
       value: dashboardData?.alertsSummary?.pendingOverBudget ?? 0,
       tone: (dashboardData?.alertsSummary?.pendingOverBudget ?? 0) > 0 ? "default" : "secondary",
