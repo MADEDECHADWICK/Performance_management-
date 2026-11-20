@@ -51,11 +51,6 @@ type OverviewResponse = {
   pendingReviews: number;
 };
 
-type EvaluationsResponse = {
-  pendingReviews?: unknown[];
-  recentPerformance?: unknown[];
-};
-
 type TeamMemberView = {
   id: number;
   name: string;
@@ -67,7 +62,6 @@ type TeamMemberView = {
   utilizationRate: number;
   billableHours: number;
   totalHours: number;
-  lastEvaluation: string | null;
 };
 
 const TeamPerformance = () => {
@@ -77,15 +71,13 @@ const TeamPerformance = () => {
   const [filterRole, setFilterRole] = useState('all');
   const [sortBy, setSortBy] = useState('performanceScore');
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
-  const [evaluationSummary, setEvaluationSummary] = useState<EvaluationsResponse | null>(null);
 
   const fetchTeamPerformance = async () => {
     try {
       setLoading(true);
-      const [teamResponse, overviewResponse, evaluationsResponse] = await Promise.all([
+      const [teamResponse, overviewResponse] = await Promise.all([
         apiFetch<TeamResponse>('GET', '/manager-dashboard/team'),
         apiFetch<OverviewResponse>('GET', '/manager-dashboard/overview'),
-        apiFetch<EvaluationsResponse>('GET', '/manager-dashboard/evaluations'),
       ]);
 
       const membersById = new Map<number, TeamMemberApi>();
@@ -105,18 +97,15 @@ const TeamPerformance = () => {
           utilizationRate: Number(row.utilizationRate || 0),
           billableHours: Number(row.billableHoursThisMonth || 0),
           totalHours: Number(row.totalHoursThisMonth || 0),
-          lastEvaluation: row.lastReviewDate,
         };
       });
 
       setTeamMembers(mappedMembers);
       setOverview(overviewResponse);
-      setEvaluationSummary(evaluationsResponse);
     } catch (error) {
       console.error('Error fetching team performance:', error);
       setTeamMembers([]);
       setOverview(null);
-      setEvaluationSummary(null);
     } finally {
       setLoading(false);
     }
@@ -135,13 +124,11 @@ const TeamPerformance = () => {
       teamAvgUtilization: avg(teamMembers.map((member) => member.utilizationRate)),
       totalBillableHours: teamMembers.reduce((sum, member) => sum + member.billableHours, 0),
       activeProjects: Number(overview?.activeJobs || 0),
-      completedEvaluations: Array.isArray(evaluationSummary?.recentPerformance) ? evaluationSummary?.recentPerformance.length : 0,
-      pendingEvaluations: Array.isArray(evaluationSummary?.pendingReviews) ? evaluationSummary?.pendingReviews.length : Number(overview?.pendingReviews || 0),
       improvementNeeded: teamMembers.filter((member) => member.performanceScore < 70).length,
       highPerformers: teamMembers.filter((member) => member.performanceScore >= 85).length,
       totalMembers: count,
     };
-  }, [teamMembers, overview, evaluationSummary]);
+  }, [teamMembers, overview]);
 
   const filteredAndSortedMembers = useMemo(() => {
     return teamMembers
@@ -179,7 +166,7 @@ const TeamPerformance = () => {
       'Utilization (%)': Number(member.utilizationRate || 0).toFixed(2),
       'Billable Hours': member.billableHours,
       'Total Hours': member.totalHours,
-      'Last Evaluation': member.lastEvaluation ? new Date(member.lastEvaluation).toLocaleDateString() : '--',
+
     }));
 
     const workbook = XLSX.utils.book_new();
@@ -215,7 +202,7 @@ const TeamPerformance = () => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Team Performance</h1>
-            <p className="text-gray-600 mt-1">Live manager view for team performance, utilization, and evaluation coverage</p>
+            <p className="text-gray-600 mt-1">Live manager view for team performance and utilization</p>
           </div>
           <Button variant="outline" onClick={exportPerformanceReport}>
             <Download className="w-4 h-4 mr-2" />
@@ -297,16 +284,7 @@ const TeamPerformance = () => {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pending Reviews</CardTitle>
-              <Users className="w-4 h-4 text-purple-600" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{metrics.pendingEvaluations}</div>
-              <p className="text-xs text-gray-600">Active jobs: {metrics.activeProjects}</p>
-            </CardContent>
-          </Card>
+
         </div>
 
         <Card>

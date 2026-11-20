@@ -57,6 +57,17 @@ const proposalInclude = {
     },
     orderBy: { createdAt: "asc" as const },
   },
+  timeEntries: {
+    where: { isProposalPrep: true },
+    select: {
+      id: true,
+      hours: true,
+      dateWorked: true,
+      status: true,
+      isProposalPrep: true,
+    },
+    orderBy: { createdAt: "asc" as const },
+  },
 };
 
 const taskTemplates = [
@@ -279,6 +290,9 @@ const buildMutationData = (body: Record<string, unknown>): Prisma.ProposalUnchec
       data[field] = body[field] === null || body[field] === "" ? null : Number(body[field]);
     }
   }
+  if (data.timeTakenHours !== undefined && data.timeTakenHours !== null) {
+    data.timeTakenHours = Math.max(0, Number(data.timeTakenHours) || 0);
+  }
 
   const dateFields = [
     "proposalDate",
@@ -307,6 +321,79 @@ const buildMutationData = (body: Record<string, unknown>): Prisma.ProposalUnchec
   }
 
   return data as Prisma.ProposalUncheckedUpdateInput;
+};
+
+const syncProposalPrepTimeEntry = async (
+  tx: Prisma.TransactionClient | typeof prisma,
+  params: {
+    proposalId: number;
+    ownerProfileId: number | null | undefined;
+    hours: unknown;
+    date?: unknown;
+    proposalTitle: string;
+    fallbackDate?: Date | null;
+  }
+) => {
+  if (!params.ownerProfileId) return null;
+
+  const existing = await tx.timeEntry.findFirst({
+    where: {
+      proposalId: params.proposalId,
+      employeeProfileId: params.ownerProfileId,
+      isProposalPrep: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const parsedHours =
+    params.hours === undefined
+      ? existing
+        ? Number(existing.hours)
+        : undefined
+      : parseNumber(params.hours);
+
+  if (parsedHours === undefined || parsedHours <= 0) {
+    if (existing && ["pending", "rejected"].includes(existing.status)) {
+      await tx.timeEntry.delete({ where: { id: existing.id } });
+    }
+    return null;
+  }
+
+  const dateWorked =
+    parseDate(params.date) || existing?.dateWorked || params.fallbackDate || new Date();
+
+  if (existing) {
+    if (!["pending", "rejected"].includes(existing.status)) {
+      return existing;
+    }
+    return tx.timeEntry.update({
+      where: { id: existing.id },
+      data: {
+        hours: parsedHours,
+        dateWorked,
+        description: `Proposal preparation: ${params.proposalTitle}`,
+      },
+    });
+  }
+
+  return tx.timeEntry.create({
+    data: {
+      jobId: null,
+      proposalId: params.proposalId,
+      taskId: null,
+      employeeProfileId: params.ownerProfileId,
+      dateWorked,
+      hours: parsedHours,
+      billable: false,
+      nonBillableCategory: "internal",
+      isProposalPrep: true,
+      description: `Proposal preparation: ${params.proposalTitle}`,
+      billableAmount: 0,
+      costAmount: 0,
+      profitLoss: 0,
+      status: "pending",
+    },
+  });
 };
 
 const syncTeamMembers = async (
@@ -695,8 +782,18 @@ router.post(
             reviewerName: body.reviewerName ? String(body.reviewerName) : undefined,
             employeeDraftLink: bdOwned && body.employeeDraftLink ? String(body.employeeDraftLink) : undefined,
             notes: body.notes ? String(body.notes) : undefined,
+            timeTakenHours:
+              Math.max(0, parseNumber(body.timeTakenHours) ?? 0) || undefined,
             wonAt: initialStatus === "won" ? new Date() : undefined,
           },
+        });
+        await syncProposalPrepTimeEntry(tx, {
+          proposalId: proposal.id,
+          ownerProfileId: creatorProfileId,
+          hours: body.timeTakenHours,
+          date: body.timeTakenDate,
+          proposalTitle,
+          fallbackDate: proposal.proposalDate,
         });
         const requestedTeamIds = [
           ...(Array.isArray(body.teamMemberProfileIds) ? body.teamMemberProfileIds : []),
@@ -855,16 +952,28 @@ router.patch(
       if (!isBdRole(req) && !isElevated(req)) {
         return res.status(403).json(errorResponse("BD/marketing, HR, GMP, or super admin access required", 403));
       }
-      await assertCanSeeProposal(req, proposalId);
+      const existing = await assertCanSeeProposal(req, proposalId);
       const data = buildMutationData(req.body || {});
       if (!data.status) data.status = "bd_in_progress";
       if (data.status === "submitted_to_client" && !data.finalSubmittedAt) {
         data.finalSubmittedAt = new Date();
       }
-      const updated = await prisma.proposal.update({
-        where: { id: proposalId },
-        data,
-        include: proposalInclude,
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.proposal.update({ where: { id: proposalId }, data });
+        if (req.body?.timeTakenHours !== undefined || req.body?.timeTakenDate !== undefined) {
+          await syncProposalPrepTimeEntry(tx, {
+            proposalId,
+            ownerProfileId: existing.createdByProfileId ?? profileIdOf(req),
+            hours: req.body?.timeTakenHours,
+            date: req.body?.timeTakenDate,
+            proposalTitle:
+              data.proposalTitle !== undefined
+                ? String(data.proposalTitle)
+                : existing.proposalTitle,
+            fallbackDate: existing.proposalDate,
+          });
+        }
+        return tx.proposal.findUnique({ where: { id: proposalId }, include: proposalInclude });
       });
       res.json(successResponse(updated, "BD proposal details updated"));
     } catch (error: any) {
@@ -886,10 +995,15 @@ router.patch(
       const requesterProfileId = profileIdOf(req);
       const requesterCanFinalize = isBdRole(req) || isElevated(req);
       const requesterCanManageReview = isManagerLike(req);
+      const requesterIsCreator = existing.createdByProfileId === requesterProfileId;
       if (!requesterCanFinalize) {
         const allowedFields = requesterCanManageReview
-          ? new Set(["notes", "managerDecisionNote"])
-          : new Set(["employeeDraftLink", "notes"]);
+          ? new Set(["notes", "managerDecisionNote", "timeTakenHours", "timeTakenDate"])
+          : new Set([
+              "employeeDraftLink",
+              "notes",
+              ...(requesterIsCreator ? ["timeTakenHours", "timeTakenDate"] : []),
+            ]);
         const blockedFields = Object.keys(req.body || {}).filter((key) => !allowedFields.has(key));
         if (blockedFields.length > 0) {
           return res
@@ -915,6 +1029,19 @@ router.patch(
       const teamMemberIds = req.body?.teamMemberProfileIds;
       const updatedResult = await prisma.$transaction(async (tx) => {
         await tx.proposal.update({ where: { id: proposalId }, data });
+        if (req.body?.timeTakenHours !== undefined || req.body?.timeTakenDate !== undefined) {
+          await syncProposalPrepTimeEntry(tx, {
+            proposalId,
+            ownerProfileId: existing.createdByProfileId ?? requesterProfileId,
+            hours: req.body?.timeTakenHours,
+            date: req.body?.timeTakenDate,
+            proposalTitle:
+              data.proposalTitle !== undefined
+                ? String(data.proposalTitle)
+                : existing.proposalTitle,
+            fallbackDate: existing.proposalDate,
+          });
+        }
         if (Array.isArray(teamMemberIds)) {
           await syncTeamMembers(tx, proposalId, teamMemberIds, "pending_manager_approval");
         }

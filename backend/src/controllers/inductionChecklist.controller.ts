@@ -133,6 +133,23 @@ export class InductionChecklistController {
     }
   }
 
+  static async updateEmployeeNote(req: AuthRequest, res: Response) {
+    try {
+      const checklistId = Number(req.params.checklistId);
+      const itemId = Number(req.params.itemId);
+      const updated = await InductionChecklistService.updateEmployeeNote(
+        checklistId,
+        itemId,
+        req.body?.note ?? "",
+        authFromReq(req)
+      );
+      res.json(successResponse(updated, "Document note updated"));
+    } catch (e: any) {
+      console.error("InductionChecklistController.updateEmployeeNote error:", e);
+      res.status(e.statusCode ?? 400).json(errorResponse(e.message ?? "Failed to update document note", e.statusCode ?? 400));
+    }
+  }
+
   static async updateItemComments(req: AuthRequest, res: Response) {
     try {
       const checklistId = Number(req.params.checklistId);

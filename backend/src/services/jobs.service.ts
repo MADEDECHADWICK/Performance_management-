@@ -78,12 +78,16 @@ export interface JobStaffAssignmentInput {
   assignedRoleId: number;
   assignedHourlyRate?: number;
   roleOnJob?: string;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
 }
 
 export interface JobStaffAssignmentUpdateInput {
   assignedRoleId?: number;
   assignedHourlyRate?: number;
   roleOnJob?: string;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
 }
 
 export interface JobCostingInput {
@@ -247,29 +251,8 @@ type WorkflowDocumentRequirement = {
 const STAGE_DOCUMENT_REQUIREMENTS: Partial<
   Record<JobStatus, WorkflowDocumentRequirement[]>
 > = {
-  in_progress: [
-    {
-      key: 'work_plan',
-      label: 'Work plan document',
-      matches: ['workplan', 'jobworkplan', 'workplandocument', 'workpaper'],
-    },
-    {
-      key: 'budget',
-      label: 'Budget document',
-      matches: ['budget', 'jobbudget', 'approvedbudget', 'budgetplan'],
-    },
-  ],
+  in_progress: [],
   completed: [
-    {
-      key: 'work_plan',
-      label: 'Work plan document',
-      matches: ['workplan', 'jobworkplan', 'workplandocument', 'workpaper'],
-    },
-    {
-      key: 'budget',
-      label: 'Budget document',
-      matches: ['budget', 'jobbudget', 'approvedbudget', 'budgetplan'],
-    },
     {
       key: 'draft_report',
       label: 'Draft report document',
@@ -401,6 +384,91 @@ class JobService {
           documentTypeMatchesRequirement(doc.documentType, requirement)
         )
     );
+  }
+
+  private async getWorkingLinkReadiness(
+    jobId: number,
+    target: 'in_progress' | 'completed'
+  ): Promise<string[]> {
+    const blockers: string[] = [];
+    const documents = await this.getWorkflowDocumentsForJob(jobId);
+    const stageRequirements: Array<{
+      type: 'work_plan' | 'budget';
+      label: string;
+      matches: string[];
+    }> = [
+      {
+        type: 'work_plan',
+        label: 'Work plan',
+        matches: ['workplan', 'jobworkplan', 'workplandocument', 'workpaper'],
+      },
+      {
+        type: 'budget',
+        label: 'Budget/cost estimate',
+        matches: ['budget', 'jobbudget', 'approvedbudget', 'budgetplan', 'costestimate'],
+      },
+    ];
+
+    for (const requirement of stageRequirements) {
+      const approvedLink = await prisma.jobWorkingDocumentLink.findFirst({
+        where: {
+          jobId,
+          linkType: requirement.type,
+          reviewStatus: 'approved',
+        },
+        select: { id: true },
+      });
+      const hasLegacyDocument = documents.some((document) =>
+        documentTypeMatchesRequirement(document.documentType, {
+          key: requirement.type,
+          label: requirement.label,
+          matches: requirement.matches,
+        })
+      );
+      if (!approvedLink && !hasLegacyDocument) {
+        blockers.push(`Approved ${requirement.label} Drive link`);
+      }
+    }
+
+    if (target === 'completed') {
+      const tasks = await prisma.task.findMany({
+        where: { jobId },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          status: true,
+          dueDate: true,
+          assignedToProfileId: true,
+        },
+      });
+      const milestones = tasks
+        .map((task) => parseMilestoneTask(task as any))
+        .filter((milestone) => Boolean(milestone)) as Array<{
+        taskId: number;
+        title: string;
+        targetPercent: number;
+        conditionStatus: string;
+        conditionCompleted: boolean;
+      }>;
+
+      for (const milestone of milestones) {
+        const approvedLink = await prisma.jobWorkingDocumentLink.findFirst({
+          where: {
+            jobId,
+            milestoneTaskId: milestone.taskId,
+            linkType: 'milestone_requirement',
+            reviewStatus: 'approved',
+          },
+          select: { id: true },
+        });
+        if (!approvedLink) {
+          blockers.push(`Approved milestone link: ${milestone.title}`);
+        }
+      }
+    }
+
+    return blockers;
   }
 
   private async recordJobCostingStatusTransition(
@@ -2155,7 +2223,7 @@ class JobService {
     const validTransitions: Record<JobStatus, JobStatus[]> = {
       planned: ['in_progress', 'cancelled'],
       in_progress: ['on_hold', 'completed', 'cancelled'],
-      on_hold: ['in_progress', 'cancelled'],
+      on_hold: ['in_progress', 'completed', 'cancelled'],
       completed: [],
       cancelled: [],
     };
@@ -2182,9 +2250,20 @@ class JobService {
         throw new Error('Cannot move to in-progress until job costing is completed.');
       }
       if (job.jobCosting.costingStatus !== 'approved') {
-        // IMPLEMENTED: Partner approval gate before execution — in-progress now requires approved job costing.
+        // IMPLEMENTED: Partner approval gate before execution �?" in-progress now requires approved job costing.
         throw new Error(
           'Cannot move to in-progress until partner approves job costing, work plan, and budget.'
+        );
+      }
+      const workingLinkBlockers = await this.getWorkingLinkReadiness(
+        jobId,
+        'in_progress'
+      );
+      if (workingLinkBlockers.length > 0) {
+        throw new Error(
+          `Cannot move to in-progress until these approved working links exist: ${workingLinkBlockers.join(
+            ', '
+          )}`
         );
       }
     }
@@ -2207,30 +2286,112 @@ class JobService {
 
     let incompleteTasks: Array<{ id: number; title: string; status: string }> = [];
     if (status === 'completed') {
-      incompleteTasks = await prisma.task.findMany({
-        where: {
-          jobId,
-          status: { notIn: ['completed', 'cancelled'] },
+      const tasks = await prisma.task.findMany({
+        where: { jobId },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          status: true,
+          dueDate: true,
+          assignedToProfileId: true,
         },
-        select: { id: true, title: true, status: true },
         orderBy: { id: 'asc' },
       });
+      const tasksWithMilestone = tasks.map((task) => ({
+        task,
+        milestone: parseMilestoneTask(task as any),
+      }));
+      const incompleteMilestones = tasksWithMilestone.filter(
+        (item) => item.milestone && !item.milestone.conditionCompleted
+      );
+      const incompleteNonMilestones = tasksWithMilestone.filter(
+        (item) =>
+          !item.milestone &&
+          !['completed', 'cancelled'].includes(String(item.task.status))
+      );
+      incompleteTasks = [
+        ...incompleteMilestones.map((item) => item.task),
+        ...incompleteNonMilestones.map((item) => item.task),
+      ];
 
-      const allowIncompleteTasksOverride = Boolean(options?.allowIncompleteTasksOverride);
-      if (incompleteTasks.length > 0 && !allowIncompleteTasksOverride) {
-        const pendingTitles = incompleteTasks
-          .slice(0, 8)
-          .map((task) => `"${task.title}"`)
-          .join(', ');
-        // IMPLEMENTED: Task-completion gate on job closure — completion now blocks until tasks complete unless manager/partner explicitly overrides.
+      if (incompleteMilestones.length > 0) {
         throw new Error(
-          `Cannot complete job with ${incompleteTasks.length} incomplete task(s): ${pendingTitles}. Set allowIncompleteTasksOverride=true and provide reason to override.`
+          `Cannot complete job until all billing milestones are complete: ${incompleteMilestones
+            .slice(0, 8)
+            .map((item) => `"${item.task.title}"`)
+            .join(', ')}`
         );
       }
 
-      if (incompleteTasks.length > 0 && !String(reason || '').trim()) {
+      const allowIncompleteTasksOverride = Boolean(options?.allowIncompleteTasksOverride);
+      if (incompleteNonMilestones.length > 0 && !allowIncompleteTasksOverride) {
+        const pendingTitles = incompleteNonMilestones
+          .slice(0, 8)
+          .map((item) => `"${item.task.title}"`)
+          .join(', ');
         throw new Error(
-          'A completion override reason is required when closing a job with incomplete tasks.'
+          `Cannot complete job with ${incompleteNonMilestones.length} incomplete non-milestone task(s): ${pendingTitles}. Set allowIncompleteTasksOverride=true and provide reason to override.`
+        );
+      }
+
+      if (incompleteNonMilestones.length > 0 && !String(reason || '').trim()) {
+        throw new Error(
+          'A completion override reason is required when closing a job with incomplete non-milestone tasks.'
+        );
+      }
+
+      const workingLinkBlockers = await this.getWorkingLinkReadiness(
+        jobId,
+        'completed'
+      );
+      if (workingLinkBlockers.length > 0) {
+        throw new Error(
+          `Cannot complete job until these approved working links exist: ${workingLinkBlockers.join(
+            ', '
+          )}`
+        );
+      }
+
+      const [pendingEntries, pendingApprovals, pendingOverAllocations] =
+        await Promise.all([
+          prisma.timeEntry.count({
+            where: { jobId, status: { in: ['pending', 'submitted'] } },
+          }),
+          prisma.timeEntryApprovalRequest.count({
+            where: { jobId, status: 'pending' },
+          }),
+          prisma.timeOverBudgetRequest.count({
+            where: {
+              jobId,
+              status: { in: ['pending', 'manager_approved'] },
+            },
+          }),
+        ]);
+
+      if (pendingEntries > 0) {
+        throw new Error(
+          `Cannot complete job with ${pendingEntries} pending/submitted timesheet entr${pendingEntries === 1 ? 'y' : 'ies'}.`
+        );
+      }
+      if (pendingApprovals > 0) {
+        throw new Error(
+          `Cannot complete job with ${pendingApprovals} pending additional-hours request(s).`
+        );
+      }
+      if (pendingOverAllocations > 0) {
+        throw new Error(
+          `Cannot complete job with ${pendingOverAllocations} pending over-allocation request(s).`
+        );
+      }
+
+      if (
+        !['ready_for_collection', 'partial_collection', 'fully_collected'].includes(
+          String(job.collectionStage)
+        )
+      ) {
+        throw new Error(
+          'Record the collection status as ready for collection, partial collection, or fully collected before completing the job.'
         );
       }
     }
@@ -2388,12 +2549,23 @@ class JobService {
       assignedHourlyRate,
     };
 
+    const billableAllocatedHours = Math.max(0, Number(input.billableAllocatedHours ?? 0));
+    const nonBillableAllocatedHours = Math.max(
+      0,
+      Number(input.nonBillableAllocatedHours ?? 0)
+    );
+    if (!Number.isFinite(billableAllocatedHours) || !Number.isFinite(nonBillableAllocatedHours)) {
+      throw new Error('Assignment hour budgets must be valid numbers');
+    }
+
     const assignment = await prisma.jobStaffAssignment.create({
       data: {
         jobId,
         employeeProfileId: input.employeeProfileId,
         assignedRoleId: input.assignedRoleId,
         assignedHourlyRate,
+        billableAllocatedHours,
+        nonBillableAllocatedHours,
         roleSnapshot,
         roleOnJob: input.roleOnJob,
         assignedByProfileId: authContext.profileId,
@@ -3047,12 +3219,15 @@ class JobService {
     const hasAnyUpdatableField =
       input.assignedRoleId !== undefined ||
       input.assignedHourlyRate !== undefined ||
-      input.roleOnJob !== undefined;
+      input.roleOnJob !== undefined ||
+      input.billableAllocatedHours !== undefined ||
+      input.nonBillableAllocatedHours !== undefined;
 
     if (!hasAnyUpdatableField) {
       throw {
         statusCode: 400,
-        message: 'At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob',
+        message:
+          'At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob, billableAllocatedHours, nonBillableAllocatedHours',
       };
     }
 
@@ -3088,11 +3263,25 @@ class JobService {
       assignedHourlyRate: nextHourlyRate,
     };
 
+    const nextBillableHours =
+      input.billableAllocatedHours !== undefined
+        ? Math.max(0, Number(input.billableAllocatedHours))
+        : Number(assignment.billableAllocatedHours || 0);
+    const nextNonBillableHours =
+      input.nonBillableAllocatedHours !== undefined
+        ? Math.max(0, Number(input.nonBillableAllocatedHours))
+        : Number(assignment.nonBillableAllocatedHours || 0);
+    if (!Number.isFinite(nextBillableHours) || !Number.isFinite(nextNonBillableHours)) {
+      throw { statusCode: 400, message: 'Assignment hour budgets must be valid numbers' };
+    }
+
     const updated = await prisma.jobStaffAssignment.update({
       where: { id: assignmentId },
       data: {
         assignedRoleId: nextRoleId,
         assignedHourlyRate: nextHourlyRate,
+        billableAllocatedHours: nextBillableHours,
+        nonBillableAllocatedHours: nextNonBillableHours,
         roleOnJob:
           input.roleOnJob !== undefined
             ? String(input.roleOnJob || '').trim() || null
@@ -3713,15 +3902,79 @@ class JobService {
       byEmployee.set(entry.employeeProfileId, current);
     }
 
+    const assignmentBudgets = await prisma.jobStaffAssignment.findMany({
+      where: { jobId },
+      select: {
+        employeeProfileId: true,
+        billableAllocatedHours: true,
+        nonBillableAllocatedHours: true,
+      },
+    });
+    const budgetByEmployee = new Map(
+      assignmentBudgets.map((assignment) => [
+        assignment.employeeProfileId,
+        {
+          billableAllocatedHours: Number(assignment.billableAllocatedHours || 0),
+          nonBillableAllocatedHours: Number(assignment.nonBillableAllocatedHours || 0),
+        },
+      ])
+    );
+    const overAllocationRows = await prisma.timeOverBudgetRequest.findMany({
+      where: { jobId },
+      select: {
+        billableType: true,
+        status: true,
+        requestedAdditional: true,
+      },
+    });
+    const sumOverAllocation = (
+      predicate: (row: (typeof overAllocationRows)[number]) => boolean
+    ) =>
+      overAllocationRows
+        .filter(predicate)
+        .reduce((sum, row) => sum + Number(row.requestedAdditional || 0), 0);
+
+    const billableAllocatedHours = assignmentBudgets.reduce(
+      (sum, assignment) => sum + Number(assignment.billableAllocatedHours || 0),
+      0
+    );
+    const nonBillableAllocatedHours = assignmentBudgets.reduce(
+      (sum, assignment) => sum + Number(assignment.nonBillableAllocatedHours || 0),
+      0
+    );
+    const approvedBillableExcessHours = sumOverAllocation(
+      (row) => row.status === 'partner_approved' && row.billableType === 'billable'
+    );
+    const approvedNonBillableExcessHours = sumOverAllocation(
+      (row) => row.status === 'partner_approved' && row.billableType !== 'billable'
+    );
+    const rejectedExcessHours = sumOverAllocation((row) =>
+      ['manager_rejected', 'partner_rejected', 'auto_rejected'].includes(row.status)
+    );
+
     const employeeTracking = Array.from(byEmployee.values()).map((item) => {
+      const budgets = budgetByEmployee.get(item.profileId) || {
+        billableAllocatedHours: 0,
+        nonBillableAllocatedHours: 0,
+      };
+      const totalBudget =
+        budgets.billableAllocatedHours + budgets.nonBillableAllocatedHours;
       const utilizationPercent =
-        item.allocatedHours > 0
-          ? Number(((item.loggedHours / item.allocatedHours) * 100).toFixed(2))
+        totalBudget > 0
+          ? Number(((item.loggedHours / totalBudget) * 100).toFixed(2))
           : 0;
-      const remainingHours = roundCurrency(item.allocatedHours - item.loggedHours);
+      const remainingHours = roundCurrency(totalBudget - item.loggedHours);
       return {
         ...item,
-        allocatedHours: roundCurrency(item.allocatedHours),
+        allocatedHours: roundCurrency(totalBudget),
+        billableAllocatedHours: roundCurrency(budgets.billableAllocatedHours),
+        nonBillableAllocatedHours: roundCurrency(budgets.nonBillableAllocatedHours),
+        billableRemainingHours: roundCurrency(
+          Math.max(0, budgets.billableAllocatedHours - item.billableHours)
+        ),
+        nonBillableRemainingHours: roundCurrency(
+          Math.max(0, budgets.nonBillableAllocatedHours - item.nonBillableHours)
+        ),
         loggedHours: roundCurrency(item.loggedHours),
         approvedHours: roundCurrency(item.approvedHours),
         billableHours: roundCurrency(item.billableHours),
@@ -3753,6 +4006,13 @@ class JobService {
     missingForInProgress.forEach((item) =>
       lifecycleBlockersForInProgress.push(`Missing document: ${item.label}`)
     );
+    const workingLinkBlockersForInProgress = await this.getWorkingLinkReadiness(
+      jobId,
+      'in_progress'
+    );
+    workingLinkBlockersForInProgress.forEach((label) =>
+      lifecycleBlockersForInProgress.push(`Missing working link: ${label}`)
+    );
 
     const lifecycleBlockersForCompletion: string[] = [];
     if (incompleteTaskCount > 0) {
@@ -3761,6 +4021,49 @@ class JobService {
     missingForCompletion.forEach((item) =>
       lifecycleBlockersForCompletion.push(`Missing document: ${item.label}`)
     );
+    const workingLinkBlockersForCompletion = await this.getWorkingLinkReadiness(
+      jobId,
+      'completed'
+    );
+    workingLinkBlockersForCompletion.forEach((label) =>
+      lifecycleBlockersForCompletion.push(`Missing working link: ${label}`)
+    );
+    const [pendingTimesheetCount, pendingAdditionalRequests, pendingOverAllocations] =
+      await Promise.all([
+        prisma.timeEntry.count({
+          where: { jobId, status: { in: ['pending', 'submitted'] } },
+        }),
+        prisma.timeEntryApprovalRequest.count({
+          where: { jobId, status: 'pending' },
+        }),
+        prisma.timeOverBudgetRequest.count({
+          where: { jobId, status: { in: ['pending', 'manager_approved'] } },
+        }),
+      ]);
+    if (pendingTimesheetCount > 0) {
+      lifecycleBlockersForCompletion.push(
+        `${pendingTimesheetCount} timesheet entr${pendingTimesheetCount === 1 ? 'y' : 'ies'} still pending`
+      );
+    }
+    if (pendingAdditionalRequests > 0) {
+      lifecycleBlockersForCompletion.push(
+        `${pendingAdditionalRequests} additional-hours request(s) still pending`
+      );
+    }
+    if (pendingOverAllocations > 0) {
+      lifecycleBlockersForCompletion.push(
+        `${pendingOverAllocations} over-allocation request(s) still pending`
+      );
+    }
+    if (
+      !['ready_for_collection', 'partial_collection', 'fully_collected'].includes(
+        String(job.collectionStage)
+      )
+    ) {
+      lifecycleBlockersForCompletion.push(
+        'Collection status is not ready, partial, or fully collected'
+      );
+    }
 
     const now = new Date();
     const dueDate = job.dueDate ? new Date(job.dueDate) : null;
@@ -3874,6 +4177,24 @@ class JobService {
         },
       },
       tracking: {
+        allocation: {
+          billableAllocatedHours: roundCurrency(billableAllocatedHours),
+          nonBillableAllocatedHours: roundCurrency(nonBillableAllocatedHours),
+          billableActualHours: roundCurrency(totalBillableHours),
+          nonBillableActualHours: roundCurrency(totalNonBillableHours),
+          billableVarianceHours: roundCurrency(
+            billableAllocatedHours - totalBillableHours
+          ),
+          nonBillableVarianceHours: roundCurrency(
+            nonBillableAllocatedHours - totalNonBillableHours
+          ),
+          approvedBillableExcessHours: roundCurrency(approvedBillableExcessHours),
+          approvedNonBillableExcessHours: roundCurrency(
+            approvedNonBillableExcessHours
+          ),
+          rejectedExcessHours: roundCurrency(rejectedExcessHours),
+          totalWriteOffHours: roundCurrency(totalNonBillableHours),
+        },
         tasks: {
           ...taskTotals,
           incomplete: incompleteTaskCount,

@@ -162,18 +162,6 @@ export const createTimeEntryValidators = [
     return true;
   }),
 
-  body().custom((value) => {
-    const hasActivity =
-      value.nonBillableActivityId !== undefined &&
-      value.nonBillableActivityId !== null &&
-      value.nonBillableActivityId !== "";
-    if (value.billable === false && !value.nonBillableCategory && !hasActivity) {
-      throw new Error(
-        "nonBillableCategory or nonBillableActivityId is required when billable is false (internal, training, over_budget, other)"
-      );
-    }
-    return true;
-  }),
 ];
 
 /**
@@ -257,18 +245,6 @@ export const updateTimeEntryValidators = [
     return true;
   }),
 
-  body().custom((value) => {
-    const hasActivity =
-      value.nonBillableActivityId !== undefined &&
-      value.nonBillableActivityId !== null &&
-      value.nonBillableActivityId !== "";
-    if (value.billable === false && !value.nonBillableCategory && !hasActivity) {
-      throw new Error(
-        "nonBillableCategory or nonBillableActivityId is required when billable is false (internal, training, over_budget, other)"
-      );
-    }
-    return true;
-  }),
 ];
 
 /**

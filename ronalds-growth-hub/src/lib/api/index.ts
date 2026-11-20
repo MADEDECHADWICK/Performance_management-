@@ -15,7 +15,6 @@ export { default as clientOnboardingsAPI } from './clientOnboardings';
 export { default as jobsAPI } from './jobs';
 export { default as timeEntriesAPI } from './timeEntries';
 export { default as employeesAPI } from './employees';
-export { default as evaluationsAPI } from './evaluations';
 export { default as documentsAPI } from './documents';
 export { default as departmentsAPI } from './departments';
 export { default as surveysAPI } from './surveys';
@@ -34,6 +33,7 @@ export { default as requisitionsAPI } from './requisitions';
 export { default as reportingAPI } from './reporting';
 export { default as writeOffsAPI } from './writeOffs';
 export { default as utilizationAPI } from './utilization';
+export { default as performanceReportAPI } from './performanceReport';
 
 // Convenience grouped import
 import authAPI from './auth';
@@ -42,7 +42,6 @@ import clientOnboardingsAPI from './clientOnboardings';
 import jobsAPI from './jobs';
 import timeEntriesAPI from './timeEntries';
 import employeesAPI from './employees';
-import evaluationsAPI from './evaluations';
 import documentsAPI from './documents';
 import departmentsAPI from './departments';
 import surveysAPI from './surveys';
@@ -67,7 +66,6 @@ const API = {
   jobs: jobsAPI,
   timeEntries: timeEntriesAPI,
   employees: employeesAPI,
-  evaluations: evaluationsAPI,
   documents: documentsAPI,
   departments: departmentsAPI,
   surveys: surveysAPI,

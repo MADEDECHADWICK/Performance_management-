@@ -564,9 +564,6 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
 
   const activeJobs = asNumber(firmMetrics.active_jobs ?? firmMetrics.activeJobs);
   const utilizationRate = asNumber(firmMetrics.utilization_rate ?? firmMetrics.utilizationRate);
-  const pendingEvaluationsOver30Days = asNumber(
-    alertsSummary.pendingEvaluationsOver30Days
-  );
   const atRiskJobs = asNumber(riskSummary.atRiskJobs ?? alertsSummary.atRiskJobs);
   const atRiskExposure = asNumber(
     riskSummary.atRiskExposure ?? alertsSummary.atRiskExposure
@@ -595,12 +592,6 @@ function buildGmpSummary(overviewData: any, personalData: any): FinancialSummary
         value: `${asNumber(alertsSummary.pendingOverBudget).toLocaleString()}`,
         hint: "Requests needing control decisions",
         tone: asNumber(alertsSummary.pendingOverBudget) > 0 ? "warning" : "positive",
-      },
-      {
-        label: "Aged Evaluations",
-        value: `${pendingEvaluationsOver30Days.toLocaleString()}`,
-        hint: "Pending for 30+ days",
-        tone: pendingEvaluationsOver30Days > 0 ? "warning" : "positive",
       },
       { label: "Firm Utilization", value: formatPct(utilizationRate), hint: "Billable utilization ratio" },
     ],

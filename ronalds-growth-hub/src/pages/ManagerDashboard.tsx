@@ -285,7 +285,6 @@ const ManagerDashboard = () => {
   const [approvalAudit, setApprovalAudit] = useState<ApprovalAuditLog[]>([]);
   const [workloadMetrics, setWorkloadMetrics] = useState<WorkloadMetrics | null>(null);
   const [financialData, setFinancialData] = useState<any>(null);
-  const [evaluationData, setEvaluationData] = useState<any>(null);
   const [jobSearch, setJobSearch] = useState('');
   const [jobStatusFilter, setJobStatusFilter] = useState('');
 
@@ -350,7 +349,6 @@ const ManagerDashboard = () => {
         setTeamData(null);
         setJobData(null);
         setFinancialData(null);
-        setEvaluationData(null);
         return;
       }
       console.error('Error loading dashboard data:', error);
@@ -390,12 +388,6 @@ const ManagerDashboard = () => {
             setFinancialData(response);
           }
           break;
-        case 'evaluations':
-          if (!evaluationData) {
-            const response = await apiFetch('GET', '/manager-dashboard/evaluations');
-            setEvaluationData(response);
-          }
-          break;
       }
     } catch (error: any) {
       if (error?.status === 401) {
@@ -411,9 +403,6 @@ const ManagerDashboard = () => {
         }
         if (tab === 'financials') {
           setFinancialData(null);
-        }
-        if (tab === 'evaluations') {
-          setEvaluationData(null);
         }
         return;
       }
@@ -967,18 +956,6 @@ const ManagerDashboard = () => {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Project Eval Score</CardTitle>
-                <Award className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {personalPerformance.projectEvaluationScore}%
-                </div>
-                <p className="text-xs text-muted-foreground">Job-based reviews</p>
-              </CardContent>
-            </Card>
           </div>
         )}
 
@@ -1093,14 +1070,6 @@ const ManagerDashboard = () => {
                   >
                     <CheckCircle className="h-4 w-4 mr-2" />
                     Approve Timesheets
-                  </Button>
-                  <Button
-                    className="w-full justify-start"
-                    variant="outline"
-                    onClick={() => navigate('/evaluations')}
-                  >
-                    <AlertCircle className="h-4 w-4 mr-2" />
-                    Complete Pending Evaluations
                   </Button>
                   <Button
                     className="w-full justify-start"

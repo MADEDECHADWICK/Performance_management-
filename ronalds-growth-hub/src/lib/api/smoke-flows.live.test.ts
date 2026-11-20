@@ -1,4 +1,4 @@
-process.env.NODE_ENV = "test";
+﻿process.env.NODE_ENV = "test";
 process.env.JWT_SECRET =
   process.env.JWT_SECRET || "frontend-live-smoke-secret-12345678901234567890";
 process.env.REQUEST_LOGGING_ENABLED = "false";
@@ -114,7 +114,6 @@ jest.mock("./client", () => ({
 }));
 
 import authAPI, { type LoginSuccessResponse, type LoginResponse } from "./auth";
-import evaluationsAPI from "./evaluations";
 import { clearAuth, getToken, getUser, setToken, setUser } from "./client";
 
 jest.setTimeout(120_000);
@@ -191,17 +190,6 @@ const startLocalBackend = async () => {
   });
 };
 
-const getManagedEvaluatee = async (managerProfileId: number) => {
-  const employees = await evaluationsAPI.getAssignableEmployees();
-  const evaluatee = employees.find((employee) => employee.managerId === managerProfileId);
-
-  if (!evaluatee) {
-    throw new Error("No managed employee found in evaluation directory for seeded manager");
-  }
-
-  return evaluatee;
-};
-
 const completeOnboardingForProfiles = async (profileIds: number[]) => {
   const ids = profileIds.filter((id): id is number => Number.isFinite(id) && id > 0);
   if (!ids.length) return;
@@ -268,80 +256,4 @@ describeLive("frontend live smoke flows", () => {
     expect(getUser()).toEqual(response.user);
   });
 
-  it("creates a cycle, publishes assignments, and submits a live evaluation", async () => {
-    const hrSession = assertLoginSuccess(
-      await authAPI.login("hr@ronalds.local", "Password123!")
-    );
-    const managerSession = assertLoginSuccess(
-      await authAPI.login("manager@ronalds.local", "Password123!")
-    );
-    const managerProfileId = managerSession.user.profile?.id;
-
-    expect(managerProfileId).toBeDefined();
-
-    useSession(hrSession);
-    const evaluatee = await getManagedEvaluatee(managerProfileId!);
-    await completeOnboardingForProfiles([managerProfileId!, evaluatee.id]);
-
-    const now = new Date();
-    const title = `${FRONTEND_SMOKE_PREFIX} Cycle ${Date.now()}`;
-    const cycle = await evaluationsAPI.createCycle({
-      title,
-      description: "Backend-integrated frontend smoke cycle",
-      cycleType: "quarterly",
-      startDate: toIsoDate(now),
-      endDate: toIsoDate(addDays(now, 30)),
-      dueDate: toIsoDate(addDays(now, 7)),
-      enableSelfEvaluation: false,
-      enablePeerEvaluation: false,
-      enableUpwardEvaluation: false,
-      enableDownwardEvaluation: true,
-      processAnonymously: false,
-      requireEvaluatorSignature: true,
-    });
-
-    const published = await evaluationsAPI.assignEvaluators(cycle.id, {
-      assignments: [
-        {
-          evaluateeId: evaluatee.id,
-          evaluatorId: managerProfileId!,
-          relationship: "manager",
-          dueDate: toIsoDate(addDays(now, 7)),
-        },
-      ],
-    });
-
-    expect(published.count).toBe(1);
-
-    useSession(managerSession);
-    const assignments = await evaluationsAPI.getMyAssignments();
-    const assignment = assignments.find((item) => item.cycleId === cycle.id);
-
-    expect(assignment?.id).toBeDefined();
-
-    const detail = await evaluationsAPI.getAssignmentById(assignment!.id);
-    const questions = detail.template?.questions || [];
-
-    expect(questions.length).toBeGreaterThan(0);
-
-    const submitted = await evaluationsAPI.submitEvaluation(assignment!.id, {
-      responses: questions.map((question) => ({
-        questionId: question.id,
-        score: 4,
-        comment: `${FRONTEND_SMOKE_PREFIX} response ${question.id}`,
-      })),
-      evaluatorComment: `${FRONTEND_SMOKE_PREFIX} submitted via frontend API`,
-      evaluatorSigned: true,
-    });
-
-    expect(String(submitted.status).toLowerCase()).toBe("submitted");
-
-    useSession(hrSession);
-    const results = await evaluationsAPI.getCycleResults(cycle.id);
-    const result = results.results.find((row) => row.evaluateeId === evaluatee.id);
-
-    expect(result).toBeDefined();
-    expect(typeof result?.overallScore).toBe("number");
-    expect(result?.ratingBand).toBeTruthy();
-  });
 });

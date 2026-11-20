@@ -498,6 +498,18 @@ function AppSidebar({
                 module="reports"
               />
               <NavItem
+                path="/timesheet-reports"
+                icon={FileSpreadsheet}
+                label="Timesheet Reports"
+                viewKey="reports.timesheet_reports"
+              />
+              <NavItem
+                path="/performance"
+                icon={TrendingUp}
+                label="Performance"
+                viewKey="reports.performance"
+              />
+              <NavItem
                 path="/bsc-management"
                 icon={Target}
                 label="BSC & KPIs"
@@ -566,52 +578,6 @@ function AppSidebar({
 		                    <NavItem path="/requisitions" icon={FileText} label="Requisitions" viewKey="requisitions.my" module="requisitions" />
 		                    <NavItem path="/development-plan" icon={FileText} label="Development Plan" viewKey="development.plan" module="evaluations" />
 	                  </SidebarMenu>
-              </SidebarGroupContent>
-            </CollapsibleContent>
-          </SidebarGroup>
-        </Collapsible>
-
-        {/* Evaluations */}
-        <Collapsible className="group/collapsible">
-          <SidebarGroup>
-            <SidebarGroupLabel asChild>
-              <CollapsibleTrigger className="flex w-full items-center justify-between">
-                Evaluations
-                <ChevronDown className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-180" />
-              </CollapsibleTrigger>
-            </SidebarGroupLabel>
-            <CollapsibleContent>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <NavItem
-                    path="/evaluations"
-                    icon={ClipboardCheck}
-                    label="Evaluations"
-                    viewKey="evaluations.my"
-                    module="evaluations"
-                  />
-                  <NavItem
-                    path="/evaluations/cycles"
-                    icon={Calendar}
-                    label="Create & Launch"
-                    viewKey="evaluations.management"
-                    module="evaluations"
-                  />
-                  <NavItem
-                    path="/evaluations/feedback"
-                    icon={Users}
-                    label="Feedback"
-                    viewKey="feedback.continuous"
-                    module="evaluations"
-                  />
-                  <NavItem
-                    path="/project-evaluations"
-                    icon={ClipboardCheck}
-                    label="Project Evaluations"
-                    viewKey="evaluations.project_view"
-                    module="evaluations"
-                  />
-                </SidebarMenu>
               </SidebarGroupContent>
             </CollapsibleContent>
           </SidebarGroup>
@@ -707,7 +673,6 @@ function AppSidebar({
 		                    <NavItem path="/recruitment-candidates" icon={UserCheck} label="Recruitment Pipeline" viewKey="people.recruitment_candidates" module="users" />
 	                    <NavItem path="/admin-job-creation" icon={Plus} label="Create Job" viewKey="jobs.admin_create" module="jobs" action="write" />
                     <NavItem path="/job-workflow-dashboard" icon={ChartCandlestick} label="Job Operations" viewKey="jobs.workflow" module="jobs" />
-	                    <NavItem path="/calibration" icon={Settings} label="Calibration" viewKey="evaluations.calibration" module="evaluations" />
                     <NavItem path="/positions-rates" icon={DollarSign} label="Positions & Rates" viewKey="people.positions_rates" module="users" />
                     <NavItem path="/audit-logs" icon={Shield} label="Audit Logs" viewKey="reports.audit_logs" module="reports" />
                     <NavItem path="/ops-center" icon={Activity} label="Ops Center" viewKey="reports.ops_center" module="reports" />

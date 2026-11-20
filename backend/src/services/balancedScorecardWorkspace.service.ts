@@ -1,4 +1,4 @@
-import prisma from "../prisma";
+﻿import prisma from "../prisma";
 import {
   KpiMeasurementType,
   KpiTargetDirection,
@@ -2048,10 +2048,10 @@ const buildEmployeeContributions = (
       workflowRecordId: null,
       evidenceCount: 0,
       reviewContextPath: reviewAssignment
-        ? `/evaluations/assignments/${reviewAssignment.id}`
+        ? "/bsc-management"
         : employeeAssignments[0]?.cycleId
-          ? `/evaluations/cycles/${employeeAssignments[0].cycleId}/results`
-          : "/evaluations/feedback",
+          ? "/bsc-management"
+          : "/bsc-management",
     });
   }
 
@@ -2091,7 +2091,7 @@ const buildEmployeeContributions = (
       id: `scorecard-${resolvedProfileId}`,
       sourceType: "evaluation_cycle",
       sourceReferenceId: null,
-      title: "BSC contribution — awaiting review cycle",
+      title: "BSC contribution â€” awaiting review cycle",
       kpiId: config.peopleKpiId,
       initiative: config.peopleInitiativeTitle || "People & Readiness",
       dueDate: "Next review cycle",
@@ -2106,7 +2106,7 @@ const buildEmployeeContributions = (
       lastUpdatedAt: null,
       workflowRecordId: null,
       evidenceCount: 0,
-      reviewContextPath: "/evaluations/feedback",
+      reviewContextPath: "/bsc-management",
     });
   }
 
@@ -2406,7 +2406,7 @@ async function resolveRoleScopeFilter(
   role: WorkspaceRole,
   requestingProfileId: number | null
 ): Promise<RoleScopeFilter> {
-  // No profile ID or privileged role → firm-wide access.
+  // No profile ID or privileged role â†’ firm-wide access.
   // Omitting requestingProfileId silently grants firm-wide scope, so callers
   // should always supply it for non-privileged roles.
   if (FIRM_WIDE_ROLES.has(role)) {
@@ -2449,7 +2449,7 @@ async function resolveRoleScopeFilter(
     };
   }
 
-  // finance / marketing — firm-wide KPI view, no people scoping.
+  // finance / marketing â€” firm-wide KPI view, no people scoping.
   return { employeeIds: null, departmentIds: null };
 }
 
@@ -3003,7 +3003,7 @@ const buildBalancedScorecardWorkspace = async (params: {
   /**
    * The profile ID of the user who is actually making the request.
    * Used for role-based data scoping. When omitted, defaults to firm-wide
-   * access — callers must supply this for non-privileged roles.
+   * access â€” callers must supply this for non-privileged roles.
    */
   requestingProfileId?: number | null;
   evaluationCycleId?: number | null;
@@ -3016,7 +3016,7 @@ const buildBalancedScorecardWorkspace = async (params: {
   };
   const asOfDate = new Date();
 
-  // Resolve evaluation cycle and role scope in parallel — they are independent.
+  // Resolve evaluation cycle and role scope in parallel â€” they are independent.
   const [evaluationCycle, scopeContext] = await Promise.all([
     resolveWorkspaceEvaluationCycle(params.evaluationCycleId ?? null),
     resolveRoleScopeContext(params.role, params.requestingProfileId ?? null),
@@ -3120,7 +3120,7 @@ const buildBalancedScorecardWorkspace = async (params: {
           ? manualComputation.status
           : scoreToStatus(weightedScore);
     if (!perspectiveId) {
-      // Goal's parent perspective is archived or missing — skip this KPI to avoid
+      // Goal's parent perspective is archived or missing â€” skip this KPI to avoid
       // it appearing under the wrong perspective.
       return null;
     }
@@ -3698,7 +3698,7 @@ export async function getBalancedScorecardWorkspace(params: {
   /**
    * The profile ID of the user who is actually making the request.
    * Used for role-based data scoping. When omitted, defaults to firm-wide
-   * access â€” callers must supply this for non-privileged roles.
+   * access Ã¢â‚¬â€ callers must supply this for non-privileged roles.
    */
   requestingProfileId?: number | null;
   evaluationCycleId?: number | null;

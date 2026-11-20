@@ -361,6 +361,16 @@ export const assignJobTeamValidators = [
     .optional()
     .isString()
     .trim(),
+
+  body("billableAllocatedHours")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("billableAllocatedHours must be >= 0"),
+
+  body("nonBillableAllocatedHours")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("nonBillableAllocatedHours must be >= 0"),
 ];
 
 /**
@@ -390,15 +400,27 @@ export const updateJobStaffAssignmentValidators = [
     .isString()
     .trim(),
 
+  body("billableAllocatedHours")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("billableAllocatedHours must be >= 0"),
+
+  body("nonBillableAllocatedHours")
+    .optional()
+    .isFloat({ min: 0 })
+    .withMessage("nonBillableAllocatedHours must be >= 0"),
+
   body()
     .custom((payload) => {
       const hasAtLeastOneField =
         payload.assignedRoleId !== undefined ||
         payload.assignedHourlyRate !== undefined ||
-        payload.roleOnJob !== undefined;
+        payload.roleOnJob !== undefined ||
+        payload.billableAllocatedHours !== undefined ||
+        payload.nonBillableAllocatedHours !== undefined;
       if (!hasAtLeastOneField) {
         throw new Error(
-          "At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob"
+          "At least one field is required: assignedRoleId, assignedHourlyRate, roleOnJob, billableAllocatedHours, nonBillableAllocatedHours"
         );
       }
       return true;

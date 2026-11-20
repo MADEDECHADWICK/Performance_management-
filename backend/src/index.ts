@@ -4,7 +4,6 @@ import websocketService from "./services/websocket.service";
 import backgroundJobsService from "./services/background-jobs.service";
 import { NotificationOutboxService } from "./services/notificationOutbox.service";
 import { JobOverdueNotificationService } from "./services/jobOverdueNotifications.service";
-import { EvaluationReminderNotificationService } from "./services/evaluationReminderNotifications.service";
 import { assertRuntimeConfig, runtimeConfig } from "./config/env";
 import { logger, toLogContext } from "./lib/logger";
 import { ObservabilityService } from "./services/observability.service";
@@ -20,7 +19,6 @@ ObservabilityService.startMonitoring();
 void backgroundJobsService.initialize();
 NotificationOutboxService.startWorker();
 JobOverdueNotificationService.startWorker();
-EvaluationReminderNotificationService.startWorker();
 
 if (
   runtimeConfig.nodeEnv === "production" &&
@@ -75,8 +73,7 @@ const shutdown = () => {
     logger.error("background_jobs_shutdown_failed", toLogContext(error));
   });
   NotificationOutboxService.stopWorker();
-  JobOverdueNotificationService.stopWorker();
-  EvaluationReminderNotificationService.stopWorker();
+JobOverdueNotificationService.stopWorker();
 };
 
 process.on("SIGINT", shutdown);

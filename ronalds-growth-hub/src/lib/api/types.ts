@@ -283,6 +283,8 @@ export interface JobStaffAssignment {
   employeeProfileId: number;
   assignedRoleId: number;
   assignedHourlyRate: number;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
   roleOnJob?: string;
   assignedAt: string;
   assignedByProfileId?: number;
@@ -473,6 +475,10 @@ export interface JobWorkflowTrackingEmployee {
   assignedRole?: string | null;
   assignedHourlyRate?: number;
   allocatedHours: number;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
+  billableRemainingHours?: number;
+  nonBillableRemainingHours?: number;
   loggedHours: number;
   approvedHours: number;
   billableHours: number;
@@ -485,6 +491,18 @@ export interface JobWorkflowTrackingEmployee {
 }
 
 export interface JobWorkflowTrackingPayload {
+  allocation?: {
+    billableAllocatedHours: number;
+    nonBillableAllocatedHours: number;
+    billableActualHours: number;
+    nonBillableActualHours: number;
+    billableVarianceHours: number;
+    nonBillableVarianceHours: number;
+    approvedBillableExcessHours: number;
+    approvedNonBillableExcessHours: number;
+    rejectedExcessHours: number;
+    totalWriteOffHours: number;
+  };
   tasks: {
     total: number;
     pending: number;
@@ -722,13 +740,18 @@ export interface TimeOverBudgetRequest {
   id: number;
   employeeProfileId: number;
   jobId: number;
-  requestedHours: number;
-  reason: string;
-  billable?: boolean;
+  timeEntryId?: number | null;
+  allocatedHours: number;
+  loggedHours: number;
+  requestedAdditional: number;
+  totalAfterRequest: number;
+  billableType: string;
   status: OverBudgetRequestStatus;
-  managerApprovedAt?: string;
-  partnerApprovedAt?: string;
-  rejectionReason?: string;
+  requestReason?: string | null;
+  approvalNotes?: string | null;
+  rejectionReason?: string | null;
+  decidedByProfileId?: number | null;
+  decidedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -944,6 +967,7 @@ export interface InductionChecklistItem {
   itemType?: string;
   resourceUrl?: string;
   comments?: string;
+  employeeNote?: string;
   isCompleted: boolean;
   completedByProfileId?: number;
   completedAt?: string;
@@ -972,6 +996,12 @@ export interface EmployeeOnboardingCase {
   dueDate?: string;
   hrOwnerProfileId?: number;
   notes?: string;
+  reviewStatus?: string;
+  submittedAt?: string;
+  documentsSubmittedAt?: string;
+  reviewedAt?: string;
+  reviewedByProfileId?: number;
+  reviewNote?: string;
   createdAt: string;
   updatedAt: string;
   employee?: Profile;

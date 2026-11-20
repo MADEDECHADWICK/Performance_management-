@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { proposalsAPI, type CreateProposalPayload, type Proposal, type ProposalContext } from "@/lib/api/proposals";
 
 const SERVICE_TYPES = [
@@ -79,6 +80,8 @@ function CreateProposalForm({
     assignedPartnerProfileId: null,
     departmentId: null,
     teamMemberProfileIds: [],
+    timeTakenHours: 0,
+    timeTakenDate: new Date().toISOString().slice(0, 10),
   });
   const [selectedTeamIds, setSelectedTeamIds] = useState<number[]>([]);
 
@@ -278,6 +281,29 @@ function CreateProposalForm({
         <Label>Notes</Label>
         <Textarea value={form.notes ?? ""} onChange={(event) => set("notes", event.target.value)} rows={3} />
       </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Time spent on this proposal (hours)</Label>
+          <Input
+            type="number"
+            min={0}
+            step="0.25"
+            value={form.timeTakenHours ?? 0}
+            onChange={(event) => set("timeTakenHours", Number(event.target.value))}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Date worked</Label>
+          <Input
+            type="date"
+            value={form.timeTakenDate ?? ""}
+            onChange={(event) => set("timeTakenDate", event.target.value)}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        This automatically creates a pending timesheet entry linked to this proposal.
+      </p>
       <div className="flex justify-end gap-2 border-t pt-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Cancel</Button>
         <Button type="submit" disabled={saving || !canSubmitProposal}>
@@ -301,10 +327,57 @@ const EXECUTION_STATUSES: Proposal["status"][] = [
 
 function ProposalRow({ proposal, onRefresh }: { proposal: Proposal; onRefresh: () => void }) {
   const { toast } = useToast();
+  const { profile: currentProfile } = useAuth();
+  const isCreator = proposal.createdByProfileId === currentProfile?.id;
   const cfg = statusConfig(proposal.status);
   const [draftLink, setDraftLink] = useState(proposal.employeeDraftLink || "");
   const [savingDraftLink, setSavingDraftLink] = useState(false);
   const canSubmitDraft = EXECUTION_STATUSES.includes(proposal.status);
+
+  const prepEntry = proposal.timeEntries?.find((entry) => entry.isProposalPrep);
+  const [timeHours, setTimeHours] = useState(
+    prepEntry ? Number(prepEntry.hours) : Number(proposal.timeTakenHours || 0)
+  );
+  const [timeDate, setTimeDate] = useState(
+    prepEntry
+      ? String(prepEntry.dateWorked).slice(0, 10)
+      : new Date().toISOString().slice(0, 10)
+  );
+  const [savingTime, setSavingTime] = useState(false);
+
+  useEffect(() => {
+    setTimeHours(
+      prepEntry ? Number(prepEntry.hours) : Number(proposal.timeTakenHours || 0)
+    );
+    setTimeDate(
+      prepEntry
+        ? String(prepEntry.dateWorked).slice(0, 10)
+        : new Date().toISOString().slice(0, 10)
+    );
+  }, [prepEntry, proposal.timeTakenHours]);
+
+  const saveProposalTime = async () => {
+    setSavingTime(true);
+    try {
+      await proposalsAPI.update(proposal.id, {
+        timeTakenHours: Number(timeHours),
+        timeTakenDate: timeDate,
+      });
+      toast({
+        title: "Proposal time saved",
+        description: "Your timesheet entry has been updated.",
+      });
+      onRefresh();
+    } catch (error: any) {
+      toast({
+        title: "Time not saved",
+        description: error.message || "Unable to update the proposal time.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingTime(false);
+    }
+  };
 
   const saveDraftLink = async () => {
     if (!draftLink.trim()) return;
@@ -379,6 +452,41 @@ function ProposalRow({ proposal, onRefresh }: { proposal: Proposal; onRefresh: (
           ) : "Pending"}
         </div>
       </div>
+      {isCreator ? (
+        <>
+          <div className="mt-3 grid gap-3 rounded-md border bg-muted/20 p-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <div className="space-y-1.5">
+              <Label>Time spent on this proposal (hours)</Label>
+              <Input
+                type="number"
+                min={0}
+                step="0.25"
+                value={timeHours}
+                onChange={(event) => setTimeHours(Number(event.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Date worked</Label>
+              <Input
+                type="date"
+                value={timeDate}
+                onChange={(event) => setTimeDate(event.target.value)}
+              />
+            </div>
+            <Button onClick={saveProposalTime} disabled={savingTime}>
+              {savingTime ? "Saving..." : "Save time"}
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Linked to your timesheets
+            {prepEntry ? ` · entry status: ${prepEntry.status}` : ""}
+          </p>
+        </>
+      ) : prepEntry ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Proposal time logged: {Number(prepEntry.hours).toFixed(2)}h · {prepEntry.status}
+        </p>
+      ) : null}
       {proposal.managerDecisionNote && (
         <p className="mt-3 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
           {proposal.managerDecisionNote}

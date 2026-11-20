@@ -75,6 +75,9 @@ export interface JobWriteOffRow {
   deliveredValue: number;
   deliveredHours: number;
   nonBillableHours: number;
+  nonBillableValue: number;
+  totalServiceValue: number;
+  overServiceWriteOffValue: number;
   writeOffValue: number;
   writeUpValue: number;
   writeOffPercent: number;
@@ -94,7 +97,10 @@ export interface JobWriteOffGroup {
   jobCount: number;
   jobsWithWriteOff: number;
   deliveredValue: number;
+  nonBillableValue: number;
+  totalServiceValue: number;
   feeBasis: number;
+  overServiceWriteOffValue: number;
   writeOffValue: number;
   writeUpValue: number;
   writeOffRatePercent: number;

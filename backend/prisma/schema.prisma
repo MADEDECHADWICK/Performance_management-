@@ -166,6 +166,13 @@ enum OnboardingStatus {
   completed
 }
 
+enum OnboardingReviewStatus {
+  draft
+  submitted
+  changes_requested
+  approved
+}
+
 enum OffboardingStatus {
   initiated
   in_progress
@@ -303,6 +310,21 @@ enum BillableType {
   loss
 }
 
+enum JobWorkingLinkType {
+  milestone_requirement
+  proposal
+  cost_estimate
+  work_plan
+  budget
+  other
+}
+
+enum JobWorkingLinkStatus {
+  pending
+  approved
+  rejected
+}
+
 enum NonBillableCategory {
   leave
   public_holiday
@@ -310,6 +332,7 @@ enum NonBillableCategory {
   training
   over_budget
   other
+  client_write_off
 }
 
 enum WriteOffValuation {
@@ -663,6 +686,10 @@ model User {
   lastLogin  DateTime?
   resetToken String?   @unique
 
+  onboardingInviteTokenHash String?   @unique @map("onboarding_invite_token_hash")
+  onboardingInviteExpiresAt DateTime? @map("onboarding_invite_expires_at")
+  onboardingInviteSentAt    DateTime? @map("onboarding_invite_sent_at")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -901,6 +928,7 @@ model Profile {
   backgroundCheckDate     DateTime?              @map("background_check_date")
 
   statusTransitionsChanged StatusTransition[] @relation("StatusTransitionChangedBy")
+  jobCompletionUpdates     JobCompletionHistory[] @relation("JobCompletionRecordedBy")
 
   financialTarget   Decimal? @map("financial_target") @db.Decimal(14, 2)
   utilizationTarget Decimal  @default(0.75) @map("utilization_target") @db.Decimal(5, 2)
@@ -1026,6 +1054,8 @@ model Profile {
   proposalsAsSource       Proposal[]           @relation("ProposalSource")
   proposalsAsReviewer     Proposal[]           @relation("ProposalReviewer")
   proposalsAsBdOwner      Proposal[]           @relation("ProposalBdOwner")
+  workingDocumentLinksAdded    JobWorkingDocumentLink[] @relation("WorkingLinkAddedBy")
+  workingDocumentLinksApproved JobWorkingDocumentLink[] @relation("WorkingLinkApprovedBy")
   proposalTeamAssignments ProposalTeamMember[] @relation("ProposalTeamMemberProfile")
   proposalTeamApprovals   ProposalTeamMember[] @relation("ProposalTeamMemberApprover")
 
@@ -1660,6 +1690,13 @@ model EmployeeOnboardingCase {
   startDate DateTime?        @map("start_date")
   dueDate   DateTime?        @map("due_date")
 
+  reviewStatus        OnboardingReviewStatus @default(draft) @map("review_status")
+  submittedAt         DateTime?              @map("submitted_at")
+  documentsSubmittedAt DateTime?             @map("documents_submitted_at")
+  reviewedAt          DateTime?              @map("reviewed_at")
+  reviewedByProfileId Int?                   @map("reviewed_by_profile_id")
+  reviewNote          String?                @map("review_note") @db.Text
+
   hrOwnerProfileId Int?    @map("hr_owner_profile_id")
   notes            String? @db.Text
 
@@ -1785,6 +1822,7 @@ model InductionChecklistItem {
   itemType     String  @default("task") @map("item_type")
   resourceUrl  String? @map("resource_url")
   comments     String? @db.Text
+  employeeNote String? @map("employee_note") @db.Text
 
   isCompleted          Boolean   @default(false) @map("is_completed")
   completedByProfileId Int?      @map("completed_by_profile_id")
@@ -2750,6 +2788,7 @@ model Job {
   startDate      DateTime? @map("start_date")
   dueDate        DateTime? @map("due_date")
   completionDate DateTime? @map("completion_date")
+  completionPercent Decimal @default(0) @map("completion_percent") @db.Decimal(5, 2)
   status         JobStatus @default(planned)
 
   collectionStage           JobCollectionStage @default(not_ready) @map("collection_stage")
@@ -2798,6 +2837,8 @@ model Job {
   receivableFollowUps ReceivableFollowUpAction[]
   revenueAllocations  RevenueAllocation[]
   statusTransitions   StatusTransition[]
+  completionHistory   JobCompletionHistory[]
+  workingDocumentLinks JobWorkingDocumentLink[]
 
   surveys            ClientSatisfactionSurvey[]
   projectEvaluations ProjectEvaluation[]
@@ -2809,6 +2850,21 @@ model Job {
   @@index([clientId])
   @@index([receivableOwnerProfileId])
   @@map("jobs")
+}
+
+model JobCompletionHistory {
+  id                  Int      @id @default(autoincrement())
+  jobId               Int      @map("job_id")
+  completionPercent   Decimal  @map("completion_percent") @db.Decimal(5, 2)
+  recordedAt          DateTime @default(now()) @map("recorded_at")
+  recordedByProfileId Int?     @map("recorded_by_profile_id")
+  note                String?  @db.Text
+
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  recordedBy Profile? @relation("JobCompletionRecordedBy", fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([jobId, recordedAt])
+  @@map("job_completion_history")
 }
 
 model ProjectEvaluation {
@@ -2864,6 +2920,7 @@ model Task {
 
   timeEntries TimeEntry[]
   jobInvoices JobInvoice[] @relation("JobInvoiceMilestoneTask")
+  workingDocumentLinks JobWorkingDocumentLink[] @relation("MilestoneWorkingLinks")
 
   @@index([jobId])
   @@index([assignedToProfileId])
@@ -2878,6 +2935,9 @@ model JobStaffAssignment {
 
   assignedRoleId     Int     @map("assigned_role_id")
   assignedHourlyRate Decimal @map("assigned_hourly_rate") @db.Decimal(12, 2)
+
+  billableAllocatedHours    Decimal @default(0) @map("billable_allocated_hours") @db.Decimal(10, 2)
+  nonBillableAllocatedHours Decimal @default(0) @map("non_billable_allocated_hours") @db.Decimal(10, 2)
 
   roleSnapshot Json?    @map("role_snapshot")
   roleOnJob    String?  @map("role_on_job")
@@ -2998,6 +3058,7 @@ model TimeEntry {
   billable              Boolean              @default(true)
   nonBillableCategory   NonBillableCategory? @map("non_billable_category")
   nonBillableActivityId Int?                 @map("non_billable_activity_id")
+  isProposalPrep        Boolean              @default(false) @map("is_proposal_prep")
   description           String?
 
   status TimeEntryStatus @default(submitted)
@@ -3009,6 +3070,7 @@ model TimeEntry {
   billableAmount Decimal @default(0) @map("billable_amount") @db.Decimal(14, 2)
   costAmount     Decimal @default(0) @map("cost_amount") @db.Decimal(14, 2)
   profitLoss     Decimal @default(0) @map("profit_loss") @db.Decimal(14, 2)
+  rejectedExcessHours Decimal @default(0) @map("rejected_excess_hours") @db.Decimal(10, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3036,6 +3098,7 @@ model TimeEntry {
   @@index([proposalId])
   @@index([taskId])
   @@index([nonBillableActivityId])
+  @@index([proposalId, employeeProfileId, isProposalPrep])
   @@map("time_entries")
 }
 
@@ -3118,6 +3181,9 @@ model TimeOverBudgetRequest {
   autoRejected    Boolean @default(false) @map("auto_rejected")
   rejectionReason String? @map("rejection_reason")
   approvalNotes   String? @map("approval_notes")
+  requestReason   String? @map("request_reason") @db.Text
+  decidedByProfileId Int? @map("decided_by_profile_id")
+  decidedAt          DateTime? @map("decided_at")
 
   estimatedCostImpact Decimal? @map("estimated_cost_impact") @db.Decimal(14, 2)
   wouldExceedBudget   Boolean  @default(false) @map("would_exceed_budget")
@@ -3133,6 +3199,32 @@ model TimeOverBudgetRequest {
   @@index([employeeProfileId])
   @@index([status])
   @@map("time_over_budget_requests")
+}
+
+model JobWorkingDocumentLink {
+  id               Int                  @id @default(autoincrement())
+  jobId            Int                  @map("job_id")
+  milestoneTaskId  Int?                 @map("milestone_task_id")
+  linkType         JobWorkingLinkType   @map("link_type")
+  label            String
+  url              String               @db.Text
+  addedByProfileId Int                  @map("added_by_profile_id")
+  reviewStatus     JobWorkingLinkStatus @default(pending) @map("review_status")
+  approvedByProfileId Int?              @map("approved_by_profile_id")
+  approvedAt          DateTime?         @map("approved_at")
+  notes               String?           @db.Text
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+
+  job            Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  milestoneTask  Task?   @relation("MilestoneWorkingLinks", fields: [milestoneTaskId], references: [id], onDelete: SetNull)
+  addedBy        Profile @relation("WorkingLinkAddedBy", fields: [addedByProfileId], references: [id], onDelete: Restrict)
+  approvedBy     Profile? @relation("WorkingLinkApprovedBy", fields: [approvedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([jobId, linkType])
+  @@index([milestoneTaskId])
+  @@index([reviewStatus])
+  @@map("job_working_document_links")
 }
 
 // =============================

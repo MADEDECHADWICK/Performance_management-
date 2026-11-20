@@ -236,6 +236,41 @@ router.delete(
   JobController.removeStaffAssignment
 );
 
+router.get(
+  "/:jobId/working-links",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.listWorkingLinks
+);
+
+router.post(
+  "/:jobId/working-links",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.createWorkingLink
+);
+
+router.patch(
+  "/:jobId/working-links/:linkId",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.updateWorkingLink
+);
+
+router.delete(
+  "/:jobId/working-links/:linkId",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.removeWorkingLink
+);
+
+router.patch(
+  "/:jobId/working-links/:linkId/review",
+  ...authenticated(),
+  requireJobAccess("view"),
+  JobController.reviewWorkingLink
+);
+
 /**
  * GET /jobs/:jobId/profitability
  * Get job profitability analysis

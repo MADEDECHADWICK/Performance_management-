@@ -7,6 +7,7 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import jobService from "../services/jobs.service";
+import JobWorkingDocumentLinksService from "../services/jobWorkingDocumentLinks.service";
 import { successResponse, errorResponse, paginatedResponse } from "../utils/response";
 
 export class JobController {
@@ -513,6 +514,98 @@ export class JobController {
 
       const result = await jobService.removeJobStaffAssignment(jobId, assignmentId, auth);
       res.json(successResponse(result, "Staff assignment removed"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  static async listWorkingLinks(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const links = await JobWorkingDocumentLinksService.list(jobId);
+      res.json(successResponse(links, "Working document links retrieved"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  static async createWorkingLink(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+      const link = await JobWorkingDocumentLinksService.create(
+        jobId,
+        req.body || {},
+        auth
+      );
+      res.status(201).json(successResponse(link, "Working document link added", 201));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  static async updateWorkingLink(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const linkId = Number(req.params.linkId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+      const link = await JobWorkingDocumentLinksService.update(
+        jobId,
+        linkId,
+        req.body || {},
+        auth
+      );
+      res.json(successResponse(link, "Working document link updated"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  static async removeWorkingLink(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const linkId = Number(req.params.linkId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+      const result = await JobWorkingDocumentLinksService.remove(jobId, linkId, auth);
+      res.json(successResponse(result, "Working document link removed"));
+    } catch (error: any) {
+      const statusCode = error.statusCode || 500;
+      res.status(statusCode).json(errorResponse(error.message, statusCode));
+    }
+  }
+
+  static async reviewWorkingLink(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = Number(req.params.jobId);
+      const linkId = Number(req.params.linkId);
+      const auth = {
+        userId: req.user!.userId,
+        profileId: req.user!.profileId!,
+        roles: req.userRoles || [],
+      };
+      const link = await JobWorkingDocumentLinksService.review(
+        jobId,
+        linkId,
+        req.body || {},
+        auth
+      );
+      res.json(successResponse(link, "Working document link reviewed"));
     } catch (error: any) {
       const statusCode = error.statusCode || 500;
       res.status(statusCode).json(errorResponse(error.message, statusCode));

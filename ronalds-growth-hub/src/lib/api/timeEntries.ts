@@ -95,6 +95,46 @@ export interface JobAllocationSummary {
   allowedEmployeeHours: number;
   remainingJobHours: number;
   remainingEmployeeHours: number;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
+  billableApprovedExcessHours?: number;
+  nonBillableApprovedExcessHours?: number;
+  billableLoggedHours?: number;
+  nonBillableLoggedHours?: number;
+  billableAllowedHours?: number;
+  nonBillableAllowedHours?: number;
+  billableRemainingHours?: number;
+  nonBillableRemainingHours?: number;
+  allocationSource?: string;
+}
+
+export interface OverAllocationRequest {
+  id: number;
+  jobId: number;
+  employeeProfileId: number;
+  timeEntryId?: number | null;
+  allocatedHours: number;
+  loggedHours: number;
+  requestedAdditional: number;
+  totalAfterRequest: number;
+  billableType: string;
+  status: string;
+  requestReason?: string | null;
+  approvalNotes?: string | null;
+  rejectionReason?: string | null;
+  decidedByProfileId?: number | null;
+  decidedAt?: string | null;
+  createdAt: string;
+  job?: { id: number; jobName: string; client?: { id: number; clientName: string } | null };
+  employee?: { id: number; firstName: string; lastName: string };
+  timeEntry?: {
+    id: number;
+    hours: number;
+    billable: boolean;
+    status: string;
+    description?: string | null;
+    dateWorked: string;
+  } | null;
 }
 
 export const timeEntriesAPI = {
@@ -324,6 +364,21 @@ export const timeEntriesAPI = {
    */
   rejectApprovalRequest: async (requestId: number, approvalNotes?: string): Promise<TimeEntryApprovalRequest> => {
     return api.patch(`/time-entries/approval-requests/${requestId}/reject`, { approvalNotes });
+  },
+
+  listOverBudgetRequests: async (filters?: {
+    jobId?: number;
+    employeeProfileId?: number;
+    status?: string;
+  }): Promise<OverAllocationRequest[]> => {
+    const params = new URLSearchParams();
+    if (filters?.jobId) params.append('jobId', String(filters.jobId));
+    if (filters?.employeeProfileId) {
+      params.append('employeeProfileId', String(filters.employeeProfileId));
+    }
+    if (filters?.status) params.append('status', filters.status);
+    const query = params.toString();
+    return api.get(`/time-entries/over-budget-requests${query ? `?${query}` : ''}`);
   },
 
   /**

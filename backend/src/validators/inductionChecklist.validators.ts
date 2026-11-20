@@ -80,4 +80,5 @@ export const updateInductionItemCommentsValidators = [
   param("checklistId").isInt({ min: 1 }),
   param("itemId").isInt({ min: 1 }),
   body("comments").optional().isString(),
+  body("note").optional().isString(),
 ];

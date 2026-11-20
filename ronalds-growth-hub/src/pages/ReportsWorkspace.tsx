@@ -41,7 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { evaluationsAPI, reportingAPI } from "@/lib/api";
+import { performanceFrameworkAPI, reportingAPI } from "@/lib/api";
 import type { ReportingWorkspace } from "@/lib/api/reporting";
 import { StatusBadge } from "@/components/framework/BalancedScorecardPrimitives";
 import { useToast } from "@/hooks/use-toast";
@@ -235,7 +235,7 @@ export default function ReportsWorkspace() {
 
     const loadCycles = async () => {
       try {
-        const cycles = await evaluationsAPI.getMyCycles();
+        const cycles = await performanceFrameworkAPI.getEvaluationCycles();
         if (!active) return;
         setCycleOptions([
           { value: "latest", label: "Latest evaluation cycle" },

@@ -617,6 +617,7 @@ export default function FinanceProfitability() {
                             <TableHead>Client</TableHead>
                             <TableHead>Partner</TableHead>
                             <TableHead className="text-right">Delivered</TableHead>
+                            <TableHead className="text-right">Non-billable</TableHead>
                             <TableHead className="text-right">Fee basis</TableHead>
                             <TableHead className="text-right">Write-off</TableHead>
                             <TableHead className="text-right">Write-off %</TableHead>
@@ -625,7 +626,7 @@ export default function FinanceProfitability() {
                         <TableBody>
                           {(writeOffJobs?.topWriteOffs || []).length === 0 && (
                             <TableRow>
-                              <TableCell colSpan={7} className="text-center text-muted-foreground">
+                              <TableCell colSpan={8} className="text-center text-muted-foreground">
                                 No job write-offs for this period.
                               </TableCell>
                             </TableRow>
@@ -636,6 +637,7 @@ export default function FinanceProfitability() {
                               <TableCell>{job.clientName}</TableCell>
                               <TableCell>{job.partnerName || "Unassigned"}</TableCell>
                               <TableCell className="text-right">{formatMoney(job.deliveredValue)}</TableCell>
+                              <TableCell className="text-right">{formatMoney(job.nonBillableValue)}</TableCell>
                               <TableCell className="text-right">{formatMoney(job.feeBasis)}</TableCell>
                               <TableCell className="text-right font-semibold text-rose-600">
                                 {formatMoney(job.writeOffValue)}

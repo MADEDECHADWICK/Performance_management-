@@ -497,14 +497,6 @@ export default function AdminJobCreation() {
       toast({ title: 'Validation Error', description: 'Due date is required', variant: 'destructive' });
       return false;
     }
-    if (assignments.length === 0) {
-      toast({
-        title: 'Validation Error',
-        description: 'Assign at least one staff member before handing the job to the manager.',
-        variant: 'destructive',
-      });
-      return false;
-    }
     return true;
   };
 

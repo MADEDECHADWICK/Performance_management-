@@ -464,9 +464,6 @@ const Notifications = () => {
       return "/timesheets";
     }
 
-    if (item.evaluationDefinitionId && item.evaluationDefinitionId > 0) {
-      return "/evaluations";
-    }
 
     if (item.workflowAssignmentId && item.workflowAssignmentId > 0) {
       return null;
@@ -479,9 +476,7 @@ const Notifications = () => {
     if (context.includes("offboarding")) {
       return "/profile";
     }
-    if (context.includes("evaluation")) {
-      return "/evaluations";
-    }
+
     if (context.includes("timesheet") || context.includes("time entry")) {
       return "/timesheets";
     }

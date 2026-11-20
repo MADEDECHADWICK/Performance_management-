@@ -205,7 +205,6 @@ const Dashboard = () => {
           throw new Error("Current user profile ID is missing.");
         }
         await loadPersonalPerformance(userProfileId);
-        await loadRecentActivity(userProfileId);
         await loadEmployeeNotifications();
       } catch (error) {
         console.error("Error loading dashboard:", error);
@@ -357,11 +356,8 @@ const Dashboard = () => {
       const totalRevenue = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.allocatedRevenue || a?.allocationAmount || 0), 0);
       const totalBillableHours = assignmentRows.reduce((sum: number, a: any) => sum + Number(a?.plannedHours || a?.billableHours || 0), 0);
 
-      // Get client ratings
-      const clientEvals = await apiFetch("GET", `/client-evaluations?employeeIds=${userProfileId}`);
-      const avgClientRating = clientEvals && clientEvals.length > 0
-        ? clientEvals.reduce((sum: number, e: any) => sum + Number(e?.overallRating || e?.overall_rating || 0), 0) / clientEvals.length
-        : 0;
+      const clientEvals: any[] = [];
+      const avgClientRating = 0;
 
       // Calculate utilization (assuming 160 billable hours per month target)
       const utilizationRate = Math.min(100, (totalBillableHours / 160) * 100);
@@ -444,46 +440,6 @@ const Dashboard = () => {
     }
   };
 
-  const loadRecentActivity = async (userProfileId: number) => {
-    try {
-      const activities: any[] = [];
-
-      // Check completed evaluations
-      const completedEvals = await apiFetch(
-        "GET",
-        `/evaluation-assignments?evaluatorProfileId=${userProfileId}&status=completed&limit=1&include=definition`
-      );
-
-      if (Array.isArray(completedEvals) && completedEvals.length > 0) {
-        activities.push({
-          type: "success",
-          title: "Evaluation completed",
-          description: `${completedEvals[0]?.definition?.name || completedEvals[0]?.evaluatorType || "Assigned"} evaluation submitted`,
-          date: completedEvals[0]?.submittedAt || completedEvals[0]?.updatedAt
-        });
-      }
-
-      // Check pending evaluations
-      const pendingEvals = await apiFetch(
-        "GET",
-        `/evaluation-assignments?evaluatorProfileId=${userProfileId}&status=pending&limit=100`
-      );
-      const pendingCount = Array.isArray(pendingEvals) ? pendingEvals.length : 0;
-
-      if (pendingCount && pendingCount > 0) {
-        activities.push({
-          type: "warning",
-          title: "Pending evaluations",
-          description: `${pendingCount} evaluation(s) awaiting completion`,
-          date: new Date().toISOString()
-        });
-      }
-
-      setRecentActivities(activities.slice(0, 3));
-    } catch (error) {
-      console.error("Error loading activities:", error);
-    }
-  };
 
   const loadPartnerPerformance = async (user: any) => {
     try {
@@ -652,7 +608,7 @@ const Dashboard = () => {
                   Customer: {performance?.customerScore || 0}% | Internal: {performance?.internalProcessScore || 0}% | Learning: {performance?.learningGrowthScore || 0}%
                 </p>
                 <p className="text-muted-foreground">
-                  Project eval: {performance?.projectEvaluationScore || 0}% | Billable hours: {performance?.billableHours || 0}
+                  Billable hours: {performance?.billableHours || 0}
                 </p>
               </div>
               <div className="mt-4 rounded-md border p-3 space-y-2">

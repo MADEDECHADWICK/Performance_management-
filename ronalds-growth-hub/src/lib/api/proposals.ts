@@ -75,6 +75,13 @@ export interface Proposal {
   clientFeedback?: string | null;
   managerDecisionNote?: string | null;
   timeTakenHours?: number | null;
+  timeEntries?: Array<{
+    id: number;
+    hours: number;
+    dateWorked: string;
+    status: string;
+    isProposalPrep: boolean;
+  }>;
   client?: { id: number; clientName: string; industry?: string | null } | null;
   department?: { id: number; name: string; departmentCode?: string | null } | null;
   assignedPartner?: ProposalPerson | null;
@@ -155,6 +162,8 @@ export interface CreateProposalPayload {
   reviewerProfileId?: number | null;
   bdOwnerProfileId?: number | null;
   teamMemberProfileIds?: number[];
+  timeTakenHours?: number;
+  timeTakenDate?: string;
 }
 
 export interface UpdateProposalPayload extends Partial<CreateProposalPayload> {

@@ -110,7 +110,6 @@ import {
 } from "@/lib/api/performanceFramework";
 import documentsAPI from "@/lib/api/documents";
 import employeesAPI from "@/lib/api/employees";
-import evaluationsAPI from "@/lib/api/evaluations";
 import rolesAPI, { type Role } from "@/lib/api/roles";
 import type { Profile } from "@/lib/api/types";
 import {
@@ -286,7 +285,7 @@ export default function BalancedScorecardModule() {
 
   const { data: availableCycles = [] } = useQuery({
     queryKey: ["evaluation-cycles"],
-    queryFn: () => evaluationsAPI.getMyCycles(),
+    queryFn: () => performanceFrameworkAPI.getEvaluationCycles(),
     staleTime: 60_000,
   });
 
@@ -3219,22 +3218,9 @@ export default function BalancedScorecardModule() {
                     <p className="text-sm text-amber-700">{workspaceError}</p>
                   </div>
                 ) : null}
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3">
                   <Button className="h-11 rounded-2xl" onClick={handlePrimaryActionClick}>
                     {selectedRoleProfile.primaryAction}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11 rounded-2xl"
-                    onClick={() => {
-                      if (evaluationSummary.cycleId && hasAnyRole(["hr", "manager", "super_admin"])) {
-                        navigate(`/evaluations/cycles/${evaluationSummary.cycleId}/results`);
-                        return;
-                      }
-                      navigate("/evaluations");
-                    }}
-                  >
-                    {evaluationSummary.cycleId ? "Open evaluation cycle" : "Open evaluations"}
                   </Button>
                 </div>
               </CardContent>

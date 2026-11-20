@@ -315,7 +315,7 @@ export class NotificationService {
       case "Client":
         return target.id ? `/clients/${target.id}` : "/clients";
       case "EvaluationDefinition":
-        return "/evaluations";
+        return "/notifications";
       case "TimeEntry":
         return "/timesheets";
       case "WorkflowAssignment":

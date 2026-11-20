@@ -7,12 +7,12 @@ const featureCards = [
   {
     icon: BarChart3,
     title: "Financial Integration",
-    description: "Weighted performance scoring informed by job costing and collections data.",
+    description: "Weighted performance scoring informed by financial and collections data.",
   },
   {
     icon: Users,
-    title: "360-Degree Feedback",
-    description: "Manager, peer, self, and client perspectives captured in one system.",
+    title: "Balanced Scorecard",
+    description: "Goals, KPIs, and performance measures connected in one system.",
   },
   {
     icon: Target,
@@ -73,7 +73,7 @@ const Index = () => {
                 </span>
               </h2>
               <p className="max-w-2xl text-base text-muted-foreground sm:text-lg">
-                Ronalds LLP combines 360-degree evaluations, workforce analytics, and financial impact into one operational command center.
+                Ronalds LLP combines balanced scorecard KPIs, workforce analytics, and financial impact into one operational command center.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -84,7 +84,7 @@ const Index = () => {
             <CardContent className="space-y-6 p-6 sm:p-7">
               <div>
                 <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">At a glance</p>
-                <h3 className="mt-2 text-2xl font-semibold text-foreground">One workflow for feedback, finance, and growth.</h3>
+                <h3 className="mt-2 text-2xl font-semibold text-foreground">One workflow for KPIs, finance, and growth.</h3>
               </div>
               <div className="space-y-3">
                 {quickStats.map((item) => {

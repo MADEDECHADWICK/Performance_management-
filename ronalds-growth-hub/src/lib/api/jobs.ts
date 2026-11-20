@@ -70,11 +70,50 @@ interface JobFilters {
   priority?: Priority;
 }
 
-interface AssignStaffPayload {
+export interface AssignStaffPayload {
   employeeProfileId: number;
   assignedRoleId: number;
   assignedHourlyRate: number;
   roleOnJob?: string;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
+}
+
+export interface UpdateStaffAssignmentPayload {
+  assignedRoleId?: number;
+  assignedHourlyRate?: number;
+  roleOnJob?: string;
+  billableAllocatedHours?: number;
+  nonBillableAllocatedHours?: number;
+}
+
+export type JobWorkingLinkType =
+  | 'milestone_requirement'
+  | 'proposal'
+  | 'cost_estimate'
+  | 'work_plan'
+  | 'budget'
+  | 'other';
+
+export type JobWorkingLinkStatus = 'pending' | 'approved' | 'rejected';
+
+export interface JobWorkingDocumentLink {
+  id: number;
+  jobId: number;
+  milestoneTaskId?: number | null;
+  linkType: JobWorkingLinkType;
+  label: string;
+  url: string;
+  addedByProfileId: number;
+  reviewStatus: JobWorkingLinkStatus;
+  approvedByProfileId?: number | null;
+  approvedAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  addedBy?: { id: number; firstName: string; lastName: string } | null;
+  approvedBy?: { id: number; firstName: string; lastName: string } | null;
+  milestoneTask?: { id: number; title: string; status: string } | null;
 }
 
 interface JobCostingPayload {
@@ -238,6 +277,63 @@ export const jobsAPI = {
    */
   assignStaff: async (jobId: number, data: AssignStaffPayload): Promise<JobStaffAssignment> => {
     return api.post(`/jobs/${jobId}/staff`, data);
+  },
+
+  updateStaff: async (
+    jobId: number,
+    assignmentId: number,
+    data: UpdateStaffAssignmentPayload
+  ): Promise<JobStaffAssignment> => {
+    return api.patch(`/jobs/${jobId}/staff/${assignmentId}`, data);
+  },
+
+  removeStaff: async (jobId: number, assignmentId: number): Promise<{ removed: boolean }> => {
+    return api.delete(`/jobs/${jobId}/staff/${assignmentId}`);
+  },
+
+  getWorkingLinks: async (jobId: number): Promise<JobWorkingDocumentLink[]> => {
+    return api.get(`/jobs/${jobId}/working-links`);
+  },
+
+  addWorkingLink: async (
+    jobId: number,
+    data: {
+      linkType: JobWorkingLinkType;
+      label: string;
+      url: string;
+      milestoneTaskId?: number;
+      notes?: string;
+    }
+  ): Promise<JobWorkingDocumentLink> => {
+    return api.post(`/jobs/${jobId}/working-links`, data);
+  },
+
+  updateWorkingLink: async (
+    jobId: number,
+    linkId: number,
+    data: Partial<{
+      linkType: JobWorkingLinkType;
+      label: string;
+      url: string;
+      notes: string;
+    }>
+  ): Promise<JobWorkingDocumentLink> => {
+    return api.patch(`/jobs/${jobId}/working-links/${linkId}`, data);
+  },
+
+  removeWorkingLink: async (
+    jobId: number,
+    linkId: number
+  ): Promise<{ deleted: boolean }> => {
+    return api.delete(`/jobs/${jobId}/working-links/${linkId}`);
+  },
+
+  reviewWorkingLink: async (
+    jobId: number,
+    linkId: number,
+    data: { status: 'approved' | 'rejected'; notes?: string }
+  ): Promise<JobWorkingDocumentLink> => {
+    return api.patch(`/jobs/${jobId}/working-links/${linkId}/review`, data);
   },
 
   // ==================

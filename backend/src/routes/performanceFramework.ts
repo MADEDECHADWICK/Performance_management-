@@ -206,6 +206,35 @@ const resolveDefinitionForProfile = async (
   });
 };
 
+router.get("/evaluation-cycles", async (_req, res) => {
+  try {
+    const cycles = await prisma.evaluationCycle.findMany({
+      orderBy: { startDate: "desc" },
+      select: {
+        id: true,
+        cycleName: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+      },
+    });
+    return res.json(
+      successResponse(
+        cycles.map((cycle) => ({
+          id: cycle.id,
+          title: cycle.cycleName,
+          status: cycle.status,
+          startDate: cycle.startDate,
+          endDate: cycle.endDate,
+        })),
+        "Evaluation cycles retrieved"
+      )
+    );
+  } catch (error) {
+    return res.status(500).json(errorResponse("Failed to load evaluation cycles", 500));
+  }
+});
+
 router.get("/blueprint", async (_req, res) => {
   try {
     return res.json(

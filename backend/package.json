@@ -17,6 +17,7 @@
     "seed": "ts-node prisma/seed.ts",
     "seed:uat-team": "ts-node prisma/scripts/seed-uat-team.ts",
     "seed:operational-uat": "ts-node --transpile-only prisma/scripts/seed-operational-uat.ts",
+    "seed:job-costing-demo": "ts-node --transpile-only prisma/scripts/seed-job-costing-demo.ts",
     "validate:operational-uat": "ts-node --transpile-only prisma/scripts/validate-operational-uat.ts",
     "bootstrap:render-users": "node prisma/scripts/bootstrap-render-users.cjs",
     "bsc:pilot": "ts-node --transpile-only prisma/scripts/bootstrap-bsc-pilot.ts",

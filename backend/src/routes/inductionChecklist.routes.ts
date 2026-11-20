@@ -65,6 +65,14 @@ router.patch(
 );
 
 router.patch(
+  "/:checklistId/items/:itemId/employee-note",
+  authenticated(),
+  validateRequest(updateInductionItemCommentsValidators),
+  handleValidationErrors,
+  InductionChecklistController.updateEmployeeNote
+);
+
+router.patch(
   "/:checklistId/items/:itemId/comments",
   authenticated(),
   validateRequest(updateInductionItemCommentsValidators),

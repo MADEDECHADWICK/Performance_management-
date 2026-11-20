@@ -18,7 +18,6 @@ import documentsRoutes from './documents.routes';
 import employeeOnboardingRoutes from './employeeOnboardingCase.routes';
 import employeeOffboardingRoutes from './employeeOffboardingCase.routes';
 import onboardingPoliciesRoutes from './onboardingPolicies.routes';
-import evaluationRoutes from './evaluations.routes';
 import inductionChecklistRoutes from './inductionChecklist.routes';
 import partnerRoutes from './partners.routes';
 import jobsRoutes from './jobs.routes';
@@ -32,19 +31,12 @@ import auditLogsRoutes from './auditLogs';
 import clientsRoutes from './clients';
 import clientOnboardingsRoutes from './clientOnboardings';
 import certificatesRoutes from './certificates';
-import clientEvaluationsRoutes from './clientEvaluations';
-import continuousFeedbackRoutes from './continuousFeedback';
 import developmentRecommendationsRoutes from './developmentRecommendations';
 import employeeProjectAllocationsRoutes from './employeeProjectAllocations';
 import employeeRolesRoutes from './employeeRoles';
 import employeesRoutes from './employees';
-import evaluationAssignmentsRoutes from './evaluationAssignments';
-import evaluationCyclesRoutes from './evaluationCycles';
-import evaluationTemplatesRoutes from './evaluationTemplates';
 import employeeGoalsRoutes from './employeeGoals';
 import competenciesRoutes from './competencies';
-import feedbackRoutes from './feedback';
-import checkInRoutes from './checkins';
 import financialSummaryRoutes from './financialSummary';
 import financeDashboardRoutes from './financeDashboard';
 import gmpDashboardRoutes from './gmpDashboard';
@@ -52,6 +44,8 @@ import hrDashboardRoutes from './hrDashboard';
 import jobProfitabilityRoutes from './jobProfitability';
 import writeOffRoutes from './writeOffs';
 import utilizationRoutes from './utilization';
+import timesheetReportRoutes from './timesheetReports';
+import performanceReportRoutes from './performanceReport';
 import managerDashboardRoutes from './managerDashboard';
 import nonFinancialPerformanceRoutes from './nonFinancialPerformance';
 import notificationsRoutes from './notifications';
@@ -67,11 +61,8 @@ import subordinatesRoutes from './subordinates';
 import engagementLettersRoutes from './engagementLetters';
 import performanceScoresRoutes from './performanceScores';
 import performanceFrameworkRoutes from './performanceFramework';
-import projectEvaluationsRoutes from './projectEvaluations';
-import calibrationRoutes from './calibration';
 import performanceBandsRoutes from './performanceBands';
 import developmentPlansRoutes from './developmentPlans';
-import evaluationReportsRoutes from './evaluationReports';
 import surveysRoutes from './surveys';
 import teamManagementRoutes from './teamManagement';
 import todosRoutes from './todos';
@@ -117,7 +108,6 @@ router.use(
 router.use('/onboarding', authMiddleware, requireModuleAccess('users', 'read'), employeeOnboardingRoutes);
 router.use('/onboarding-policies', authMiddleware, onboardingPoliciesRoutes);
 router.use('/offboarding', authMiddleware, requireModuleAccess('users'), employeeOffboardingRoutes);
-router.use('/evaluations', authMiddleware, requireModuleAccess('evaluations'), evaluationRoutes);
 router.use('/induction-checklist', authMiddleware, requireModuleAccess('users', 'read'), inductionChecklistRoutes);
 router.use(
   '/partners',
@@ -149,13 +139,27 @@ router.use('/finance-dashboard', authMiddleware, requireModuleAccess('finance', 
 router.use('/job-profitability', authMiddleware, requireModuleAccess('finance'), jobProfitabilityRoutes);
 router.use('/write-offs', authMiddleware, requireModuleAccess('finance', 'read'), writeOffRoutes);
 router.use('/utilization', authMiddleware, requireModuleAccess('reports', 'read'), utilizationRoutes);
-router.use('/evaluation-assignments', authMiddleware, requireModuleAccess('evaluations'), evaluationAssignmentsRoutes);
-router.use('/evaluation-cycles', authMiddleware, requireModuleAccess('evaluations'), evaluationCyclesRoutes);
-router.use('/evaluation-templates', authMiddleware, requireModuleAccess('evaluations'), evaluationTemplatesRoutes);
+router.use(
+  '/timesheet-reports',
+  authMiddleware,
+  requireAnyModuleAccess([
+    { moduleKey: 'reports', action: 'read' },
+    { moduleKey: 'time_entries', action: 'read' },
+    { moduleKey: 'time_entries', action: 'write' },
+  ]),
+  timesheetReportRoutes
+);
+router.use(
+  '/performance-report',
+  authMiddleware,
+  requireAnyModuleAccess([
+    { moduleKey: 'reports', action: 'read' },
+    { moduleKey: 'dashboard', action: 'read' },
+  ]),
+  performanceReportRoutes
+);
 router.use('/employee-goals', authMiddleware, requireModuleAccess('evaluations'), employeeGoalsRoutes);
 router.use('/competencies', authMiddleware, requireModuleAccess('evaluations'), competenciesRoutes);
-router.use('/client-evaluations', authMiddleware, requireModuleAccess('evaluations'), clientEvaluationsRoutes);
-router.use('/continuous-feedback', authMiddleware, requireModuleAccess('evaluations'), continuousFeedbackRoutes);
 router.use('/performance-reviews', authMiddleware, requireModuleAccess('evaluations'), performanceReviewsRoutes);
 router.use('/non-financial-performance', authMiddleware, requireModuleAccess('evaluations'), nonFinancialPerformanceRoutes);
 router.use('/development-recommendations', authMiddleware, requireModuleAccess('evaluations'), developmentRecommendationsRoutes);
@@ -176,15 +180,10 @@ router.use('/client-onboardings', authMiddleware, requireModuleAccess('clients')
 router.use('/performance-scores', authMiddleware, requireModuleAccess('reports'), performanceScoresRoutes);
 router.use('/performance-framework', authMiddleware, requireModuleAccess('dashboard'), performanceFrameworkRoutes);
 router.use('/kpi-cascade', authMiddleware, requireModuleAccess('dashboard', 'read'), kpiCascadeRoutes);
-router.use('/project-evaluations', authMiddleware, requireModuleAccess('evaluations'), projectEvaluationsRoutes);
-router.use('/calibration', authMiddleware, requireModuleAccess('evaluations'), calibrationRoutes);
 router.use('/performance-bands', authMiddleware, requireModuleAccess('evaluations'), performanceBandsRoutes);
 router.use('/development-plans', authMiddleware, requireModuleAccess('evaluations'), developmentPlansRoutes);
-router.use('/evaluation-reports', authMiddleware, requireModuleAccess('evaluations'), evaluationReportsRoutes);
 router.use('/proposals', proposalsRoutes);
 router.use('/surveys', surveysRoutes);
-router.use('/feedback', authMiddleware, requireModuleAccess('evaluations'), feedbackRoutes);
-router.use('/checkins', authMiddleware, requireModuleAccess('evaluations'), checkInRoutes);
 router.use('/notifications', authMiddleware, requireModuleAccess('notifications', 'read'), notificationsRoutes);
 router.use(
   '/ops',

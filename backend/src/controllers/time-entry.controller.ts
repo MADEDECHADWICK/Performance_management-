@@ -3,10 +3,29 @@ import { AuthRequest } from '../middleware/auth';
 import { buildPrimaryRoleAuthContext } from '../auth/accessRoles';
 import { TimeEntryService } from '../services/time-entry.service';
 import { TimeUtilizationService } from '../services/timeUtilization.service';
+import { TimesheetProjectionService } from '../services/timesheetProjection.service';
 import prisma from '../prisma';
 import { successResponse, errorResponse, paginatedResponse } from '../utils/response';
 
 const buildAuthContext = (req: AuthRequest) => buildPrimaryRoleAuthContext(req);
+
+const ensureHolidayEntriesForRange = async (
+  dateFrom?: Date,
+  dateTo?: Date
+): Promise<void> => {
+  if (!dateFrom || !dateTo) return;
+  const rangeDays =
+    Math.abs(dateTo.getTime() - dateFrom.getTime()) / (24 * 60 * 60 * 1000);
+  if (!Number.isFinite(rangeDays) || rangeDays > 62) return;
+  try {
+    await TimesheetProjectionService.ensurePublicHolidayEntries(prisma, {
+      dateFrom,
+      dateTo,
+    });
+  } catch (error) {
+    console.warn('public_holiday_timesheet_backfill_failed', error);
+  }
+};
 
 export class TimeEntryController {
   /**
@@ -26,6 +45,8 @@ export class TimeEntryController {
           : undefined;
       const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
       const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
+
+      await ensureHolidayEntriesForRange(dateFrom, dateTo);
 
       const auth = buildAuthContext(req);
 
@@ -78,6 +99,27 @@ export class TimeEntryController {
     }
   }
 
+  static async listOverBudgetRequests(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const jobId = req.query.jobId ? Number(req.query.jobId) : undefined;
+      const employeeProfileId = req.query.employeeProfileId
+        ? Number(req.query.employeeProfileId)
+        : undefined;
+      const status = (req.query.status as string) || undefined;
+
+      const requests = await TimeEntryService.listOverBudgetRequests(
+        { jobId, employeeProfileId, status },
+        buildAuthContext(req)
+      );
+
+      res.json(successResponse(requests, "Over-allocation requests retrieved"));
+    } catch (error: any) {
+      res.status(error.statusCode || 500).json(
+        errorResponse(error.message, error.statusCode || 500, error.details)
+      );
+    }
+  }
+
   /**
    * GET /time-entries/my
    * List only the authenticated user's time entries
@@ -95,6 +137,8 @@ export class TimeEntryController {
           : undefined;
       const dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom as string) : undefined;
       const dateTo = req.query.dateTo ? new Date(req.query.dateTo as string) : undefined;
+
+      await ensureHolidayEntriesForRange(dateFrom, dateTo);
 
       const result = await TimeEntryService.listTimeEntries(
         {
@@ -508,6 +552,8 @@ export class TimeEntryController {
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
+
+      await ensureHolidayEntriesForRange(weekStart, weekEnd);
 
       const auth = buildAuthContext(req);
 
